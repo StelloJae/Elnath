@@ -1,0 +1,13 @@
+# Binary
+elnath
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+
+# OMC state
+.omc/

@@ -1,0 +1,454 @@
+package llm
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
+)
+
+const (
+	anthropicDefaultBaseURL = "https://api.anthropic.com"
+	anthropicAPIVersion     = "2023-06-01"
+	anthropicDefaultTimeout = 120 * time.Second
+)
+
+// AnthropicProvider implements Provider for Anthropic's Messages API.
+type AnthropicProvider struct {
+	apiKey  string
+	baseURL string
+	model   string
+	client  *http.Client
+}
+
+// AnthropicOption configures an AnthropicProvider.
+type AnthropicOption func(*AnthropicProvider)
+
+// WithAnthropicBaseURL overrides the default API base URL.
+func WithAnthropicBaseURL(u string) AnthropicOption {
+	return func(p *AnthropicProvider) { p.baseURL = u }
+}
+
+// WithAnthropicHTTPClient replaces the default HTTP client.
+func WithAnthropicHTTPClient(c *http.Client) AnthropicOption {
+	return func(p *AnthropicProvider) { p.client = c }
+}
+
+// WithAnthropicTimeout sets the HTTP client timeout.
+func WithAnthropicTimeout(d time.Duration) AnthropicOption {
+	return func(p *AnthropicProvider) { p.client = &http.Client{Timeout: d} }
+}
+
+// NewAnthropicProvider constructs an Anthropic provider.
+func NewAnthropicProvider(apiKey, model string, opts ...AnthropicOption) *AnthropicProvider {
+	p := &AnthropicProvider{
+		apiKey:  apiKey,
+		baseURL: anthropicDefaultBaseURL,
+		model:   model,
+		client:  &http.Client{Timeout: anthropicDefaultTimeout},
+	}
+	for _, o := range opts {
+		o(p)
+	}
+	return p
+}
+
+func (p *AnthropicProvider) Name() string { return "anthropic" }
+
+// Stream sends a streaming request to Anthropic and calls cb for each event.
+func (p *AnthropicProvider) Stream(ctx context.Context, req Request, cb func(StreamEvent)) error {
+	body, err := buildAnthropicRequest(req, p.model)
+	if err != nil {
+		return fmt.Errorf("anthropic: build request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		p.baseURL+"/v1/messages", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("anthropic: new http request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("x-api-key", p.apiKey)
+	httpReq.Header.Set("anthropic-version", anthropicAPIVersion)
+	httpReq.Header.Set("Accept", "text/event-stream")
+
+	resp, err := p.client.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("anthropic: http: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		switch resp.StatusCode {
+		case 429:
+			return fmt.Errorf("anthropic: rate limit (429): %s", errBody)
+		case 529:
+			return fmt.Errorf("anthropic: overloaded (529): %s", errBody)
+		default:
+			return fmt.Errorf("anthropic: status %d: %s", resp.StatusCode, errBody)
+		}
+	}
+
+	return parseAnthropicSSE(resp.Body, cb)
+}
+
+// --- request building ---
+
+type anthropicRequest struct {
+	Model     string             `json:"model"`
+	MaxTokens int                `json:"max_tokens"`
+	System    string             `json:"system,omitempty"`
+	Messages  []anthropicMessage `json:"messages"`
+	Tools     []anthropicTool    `json:"tools,omitempty"`
+	Stream    bool               `json:"stream"`
+}
+
+type anthropicMessage struct {
+	Role    string            `json:"role"`
+	Content []json.RawMessage `json:"content"`
+}
+
+type anthropicTool struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	InputSchema json.RawMessage `json:"input_schema"`
+}
+
+var defaultInputSchema = json.RawMessage(`{"type":"object","properties":{}}`)
+
+func buildAnthropicRequest(req Request, defaultModel string) ([]byte, error) {
+	model := req.Model
+	if model == "" {
+		model = defaultModel
+	}
+	maxTokens := req.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = 8192
+	}
+
+	ar := anthropicRequest{
+		Model:     model,
+		MaxTokens: maxTokens,
+		System:    req.System,
+		Stream:    true,
+	}
+
+	for _, t := range req.Tools {
+		schema := t.InputSchema
+		if len(schema) == 0 {
+			schema = defaultInputSchema
+		}
+		ar.Tools = append(ar.Tools, anthropicTool{
+			Name:        t.Name,
+			Description: t.Description,
+			InputSchema: schema,
+		})
+	}
+
+	for _, msg := range req.Messages {
+		am, err := toAnthropicMessage(msg)
+		if err != nil {
+			return nil, err
+		}
+		ar.Messages = append(ar.Messages, am)
+	}
+
+	return json.Marshal(ar)
+}
+
+func toAnthropicMessage(msg Message) (anthropicMessage, error) {
+	am := anthropicMessage{Role: string(msg.Role)}
+	for _, block := range msg.Content {
+		raw, err := marshalBlock(block)
+		if err != nil {
+			return anthropicMessage{}, err
+		}
+		am.Content = append(am.Content, raw)
+	}
+	return am, nil
+}
+
+// --- SSE parsing ---
+
+func parseAnthropicSSE(r io.Reader, cb func(StreamEvent)) error {
+	scanner := bufio.NewScanner(r)
+
+	// Track in-progress tool use blocks by index.
+	type toolState struct {
+		id    string
+		name  string
+		input strings.Builder
+	}
+	tools := map[int]*toolState{}
+	var currentToolIndex int
+
+	var usage UsageStats
+
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		if strings.HasPrefix(line, "event:") {
+			// event type line — we handle via data parsing
+			continue
+		}
+
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+
+		data := strings.TrimPrefix(line, "data:")
+		data = strings.TrimSpace(data)
+		if data == "[DONE]" {
+			break
+		}
+
+		var ev map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(data), &ev); err != nil {
+			continue
+		}
+
+		evType := jsonString(ev["type"])
+
+		switch evType {
+		case "message_start":
+			// extract input token count
+			var ms struct {
+				Message struct {
+					Usage struct {
+						InputTokens int `json:"input_tokens"`
+					} `json:"usage"`
+				} `json:"message"`
+			}
+			if err := json.Unmarshal([]byte(data), &ms); err == nil {
+				usage.InputTokens = ms.Message.Usage.InputTokens
+				// Emit a no-content event carrying the input token count.
+				cb(StreamEvent{InputTokens: usage.InputTokens})
+			}
+
+		case "content_block_start":
+			var cbs struct {
+				Index        int `json:"index"`
+				ContentBlock struct {
+					Type string `json:"type"`
+					ID   string `json:"id"`
+					Name string `json:"name"`
+				} `json:"content_block"`
+			}
+			if err := json.Unmarshal([]byte(data), &cbs); err != nil {
+				continue
+			}
+			if cbs.ContentBlock.Type == "tool_use" {
+				currentToolIndex = cbs.Index
+				tools[cbs.Index] = &toolState{
+					id:   cbs.ContentBlock.ID,
+					name: cbs.ContentBlock.Name,
+				}
+				cb(StreamEvent{
+					Type: EventToolUseStart,
+					ToolCall: &ToolUseEvent{
+						ID:   cbs.ContentBlock.ID,
+						Name: cbs.ContentBlock.Name,
+					},
+				})
+			}
+
+		case "content_block_delta":
+			var cbd struct {
+				Index int `json:"index"`
+				Delta struct {
+					Type        string `json:"type"`
+					Text        string `json:"text"`
+					PartialJSON string `json:"partial_json"`
+				} `json:"delta"`
+			}
+			if err := json.Unmarshal([]byte(data), &cbd); err != nil {
+				continue
+			}
+			switch cbd.Delta.Type {
+			case "text_delta":
+				cb(StreamEvent{Type: EventTextDelta, Content: cbd.Delta.Text})
+			case "input_json_delta":
+				if ts, ok := tools[cbd.Index]; ok {
+					ts.input.WriteString(cbd.Delta.PartialJSON)
+					cb(StreamEvent{
+						Type: EventToolUseDelta,
+						ToolCall: &ToolUseEvent{
+							ID:    ts.id,
+							Name:  ts.name,
+							Input: cbd.Delta.PartialJSON,
+						},
+					})
+				}
+			}
+
+		case "content_block_stop":
+			var cbs struct {
+				Index int `json:"index"`
+			}
+			if err := json.Unmarshal([]byte(data), &cbs); err != nil {
+				continue
+			}
+			if ts, ok := tools[cbs.Index]; ok {
+				cb(StreamEvent{
+					Type: EventToolUseDone,
+					ToolCall: &ToolUseEvent{
+						ID:    ts.id,
+						Name:  ts.name,
+						Input: ts.input.String(),
+					},
+				})
+				_ = currentToolIndex
+			}
+
+		case "message_delta":
+			var md struct {
+				Usage struct {
+					OutputTokens int `json:"output_tokens"`
+				} `json:"usage"`
+			}
+			if err := json.Unmarshal([]byte(data), &md); err == nil {
+				usage.OutputTokens = md.Usage.OutputTokens
+			}
+
+		case "message_stop":
+			cb(StreamEvent{Type: EventDone, Usage: &usage})
+
+		case "error":
+			var errEv struct {
+				Error struct {
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal([]byte(data), &errEv); err == nil {
+				return fmt.Errorf("anthropic: stream error: %s", errEv.Error.Message)
+			}
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("anthropic: scan: %w", err)
+	}
+	return nil
+}
+
+// Chat sends a non-streaming request and returns the complete response by
+// accumulating the stream internally.
+func (p *AnthropicProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
+	var textParts []string
+	var toolCalls []CompletedToolCall
+	var usageStats UsageStats
+
+	// Track in-progress tool calls keyed by ID.
+	pending := map[string]*CompletedToolCall{}
+
+	err := p.Stream(ctx, req, func(ev StreamEvent) {
+		switch ev.Type {
+		case EventTextDelta:
+			if ev.Content != "" {
+				textParts = append(textParts, ev.Content)
+			}
+		case EventToolUseStart:
+			if ev.ToolCall != nil {
+				pending[ev.ToolCall.ID] = &CompletedToolCall{
+					ID:   ev.ToolCall.ID,
+					Name: ev.ToolCall.Name,
+				}
+			}
+		case EventToolUseDelta:
+			if ev.ToolCall != nil {
+				if tc, ok := pending[ev.ToolCall.ID]; ok {
+					tc.Input += ev.ToolCall.Input
+				}
+			}
+		case EventToolUseDone:
+			if ev.ToolCall != nil {
+				if tc, ok := pending[ev.ToolCall.ID]; ok {
+					toolCalls = append(toolCalls, *tc)
+					delete(pending, ev.ToolCall.ID)
+				}
+			}
+		case EventDone:
+			if ev.Usage != nil {
+				usageStats = *ev.Usage
+			}
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	combined := ""
+	for _, p := range textParts {
+		combined += p
+	}
+
+	resp := &ChatResponse{
+		Content: combined,
+		Usage: Usage{
+			InputTokens:  usageStats.InputTokens,
+			OutputTokens: usageStats.OutputTokens,
+			CacheRead:    usageStats.CacheRead,
+			CacheWrite:   usageStats.CacheWrite,
+		},
+	}
+	for _, tc := range toolCalls {
+		resp.ToolCalls = append(resp.ToolCalls, ToolCall{
+			ID:    tc.ID,
+			Name:  tc.Name,
+			Input: tc.Input,
+		})
+	}
+	if len(resp.ToolCalls) > 0 {
+		resp.StopReason = "tool_use"
+	} else {
+		resp.StopReason = "end_turn"
+	}
+	return resp, nil
+}
+
+// anthropicModels lists the supported Anthropic models with approximate pricing.
+var anthropicModels = []ModelInfo{
+	{
+		ID:              "claude-opus-4-20250514",
+		Name:            "Claude Opus 4",
+		MaxTokens:       32000,
+		InputPricePerM:  15.0,
+		OutputPricePerM: 75.0,
+	},
+	{
+		ID:              "claude-sonnet-4-20250514",
+		Name:            "Claude Sonnet 4",
+		MaxTokens:       16000,
+		InputPricePerM:  3.0,
+		OutputPricePerM: 15.0,
+	},
+	{
+		ID:              "claude-haiku-4-20251001",
+		Name:            "Claude Haiku 4",
+		MaxTokens:       8192,
+		InputPricePerM:  0.8,
+		OutputPricePerM: 4.0,
+	},
+}
+
+// Models returns the list of Anthropic models known to this provider.
+func (p *AnthropicProvider) Models() []ModelInfo {
+	return anthropicModels
+}
+
+func jsonString(raw json.RawMessage) string {
+	if raw == nil {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return ""
+	}
+	return s
+}
