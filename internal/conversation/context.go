@@ -192,7 +192,6 @@ func (cw *ContextWindow) autoCompress(ctx context.Context, provider llm.Provider
 	}
 
 	req := llm.ChatRequest{
-		Model:     "claude-haiku-4-5-20251001",
 		System:    summarizePrompt,
 		Messages:  []llm.Message{llm.NewUserMessage(sb.String())},
 		MaxTokens: 512,

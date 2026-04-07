@@ -33,7 +33,7 @@ func (w *SingleWorkflow) Run(ctx context.Context, input WorkflowInput) (*Workflo
 	opts := agentOptions(input.Config)
 	a := agent.New(input.Provider, input.Tools, opts...)
 
-	result, err := a.Run(ctx, messages, nil)
+	result, err := a.Run(ctx, messages, input.OnText)
 	if err != nil {
 		return nil, fmt.Errorf("single workflow: %w", err)
 	}

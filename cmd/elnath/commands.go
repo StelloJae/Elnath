@@ -229,6 +229,7 @@ func runOrchestrated(
 		Tools:    reg,
 		Provider: provider,
 		Config:   wfCfg,
+		OnText:   func(s string) { fmt.Print(s) },
 	}
 
 	fmt.Println()

@@ -22,7 +22,8 @@ type WorkflowInput struct {
 	Tools    *tools.Registry
 	Provider llm.Provider
 	Config   WorkflowConfig
-	Extra    interface{} // workflow-specific dependencies (e.g. *ResearchDeps)
+	OnText   func(string) // streaming text callback (nil = silent)
+	Extra    interface{}   // workflow-specific dependencies (e.g. *ResearchDeps)
 }
 
 // WorkflowResult is the output of a completed workflow execution.

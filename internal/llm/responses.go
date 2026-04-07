@@ -49,39 +49,33 @@ func (p *ResponsesProvider) Models() []ModelInfo {
 }
 
 func (p *ResponsesProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
-	body := p.buildRequest(req, false)
-	data, err := json.Marshal(body)
-	if err != nil {
-		return nil, fmt.Errorf("responses: marshal: %w", err)
-	}
+	// Codex Responses API requires stream=true. Collect streamed chunks into a single response.
+	var textParts []string
+	var usage *UsageStats
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.baseURL+"/responses", bytes.NewReader(data))
+	err := p.Stream(ctx, req, func(ev StreamEvent) {
+		switch ev.Type {
+		case EventTextDelta:
+			textParts = append(textParts, ev.Content)
+		case EventDone:
+			usage = ev.Usage
+		}
+	})
 	if err != nil {
 		return nil, err
 	}
-	p.setHeaders(httpReq)
 
-	resp, err := p.client.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("responses: request: %w", err)
+	resp := &ChatResponse{
+		Content:    strings.Join(textParts, ""),
+		StopReason: "end_turn",
 	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("responses: read body: %w", err)
+	if usage != nil {
+		resp.Usage = Usage{
+			InputTokens:  usage.InputTokens,
+			OutputTokens: usage.OutputTokens,
+		}
 	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("responses: http %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	var result responsesResult
-	if err := json.Unmarshal(respBody, &result); err != nil {
-		return nil, fmt.Errorf("responses: unmarshal: %w", err)
-	}
-
-	return p.parseResult(&result), nil
+	return resp, nil
 }
 
 func (p *ResponsesProvider) Stream(ctx context.Context, req ChatRequest, cb func(StreamEvent)) error {
@@ -190,8 +184,12 @@ func (p *ResponsesProvider) buildRequest(req ChatRequest, stream bool) map[strin
 	if instructions == "" {
 		instructions = "You are a helpful assistant."
 	}
+	model := req.Model
+	if model == "" {
+		model = p.model
+	}
 	body := map[string]interface{}{
-		"model":        req.Model,
+		"model":        model,
 		"input":        input,
 		"instructions": instructions,
 		"store":        false,

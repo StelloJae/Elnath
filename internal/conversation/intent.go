@@ -73,7 +73,6 @@ func (c *LLMClassifier) Classify(ctx context.Context, provider llm.Provider, mes
 	))
 
 	req := llm.ChatRequest{
-		Model:       "claude-haiku-4-5-20251001",
 		Messages:    messages,
 		System:      classificationPrompt,
 		MaxTokens:   64,
