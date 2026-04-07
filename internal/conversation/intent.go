@@ -18,6 +18,7 @@ const (
 	IntentComplexTask Intent = "complex_task"
 	IntentProject     Intent = "project"
 	IntentResearch    Intent = "research"
+	IntentWikiQuery   Intent = "wiki_query"
 	IntentUnclear     Intent = "unclear"
 	IntentChat        Intent = "chat"
 )
@@ -40,6 +41,7 @@ Intent categories:
 - "complex_task": User wants a multi-step task requiring planning (e.g., "refactor this module")
 - "project": User is starting or describing a larger project or initiative
 - "research": User wants investigation, analysis, or exploration of a topic
+- "wiki_query": User is asking about previously stored knowledge, past events, or project history (e.g., "what changed in Stella?", "what do we know about X?")
 - "chat": User is making conversation, sharing thoughts, or giving feedback
 - "unclear": Intent cannot be determined from the message
 

@@ -38,18 +38,19 @@ func NewRouter(workflows map[string]Workflow) *Router {
 func (r *Router) Route(intent conversation.Intent, ctx *RoutingContext) Workflow {
 	switch intent {
 	case conversation.IntentComplexTask:
-		if ctx != nil && ctx.EstimatedFiles >= 4 {
-			if wf, ok := r.workflows["team"]; ok {
-				return wf
-			}
+		if ctx != nil && ctx.EstimatedFiles < 4 {
+			return r.get("single")
 		}
-		return r.get("single")
+		return r.get("team")
 
 	case conversation.IntentProject:
 		return r.get("autopilot")
 
 	case conversation.IntentResearch:
 		return r.get("research")
+
+	case conversation.IntentWikiQuery:
+		return r.get("single")
 
 	case conversation.IntentQuestion,
 		conversation.IntentSimpleTask,
