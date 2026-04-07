@@ -15,7 +15,6 @@ import (
 const defaultOpenAIBaseURL = "https://api.openai.com/v1"
 
 // OpenAIProvider implements Provider for the OpenAI chat completions API.
-// It is chat-only — tool_use is not forwarded (AD-3).
 type OpenAIProvider struct {
 	apiKey  string
 	baseURL string
@@ -53,7 +52,6 @@ func NewOpenAIProvider(apiKey, model string, opts ...OpenAIOption) *OpenAIProvid
 func (p *OpenAIProvider) Name() string { return "openai" }
 
 // Stream sends a chat completion request with streaming and calls cb for each event.
-// Tool definitions are NOT included in the request (chat-only per AD-3).
 func (p *OpenAIProvider) Stream(ctx context.Context, req Request, cb func(StreamEvent)) error {
 	msgs, err := toOpenAIMessages(req.Messages)
 	if err != nil {
@@ -76,6 +74,19 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req Request, cb func(Stream
 		Messages:  msgs,
 		MaxTokens: maxTokens,
 		Stream:    true,
+	}
+
+	if len(req.Tools) > 0 {
+		for _, t := range req.Tools {
+			body.Tools = append(body.Tools, openAITool{
+				Type: "function",
+				Function: openAIFunction{
+					Name:        t.Name,
+					Description: t.Description,
+					Parameters:  t.InputSchema,
+				},
+			})
+		}
 	}
 
 	payload, err := json.Marshal(body)
@@ -110,6 +121,8 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req Request, cb func(Stream
 func (p *OpenAIProvider) parseSSE(r io.Reader, cb func(StreamEvent)) error {
 	scanner := bufio.NewScanner(r)
 	var inputTokens int
+	// index → tool call ID, used to correlate argument delta chunks.
+	pendingToolIDs := map[int]string{}
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -148,6 +161,40 @@ func (p *OpenAIProvider) parseSSE(r io.Reader, cb func(StreamEvent)) error {
 					Content: choice.Delta.Content,
 				})
 			}
+
+			for _, tc := range choice.Delta.ToolCalls {
+				if tc.ID != "" {
+					// First chunk for this tool call: has ID and function name.
+					pendingToolIDs[tc.Index] = tc.ID
+					cb(StreamEvent{
+						Type: EventToolUseStart,
+						ToolCall: &ToolUseEvent{
+							ID:   tc.ID,
+							Name: tc.Function.Name,
+						},
+					})
+				}
+				if tc.Function.Arguments != "" {
+					id := pendingToolIDs[tc.Index]
+					cb(StreamEvent{
+						Type: EventToolUseDelta,
+						ToolCall: &ToolUseEvent{
+							ID:    id,
+							Input: tc.Function.Arguments,
+						},
+					})
+				}
+			}
+
+			if choice.FinishReason == "tool_calls" {
+				for _, id := range pendingToolIDs {
+					cb(StreamEvent{
+						Type:     EventToolUseDone,
+						ToolCall: &ToolUseEvent{ID: id},
+					})
+				}
+				pendingToolIDs = map[int]string{}
+			}
 		}
 	}
 
@@ -164,8 +211,8 @@ func (p *OpenAIProvider) parseSSE(r io.Reader, cb func(StreamEvent)) error {
 }
 
 // toOpenAIMessages converts []Message to OpenAI wire format.
-// ToolUseBlock and ToolResultBlock are converted to text so the chat
-// context is preserved without requiring tool_use support (AD-3).
+// ToolUseBlock in assistant messages → tool_calls field.
+// ToolResultBlock in user messages → separate "tool" role messages.
 func toOpenAIMessages(msgs []Message) ([]openAIMessage, error) {
 	out := make([]openAIMessage, 0, len(msgs))
 	for _, m := range msgs {
@@ -175,29 +222,52 @@ func toOpenAIMessages(msgs []Message) ([]openAIMessage, error) {
 			continue
 		}
 
-		var sb strings.Builder
+		// Collect text blocks and tool use blocks separately for assistant messages.
+		var textParts []string
+		var toolCalls []openAIToolCall
+		var toolResults []openAIMessage
+
 		for _, b := range m.Content {
 			switch blk := b.(type) {
 			case TextBlock:
-				sb.WriteString(blk.Text)
+				textParts = append(textParts, blk.Text)
 			case ToolUseBlock:
-				input, _ := json.Marshal(blk.Input)
-				fmt.Fprintf(&sb, "[tool_use: %s(%s)]", blk.Name, string(input))
-			case ToolResultBlock:
-				if blk.IsError {
-					fmt.Fprintf(&sb, "[tool_error(%s): %s]", blk.ToolUseID, blk.Content)
-				} else {
-					fmt.Fprintf(&sb, "[tool_result(%s): %s]", blk.ToolUseID, blk.Content)
+				args := string(blk.Input)
+				if args == "" {
+					args = "{}"
 				}
-			default:
-				// Unknown block: skip.
+				toolCalls = append(toolCalls, openAIToolCall{
+					ID:   blk.ID,
+					Type: "function",
+					Function: openAIFunctionCall{
+						Name:      blk.Name,
+						Arguments: args,
+					},
+				})
+			case ToolResultBlock:
+				// Tool results become standalone "tool" role messages.
+				toolResults = append(toolResults, openAIMessage{
+					Role:       "tool",
+					Content:    blk.Content,
+					ToolCallID: blk.ToolUseID,
+				})
 			}
 		}
 
-		out = append(out, openAIMessage{
-			Role:    role,
-			Content: sb.String(),
-		})
+		if len(toolResults) > 0 {
+			// User messages containing tool results are emitted as individual tool messages.
+			out = append(out, toolResults...)
+			continue
+		}
+
+		msg := openAIMessage{Role: role}
+		if len(textParts) > 0 {
+			msg.Content = strings.Join(textParts, "")
+		}
+		if len(toolCalls) > 0 {
+			msg.ToolCalls = toolCalls
+		}
+		out = append(out, msg)
 	}
 	return out, nil
 }
@@ -206,12 +276,38 @@ func toOpenAIMessages(msgs []Message) ([]openAIMessage, error) {
 func (p *OpenAIProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
 	var textParts []string
 	var usageStats UsageStats
+	pending := map[string]*CompletedToolCall{}
+	var toolCalls []ToolCall
 
 	err := p.Stream(ctx, req, func(ev StreamEvent) {
 		switch ev.Type {
 		case EventTextDelta:
 			if ev.Content != "" {
 				textParts = append(textParts, ev.Content)
+			}
+		case EventToolUseStart:
+			if ev.ToolCall != nil {
+				pending[ev.ToolCall.ID] = &CompletedToolCall{
+					ID:   ev.ToolCall.ID,
+					Name: ev.ToolCall.Name,
+				}
+			}
+		case EventToolUseDelta:
+			if ev.ToolCall != nil {
+				if tc, ok := pending[ev.ToolCall.ID]; ok {
+					tc.Input += ev.ToolCall.Input
+				}
+			}
+		case EventToolUseDone:
+			if ev.ToolCall != nil {
+				if tc, ok := pending[ev.ToolCall.ID]; ok {
+					toolCalls = append(toolCalls, ToolCall{
+						ID:    tc.ID,
+						Name:  tc.Name,
+						Input: tc.Input,
+					})
+					delete(pending, ev.ToolCall.ID)
+				}
 			}
 		case EventDone:
 			if ev.Usage != nil {
@@ -223,18 +319,20 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRespon
 		return nil, err
 	}
 
-	combined := ""
-	for _, part := range textParts {
-		combined += part
+	stopReason := "end_turn"
+	if len(toolCalls) > 0 {
+		stopReason = "tool_use"
 	}
-	return &ChatResponse{
-		Content:    combined,
-		StopReason: "end_turn",
+	resp := &ChatResponse{
+		Content:    strings.Join(textParts, ""),
+		StopReason: stopReason,
 		Usage: Usage{
 			InputTokens:  usageStats.InputTokens,
 			OutputTokens: usageStats.OutputTokens,
 		},
-	}, nil
+	}
+	resp.ToolCalls = toolCalls
+	return resp, nil
 }
 
 var openAIModels = []ModelInfo{
@@ -262,8 +360,32 @@ func (p *OpenAIProvider) Models() []ModelInfo {
 // ---- wire types ----
 
 type openAIMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string          `json:"role"`
+	Content    string          `json:"content,omitempty"`
+	ToolCalls  []openAIToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string          `json:"tool_call_id,omitempty"`
+}
+
+type openAIToolCall struct {
+	ID       string             `json:"id"`
+	Type     string             `json:"type"` // "function"
+	Function openAIFunctionCall `json:"function"`
+}
+
+type openAIFunctionCall struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+type openAITool struct {
+	Type     string         `json:"type"` // always "function"
+	Function openAIFunction `json:"function"`
+}
+
+type openAIFunction struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Parameters  json.RawMessage `json:"parameters,omitempty"`
 }
 
 type openAIChatRequest struct {
@@ -271,6 +393,7 @@ type openAIChatRequest struct {
 	Messages  []openAIMessage `json:"messages"`
 	MaxTokens int             `json:"max_tokens"`
 	Stream    bool            `json:"stream"`
+	Tools     []openAITool    `json:"tools,omitempty"`
 }
 
 type openAIStreamChunk struct {
@@ -279,11 +402,20 @@ type openAIStreamChunk struct {
 }
 
 type openAIStreamChoice struct {
-	Delta openAIStreamDelta `json:"delta"`
+	Delta        openAIStreamDelta `json:"delta"`
+	FinishReason string            `json:"finish_reason,omitempty"`
 }
 
 type openAIStreamDelta struct {
-	Content string `json:"content"`
+	Content   string                 `json:"content"`
+	ToolCalls []openAIStreamToolCall `json:"tool_calls,omitempty"`
+}
+
+type openAIStreamToolCall struct {
+	Index    int                `json:"index"`
+	ID       string             `json:"id,omitempty"`
+	Type     string             `json:"type,omitempty"`
+	Function openAIFunctionCall `json:"function"`
 }
 
 type openAIUsage struct {

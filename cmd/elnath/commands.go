@@ -608,6 +608,9 @@ Subcommands:
 // ---- helpers ----
 
 func buildProvider(cfg *config.Config) (llm.Provider, string, error) {
+	reg := llm.NewRegistry()
+	var model string
+
 	if cfg.Anthropic.APIKey != "" {
 		var opts []llm.AnthropicOption
 		if cfg.Anthropic.BaseURL != "" {
@@ -616,19 +619,59 @@ func buildProvider(cfg *config.Config) (llm.Provider, string, error) {
 		if cfg.Anthropic.Timeout > 0 {
 			opts = append(opts, llm.WithAnthropicTimeout(time.Duration(cfg.Anthropic.Timeout)*time.Second))
 		}
-		return llm.NewAnthropicProvider(cfg.Anthropic.APIKey, cfg.Anthropic.Model, opts...), cfg.Anthropic.Model, nil
+		m := cfg.Anthropic.Model
+		if m == "" {
+			m = "claude-sonnet-4-6"
+		}
+		reg.Register("anthropic", llm.NewAnthropicProvider(cfg.Anthropic.APIKey, m, opts...))
+		if model == "" {
+			model = m
+		}
 	}
-	if token, codexModel, accountID := loadCodexAuth(); token != "" {
-		return llm.NewResponsesProvider(token, codexModel, accountID), codexModel, nil
+
+	codexToken, codexModel, codexAccountID := loadCodexAuth()
+	if codexToken != "" {
+		reg.Register("openai-responses", llm.NewResponsesProvider(codexToken, codexModel, codexAccountID))
+		if model == "" {
+			model = codexModel
+		}
 	}
+
 	if cfg.OpenAI.APIKey != "" {
 		var opts []llm.OpenAIOption
 		if cfg.OpenAI.BaseURL != "" {
 			opts = append(opts, llm.WithOpenAIBaseURL(cfg.OpenAI.BaseURL))
 		}
-		return llm.NewOpenAIProvider(cfg.OpenAI.APIKey, cfg.OpenAI.Model, opts...), cfg.OpenAI.Model, nil
+		m := cfg.OpenAI.Model
+		if m == "" {
+			m = "gpt-4o"
+		}
+		reg.Register("openai", llm.NewOpenAIProvider(cfg.OpenAI.APIKey, m, opts...))
+		if model == "" {
+			model = m
+		}
 	}
-	return nil, "", fmt.Errorf("no LLM provider configured: set ELNATH_ANTHROPIC_API_KEY or ELNATH_OPENAI_API_KEY")
+
+	if len(reg.List()) == 0 {
+		return nil, "", fmt.Errorf("no LLM provider configured: set ELNATH_ANTHROPIC_API_KEY or ELNATH_OPENAI_API_KEY")
+	}
+
+	canonical := llm.ResolveModel(model)
+	detectedProvider := llm.DetectProvider(canonical)
+
+	// Codex Responses provider preferred over plain OpenAI for the same model names.
+	if detectedProvider == "openai" && codexToken != "" {
+		p, err := reg.Get("openai-responses")
+		if err == nil {
+			return p, canonical, nil
+		}
+	}
+
+	p, resolvedModel, err := reg.ForModel(model)
+	if err != nil {
+		return nil, "", err
+	}
+	return p, resolvedModel, nil
 }
 
 func loadCodexAuth() (token, model, accountID string) {
