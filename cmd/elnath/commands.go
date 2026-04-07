@@ -122,7 +122,8 @@ func cmdRun(ctx context.Context, args []string) error {
 		WithLogger(app.Logger)
 
 	// Build tool registry (with wiki tools if wiki is available).
-	reg := buildToolRegistry(cfg.DataDir)
+	cwd, _ := os.Getwd()
+	reg := buildToolRegistry(cwd)
 	registerWikiTools(reg, cfg.WikiDir, db.Wiki)
 
 	// Build permission engine.
@@ -302,7 +303,8 @@ func cmdDaemonStart(ctx context.Context) error {
 		return fmt.Errorf("build provider: %w", err)
 	}
 
-	reg := buildToolRegistry(cfg.DataDir)
+	cwd, _ := os.Getwd()
+	reg := buildToolRegistry(cwd)
 	registerWikiTools(reg, cfg.WikiDir, db.Wiki)
 
 	mode := parsePermissionMode(cfg.Permission.Mode)
@@ -695,15 +697,15 @@ func registerWikiTools(reg *tools.Registry, wikiDir string, wikiDB *sql.DB) {
 	reg.Register(wiki.NewWikiWriteTool(store))
 }
 
-func buildToolRegistry(dataDir string) *tools.Registry {
+func buildToolRegistry(workDir string) *tools.Registry {
 	reg := tools.NewRegistry()
-	reg.Register(tools.NewBashTool(dataDir))
-	reg.Register(tools.NewReadTool(dataDir))
-	reg.Register(tools.NewWriteTool(dataDir))
-	reg.Register(tools.NewEditTool(dataDir))
-	reg.Register(tools.NewGlobTool(dataDir))
-	reg.Register(tools.NewGrepTool(dataDir))
-	reg.Register(tools.NewGitTool(dataDir))
+	reg.Register(tools.NewBashTool(workDir))
+	reg.Register(tools.NewReadTool(workDir))
+	reg.Register(tools.NewWriteTool(workDir))
+	reg.Register(tools.NewEditTool(workDir))
+	reg.Register(tools.NewGlobTool(workDir))
+	reg.Register(tools.NewGrepTool(workDir))
+	reg.Register(tools.NewGitTool(workDir))
 	reg.Register(tools.NewWebFetchTool())
 	return reg
 }
