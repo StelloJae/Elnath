@@ -51,14 +51,45 @@ func (p *ResponsesProvider) Models() []ModelInfo {
 func (p *ResponsesProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
 	// Codex Responses API requires stream=true. Collect streamed chunks into a single response.
 	var textParts []string
-	var usage *UsageStats
+	var toolCalls []CompletedToolCall
+	var usageStats UsageStats
+
+	pending := map[string]*CompletedToolCall{}
 
 	err := p.Stream(ctx, req, func(ev StreamEvent) {
 		switch ev.Type {
 		case EventTextDelta:
-			textParts = append(textParts, ev.Content)
+			if ev.Content != "" {
+				textParts = append(textParts, ev.Content)
+			}
+		case EventToolUseStart:
+			if ev.ToolCall != nil {
+				pending[ev.ToolCall.ID] = &CompletedToolCall{
+					ID:   ev.ToolCall.ID,
+					Name: ev.ToolCall.Name,
+				}
+			}
+		case EventToolUseDelta:
+			if ev.ToolCall != nil {
+				if tc, ok := pending[ev.ToolCall.ID]; ok {
+					tc.Input += ev.ToolCall.Input
+				}
+			}
+		case EventToolUseDone:
+			if ev.ToolCall != nil {
+				if tc, ok := pending[ev.ToolCall.ID]; ok {
+					tc.Input = ev.ToolCall.Input
+					toolCalls = append(toolCalls, *tc)
+					delete(pending, ev.ToolCall.ID)
+				}
+			}
 		case EventDone:
-			usage = ev.Usage
+			if ev.Usage != nil {
+				usageStats = UsageStats{
+					InputTokens:  ev.Usage.InputTokens,
+					OutputTokens: ev.Usage.OutputTokens,
+				}
+			}
 		}
 	})
 	if err != nil {
@@ -68,12 +99,20 @@ func (p *ResponsesProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRes
 	resp := &ChatResponse{
 		Content:    strings.Join(textParts, ""),
 		StopReason: "end_turn",
+		Usage: Usage{
+			InputTokens:  usageStats.InputTokens,
+			OutputTokens: usageStats.OutputTokens,
+		},
 	}
-	if usage != nil {
-		resp.Usage = Usage{
-			InputTokens:  usage.InputTokens,
-			OutputTokens: usage.OutputTokens,
-		}
+	for _, tc := range toolCalls {
+		resp.ToolCalls = append(resp.ToolCalls, ToolCall{
+			ID:    tc.ID,
+			Name:  tc.Name,
+			Input: tc.Input,
+		})
+	}
+	if len(resp.ToolCalls) > 0 {
+		resp.StopReason = "tool_use"
 	}
 	return resp, nil
 }
@@ -105,6 +144,11 @@ func (p *ResponsesProvider) Stream(ctx context.Context, req ChatRequest, cb func
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 1<<20), 1<<20)
 
+	// Track item_id → call_id mapping for function calls.
+	// The Responses API uses item_id in delta/done events but call_id is
+	// what we need for tool result matching.
+	itemToCallID := map[string]string{}
+
 	for scanner.Scan() {
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "data: ") {
@@ -123,6 +167,35 @@ func (p *ResponsesProvider) Stream(ctx context.Context, req ChatRequest, cb func
 		switch event.Type {
 		case "response.output_text.delta":
 			cb(StreamEvent{Type: EventTextDelta, Content: event.Delta})
+		case "response.output_item.added":
+			if event.Item != nil && event.Item.Type == "function_call" {
+				itemToCallID[event.Item.ID] = event.Item.CallID
+				cb(StreamEvent{
+					Type: EventToolUseStart,
+					ToolCall: &ToolUseEvent{
+						ID:   event.Item.CallID,
+						Name: event.Item.Name,
+					},
+				})
+			}
+		case "response.function_call_arguments.delta":
+			callID := itemToCallID[event.ItemID]
+			cb(StreamEvent{
+				Type: EventToolUseDelta,
+				ToolCall: &ToolUseEvent{
+					ID:    callID,
+					Input: event.Delta,
+				},
+			})
+		case "response.function_call_arguments.done":
+			callID := itemToCallID[event.ItemID]
+			cb(StreamEvent{
+				Type: EventToolUseDone,
+				ToolCall: &ToolUseEvent{
+					ID:    callID,
+					Input: event.Arguments,
+				},
+			})
 		case "response.completed":
 			var usage *UsageStats
 			if event.Response != nil && event.Response.Usage != nil {
@@ -150,34 +223,47 @@ func (p *ResponsesProvider) setHeaders(req *http.Request) {
 }
 
 func (p *ResponsesProvider) buildRequest(req ChatRequest, stream bool) map[string]interface{} {
-	input := make([]map[string]interface{}, 0, len(req.Messages))
+	input := make([]interface{}, 0, len(req.Messages)*2)
 
 	// System prompt handled via "instructions" field, not in input
 
 	for _, msg := range req.Messages {
-		m := map[string]interface{}{"role": msg.Role}
-		parts := make([]map[string]interface{}, 0)
+		var textParts []map[string]interface{}
 		for _, block := range msg.Content {
 			switch b := block.(type) {
 			case TextBlock:
-				parts = append(parts, map[string]interface{}{
+				textParts = append(textParts, map[string]interface{}{
 					"type": "input_text",
 					"text": b.Text,
 				})
 			case ToolUseBlock:
-				// skip tool_use in input (handled separately)
+				// Flush accumulated text parts as a role message first.
+				if len(textParts) > 0 {
+					input = append(input, buildRoleMessage(msg.Role, textParts))
+					textParts = nil
+				}
+				input = append(input, map[string]interface{}{
+					"type":      "function_call",
+					"name":      b.Name,
+					"call_id":   b.ID,
+					"arguments": string(b.Input),
+				})
 			case ToolResultBlock:
-				// skip tool results for now (chat-only mode)
+				// Flush accumulated text parts as a role message first.
+				if len(textParts) > 0 {
+					input = append(input, buildRoleMessage(msg.Role, textParts))
+					textParts = nil
+				}
+				input = append(input, map[string]interface{}{
+					"type":    "function_call_output",
+					"call_id": b.ToolUseID,
+					"output":  b.Content,
+				})
 			}
 		}
-		if len(parts) == 1 {
-			m["content"] = parts[0]["text"]
-		} else if len(parts) > 1 {
-			m["content"] = parts
-		} else {
-			m["content"] = msg.Text()
+		if len(textParts) > 0 {
+			input = append(input, buildRoleMessage(msg.Role, textParts))
 		}
-		input = append(input, m)
 	}
 
 	instructions := req.System
@@ -200,24 +286,68 @@ func (p *ResponsesProvider) buildRequest(req ChatRequest, stream bool) map[strin
 	if req.Temperature > 0 {
 		body["temperature"] = req.Temperature
 	}
+	if len(req.Tools) > 0 {
+		tools := make([]map[string]interface{}, 0, len(req.Tools))
+		for _, t := range req.Tools {
+			tool := map[string]interface{}{
+				"type":        "function",
+				"name":        t.Name,
+				"description": t.Description,
+			}
+			if len(t.InputSchema) > 0 {
+				var schema interface{}
+				if err := json.Unmarshal(t.InputSchema, &schema); err == nil {
+					tool["parameters"] = schema
+				}
+			}
+			tools = append(tools, tool)
+		}
+		body["tools"] = tools
+	}
 	return body
+}
+
+func buildRoleMessage(role string, parts []map[string]interface{}) map[string]interface{} {
+	if len(parts) == 1 {
+		return map[string]interface{}{
+			"role":    role,
+			"content": parts[0]["text"],
+		}
+	}
+	return map[string]interface{}{
+		"role":    role,
+		"content": parts,
+	}
 }
 
 func (p *ResponsesProvider) parseResult(r *responsesResult) *ChatResponse {
 	var text strings.Builder
+	var toolCalls []ToolCall
 	for _, item := range r.Output {
-		if item.Type == "message" {
+		switch item.Type {
+		case "message":
 			for _, c := range item.Content {
 				if c.Type == "output_text" {
 					text.WriteString(c.Text)
 				}
 			}
+		case "function_call":
+			toolCalls = append(toolCalls, ToolCall{
+				ID:    item.CallID,
+				Name:  item.Name,
+				Input: item.Arguments,
+			})
 		}
 	}
 
+	stopReason := "end_turn"
+	if len(toolCalls) > 0 {
+		stopReason = "tool_use"
+	}
 	resp := &ChatResponse{
 		Content:    text.String(),
-		StopReason: "end_turn",
+		ToolCalls:  toolCalls,
+		StopReason: stopReason,
 	}
 	if r.Usage != nil {
 		resp.Usage = Usage{
@@ -237,8 +367,11 @@ type responsesResult struct {
 }
 
 type responsesOutput struct {
-	Type    string             `json:"type"`
-	Content []responsesContent `json:"content"`
+	Type      string             `json:"type"`
+	Content   []responsesContent `json:"content"`
+	Name      string             `json:"name,omitempty"`
+	CallID    string             `json:"call_id,omitempty"`
+	Arguments string             `json:"arguments,omitempty"`
 }
 
 type responsesContent struct {
@@ -252,7 +385,18 @@ type responsesUsage struct {
 }
 
 type responsesStreamEvent struct {
-	Type     string           `json:"type"`
-	Delta    string           `json:"delta"`
-	Response *responsesResult `json:"response"`
+	Type      string           `json:"type"`
+	Delta     string           `json:"delta"`
+	Response  *responsesResult `json:"response"`
+	Item      *responsesItem   `json:"item,omitempty"`
+	ItemID    string           `json:"item_id,omitempty"`
+	Arguments string           `json:"arguments,omitempty"`
+}
+
+type responsesItem struct {
+	Type      string `json:"type"`
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	CallID    string `json:"call_id"`
+	Arguments string `json:"arguments"`
 }
