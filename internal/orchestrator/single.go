@@ -60,6 +60,12 @@ func agentOptions(cfg WorkflowConfig) []agent.Option {
 	if cfg.MaxIterations > 0 {
 		opts = append(opts, agent.WithMaxIterations(cfg.MaxIterations))
 	}
+	if cfg.Hooks != nil {
+		opts = append(opts, agent.WithHooks(cfg.Hooks))
+	}
+	if cfg.Permission != nil {
+		opts = append(opts, agent.WithPermission(cfg.Permission))
+	}
 	return opts
 }
 

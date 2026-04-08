@@ -113,8 +113,9 @@ func (p *Permission) Check(ctx context.Context, toolName string, input json.RawM
 // isReadOnly returns true for tools that only read state and never modify it.
 func isReadOnly(name string) bool {
 	switch name {
-	case "read", "glob", "grep", "ls", "git_log", "git_diff", "git_status",
-		"web_fetch", "web_search":
+	case "read_file", "glob", "grep", "web_fetch", "web_search",
+		"wiki_search", "wiki_read",
+		"conversation_search", "cross_project_search", "cross_project_conversation_search":
 		return true
 	}
 	return false
@@ -124,7 +125,7 @@ func isReadOnly(name string) bool {
 // execute arbitrary commands.
 func isEditTool(name string) bool {
 	switch name {
-	case "write", "edit":
+	case "write_file", "edit_file", "wiki_write":
 		return true
 	}
 	return false

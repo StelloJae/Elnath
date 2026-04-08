@@ -87,3 +87,80 @@ func TestBashWorkingDir(t *testing.T) {
 		}
 	}
 }
+
+func TestBashEmptyCommand(t *testing.T) {
+	tool := NewBashTool(t.TempDir())
+
+	res, err := tool.Execute(context.Background(), makeBashParams(t, "   ", nil))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !res.IsError {
+		t.Errorf("expected error result for empty command, got success: %s", res.Output)
+	}
+}
+
+func TestBashInvalidParams(t *testing.T) {
+	tool := NewBashTool(t.TempDir())
+
+	res, err := tool.Execute(context.Background(), json.RawMessage(`not-valid-json`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !res.IsError {
+		t.Errorf("expected error result for invalid JSON params, got success: %s", res.Output)
+	}
+}
+
+func TestBashAccessors(t *testing.T) {
+	tool := NewBashTool(t.TempDir())
+
+	if tool.Name() != "bash" {
+		t.Errorf("Name() = %q, want %q", tool.Name(), "bash")
+	}
+	if tool.Description() == "" {
+		t.Error("Description() returned empty string")
+	}
+	schema := tool.Schema()
+	if len(schema) == 0 {
+		t.Error("Schema() returned empty")
+	}
+}
+
+func TestAnalyzeCommand(t *testing.T) {
+	cases := []struct {
+		command   string
+		dangerous bool
+		reason    string
+	}{
+		{command: "echo hello", dangerous: false},
+		{command: "sudo rm -rf /", dangerous: true},
+		{command: "dd if=/dev/zero of=/dev/sda", dangerous: true},
+		{command: "rm -rf /", dangerous: true},
+		{command: "rm -rf ~", dangerous: true},
+		{command: "rm -fr /", dangerous: true},
+		{command: "rm file.txt", dangerous: false},
+		{command: "chmod 777 /etc/passwd", dangerous: true},
+		{command: "chown root /usr/bin/test", dangerous: true},
+		{command: "chmod 644 myfile.txt", dangerous: false},
+		{command: "git push --force origin main", dangerous: true},
+		{command: "git push --force origin feature", dangerous: false},
+		{command: "git push origin main", dangerous: false},
+		{command: "git push -f origin master", dangerous: true},
+		{command: "(((", dangerous: false}, // unparseable — bash will report the error
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.command, func(t *testing.T) {
+			dangerous, reason := analyzeCommand(tc.command)
+			if dangerous != tc.dangerous {
+				t.Errorf("analyzeCommand(%q) dangerous=%v, want %v (reason=%q)",
+					tc.command, dangerous, tc.dangerous, reason)
+			}
+			if tc.dangerous && reason == "" {
+				t.Errorf("analyzeCommand(%q) returned dangerous=true but empty reason", tc.command)
+			}
+		})
+	}
+}

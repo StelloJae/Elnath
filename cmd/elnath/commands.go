@@ -12,12 +12,15 @@ import (
 	"strings"
 	"time"
 
+	"log/slog"
+
 	"github.com/stello/elnath/internal/agent"
 	"github.com/stello/elnath/internal/config"
 	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/core"
 	"github.com/stello/elnath/internal/daemon"
 	"github.com/stello/elnath/internal/llm"
+	"github.com/stello/elnath/internal/mcp"
 	"github.com/stello/elnath/internal/orchestrator"
 	"github.com/stello/elnath/internal/self"
 	"github.com/stello/elnath/internal/tools"
@@ -33,6 +36,7 @@ func commandRegistry() map[string]commandRunner {
 		"run":     cmdRun,
 		"daemon":  cmdDaemon,
 		"wiki":    cmdWiki,
+		"search":  cmdSearch,
 	}
 }
 
@@ -58,6 +62,7 @@ Commands:
   run       Interactive chat mode
   daemon    Background daemon mode
   wiki      Wiki management (search, lint, ingest)
+  search    Search past conversations
   version   Show version
   help      Show this help
 
@@ -75,6 +80,14 @@ func cmdRun(ctx context.Context, args []string) error {
 	if cfgPath == "" {
 		cfgPath = config.DefaultConfigPath()
 	}
+
+	// First-run onboarding.
+	if config.NeedsOnboarding(cfgPath) {
+		if _, err := config.RunOnboarding(cfgPath, os.Stdin, os.Stdout); err != nil {
+			return fmt.Errorf("onboarding: %w", err)
+		}
+	}
+
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -138,7 +151,18 @@ func cmdRun(ctx context.Context, args []string) error {
 	// Build tool registry (with wiki tools if wiki is available).
 	cwd, _ := os.Getwd()
 	reg := buildToolRegistry(cwd)
-	registerWikiTools(reg, cfg.WikiDir, db.Wiki)
+	gitSync, wikiIdx := registerWikiTools(reg, cfg.WikiDir, db.Wiki)
+	reg.Register(conversation.NewConversationSearchTool(historyStore))
+
+	// Register cross-project search tools if projects are configured.
+	if len(cfg.Projects) > 0 {
+		registerCrossProjectTools(reg, cfg.Projects, app)
+	}
+
+	// Start MCP servers and register their tools (failures are non-fatal).
+	if len(cfg.MCPServers) > 0 {
+		registerMCPTools(ctx, reg, cfg.MCPServers, app)
+	}
 
 	// Build permission engine.
 	mode := parsePermissionMode(cfg.Permission.Mode)
@@ -149,10 +173,25 @@ func cmdRun(ctx context.Context, args []string) error {
 		agent.WithPrompter(&cliPrompter{}),
 	)
 
+	// Build hooks from config.
+	var hooks *agent.HookRegistry
+	if len(cfg.Hooks) > 0 {
+		hooks = agent.NewHookRegistry()
+		for _, hc := range cfg.Hooks {
+			hooks.Add(&agent.CommandHook{
+				Matcher: hc.Matcher,
+				PreCmd:  hc.PreCommand,
+				PostCmd: hc.PostCommand,
+			})
+		}
+	}
+
 	// Build workflow router.
 	wfCfg := orchestrator.WorkflowConfig{
 		Model:        model,
 		SystemPrompt: self.BuildSystemPromptWithPersona(selfState, "", personaExtra),
+		Hooks:        hooks,
+		Permission:   perm,
 	}
 	router := buildRouter(wfCfg)
 
@@ -168,9 +207,14 @@ func cmdRun(ctx context.Context, args []string) error {
 	// Parse optional initial prompt from args.
 	if len(args) > 0 {
 		prompt := strings.Join(args, " ")
-		messages, err = runOrchestrated(ctx, mgr, router, provider, reg, perm, sess, messages, prompt, wfCfg, app)
+		messages, err = runOrchestrated(ctx, mgr, router, provider, reg, perm, sess, messages, prompt, wfCfg, wikiIdx, app)
 		if err != nil {
 			return err
+		}
+		if gitSync != nil {
+			if cerr := gitSync.Commit("auto: wiki update"); cerr != nil {
+				app.Logger.Warn("wiki git commit failed", "error", cerr)
+			}
 		}
 	}
 
@@ -188,16 +232,40 @@ func cmdRun(ctx context.Context, args []string) error {
 			break
 		}
 
-		messages, err = runOrchestrated(ctx, mgr, router, provider, reg, perm, sess, messages, line, wfCfg, app)
+		messages, err = runOrchestrated(ctx, mgr, router, provider, reg, perm, sess, messages, line, wfCfg, wikiIdx, app)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			continue
+		}
+		if gitSync != nil {
+			if cerr := gitSync.Commit("auto: wiki update"); cerr != nil {
+				app.Logger.Warn("wiki git commit failed", "error", cerr)
+			}
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("stdin: %w", err)
 	}
+
+	// Auto-document session to wiki.
+	if cfg.WikiDir != "" {
+		wikiStore, werr := wiki.NewStore(cfg.WikiDir)
+		if werr == nil {
+			ad := wiki.NewAutoDocumenter(wikiStore, provider, app.Logger)
+			if ierr := ad.IngestSession(ctx, sess.ID, messages); ierr != nil {
+				app.Logger.Warn("auto-documentation failed", "error", ierr)
+			} else {
+				app.Logger.Info("session auto-documented to wiki", "session", sess.ID)
+				if gitSync != nil {
+					if cerr := gitSync.Commit("auto: document session " + sess.ID); cerr != nil {
+						app.Logger.Warn("wiki git commit failed", "error", cerr)
+					}
+				}
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -213,6 +281,7 @@ func runOrchestrated(
 	messages []llm.Message,
 	userInput string,
 	wfCfg orchestrator.WorkflowConfig,
+	wikiIdx *wiki.Index,
 	app *core.App,
 ) ([]llm.Message, error) {
 	// Classify intent and prepare messages via conversation manager.
@@ -236,6 +305,14 @@ func runOrchestrated(
 	)
 	fmt.Printf("[%s → %s]\n", intent, wf.Name())
 
+	// Inject wiki RAG context into system prompt.
+	cfg := wfCfg
+	if wikiIdx != nil {
+		if ragCtx := wiki.BuildRAGContext(ctx, wikiIdx, userInput, 3); ragCtx != "" {
+			cfg.SystemPrompt += "\n\n" + ragCtx
+		}
+	}
+
 	// Execute workflow.
 	input := orchestrator.WorkflowInput{
 		Message:  userInput,
@@ -243,7 +320,7 @@ func runOrchestrated(
 		Session:  sess,
 		Tools:    reg,
 		Provider: provider,
-		Config:   wfCfg,
+		Config:   cfg,
 		OnText:   func(s string) { fmt.Print(s) },
 	}
 
@@ -252,6 +329,10 @@ func runOrchestrated(
 	fmt.Println()
 	if err != nil {
 		return nil, fmt.Errorf("workflow %s: %w", wf.Name(), err)
+	}
+
+	if summary := llm.FormatUsageSummary(wfCfg.Model, result.Usage); summary != "" {
+		fmt.Println(summary)
 	}
 
 	// Persist new messages.
@@ -521,6 +602,49 @@ func sendIPCRequest(socketPath string, req daemon.IPCRequest) (*daemon.IPCRespon
 	return &resp, nil
 }
 
+func cmdSearch(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: elnath search <query>")
+	}
+	cfgPath := extractConfigFlag(os.Args)
+	if cfgPath == "" {
+		cfgPath = config.DefaultConfigPath()
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+
+	db, err := core.OpenDB(cfg.DataDir)
+	if err != nil {
+		return fmt.Errorf("open db: %w", err)
+	}
+	defer db.Close()
+
+	if err := conversation.InitSchema(db.Main); err != nil {
+		return fmt.Errorf("init conversation schema: %w", err)
+	}
+
+	store := conversation.NewHistoryStore(db.Main)
+	query := strings.Join(args, " ")
+	results, err := store.Search(ctx, query, 20)
+	if err != nil {
+		return fmt.Errorf("search: %w", err)
+	}
+	if len(results) == 0 {
+		fmt.Println("No results found.")
+		return nil
+	}
+
+	for i, r := range results {
+		fmt.Printf("%d. [%s] session:%s (%s)\n   %s\n",
+			i+1, r.Role, r.SessionID,
+			r.CreatedAt.Format("2006-01-02 15:04"),
+			r.Snippet)
+	}
+	return nil
+}
+
 func cmdWiki(ctx context.Context, args []string) error {
 	cfgPath := extractConfigFlag(os.Args)
 	if cfgPath == "" {
@@ -752,21 +876,87 @@ func buildRouter(cfg orchestrator.WorkflowConfig) *orchestrator.Router {
 	return orchestrator.NewRouter(workflows)
 }
 
-func registerWikiTools(reg *tools.Registry, wikiDir string, wikiDB *sql.DB) {
+func registerWikiTools(reg *tools.Registry, wikiDir string, wikiDB *sql.DB) (*wiki.GitSync, *wiki.Index) {
 	if wikiDir == "" || wikiDB == nil {
-		return
+		return nil, nil
 	}
 	store, err := wiki.NewStore(wikiDir)
 	if err != nil {
-		return
+		return nil, nil
 	}
 	idx, err := wiki.NewIndex(wikiDB)
 	if err != nil {
-		return
+		return nil, nil
 	}
 	reg.Register(wiki.NewWikiSearchTool(idx))
 	reg.Register(wiki.NewWikiReadTool(store))
 	reg.Register(wiki.NewWikiWriteTool(store))
+
+	gs := wiki.NewGitSync(wikiDir, nil)
+	if err := gs.Init(); err != nil {
+		return nil, idx
+	}
+	return gs, idx
+}
+
+func registerCrossProjectTools(reg *tools.Registry, projects []config.ProjectRef, app *core.App) {
+	xps := wiki.NewCrossProjectSearcher()
+	xcs := conversation.NewCrossProjectConversationSearcher()
+	for _, p := range projects {
+		pDB, err := core.OpenDB(p.DataDir)
+		if err != nil {
+			app.Logger.Warn("cross-project: skip project, cannot open db",
+				"project", p.Name, "data_dir", p.DataDir, "error", err)
+			continue
+		}
+		app.RegisterCloser("cross-project-db:"+p.Name, pDB)
+		pIdx, err := wiki.NewIndex(pDB.Wiki)
+		if err != nil {
+			app.Logger.Warn("cross-project: skip project, cannot open wiki index",
+				"project", p.Name, "error", err)
+		} else {
+			xps.AddProject(p.Name, pIdx)
+		}
+		if err := conversation.InitSchema(pDB.Main); err == nil {
+			xcs.AddProject(p.Name, conversation.NewHistoryStore(pDB.Main))
+		}
+	}
+	if xps.Len() > 0 {
+		reg.Register(wiki.NewCrossProjectSearchTool(xps))
+	}
+	if xcs.Len() > 0 {
+		reg.Register(conversation.NewCrossProjectConversationSearchTool(xcs))
+	}
+}
+
+// registerMCPTools starts each configured MCP server, lists its tools, and
+// registers them in the tool registry. Failures are non-fatal: a server that
+// fails to start or initialize is logged and skipped.
+func registerMCPTools(ctx context.Context, reg *tools.Registry, servers []config.MCPServerConfig, app *core.App) {
+	for _, sc := range servers {
+		client, err := mcp.NewClient(ctx, sc.Command, sc.Args, sc.Env, app.Logger)
+		if err != nil {
+			app.Logger.Warn("mcp: failed to start server", slog.String("name", sc.Name), slog.String("error", err.Error()))
+			continue
+		}
+		app.RegisterCloser("mcp:"+sc.Name, client)
+
+		if err := client.Initialize(ctx); err != nil {
+			app.Logger.Warn("mcp: failed to initialize server", slog.String("name", sc.Name), slog.String("error", err.Error()))
+			continue
+		}
+
+		toolInfos, err := client.ListTools(ctx)
+		if err != nil {
+			app.Logger.Warn("mcp: failed to list tools", slog.String("name", sc.Name), slog.String("error", err.Error()))
+			continue
+		}
+
+		for _, info := range toolInfos {
+			reg.Register(mcp.NewTool(client, info))
+			app.Logger.Info("mcp: registered tool", slog.String("server", sc.Name), slog.String("tool", info.Name))
+		}
+	}
 }
 
 func buildToolRegistry(workDir string) *tools.Registry {

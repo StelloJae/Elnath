@@ -1,7 +1,7 @@
 .PHONY: build test lint run clean version
 
 BINARY := elnath
-VERSION := 0.1.0
+VERSION := 0.2.0
 LDFLAGS := -ldflags "-X main.version=$(VERSION)"
 
 build:

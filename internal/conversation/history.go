@@ -274,14 +274,36 @@ func (s *DBHistoryStore) scanHistoryResults(rows *sql.Rows) ([]HistoryResult, er
 }
 
 // rebuildFTS rebuilds the FTS index for messages in a given session.
+// Rows are fully consumed and closed before the write transaction begins to
+// avoid holding a read cursor open concurrently with a write (which deadlocks
+// on single-connection drivers such as modernc.org/sqlite in :memory: mode).
 func (s *DBHistoryStore) rebuildFTS(ctx context.Context, sessionID string) error {
+	type ftsRow struct {
+		id      int64
+		content string
+	}
+
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, content FROM conversation_messages WHERE session_id = ?
 	`, sessionID)
 	if err != nil {
 		return fmt.Errorf("history: fts rebuild query: %w", err)
 	}
-	defer rows.Close()
+
+	var entries []ftsRow
+	for rows.Next() {
+		var r ftsRow
+		if err := rows.Scan(&r.id, &r.content); err != nil {
+			rows.Close()
+			return fmt.Errorf("history: fts rebuild scan: %w", err)
+		}
+		entries = append(entries, r)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("history: fts rebuild rows: %w", err)
+	}
+	rows.Close()
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -289,22 +311,13 @@ func (s *DBHistoryStore) rebuildFTS(ctx context.Context, sessionID string) error
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	for rows.Next() {
-		var id int64
-		var content string
-		if err := rows.Scan(&id, &content); err != nil {
-			return fmt.Errorf("history: fts rebuild scan: %w", err)
-		}
-		// Insert or replace into FTS table.
+	for _, e := range entries {
 		if _, err := tx.ExecContext(ctx,
 			`INSERT OR REPLACE INTO conversation_messages_fts(rowid, content) VALUES (?, ?)`,
-			id, content,
+			e.id, e.content,
 		); err != nil {
 			return fmt.Errorf("history: fts rebuild insert: %w", err)
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("history: fts rebuild rows: %w", err)
 	}
 
 	return tx.Commit()

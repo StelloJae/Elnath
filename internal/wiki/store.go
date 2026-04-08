@@ -24,8 +24,14 @@ func NewStore(wikiDir string) (*Store, error) {
 }
 
 // absPath resolves a relative page path to an absolute filesystem path.
-func (s *Store) absPath(relPath string) string {
-	return filepath.Join(s.wikiDir, relPath)
+// Returns an error if the resolved path escapes the wiki directory.
+func (s *Store) absPath(relPath string) (string, error) {
+	abs := filepath.Join(s.wikiDir, relPath)
+	rel, err := filepath.Rel(s.wikiDir, abs)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return "", fmt.Errorf("wiki store: path %q escapes wiki directory", relPath)
+	}
+	return abs, nil
 }
 
 // Create writes a new wiki page to disk. Returns an error if the file already exists.
@@ -34,7 +40,10 @@ func (s *Store) Create(page *Page) error {
 		return fmt.Errorf("wiki store: page path must not be empty")
 	}
 
-	abs := s.absPath(page.Path)
+	abs, err := s.absPath(page.Path)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 		return fmt.Errorf("wiki store: create parent dirs for %q: %w", page.Path, err)
 	}
@@ -60,7 +69,10 @@ func (s *Store) Create(page *Page) error {
 
 // Read parses and returns the wiki page at relPath.
 func (s *Store) Read(path string) (*Page, error) {
-	abs := s.absPath(path)
+	abs, err := s.absPath(path)
+	if err != nil {
+		return nil, err
+	}
 	data, err := os.ReadFile(abs)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -83,7 +95,10 @@ func (s *Store) Update(page *Page) error {
 		return fmt.Errorf("wiki store: page path must not be empty")
 	}
 
-	abs := s.absPath(page.Path)
+	abs, err := s.absPath(page.Path)
+	if err != nil {
+		return err
+	}
 	if _, err := os.Stat(abs); os.IsNotExist(err) {
 		return fmt.Errorf("wiki store: page not found: %q", page.Path)
 	}
@@ -103,7 +118,10 @@ func (s *Store) Update(page *Page) error {
 
 // Delete removes the wiki page file at relPath.
 func (s *Store) Delete(path string) error {
-	abs := s.absPath(path)
+	abs, err := s.absPath(path)
+	if err != nil {
+		return err
+	}
 	if err := os.Remove(abs); err != nil {
 		if os.IsNotExist(err) {
 			return fmt.Errorf("wiki store: page not found: %q", path)
@@ -148,7 +166,10 @@ func (s *Store) List() ([]*Page, error) {
 
 // Upsert creates the page if it does not exist, or updates it if it does.
 func (s *Store) Upsert(page *Page) error {
-	abs := s.absPath(page.Path)
+	abs, err := s.absPath(page.Path)
+	if err != nil {
+		return err
+	}
 	if _, err := os.Stat(abs); os.IsNotExist(err) {
 		return s.Create(page)
 	}

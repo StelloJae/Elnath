@@ -246,6 +246,131 @@ func TestSegmentByTopic_AssistantOnly(t *testing.T) {
 	}
 }
 
+func TestCompressMessages_UnderBudget(t *testing.T) {
+	cw := NewContextWindow()
+	msgs := []llm.Message{
+		llm.NewUserMessage("hi"),
+		llm.NewAssistantMessage("hello"),
+	}
+	// Provider is never called since messages fit within budget.
+	provider := &mockProvider{}
+	result, err := cw.CompressMessages(context.Background(), provider, msgs, 100_000)
+	if err != nil {
+		t.Fatalf("CompressMessages: %v", err)
+	}
+	if len(result) != len(msgs) {
+		t.Errorf("message count = %d, want %d", len(result), len(msgs))
+	}
+}
+
+func TestCompressMessages_LLMSummary(t *testing.T) {
+	cw := NewContextWindow()
+
+	// Construct a message list that triggers flatSummarize (guaranteeing a provider call).
+	// flatSummarize is used when toCompress produces only 1 topic segment.
+	// One user message followed by many assistant messages = 1 segment.
+	// keepCount = recentTurnsToKeep*2 = 8; we need len(msgs) > 8 so toCompress is non-empty.
+	// Each message: 4 overhead + bodyLen/4 tokens. bodyLen=400 → 104 tokens each.
+	// 12 messages → 1248 tokens; maxTokens=200 → threshold=160 → triggers LLM summary.
+	const bodyLen = 400
+	body := strings.Repeat("a", bodyLen)
+	msgs := make([]llm.Message, 12)
+	// First message is user (starts the single topic segment in toCompress).
+	msgs[0] = llm.NewUserMessage(body)
+	// Remaining toCompress messages are all assistant — no new segments start.
+	for i := 1; i < 4; i++ {
+		msgs[i] = llm.NewAssistantMessage(body)
+	}
+	// Last 8 messages are the "recent" portion kept as-is.
+	for i := 4; i < 12; i++ {
+		if i%2 == 0 {
+			msgs[i] = llm.NewUserMessage(body)
+		} else {
+			msgs[i] = llm.NewAssistantMessage(body)
+		}
+	}
+
+	summaryCalled := false
+	provider := &mockProvider{
+		chatFn: func(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+			summaryCalled = true
+			return &llm.ChatResponse{Content: "Summary of earlier conversation"}, nil
+		},
+	}
+
+	result, err := cw.CompressMessages(context.Background(), provider, msgs, 200)
+	if err != nil {
+		t.Fatalf("CompressMessages: %v", err)
+	}
+	if !summaryCalled {
+		t.Error("expected LLM summarization to be called")
+	}
+	if len(result) >= len(msgs) {
+		t.Errorf("expected compression to reduce count from %d, got %d", len(msgs), len(result))
+	}
+}
+
+func TestCompressMessages_FallbackToSnip(t *testing.T) {
+	cw := NewContextWindow()
+
+	const bodyLen = 400
+	body := strings.Repeat("b", bodyLen)
+	msgs := make([]llm.Message, 20)
+	for i := range msgs {
+		if i%2 == 0 {
+			msgs[i] = llm.NewUserMessage(body)
+		} else {
+			msgs[i] = llm.NewAssistantMessage(body)
+		}
+	}
+
+	provider := &mockProvider{
+		chatFn: func(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+			return nil, fmt.Errorf("provider unavailable")
+		},
+	}
+
+	result, err := cw.CompressMessages(context.Background(), provider, msgs, 200)
+	if err != nil {
+		t.Fatalf("CompressMessages with provider error: %v", err)
+	}
+	// Should fall back to snip — result must be smaller than original.
+	if len(result) >= len(msgs) {
+		t.Errorf("expected snip to reduce count from %d, got %d", len(msgs), len(result))
+	}
+}
+
+func TestImportanceThreshold_Median(t *testing.T) {
+	cw := NewContextWindow()
+	segments := []topicSegment{
+		{importance: 1},
+		{importance: 5},
+		{importance: 3},
+	}
+	// Sorted: [1, 3, 5] → median at index 1 = 3.
+	got := cw.importanceThreshold(segments)
+	if got != 3 {
+		t.Errorf("importanceThreshold = %d, want 3", got)
+	}
+}
+
+func TestImportanceThreshold_Single(t *testing.T) {
+	cw := NewContextWindow()
+	segments := []topicSegment{{importance: 7}}
+	got := cw.importanceThreshold(segments)
+	if got != 7 {
+		t.Errorf("importanceThreshold = %d, want 7", got)
+	}
+}
+
+func TestImportanceThreshold_Empty(t *testing.T) {
+	cw := NewContextWindow()
+	got := cw.importanceThreshold(nil)
+	if got != 0 {
+		t.Errorf("importanceThreshold(nil) = %d, want 0", got)
+	}
+}
+
 func TestContextWindowFit_TrimKeepsRecent(t *testing.T) {
 	cw := NewContextWindow()
 	ctx := context.Background()

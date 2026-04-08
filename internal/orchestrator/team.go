@@ -194,6 +194,8 @@ func (w *TeamWorkflow) runOne(ctx context.Context, input WorkflowInput, st subta
 		Model:         input.Config.Model,
 		MaxIterations: input.Config.MaxIterations,
 		SystemPrompt:  subtaskSystemPrompt,
+		Hooks:         input.Config.Hooks,
+		Permission:    input.Config.Permission,
 	})
 	a := agent.New(input.Provider, input.Tools, opts...)
 

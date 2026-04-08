@@ -118,6 +118,8 @@ Your response must start with either PASS or FAIL.`, input.Message, lastAnswer)
 	opts := agentOptions(WorkflowConfig{
 		Model:         input.Config.Model,
 		MaxIterations: 3,
+		Hooks:         input.Config.Hooks,
+		Permission:    input.Config.Permission,
 	})
 	a := agent.New(input.Provider, input.Tools, opts...)
 

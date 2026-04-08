@@ -72,3 +72,48 @@ func TestSchemaBuilder(t *testing.T) {
 		}
 	})
 }
+
+func TestSchemaStringEnum(t *testing.T) {
+	p := StringEnum("pick one", "a", "b", "c")
+	if p.Type != "string" {
+		t.Errorf("Type = %q, want %q", p.Type, "string")
+	}
+	if p.Description != "pick one" {
+		t.Errorf("Description = %q, want %q", p.Description, "pick one")
+	}
+	if len(p.Enum) != 3 {
+		t.Fatalf("Enum length = %d, want 3", len(p.Enum))
+	}
+	want := []string{"a", "b", "c"}
+	for i, v := range want {
+		if p.Enum[i] != v {
+			t.Errorf("Enum[%d] = %q, want %q", i, p.Enum[i], v)
+		}
+	}
+}
+
+func TestSchemaBool(t *testing.T) {
+	p := Bool("a flag")
+	if p.Type != "boolean" {
+		t.Errorf("Type = %q, want %q", p.Type, "boolean")
+	}
+	if p.Description != "a flag" {
+		t.Errorf("Description = %q, want %q", p.Description, "a flag")
+	}
+}
+
+func TestSchemaArray(t *testing.T) {
+	p := Array("list of names", "string")
+	if p.Type != "array" {
+		t.Errorf("Type = %q, want %q", p.Type, "array")
+	}
+	if p.Description != "list of names" {
+		t.Errorf("Description = %q, want %q", p.Description, "list of names")
+	}
+	if p.Items == nil {
+		t.Fatal("Items is nil")
+	}
+	if p.Items.Type != "string" {
+		t.Errorf("Items.Type = %q, want %q", p.Items.Type, "string")
+	}
+}

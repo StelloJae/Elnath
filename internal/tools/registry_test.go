@@ -71,3 +71,46 @@ func TestList(t *testing.T) {
 		}
 	}
 }
+
+func TestToolDefs(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(&mockTool{name: "alpha", result: SuccessResult("")})
+	reg.Register(&mockTool{name: "beta", result: SuccessResult("")})
+
+	defs := reg.ToolDefs()
+	if len(defs) != 2 {
+		t.Fatalf("ToolDefs returned %d defs, want 2", len(defs))
+	}
+
+	// Build a name→def map for order-independent assertion.
+	byName := make(map[string]struct{ desc string; schema string })
+	for _, d := range defs {
+		byName[d.Name] = struct{ desc string; schema string }{d.Description, string(d.InputSchema)}
+	}
+
+	for _, name := range []string{"alpha", "beta"} {
+		d, ok := byName[name]
+		if !ok {
+			t.Errorf("ToolDefs missing entry for %q", name)
+			continue
+		}
+		if d.desc == "" {
+			t.Errorf("ToolDef[%q].Description is empty", name)
+		}
+		if d.schema == "" {
+			t.Errorf("ToolDef[%q].InputSchema is empty", name)
+		}
+	}
+}
+
+func TestRegisterDuplicate(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(&mockTool{name: "dup", result: SuccessResult("")})
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic on duplicate registration")
+		}
+	}()
+	reg.Register(&mockTool{name: "dup", result: SuccessResult("")})
+}

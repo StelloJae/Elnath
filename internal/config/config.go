@@ -20,6 +20,32 @@ type Config struct {
 	Permission PermissionConfig `yaml:"permission"`
 	Daemon     DaemonConfig     `yaml:"daemon"`
 	Research   ResearchConfig   `yaml:"research"`
+	Projects   []ProjectRef     `yaml:"projects"`
+	MCPServers []MCPServerConfig `yaml:"mcp_servers"`
+	Hooks      []HookConfig      `yaml:"hooks"`
+}
+
+// MCPServerConfig defines an external MCP server to connect to.
+type MCPServerConfig struct {
+	Name    string   `yaml:"name"`
+	Command string   `yaml:"command"`
+	Args    []string `yaml:"args"`
+	Env     []string `yaml:"env"`
+}
+
+// HookConfig defines a shell command hook for tool execution lifecycle events.
+type HookConfig struct {
+	Matcher    string `yaml:"matcher"`     // glob pattern for tool names (e.g., "*", "bash")
+	PreCommand string `yaml:"pre_command"` // shell command to run before tool execution
+	PostCommand string `yaml:"post_command"` // shell command to run after tool execution
+}
+
+// ProjectRef points to another Elnath project whose wiki and conversation
+// history can be searched via cross-project intelligence tools.
+type ProjectRef struct {
+	Name    string `yaml:"name"`
+	WikiDir string `yaml:"wiki_dir"`
+	DataDir string `yaml:"data_dir"`
 }
 
 type ProviderConfig struct {
@@ -126,6 +152,18 @@ func validate(cfg *Config) error {
 	case "default", "accept_edits", "plan", "bypass":
 	default:
 		return fmt.Errorf("unknown permission mode: %q", cfg.Permission.Mode)
+	}
+
+	for i, s := range cfg.MCPServers {
+		if s.Command == "" {
+			return fmt.Errorf("mcp_servers[%d]: command is required", i)
+		}
+	}
+
+	for i, h := range cfg.Hooks {
+		if h.PreCommand == "" && h.PostCommand == "" {
+			return fmt.Errorf("hooks[%d]: at least one of pre_command or post_command is required", i)
+		}
 	}
 
 	return nil

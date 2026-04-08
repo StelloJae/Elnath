@@ -25,6 +25,7 @@ type Agent struct {
 	provider      llm.Provider
 	tools         *tools.Registry
 	permission    *Permission
+	hooks         *HookRegistry
 	model         string
 	systemPrompt  string
 	maxIterations int
@@ -57,6 +58,11 @@ func WithLogger(l *slog.Logger) Option {
 // WithPermission attaches a permission engine.
 func WithPermission(p *Permission) Option {
 	return func(a *Agent) { a.permission = p }
+}
+
+// WithHooks attaches a hook registry for tool execution lifecycle events.
+func WithHooks(h *HookRegistry) Option {
+	return func(a *Agent) { a.hooks = h }
 }
 
 // New creates an Agent with the given provider and tool registry.
@@ -131,6 +137,13 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, onText func(str
 		if last.Role == llm.RoleAssistant && len(llm.ExtractToolUseBlocks(last)) > 0 {
 			return nil, fmt.Errorf("%w: model kept requesting tools after %d iterations",
 				core.ErrMaxIterations, a.maxIterations)
+		}
+	}
+
+	// Run on-stop hooks.
+	if a.hooks != nil {
+		if err := a.hooks.RunOnStop(ctx); err != nil {
+			a.logger.Warn("on-stop hook error", "error", err)
 		}
 	}
 
@@ -253,9 +266,29 @@ func (a *Agent) executeTools(ctx context.Context, messages []llm.Message, calls 
 			continue
 		}
 
+		// Pre-tool-use hooks.
+		if a.hooks != nil {
+			hookResult, hookErr := a.hooks.RunPreToolUse(ctx, call.Name, call.Input)
+			if hookErr != nil {
+				return nil, fmt.Errorf("pre-tool hook: %w", hookErr)
+			}
+			if hookResult.Action == HookDeny {
+				messages = llm.AppendToolResult(messages, call.ID,
+					fmt.Sprintf("hook denied tool %q: %s", call.Name, hookResult.Message), true)
+				continue
+			}
+		}
+
 		result, err := a.tools.Execute(ctx, call.Name, call.Input)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %s: %w", core.ErrToolExecution, call.Name, err)
+		}
+
+		// Post-tool-use hooks.
+		if a.hooks != nil {
+			if hookErr := a.hooks.RunPostToolUse(ctx, call.Name, call.Input, result); hookErr != nil {
+				a.logger.Warn("post-tool hook error", "tool", call.Name, "error", hookErr)
+			}
 		}
 
 		a.logger.Debug("tool result",

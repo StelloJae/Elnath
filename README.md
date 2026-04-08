@@ -2,18 +2,21 @@
 
 Autonomous AI assistant platform with native knowledge base and automatic workflow routing.
 
-Elnath is a standalone Go daemon and interactive CLI that brings Claude Code-level execution quality to independent AI agents. It combines intelligent workflow routing, a native Markdown+SQLite knowledge base, and modular tool execution into a self-contained platform.
+Elnath is a standalone Go daemon and interactive CLI that brings Claude Code-level execution quality to independent AI agents. It combines intelligent workflow routing, a native Markdown+SQLite knowledge base, MCP server integration, and modular tool execution into a self-contained platform.
 
 ## Features
 
 - **Interactive CLI and background daemon modes** — Use `elnath run` for interactive chat or `elnath daemon` for background job processing
-- **Model-agnostic LLM support** — Anthropic Claude (primary), OpenAI, Responses API with pluggable provider interface
+- **Model-agnostic LLM support** — Anthropic Claude (primary), OpenAI, Ollama with pluggable provider interface
 - **Native wiki with FTS5 hybrid search** — Markdown pages + SQLite full-text search index for Karpathy-style knowledge base
 - **Intent classification and automatic workflow routing** — Message intent determines execution strategy: single agent, team, autopilot, ralph (verify loop), or research
-- **5 workflow execution modes** — single (immediate), team (coordinated agents), autopilot (full autonomy), ralph (loop until verified), research (hypothesis → experiment → evaluate → wiki)
+- **5 workflow execution modes** — single (immediate), team (coordinated agents), autopilot (full autonomy), ralph (loop until verified), research (hypothesis-driven)
+- **MCP server integration** — Connect external tool servers via Model Context Protocol (stdio-based JSON-RPC)
+- **Hook system** — Pre/post tool execution hooks for validation, formatting, and custom workflows
+- **4 permission modes** — default (explicit approval), accept_edits (auto-approve file changes), plan (read-only), bypass (unrestricted)
 - **Self model with adaptive persona** — Maintains identity, system prompt, and persona that adjust based on context
 - **Session persistence with fork support** — JSONL format for reproducible session history and branching
-- **4 permission modes** — default (explicit approval), accept_edits (auto-approve changes), plan (show plan before execution), bypass (unrestricted)
+- **Cross-project intelligence** — Search wiki and conversation history across linked projects
 
 ## Quick Start
 
@@ -69,7 +72,7 @@ Start an interactive chat session. Type messages naturally; intent is classified
 | `wiki lint` | Validate wiki structure | `elnath wiki lint` |
 | `wiki rebuild` | Rebuild FTS5 index | `elnath wiki rebuild` |
 | `wiki list` | List all wiki pages | `elnath wiki list` |
-| `research` | Start research workflow | `elnath research "can we use X?"` |
+| `search` | Search past conversations | `elnath search "deployment issue"` |
 | `version` | Show version | `elnath version` |
 | `help` | Show command help | `elnath help` |
 
@@ -78,30 +81,29 @@ Start an interactive chat session. Type messages naturally; intent is classified
 ```
 cmd/elnath/           CLI dispatcher and REPL
 internal/
-  agent/              Agent loop: message → LLM → tools → repeat
+  agent/              Agent loop: message -> LLM -> tools -> repeat
   config/             YAML + environment configuration
   conversation/       Intent classification, context compression, history
   core/               App lifecycle, dual SQLite DB, logging, error handling
   daemon/             Unix socket IPC, worker pool, job queue
-  llm/                Provider interface, Anthropic/OpenAI/Responses implementations
+  llm/                Provider interface, Anthropic/OpenAI/Ollama implementations
+  mcp/                MCP client (stdio JSON-RPC), tool adapter
   orchestrator/       Workflow routing (single/team/autopilot/ralph/research)
-  research/           Hypothesis → experiment → evaluate loop
+  research/           Hypothesis -> experiment -> evaluate loop
   self/               Identity, persona, system prompt
-  tools/              Bash, File (read/write/edit/delete/ls), Git, Web
-  wiki/               Store, FTS5 index, hybrid search, page ingest, validation
+  tools/              Bash, File (read/write/edit/glob/grep), Git, Web
+  wiki/               Store, FTS5 index, hybrid search, auto-documentation
 ```
 
-### Core Interfaces
+### Core Design
 
-**Agent Loop**: The `agent` package implements the core message-processing loop. State is a message array only; no hidden state machines.
+**Message array as sole state**: The agent loop uses a message array as its only state. No hidden state machines, no magic — just messages in, messages out.
 
-**LLM Provider**: Pluggable interface supporting Anthropic, OpenAI, and Responses API. Key pool and cost tracking built in.
+**Pluggable LLM providers**: The `llm.Provider` interface supports Anthropic, OpenAI, Ollama, and the OpenAI Responses API. Providers are selected automatically based on available API keys.
 
-**Tool Executor**: Modular tools with streaming support. Stream callback pattern: `Stream(ctx, req, cb func(StreamEvent)) error`
+**Tool execution with permissions**: Tools are modular and implement a simple interface (`Name`, `Description`, `Schema`, `Execute`). The permission engine checks every tool call against the configured mode before execution.
 
-**Wiki Store**: Markdown pages with YAML frontmatter + SQLite FTS5 index. Hybrid search combines full-text and metadata queries.
-
-**Daemon IPC**: Unix socket with JSON protocol. Worker pool processes jobs from queue concurrently.
+**Wiki as knowledge base**: Markdown pages with YAML frontmatter are indexed into SQLite FTS5. RAG context is injected into system prompts automatically when relevant wiki content exists.
 
 ## Configuration
 
@@ -120,6 +122,8 @@ anthropic:
 
 permission:
   mode: default
+  allow: []       # tools always allowed (bypass permission check)
+  deny: []        # tools always denied (overrides allow)
 
 daemon:
   socket_path: ~/.elnath/daemon.sock
@@ -135,51 +139,85 @@ research:
 | Variable | Purpose | Example |
 |----------|---------|---------|
 | `ELNATH_ANTHROPIC_API_KEY` | Anthropic API key | `sk-ant-...` |
-| `ELNATH_OPENAI_API_KEY` | OpenAI API key (if using OpenAI) | `sk-...` |
+| `ELNATH_OPENAI_API_KEY` | OpenAI API key | `sk-...` |
 | `ELNATH_DATA_DIR` | Database directory | `~/.elnath/data` |
 | `ELNATH_WIKI_DIR` | Wiki pages directory | `~/.elnath/wiki` |
 | `ELNATH_LOG_LEVEL` | Logging level | `info`, `debug`, `warn`, `error` |
 | `ELNATH_PERMISSION_MODE` | Permission mode | `default`, `accept_edits`, `plan`, `bypass` |
+| `ELNATH_OLLAMA_BASE_URL` | Ollama server URL | `http://localhost:11434` |
+| `ELNATH_OLLAMA_MODEL` | Ollama model name | `llama3.2` |
 
-Priority: environment variables override config file.
+Priority: environment variables override config file values.
 
-## Wiki
+### MCP Servers
 
-The wiki is a knowledge base combining Markdown pages with SQLite full-text search.
+Connect external tool servers via [Model Context Protocol](https://modelcontextprotocol.io/). Elnath launches each server as a subprocess and communicates over stdio using JSON-RPC.
 
-### Page Format
+```yaml
+mcp_servers:
+  - name: filesystem
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "/home/user/projects"]
 
-Pages are Markdown with YAML frontmatter:
+  - name: github
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-github"]
+    env:
+      - "GITHUB_TOKEN=ghp_..."
 
-```markdown
----
-title: Authentication
-tags: [security, api]
----
-
-# Authentication
-
-Bearer token required for all API endpoints...
+  - name: postgres
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-postgres", "postgresql://localhost/mydb"]
 ```
 
-### Searching
+MCP tools are registered with an `mcp_` prefix (e.g., `mcp_read_file` from the filesystem server). Server failures are non-fatal — a server that fails to start is logged and skipped.
 
-```bash
-elnath wiki search "authentication methods"
-elnath wiki search "tag:security"
+### Hooks
+
+Hooks run shell commands before or after tool execution. Use them for auto-formatting, validation, notifications, or custom workflows.
+
+```yaml
+hooks:
+  - matcher: "edit_file"
+    post_command: "gofmt -w ${TOOL_FILE}"
+
+  - matcher: "bash"
+    pre_command: "echo 'Running: ${TOOL_INPUT}' >> ~/.elnath/audit.log"
+
+  - matcher: "*"
+    post_command: "notify-send 'Elnath' 'Tool ${TOOL_NAME} completed'"
 ```
 
-### Maintaining
+- `matcher`: glob pattern matched against tool names (`*` matches all)
+- `pre_command`: runs before tool execution; if it fails, the tool call is denied
+- `post_command`: runs after tool execution
 
-```bash
-# Validate all pages
-elnath wiki lint
+### Permission Modes
 
-# Rebuild FTS5 index (after manual edits)
-elnath wiki rebuild
+| Mode | Behavior |
+|------|----------|
+| `default` | Prompts for approval on non-read-only tools |
+| `accept_edits` | Auto-approves file read/write/edit tools; prompts for bash, git, MCP |
+| `plan` | Only allows read-only tools (read_file, glob, grep, wiki_search, etc.) |
+| `bypass` | Approves everything without prompting |
 
-# List all pages
-elnath wiki list
+Tools are classified as:
+- **Read-only**: `read_file`, `glob`, `grep`, `web_fetch`, `web_search`, `wiki_search`, `wiki_read`, `conversation_search`
+- **Edit**: `write_file`, `edit_file`, `wiki_write`
+- **Exec**: `bash`, `git` (require explicit approval in default/accept_edits modes)
+
+### Cross-Project Intelligence
+
+Link other Elnath projects to search across their wiki and conversation history:
+
+```yaml
+projects:
+  - name: backend
+    data_dir: ~/projects/backend/.elnath/data
+    wiki_dir: ~/projects/backend/.elnath/wiki
+  - name: frontend
+    data_dir: ~/projects/frontend/.elnath/data
+    wiki_dir: ~/projects/frontend/.elnath/wiki
 ```
 
 ## Workflows
@@ -192,53 +230,38 @@ Immediate response from a single LLM call. For questions, clarifications, one-of
 
 ### Team
 
-Coordinated multi-agent execution. Router agent breaks work into tasks, executes in parallel, synthesizes results. For feature development, refactoring, complex analysis.
+Coordinated multi-agent execution. Router agent breaks work into subtasks, executes in parallel, synthesizes results. For feature development, refactoring, complex analysis.
 
 ### Autopilot
 
-Full autonomous execution from goal to completion. Research, planning, implementation, verification. For ambitious features, architectural decisions, large refactors. Loops until success or cost cap reached.
+Full autonomous execution from goal to completion. Research, planning, implementation, verification. For ambitious features, architectural decisions, large refactors.
 
 ### Ralph
 
-Verification loop: execute → verify → refine → repeat until success criteria met. For bug fixes, tests, critical systems. Always terminates before proceeding.
+Verification loop: execute -> verify -> refine -> repeat until success criteria met. For bug fixes, tests, critical systems.
 
 ### Research
 
-Hypothesis-driven investigation: propose hypothesis → design experiment → execute → evaluate → update wiki. For exploratory work, understanding design tradeoffs, evaluating technologies.
+Hypothesis-driven investigation: propose hypothesis -> design experiment -> execute -> evaluate -> update wiki. For exploratory work, understanding design tradeoffs, evaluating technologies.
 
 ## Requirements
 
 - **Go 1.25+** — Uses modernc.org/sqlite for pure Go SQLite (no CGo required)
 - **macOS or Linux** — Tested on both platforms
-- **API key** — Anthropic Claude API, OpenAI, or other supported provider
+- **API key** — At least one LLM provider: Anthropic Claude, OpenAI, or Ollama (local)
 
 ## Building from Source
 
 ```bash
-# Clone repository
 git clone https://github.com/stello/elnath
 cd elnath
 
-# Build
-make build
-
-# Run tests with race detector
-make test
-
-# Run linter
-make lint
-
-# Build and run interactive mode
-make run
+make build    # Build binary
+make test     # Run tests with race detector
+make lint     # go vet + staticcheck
+make run      # Build and run interactive mode
 ```
 
 ## License
 
 Apache License 2.0. See LICENSE file for details.
-
-## Documentation
-
-- [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md) — Full implementation plan with phase guide
-- [ADR-001-v01-architecture.md](./ADR-001-v01-architecture.md) — Architecture decision record
-- [CLAW_CODE_ANALYSIS.md](./CLAW_CODE_ANALYSIS.md) — Claude Code internal architecture reference
-- [ULTRAPLAN_PROMPT.md](./ULTRAPLAN_PROMPT.md) — Original specification with smoke tests

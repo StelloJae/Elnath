@@ -40,4 +40,6 @@ type WorkflowConfig struct {
 	MaxTokens     int
 	Model         string
 	SystemPrompt  string
+	Hooks         *agent.HookRegistry
+	Permission    *agent.Permission
 }

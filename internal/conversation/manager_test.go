@@ -1,0 +1,379 @@
+package conversation
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/stello/elnath/internal/agent"
+	"github.com/stello/elnath/internal/llm"
+)
+
+// --- mock types shared across all test files in this package ---
+
+type mockClassifier struct {
+	intent Intent
+	err    error
+}
+
+func (m *mockClassifier) Classify(_ context.Context, _ llm.Provider, _ string, _ []llm.Message) (Intent, error) {
+	return m.intent, m.err
+}
+
+type mockContextWindow struct {
+	fitFn func(ctx context.Context, messages []llm.Message, maxTokens int) ([]llm.Message, error)
+}
+
+func (m *mockContextWindow) Fit(ctx context.Context, messages []llm.Message, maxTokens int) ([]llm.Message, error) {
+	if m.fitFn != nil {
+		return m.fitFn(ctx, messages, maxTokens)
+	}
+	return messages, nil
+}
+
+type mockHistoryStore struct {
+	sessions map[string][]llm.Message
+	saveErr  error
+	loadErr  error
+}
+
+func (m *mockHistoryStore) Save(_ context.Context, sessionID string, messages []llm.Message) error {
+	if m.saveErr != nil {
+		return m.saveErr
+	}
+	if m.sessions == nil {
+		m.sessions = make(map[string][]llm.Message)
+	}
+	m.sessions[sessionID] = messages
+	return nil
+}
+
+func (m *mockHistoryStore) Load(_ context.Context, sessionID string) ([]llm.Message, error) {
+	if m.loadErr != nil {
+		return nil, m.loadErr
+	}
+	return m.sessions[sessionID], nil
+}
+
+func (m *mockHistoryStore) ListSessions(_ context.Context) ([]SessionInfo, error) {
+	var result []SessionInfo
+	for id, msgs := range m.sessions {
+		result = append(result, SessionInfo{ID: id, MessageCount: len(msgs)})
+	}
+	return result, nil
+}
+
+type mockProvider struct {
+	chatFn func(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error)
+}
+
+func (m *mockProvider) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	if m.chatFn != nil {
+		return m.chatFn(ctx, req)
+	}
+	return &llm.ChatResponse{Content: `{"intent":"unclear","confidence":0.5}`}, nil
+}
+
+func (m *mockProvider) Stream(_ context.Context, _ llm.ChatRequest, _ func(llm.StreamEvent)) error {
+	return nil
+}
+
+func (m *mockProvider) Name() string { return "mock" }
+
+func (m *mockProvider) Models() []llm.ModelInfo { return nil }
+
+// --- helpers ---
+
+// newTestSession creates a real agent.Session in t.TempDir() and returns
+// the session and the data directory so Manager can be pointed at the same dir.
+func newTestSession(t *testing.T) (*agent.Session, string) {
+	t.Helper()
+	dir := t.TempDir()
+	sess, err := agent.NewSession(dir)
+	if err != nil {
+		t.Fatalf("agent.NewSession: %v", err)
+	}
+	return sess, dir
+}
+
+// --- Manager tests ---
+
+func TestManagerNewSession(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager(nil, dir)
+
+	sess, err := mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if sess == nil {
+		t.Fatal("NewSession returned nil session")
+	}
+	if sess.ID == "" {
+		t.Error("NewSession returned session with empty ID")
+	}
+}
+
+func TestManagerLoadSession(t *testing.T) {
+	sess, dir := newTestSession(t)
+	mgr := NewManager(nil, dir)
+
+	loaded, err := mgr.LoadSession(sess.ID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if loaded.ID != sess.ID {
+		t.Errorf("loaded ID = %q, want %q", loaded.ID, sess.ID)
+	}
+}
+
+func TestManagerLoadSession_NotFound(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager(nil, dir)
+
+	_, err := mgr.LoadSession("does-not-exist")
+	if err == nil {
+		t.Fatal("expected error loading nonexistent session, got nil")
+	}
+}
+
+func TestManagerSendMessage_NoOptionals(t *testing.T) {
+	sess, dir := newTestSession(t)
+	mgr := NewManager(nil, dir)
+
+	msgs, intent, err := mgr.SendMessage(context.Background(), sess.ID, "hello")
+	if err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	if intent != IntentUnclear {
+		t.Errorf("intent = %q, want %q", intent, IntentUnclear)
+	}
+	if len(msgs) != 1 {
+		t.Errorf("message count = %d, want 1", len(msgs))
+	}
+	if msgs[0].Role != llm.RoleUser {
+		t.Errorf("first message role = %q, want %q", msgs[0].Role, llm.RoleUser)
+	}
+}
+
+func TestManagerSendMessage_WithClassifier(t *testing.T) {
+	sess, dir := newTestSession(t)
+	mgr := NewManager(nil, dir).
+		WithClassifier(&mockClassifier{intent: IntentQuestion}).
+		WithProvider(&mockProvider{})
+
+	_, intent, err := mgr.SendMessage(context.Background(), sess.ID, "what is Go?")
+	if err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	if intent != IntentQuestion {
+		t.Errorf("intent = %q, want %q", intent, IntentQuestion)
+	}
+}
+
+func TestManagerSendMessage_ClassifierError(t *testing.T) {
+	// Classifier fails → intent defaults to IntentUnclear, no error returned.
+	sess, dir := newTestSession(t)
+	mgr := NewManager(nil, dir).
+		WithClassifier(&mockClassifier{err: errors.New("network error")}).
+		WithProvider(&mockProvider{})
+
+	_, intent, err := mgr.SendMessage(context.Background(), sess.ID, "test")
+	if err != nil {
+		t.Fatalf("SendMessage: unexpected error: %v", err)
+	}
+	if intent != IntentUnclear {
+		t.Errorf("intent = %q, want %q after classifier error", intent, IntentUnclear)
+	}
+}
+
+func TestManagerSendMessage_WithHistoryStore(t *testing.T) {
+	sess, dir := newTestSession(t)
+	store := &mockHistoryStore{}
+	mgr := NewManager(nil, dir).WithHistoryStore(store)
+
+	_, _, err := mgr.SendMessage(context.Background(), sess.ID, "save me")
+	if err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+
+	saved, ok := store.sessions[sess.ID]
+	if !ok {
+		t.Fatal("history.Save was not called")
+	}
+	if len(saved) != 1 {
+		t.Errorf("saved message count = %d, want 1", len(saved))
+	}
+}
+
+func TestManagerSendMessage_HistoryStoreSaveError(t *testing.T) {
+	// Save failure is non-fatal; SendMessage must still succeed.
+	sess, dir := newTestSession(t)
+	store := &mockHistoryStore{saveErr: errors.New("disk full")}
+	mgr := NewManager(nil, dir).WithHistoryStore(store)
+
+	_, _, err := mgr.SendMessage(context.Background(), sess.ID, "hello")
+	if err != nil {
+		t.Fatalf("SendMessage should not fail on history save error: %v", err)
+	}
+}
+
+func TestManagerSendMessage_WithContextWindow(t *testing.T) {
+	sess, dir := newTestSession(t)
+	called := false
+	cw := &mockContextWindow{
+		fitFn: func(_ context.Context, msgs []llm.Message, _ int) ([]llm.Message, error) {
+			called = true
+			return msgs, nil
+		},
+	}
+	mgr := NewManager(nil, dir).WithContextWindow(cw)
+
+	_, _, err := mgr.SendMessage(context.Background(), sess.ID, "hello")
+	if err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	if !called {
+		t.Error("ContextWindow.Fit was not called")
+	}
+}
+
+func TestManagerSendMessage_ContextWindowError(t *testing.T) {
+	// Fit failure → original messages used, no error returned.
+	sess, dir := newTestSession(t)
+	cw := &mockContextWindow{
+		fitFn: func(_ context.Context, msgs []llm.Message, _ int) ([]llm.Message, error) {
+			return nil, errors.New("context window error")
+		},
+	}
+	mgr := NewManager(nil, dir).WithContextWindow(cw)
+
+	msgs, _, err := mgr.SendMessage(context.Background(), sess.ID, "hello")
+	if err != nil {
+		t.Fatalf("SendMessage: unexpected error: %v", err)
+	}
+	// Fallback: original messages (empty) + user message = 1 message.
+	if len(msgs) != 1 {
+		t.Errorf("message count = %d, want 1 after context window error", len(msgs))
+	}
+}
+
+func TestManagerSendMessage_BadSessionID(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager(nil, dir)
+
+	_, _, err := mgr.SendMessage(context.Background(), "no-such-session", "hello")
+	if err == nil {
+		t.Fatal("expected error for missing session, got nil")
+	}
+}
+
+func TestManagerGetHistory_FromStore(t *testing.T) {
+	sess, dir := newTestSession(t)
+	store := &mockHistoryStore{
+		sessions: map[string][]llm.Message{
+			sess.ID: {llm.NewUserMessage("stored msg")},
+		},
+	}
+	mgr := NewManager(nil, dir).WithHistoryStore(store)
+
+	msgs, err := mgr.GetHistory(context.Background(), sess.ID)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Errorf("message count = %d, want 1", len(msgs))
+	}
+}
+
+func TestManagerGetHistory_FallbackToSessionFile(t *testing.T) {
+	// No history store → falls back to JSONL session file.
+	sess, dir := newTestSession(t)
+	mgr := NewManager(nil, dir)
+
+	msgs, err := mgr.GetHistory(context.Background(), sess.ID)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	// Session has no messages appended yet.
+	if len(msgs) != 0 {
+		t.Errorf("message count = %d, want 0", len(msgs))
+	}
+}
+
+func TestManagerGetHistory_StoreLoadError_FallsBackToFile(t *testing.T) {
+	sess, dir := newTestSession(t)
+	store := &mockHistoryStore{loadErr: errors.New("store unavailable")}
+	mgr := NewManager(nil, dir).WithHistoryStore(store)
+
+	msgs, err := mgr.GetHistory(context.Background(), sess.ID)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Errorf("fallback message count = %d, want 0", len(msgs))
+	}
+}
+
+func TestManagerGetHistory_BadSessionID(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager(nil, dir)
+
+	_, err := mgr.GetHistory(context.Background(), "no-such-id")
+	if err == nil {
+		t.Fatal("expected error for missing session, got nil")
+	}
+}
+
+func TestManagerListSessions_WithStore(t *testing.T) {
+	_, dir := newTestSession(t)
+	store := &mockHistoryStore{
+		sessions: map[string][]llm.Message{
+			"s1": {llm.NewUserMessage("a")},
+			"s2": {llm.NewUserMessage("b"), llm.NewAssistantMessage("c")},
+		},
+	}
+	mgr := NewManager(nil, dir).WithHistoryStore(store)
+
+	sessions, err := mgr.ListSessions(context.Background())
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(sessions) != 2 {
+		t.Errorf("session count = %d, want 2", len(sessions))
+	}
+}
+
+func TestManagerListSessions_NoStore(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager(nil, dir)
+
+	sessions, err := mgr.ListSessions(context.Background())
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if sessions != nil {
+		t.Errorf("expected nil sessions without store, got %v", sessions)
+	}
+}
+
+func TestManagerWithMethods_ReturnsSelf(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager(nil, dir)
+
+	// Verify fluent API returns the same *Manager.
+	p := &mockProvider{}
+	c := &mockClassifier{}
+	cw := &mockContextWindow{}
+	hs := &mockHistoryStore{}
+
+	result := mgr.
+		WithProvider(p).
+		WithClassifier(c).
+		WithContextWindow(cw).
+		WithHistoryStore(hs)
+
+	if result != mgr {
+		t.Error("With* methods should return the same *Manager")
+	}
+}
