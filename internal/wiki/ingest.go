@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -151,7 +152,19 @@ func (ing *Ingester) IngestConversation(ctx context.Context, sessionID string, t
 		Tags:    []string{"conversation", sessionID},
 	}
 
-	return ing.store.Upsert(page)
+	if err := ing.store.Upsert(page); err != nil {
+		return err
+	}
+
+	// Knowledge extraction: create structured entity/concept pages from the conversation.
+	if ing.provider != nil {
+		ke := NewKnowledgeExtractor(ing.store, ing.provider, slog.Default())
+		if err := ke.ExtractFromConversation(ctx, sessionID, turns); err != nil {
+			slog.Default().Warn("knowledge extraction failed, source page still saved", "error", err)
+		}
+	}
+
+	return nil
 }
 
 // summarise calls the LLM provider to produce a brief summary of a transcript.

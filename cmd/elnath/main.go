@@ -59,6 +59,15 @@ func extractPersonaFlag(args []string) string {
 	return ""
 }
 
+func extractSessionFlag(args []string) string {
+	for i, arg := range args {
+		if arg == "--session" && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	return ""
+}
+
 func hasFlag(args []string, flag string) bool {
 	for _, arg := range args {
 		if arg == flag {

@@ -273,14 +273,30 @@ func cmdRun(ctx context.Context, args []string) error {
 	}
 	router := buildRouter(wfCfg)
 
-	// Create session.
-	sess, err := mgr.NewSession()
-	if err != nil {
-		return fmt.Errorf("create session: %w", err)
-	}
-	app.Logger.Info("session started", "id", sess.ID)
-
+	// Create or resume session.
+	var sess *agent.Session
 	var messages []llm.Message
+	if sid := extractSessionFlag(os.Args); sid != "" {
+		sess, err = mgr.LoadSession(sid)
+		if err != nil {
+			return fmt.Errorf("resume session %s: %w", sid, err)
+		}
+		messages = sess.Messages
+		app.Logger.Info("resumed session", "id", sess.ID, "messages", len(messages))
+	} else if hasFlag(os.Args, "--continue") {
+		sess, err = mgr.LoadLatestSession()
+		if err != nil {
+			return fmt.Errorf("resume latest session: %w", err)
+		}
+		messages = sess.Messages
+		app.Logger.Info("resumed latest session", "id", sess.ID, "messages", len(messages))
+	} else {
+		sess, err = mgr.NewSession()
+		if err != nil {
+			return fmt.Errorf("create session: %w", err)
+		}
+		app.Logger.Info("session started", "id", sess.ID)
+	}
 
 	// Parse optional initial prompt from args.
 	if len(args) > 0 {

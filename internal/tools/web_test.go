@@ -110,17 +110,69 @@ func TestWebSearchToolMeta(t *testing.T) {
 	}
 }
 
-func TestWebSearchToolExecuteAlwaysErrors(t *testing.T) {
-	tool := NewWebSearchTool()
+func TestWebSearchToolExecute(t *testing.T) {
+	// Fake DuckDuckGo HTML response with result links.
+	fakeHTML := `<html><body>
+		<a class="result__a" href="https://example.com/1">First Result</a>
+		<a class="result__a" href="https://example.com/2">Second Result</a>
+	</body></html>`
 
-	res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{"query": "anything"}))
-	if err != nil {
-		t.Fatalf("Execute returned unexpected Go error: %v", err)
-	}
-	if !res.IsError {
-		t.Errorf("expected error result from stub, got output: %s", res.Output)
-	}
-	if !strings.Contains(res.Output, "not implemented") {
-		t.Errorf("error message does not mention 'not implemented': %s", res.Output)
-	}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(fakeHTML))
+	}))
+	defer ts.Close()
+
+	tool := &WebSearchTool{client: ts.Client()}
+	// Override the search URL by using a query that the tool will encode.
+	// We need to point the tool at our test server instead of DuckDuckGo,
+	// so we test the parsing logic with a direct fetch to the test server.
+	fetchTool := &WebSearchTool{client: &http.Client{Transport: &rewriteTransport{ts.URL}}}
+
+	t.Run("successful search", func(t *testing.T) {
+		res, err := fetchTool.Execute(context.Background(), mustMarshal(t, map[string]any{"query": "test"}))
+		if err != nil {
+			t.Fatalf("Execute returned unexpected Go error: %v", err)
+		}
+		if res.IsError {
+			t.Fatalf("unexpected error result: %s", res.Output)
+		}
+		if !strings.Contains(res.Output, "First Result") {
+			t.Errorf("output missing 'First Result': %s", res.Output)
+		}
+		if !strings.Contains(res.Output, "https://example.com/1") {
+			t.Errorf("output missing URL: %s", res.Output)
+		}
+	})
+
+	t.Run("empty query", func(t *testing.T) {
+		res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{"query": ""}))
+		if err != nil {
+			t.Fatalf("Execute returned unexpected Go error: %v", err)
+		}
+		if !res.IsError {
+			t.Errorf("expected error result for empty query, got: %s", res.Output)
+		}
+	})
+
+	t.Run("invalid params", func(t *testing.T) {
+		res, err := tool.Execute(context.Background(), []byte("not json{{{"))
+		if err != nil {
+			t.Fatalf("Execute returned unexpected Go error: %v", err)
+		}
+		if !res.IsError {
+			t.Errorf("expected error result for bad JSON, got: %s", res.Output)
+		}
+	})
+}
+
+// rewriteTransport redirects all requests to the test server.
+type rewriteTransport struct {
+	baseURL string
+}
+
+func (t *rewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	req.URL.Scheme = "http"
+	parsed, _ := http.NewRequest(req.Method, t.baseURL+req.URL.Path+"?"+req.URL.RawQuery, req.Body)
+	parsed.Header = req.Header
+	return http.DefaultTransport.RoundTrip(parsed)
 }

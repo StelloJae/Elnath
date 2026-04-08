@@ -5,6 +5,10 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/stello/elnath/internal/agent"
 	"github.com/stello/elnath/internal/llm"
@@ -107,6 +111,39 @@ func (m *Manager) LoadSession(sessionID string) (*agent.Session, error) {
 		return nil, fmt.Errorf("conversation: load session %s: %w", sessionID, err)
 	}
 	return s, nil
+}
+
+// LoadLatestSession finds and loads the most recently modified session file.
+func (m *Manager) LoadLatestSession() (*agent.Session, error) {
+	sessDir := filepath.Join(m.dataDir, "sessions")
+	entries, err := os.ReadDir(sessDir)
+	if err != nil {
+		return nil, fmt.Errorf("conversation: list sessions: %w", err)
+	}
+
+	var latestName string
+	var latestTime time.Time
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().After(latestTime) {
+			latestTime = info.ModTime()
+			latestName = e.Name()
+		}
+	}
+
+	if latestName == "" {
+		return nil, fmt.Errorf("conversation: no sessions found")
+	}
+
+	id := strings.TrimSuffix(latestName, ".jsonl")
+	m.logger.Info("resuming latest session", "session_id", id)
+	return m.LoadSession(id)
 }
 
 // SendMessage processes a user message for the given session.
