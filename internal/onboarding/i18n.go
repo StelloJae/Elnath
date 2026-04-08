@@ -68,6 +68,33 @@ var translations = map[Locale]map[string]string{
 		"done.title":   "Setup Complete!",
 		"done.message": "Run 'elnath run' to start chatting.",
 		"done.tip":     "Tip: Run 'elnath setup' anytime to reconfigure.",
+
+		"summary.title":      "Configuration Summary",
+		"summary.subtitle":   "Review your settings before saving",
+		"summary.apikey":     "API Key",
+		"summary.permission": "Permission Mode",
+		"summary.mcp":        "MCP Servers",
+		"summary.mcp.none":   "None selected",
+		"summary.datadir":    "Data Directory",
+		"summary.wikidir":    "Wiki Directory",
+		"summary.confirm":    "Confirm & Save",
+		"summary.edit":       "Edit Settings",
+		"summary.navigate":   "↑/↓ to select • enter to confirm • esc to go back",
+		"summary.masked":     "••••••••%s",
+
+		"smoketest.title":    "Connection Test",
+		"smoketest.testing":  "Testing connection to Anthropic API...",
+		"smoketest.success":  "✓ Elnath is working!",
+		"smoketest.fail":     "⚠ Connection test failed: %s",
+		"smoketest.fail.tip": "Don't worry — you can fix this later. Your config has been saved.",
+		"smoketest.skip":     "Skipping connection test (no API key configured)",
+		"smoketest.continue": "Press enter to continue",
+		"smoketest.response": "Response: %s",
+
+		"progress.step": "Step %d of %d",
+
+		"setup.backup":  "Existing config backed up to %s",
+		"setup.rerun":   "Re-running setup wizard...",
 	},
 	Ko: {
 		"welcome.title":      "Elnath에 오신 것을 환영합니다",
@@ -128,6 +155,33 @@ var translations = map[Locale]map[string]string{
 		"done.title":   "설정 완료!",
 		"done.message": "'elnath run'을 실행하여 대화를 시작하세요.",
 		"done.tip":     "팁: 'elnath setup'으로 언제든 재설정할 수 있습니다.",
+
+		"summary.title":      "설정 요약",
+		"summary.subtitle":   "저장 전 설정을 확인하세요",
+		"summary.apikey":     "API 키",
+		"summary.permission": "권한 모드",
+		"summary.mcp":        "MCP 서버",
+		"summary.mcp.none":   "선택 없음",
+		"summary.datadir":    "데이터 디렉토리",
+		"summary.wikidir":    "위키 디렉토리",
+		"summary.confirm":    "확인 및 저장",
+		"summary.edit":       "설정 수정",
+		"summary.navigate":   "↑/↓ 선택 • Enter 확인 • Esc 뒤로",
+		"summary.masked":     "••••••••%s",
+
+		"smoketest.title":    "연결 테스트",
+		"smoketest.testing":  "Anthropic API 연결 테스트 중...",
+		"smoketest.success":  "✓ Elnath가 작동합니다!",
+		"smoketest.fail":     "⚠ 연결 테스트 실패: %s",
+		"smoketest.fail.tip": "걱정하지 마세요 — 나중에 수정할 수 있습니다. 설정은 저장되었습니다.",
+		"smoketest.skip":     "연결 테스트 건너뜀 (API 키 미설정)",
+		"smoketest.continue": "Enter를 눌러 계속",
+		"smoketest.response": "응답: %s",
+
+		"progress.step": "%d / %d 단계",
+
+		"setup.backup":  "기존 설정이 %s에 백업되었습니다",
+		"setup.rerun":   "설정 마법사를 다시 실행합니다...",
 	},
 }
 

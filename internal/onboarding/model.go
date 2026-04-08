@@ -18,6 +18,8 @@ const (
 	StepPermission
 	StepMCP
 	StepDirectory
+	StepSummary
+	StepSmokeTest
 	StepDone
 )
 
@@ -59,6 +61,8 @@ type Model struct {
 	permission PermissionModel
 	mcp        MCPModel
 	directory  DirectoryModel
+	summary    SummaryModel
+	smoketest  SmokeTestModel
 	hasNpm     bool
 	err        error
 }
@@ -123,6 +127,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case DirectoryDoneMsg:
 		m.result.DataDir = msg.DataDir
 		m.result.WikiDir = msg.WikiDir
+		return m.afterDirectory()
+
+	case SummaryDoneMsg:
+		return m.afterSummary()
+
+	case SummaryEditMsg:
+		m.step = msg.Step
+		switch msg.Step {
+		case StepAPIKey:
+			m.apikey = NewAPIKeyModel(m.locale)
+			return m, m.apikey.Init()
+		case StepPermission:
+			m.permission = NewPermissionModel(m.locale)
+			return m, m.permission.Init()
+		case StepMCP:
+			m.mcp = NewMCPModel(m.locale, m.hasNpm)
+			return m, m.mcp.Init()
+		case StepDirectory:
+			m.directory = NewDirectoryModel(m.locale)
+			return m, m.directory.Init()
+		default:
+			m.apikey = NewAPIKeyModel(m.locale)
+			return m, m.apikey.Init()
+		}
+
+	case SmokeTestDoneMsg:
 		m.step = StepDone
 		return m, tea.Quit
 	}
@@ -131,23 +161,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) View() string {
+	var content string
 	switch m.step {
 	case StepWelcome:
-		return m.welcome.View()
+		content = m.welcome.View()
 	case StepLanguage:
-		return m.language.View()
+		content = m.language.View()
 	case StepAPIKey:
-		return m.apikey.View()
+		content = m.apikey.View()
 	case StepPermission:
-		return m.permission.View()
+		content = m.permission.View()
 	case StepMCP:
-		return m.mcp.View()
+		content = m.mcp.View()
 	case StepDirectory:
-		return m.directory.View()
+		content = m.directory.View()
+	case StepSummary:
+		content = m.summary.View()
+	case StepSmokeTest:
+		content = m.smoketest.View()
 	case StepDone:
 		return ""
+	default:
+		return ""
 	}
-	return ""
+
+	quick := m.result.Path == PathQuick
+	progress := RenderProgress(m.locale, m.step, quick)
+	if progress != "" {
+		return progress + "\n" + content
+	}
+	return content
 }
 
 // Done returns true when the wizard has completed.
@@ -176,8 +219,9 @@ func (m Model) afterAPIKey() (tea.Model, tea.Cmd) {
 		m.result.DataDir = filepath.Join(base, "data")
 		m.result.WikiDir = filepath.Join(base, "wiki")
 		m.result.PermissionMode = "default"
-		m.step = StepDone
-		return m, tea.Quit
+		m.step = StepSummary
+		m.summary = NewSummaryModel(m.locale, m.result, true)
+		return m, m.summary.Init()
 	default:
 		m.step = StepPermission
 		m.permission = NewPermissionModel(m.locale)
@@ -197,6 +241,20 @@ func (m Model) afterMCP() (tea.Model, tea.Cmd) {
 	m.step = StepDirectory
 	m.directory = NewDirectoryModel(m.locale)
 	return m, m.directory.Init()
+}
+
+// afterDirectory routes to Summary step (Full path only).
+func (m Model) afterDirectory() (tea.Model, tea.Cmd) {
+	m.step = StepSummary
+	m.summary = NewSummaryModel(m.locale, m.result, m.result.Path == PathQuick)
+	return m, m.summary.Init()
+}
+
+// afterSummary routes to SmokeTest step.
+func (m Model) afterSummary() (tea.Model, tea.Cmd) {
+	m.step = StepSmokeTest
+	m.smoketest = NewSmokeTestModel(m.locale, m.result.APIKey)
+	return m, m.smoketest.Init()
 }
 
 // goBack moves to the previous step.
@@ -222,6 +280,19 @@ func (m Model) goBack() (tea.Model, tea.Cmd) {
 		m.step = StepMCP
 		m.mcp = NewMCPModel(m.locale, m.hasNpm)
 		return m, m.mcp.Init()
+	case StepSummary:
+		if m.result.Path == PathQuick {
+			m.step = StepAPIKey
+			m.apikey = NewAPIKeyModel(m.locale)
+			return m, m.apikey.Init()
+		}
+		m.step = StepDirectory
+		m.directory = NewDirectoryModel(m.locale)
+		return m, m.directory.Init()
+	case StepSmokeTest:
+		m.step = StepSummary
+		m.summary = NewSummaryModel(m.locale, m.result, m.result.Path == PathQuick)
+		return m, m.summary.Init()
 	}
 	return m, nil
 }
@@ -284,6 +355,24 @@ func (m Model) updateCurrentStep(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		m.directory = dm
+		cmd = c
+	case StepSummary:
+		updated, c := m.summary.Update(msg)
+		sm, ok := updated.(SummaryModel)
+		if !ok {
+			m.err = fmt.Errorf("unexpected model type from summary update: %T", updated)
+			return m, tea.Quit
+		}
+		m.summary = sm
+		cmd = c
+	case StepSmokeTest:
+		updated, c := m.smoketest.Update(msg)
+		st, ok := updated.(SmokeTestModel)
+		if !ok {
+			m.err = fmt.Errorf("unexpected model type from smoketest update: %T", updated)
+			return m, tea.Quit
+		}
+		m.smoketest = st
 		cmd = c
 	}
 

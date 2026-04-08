@@ -77,4 +77,11 @@ var (
 
 	warningStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#F59E0B"))
+
+	progressFilledStyle = lipgloss.NewStyle().
+				Foreground(accentColor).
+				Bold(true)
+
+	progressEmptyStyle = lipgloss.NewStyle().
+				Foreground(subtleColor)
 )

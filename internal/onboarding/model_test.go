@@ -52,11 +52,11 @@ func TestModel_APIKeyDone_QuickPath(t *testing.T) {
 	m.step = StepAPIKey
 	m.result.Path = PathQuick
 
-	updated, cmd := m.Update(APIKeyDoneMsg{Key: "sk-test"})
+	updated, _ := m.Update(APIKeyDoneMsg{Key: "sk-test"})
 	model := updated.(Model)
 
-	if !model.Done() {
-		t.Error("expected Done after APIKeyDone on Quick path")
+	if model.step != StepSummary {
+		t.Errorf("expected StepSummary after APIKeyDone on Quick path, got %d", model.step)
 	}
 	if model.result.APIKey != "sk-test" {
 		t.Errorf("expected api key 'sk-test', got %q", model.result.APIKey)
@@ -69,9 +69,6 @@ func TestModel_APIKeyDone_QuickPath(t *testing.T) {
 	}
 	if model.result.PermissionMode != "default" {
 		t.Errorf("expected default permission on Quick path, got %q", model.result.PermissionMode)
-	}
-	if cmd == nil {
-		t.Error("expected tea.Quit cmd")
 	}
 }
 
@@ -124,15 +121,16 @@ func TestModel_MCPDone_ToDirectory(t *testing.T) {
 	}
 }
 
-func TestModel_DirectoryDone(t *testing.T) {
+func TestModel_DirectoryDone_ToSummary(t *testing.T) {
 	m := New("/tmp/config.yaml", "0.3.0")
 	m.step = StepDirectory
+	m.result.Path = PathFull
 
-	updated, cmd := m.Update(DirectoryDoneMsg{DataDir: "/data", WikiDir: "/wiki"})
+	updated, _ := m.Update(DirectoryDoneMsg{DataDir: "/data", WikiDir: "/wiki"})
 	model := updated.(Model)
 
-	if !model.Done() {
-		t.Error("expected Done after DirectoryDone")
+	if model.step != StepSummary {
+		t.Errorf("expected StepSummary after DirectoryDone, got %d", model.step)
 	}
 	if model.result.DataDir != "/data" {
 		t.Errorf("expected /data, got %q", model.result.DataDir)
@@ -140,8 +138,83 @@ func TestModel_DirectoryDone(t *testing.T) {
 	if model.result.WikiDir != "/wiki" {
 		t.Errorf("expected /wiki, got %q", model.result.WikiDir)
 	}
+}
+
+func TestModel_SummaryDone_ToSmokeTest(t *testing.T) {
+	m := New("/tmp/config.yaml", "0.3.0")
+	m.step = StepSummary
+	m.result.APIKey = "sk-test"
+
+	updated, _ := m.Update(SummaryDoneMsg{})
+	model := updated.(Model)
+
+	if model.step != StepSmokeTest {
+		t.Errorf("expected StepSmokeTest after SummaryDone, got %d", model.step)
+	}
+}
+
+func TestModel_SummaryEdit_GoesToStep(t *testing.T) {
+	m := New("/tmp/config.yaml", "0.3.0")
+	m.step = StepSummary
+
+	updated, _ := m.Update(SummaryEditMsg{Step: StepPermission})
+	model := updated.(Model)
+
+	if model.step != StepPermission {
+		t.Errorf("expected StepPermission after SummaryEdit, got %d", model.step)
+	}
+}
+
+func TestModel_SmokeTestDone(t *testing.T) {
+	m := New("/tmp/config.yaml", "0.3.0")
+	m.step = StepSmokeTest
+
+	updated, cmd := m.Update(SmokeTestDoneMsg{})
+	model := updated.(Model)
+
+	if !model.Done() {
+		t.Error("expected Done after SmokeTestDone")
+	}
 	if cmd == nil {
 		t.Error("expected tea.Quit cmd")
+	}
+}
+
+func TestModel_StepBack_SummaryToDirectory_FullPath(t *testing.T) {
+	m := New("/tmp/config.yaml", "0.3.0")
+	m.step = StepSummary
+	m.result.Path = PathFull
+
+	updated, _ := m.Update(stepBackMsg{})
+	model := updated.(Model)
+
+	if model.step != StepDirectory {
+		t.Errorf("expected StepDirectory after back from Summary (full), got %d", model.step)
+	}
+}
+
+func TestModel_StepBack_SummaryToAPIKey_QuickPath(t *testing.T) {
+	m := New("/tmp/config.yaml", "0.3.0")
+	m.step = StepSummary
+	m.result.Path = PathQuick
+
+	updated, _ := m.Update(stepBackMsg{})
+	model := updated.(Model)
+
+	if model.step != StepAPIKey {
+		t.Errorf("expected StepAPIKey after back from Summary (quick), got %d", model.step)
+	}
+}
+
+func TestModel_StepBack_SmokeTestToSummary(t *testing.T) {
+	m := New("/tmp/config.yaml", "0.3.0")
+	m.step = StepSmokeTest
+
+	updated, _ := m.Update(stepBackMsg{})
+	model := updated.(Model)
+
+	if model.step != StepSummary {
+		t.Errorf("expected StepSummary after back from SmokeTest, got %d", model.step)
 	}
 }
 
@@ -258,8 +331,22 @@ func TestModel_FullFlowEndToEnd(t *testing.T) {
 		t.Fatalf("expected StepDirectory, got %d", m.step)
 	}
 
-	// Directory → Done
+	// Directory → Summary
 	updated, _ = m.Update(DirectoryDoneMsg{DataDir: "/custom/data", WikiDir: "/custom/wiki"})
+	m = updated.(Model)
+	if m.step != StepSummary {
+		t.Fatalf("expected StepSummary, got %d", m.step)
+	}
+
+	// Summary → SmokeTest
+	updated, _ = m.Update(SummaryDoneMsg{})
+	m = updated.(Model)
+	if m.step != StepSmokeTest {
+		t.Fatalf("expected StepSmokeTest, got %d", m.step)
+	}
+
+	// SmokeTest → Done
+	updated, _ = m.Update(SmokeTestDoneMsg{})
 	m = updated.(Model)
 	if !m.Done() {
 		t.Fatal("expected Done")

@@ -36,6 +36,7 @@ func commandRegistry() map[string]commandRunner {
 		"version": cmdVersion,
 		"help":    cmdHelp,
 		"run":     cmdRun,
+		"setup":   cmdSetup,
 		"daemon":  cmdDaemon,
 		"wiki":    cmdWiki,
 		"search":  cmdSearch,
@@ -62,6 +63,7 @@ func cmdHelp(_ context.Context, _ []string) error {
 
 Commands:
   run       Interactive chat mode
+  setup     Re-run the setup wizard
   daemon    Background daemon mode
   wiki      Wiki management (search, lint, ingest)
   search    Search past conversations
@@ -75,6 +77,48 @@ Daemon subcommands:
   daemon stop               Gracefully stop the running daemon
   daemon install            Install launchd plist for auto-start`)
 	return nil
+}
+
+func cmdSetup(_ context.Context, _ []string) error {
+	cfgPath := extractConfigFlag(os.Args)
+	if cfgPath == "" {
+		cfgPath = config.DefaultConfigPath()
+	}
+
+	// Back up existing config if present.
+	if _, err := os.Stat(cfgPath); err == nil {
+		backupPath := cfgPath + ".bak"
+		data, err := os.ReadFile(cfgPath)
+		if err != nil {
+			return fmt.Errorf("read existing config for backup: %w", err)
+		}
+		if err := os.WriteFile(backupPath, data, 0o600); err != nil {
+			return fmt.Errorf("write config backup: %w", err)
+		}
+		fmt.Printf(onboarding.T(onboarding.En, "setup.backup")+"\n", backupPath)
+	}
+
+	result, err := onboarding.Run(cfgPath, version, onboarding.WithRerunMode())
+	if err != nil {
+		return fmt.Errorf("setup wizard: %w", err)
+	}
+
+	var mcpServers []config.MCPServerConfig
+	for _, s := range result.MCPServers {
+		mcpServers = append(mcpServers, config.MCPServerConfig{
+			Name:    s.Name,
+			Command: s.Command,
+			Args:    s.Args,
+		})
+	}
+	cfgResult := &config.OnboardingResult{
+		APIKey:         result.APIKey,
+		DataDir:        result.DataDir,
+		WikiDir:        result.WikiDir,
+		PermissionMode: result.PermissionMode,
+		MCPServers:     mcpServers,
+	}
+	return config.WriteFromResult(cfgPath, cfgResult)
 }
 
 func cmdRun(ctx context.Context, args []string) error {
