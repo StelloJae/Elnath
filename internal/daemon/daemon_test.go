@@ -1,0 +1,446 @@
+package daemon
+
+import (
+	"bufio"
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/stello/elnath/internal/agent"
+	"github.com/stello/elnath/internal/llm"
+	"github.com/stello/elnath/internal/tools"
+
+	_ "modernc.org/sqlite"
+)
+
+// mockProvider is a minimal llm.Provider that returns a fixed text response.
+type mockProvider struct {
+	text string
+	err  error
+}
+
+func (m *mockProvider) Name() string { return "mock" }
+
+func (m *mockProvider) Models() []llm.ModelInfo { return nil }
+
+func (m *mockProvider) Chat(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return &llm.ChatResponse{Content: m.text}, nil
+}
+
+func (m *mockProvider) Stream(_ context.Context, _ llm.ChatRequest, cb func(llm.StreamEvent)) error {
+	if m.err != nil {
+		return m.err
+	}
+	if m.text != "" {
+		cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: m.text})
+	}
+	cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{}})
+	return nil
+}
+
+// newMockAgent builds a real *agent.Agent backed by the given mock provider.
+func newMockAgent(p llm.Provider) *agent.Agent {
+	reg := tools.NewRegistry()
+	return agent.New(p, reg)
+}
+
+// mockAgentFactory returns an AgentFactory that creates agents with the given provider.
+func mockAgentFactory(p llm.Provider) AgentFactory {
+	return func(ctx context.Context) (*agent.Agent, error) {
+		return newMockAgent(p), nil
+	}
+}
+
+// failingAgentFactory returns an AgentFactory whose agents always fail during Run.
+func failingAgentFactory(providerErr error) AgentFactory {
+	return mockAgentFactory(&mockProvider{err: providerErr})
+}
+
+// sendIPC connects to the Unix socket, writes a JSON-line request, and reads
+// the JSON-line response.
+func sendIPC(t *testing.T, socketPath string, req IPCRequest) IPCResponse {
+	t.Helper()
+	conn, err := net.Dial("unix", socketPath)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	data, _ := json.Marshal(req)
+	conn.Write(append(data, '\n'))
+
+	scanner := bufio.NewScanner(conn)
+	if !scanner.Scan() {
+		t.Fatal("no response from daemon")
+	}
+
+	var resp IPCResponse
+	if err := json.Unmarshal(scanner.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	return resp
+}
+
+// startDaemon spins up a Daemon in a background goroutine and waits until the
+// Unix socket is ready. It registers a t.Cleanup to stop the daemon.
+func startDaemon(t *testing.T, q *Queue, socketPath string, factory AgentFactory, workers int) *Daemon {
+	t.Helper()
+
+	d := New(q, socketPath, workers, factory, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- d.Start(ctx)
+	}()
+
+	// Poll until the socket is accepting connections (max 2 s).
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		c, err := net.Dial("unix", socketPath)
+		if err == nil {
+			c.Close()
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Error("daemon did not stop within timeout")
+		}
+	})
+
+	return d
+}
+
+// pollTaskStatus retries queue.Get until the task reaches the expected status
+// or the deadline elapses.
+func pollTaskStatus(t *testing.T, q *Queue, id int64, want TaskStatus, timeout time.Duration) *Task {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		task, err := q.Get(context.Background(), id)
+		if err != nil {
+			t.Fatalf("Get task %d: %v", id, err)
+		}
+		if task.Status == want {
+			return task
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	task, _ := q.Get(context.Background(), id)
+	t.Fatalf("task %d: status = %q after %s, want %q", id, task.Status, timeout, want)
+	return nil
+}
+
+// --- tests ---
+
+// TestDaemonSubmitAndStatus verifies the end-to-end path:
+// submit → task appears in status list → worker completes → status = done.
+func TestDaemonSubmitAndStatus(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	factory := mockAgentFactory(&mockProvider{text: "hello from mock"})
+	startDaemon(t, q, socketPath, factory, 1)
+
+	// Submit a task via IPC.
+	submitResp := sendIPC(t, socketPath, IPCRequest{
+		Command: "submit",
+		Payload: mustMarshalString(t, "tell me a joke"),
+	})
+	if !submitResp.OK {
+		t.Fatalf("submit: not OK: %s", submitResp.Err)
+	}
+
+	taskID := extractTaskID(t, submitResp)
+
+	// Status should show the task (pending or running).
+	statusResp := sendIPC(t, socketPath, IPCRequest{Command: "status"})
+	if !statusResp.OK {
+		t.Fatalf("status: not OK: %s", statusResp.Err)
+	}
+	tasks := extractTasks(t, statusResp)
+	if len(tasks) == 0 {
+		t.Fatal("status: expected at least one task")
+	}
+	found := false
+	for _, tv := range tasks {
+		if int64(tv["id"].(float64)) == taskID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("submitted task %d not found in status response", taskID)
+	}
+
+	// Wait for the worker to finish.
+	done := pollTaskStatus(t, q, taskID, StatusDone, 5*time.Second)
+	if done.Result != "hello from mock" {
+		t.Errorf("task result = %q, want %q", done.Result, "hello from mock")
+	}
+}
+
+// TestDaemonSubmitEmptyPayload verifies that an empty payload returns an error.
+func TestDaemonSubmitEmptyPayload(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	startDaemon(t, q, socketPath, mockAgentFactory(&mockProvider{text: "ok"}), 1)
+
+	resp := sendIPC(t, socketPath, IPCRequest{
+		Command: "submit",
+		Payload: mustMarshalString(t, ""),
+	})
+	if resp.OK {
+		t.Fatal("expected error for empty payload, got OK")
+	}
+	if resp.Err == "" {
+		t.Fatal("expected non-empty error message")
+	}
+}
+
+// TestDaemonSubmitNoPayload verifies that a missing payload field also errors.
+func TestDaemonSubmitNoPayload(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	startDaemon(t, q, socketPath, mockAgentFactory(&mockProvider{text: "ok"}), 1)
+
+	resp := sendIPC(t, socketPath, IPCRequest{Command: "submit"})
+	if resp.OK {
+		t.Fatal("expected error for missing payload, got OK")
+	}
+}
+
+// TestDaemonStopCommand verifies that the "stop" command triggers graceful shutdown.
+func TestDaemonStopCommand(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	d := New(q, socketPath, 1, mockAgentFactory(&mockProvider{text: "ok"}), nil)
+
+	startDone := make(chan error, 1)
+	go func() {
+		startDone <- d.Start(context.Background())
+	}()
+
+	// Wait for socket to be ready.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		c, err := net.Dial("unix", socketPath)
+		if err == nil {
+			c.Close()
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	resp := sendIPC(t, socketPath, IPCRequest{Command: "stop"})
+	if !resp.OK {
+		t.Fatalf("stop: not OK: %s", resp.Err)
+	}
+
+	select {
+	case err := <-startDone:
+		if err != nil {
+			t.Errorf("Start returned error after stop: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("daemon did not stop within 3 seconds after stop command")
+	}
+}
+
+// TestDaemonUnknownCommand verifies that unrecognised commands return an error response.
+func TestDaemonUnknownCommand(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	startDaemon(t, q, socketPath, mockAgentFactory(&mockProvider{text: "ok"}), 1)
+
+	resp := sendIPC(t, socketPath, IPCRequest{Command: "frobnicate"})
+	if resp.OK {
+		t.Fatal("expected error for unknown command, got OK")
+	}
+	if resp.Err == "" {
+		t.Fatal("expected non-empty error message for unknown command")
+	}
+}
+
+// TestDaemonWorkerCompletion verifies that a submitted task is marked done with
+// the text produced by the mock agent.
+func TestDaemonWorkerCompletion(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	const wantResult = "agent output text"
+	startDaemon(t, q, socketPath, mockAgentFactory(&mockProvider{text: wantResult}), 1)
+
+	resp := sendIPC(t, socketPath, IPCRequest{
+		Command: "submit",
+		Payload: mustMarshalString(t, "do some work"),
+	})
+	if !resp.OK {
+		t.Fatalf("submit: %s", resp.Err)
+	}
+	taskID := extractTaskID(t, resp)
+
+	task := pollTaskStatus(t, q, taskID, StatusDone, 5*time.Second)
+	if task.Result != wantResult {
+		t.Errorf("result = %q, want %q", task.Result, wantResult)
+	}
+}
+
+// TestDaemonWorkerFailure verifies that when the mock agent returns an error,
+// the task is marked as failed.
+func TestDaemonWorkerFailure(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	providerErr := errors.New("provider error 500")
+	startDaemon(t, q, socketPath, failingAgentFactory(providerErr), 1)
+
+	resp := sendIPC(t, socketPath, IPCRequest{
+		Command: "submit",
+		Payload: mustMarshalString(t, "this will fail"),
+	})
+	if !resp.OK {
+		t.Fatalf("submit: %s", resp.Err)
+	}
+	taskID := extractTaskID(t, resp)
+
+	task := pollTaskStatus(t, q, taskID, StatusFailed, 5*time.Second)
+	if task.Result == "" {
+		t.Error("expected non-empty error message in task.Result")
+	}
+}
+
+// TestDaemonInvalidJSON verifies that a non-JSON line results in an error response.
+func TestDaemonInvalidJSON(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	startDaemon(t, q, socketPath, mockAgentFactory(&mockProvider{text: "ok"}), 1)
+
+	conn, err := net.Dial("unix", socketPath)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	conn.Write([]byte("not json at all\n"))
+
+	scanner := bufio.NewScanner(conn)
+	if !scanner.Scan() {
+		t.Fatal("expected error response for invalid JSON")
+	}
+	var resp IPCResponse
+	json.Unmarshal(scanner.Bytes(), &resp)
+	if resp.OK {
+		t.Fatal("expected error for invalid JSON, got OK")
+	}
+}
+
+// --- helpers ---
+
+func mustMarshalString(t *testing.T, s string) json.RawMessage {
+	t.Helper()
+	b, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("marshal string: %v", err)
+	}
+	return b
+}
+
+func extractTaskID(t *testing.T, resp IPCResponse) int64 {
+	t.Helper()
+	m, ok := resp.Data.(map[string]interface{})
+	if !ok {
+		t.Fatalf("submit response Data is not a map: %T", resp.Data)
+	}
+	idFloat, ok := m["task_id"].(float64)
+	if !ok {
+		t.Fatalf("task_id missing or not a number in response: %v", resp.Data)
+	}
+	return int64(idFloat)
+}
+
+func extractTasks(t *testing.T, resp IPCResponse) []map[string]interface{} {
+	t.Helper()
+	m, ok := resp.Data.(map[string]interface{})
+	if !ok {
+		t.Fatalf("status response Data is not a map: %T", resp.Data)
+	}
+	raw, ok := m["tasks"]
+	if !ok {
+		t.Fatal("status response missing 'tasks' key")
+	}
+	slice, ok := raw.([]interface{})
+	if !ok {
+		t.Fatalf("tasks is not a slice: %T", raw)
+	}
+	out := make([]map[string]interface{}, 0, len(slice))
+	for _, item := range slice {
+		entry, ok := item.(map[string]interface{})
+		if !ok {
+			t.Fatalf("task entry is not a map: %T", item)
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+// Compile-time assertion: mockProvider must implement llm.Provider.
+var _ llm.Provider = (*mockProvider)(nil)
+
+// Compile-time assertion: openTestDB is shared with queue_test.go in the same
+// package; this blank import ensures the sqlite driver is registered exactly once.
+var _ *sql.DB = nil
+
+// Ensure fmt is used (for failingAgentFactory error wrapping in daemon.go).
+var _ = fmt.Sprintf
