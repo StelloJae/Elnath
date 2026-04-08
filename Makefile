@@ -1,7 +1,7 @@
-.PHONY: build test lint run clean version
+.PHONY: build test lint run clean version release release-snapshot install
 
 BINARY := elnath
-VERSION := 0.2.0
+VERSION := 0.3.0
 LDFLAGS := -ldflags "-X main.version=$(VERSION)"
 
 build:
@@ -19,6 +19,16 @@ lint:
 
 clean:
 	rm -f $(BINARY)
+	rm -rf dist/
 
 version: build
 	./$(BINARY) version
+
+install:
+	go install $(LDFLAGS) ./cmd/elnath
+
+release:
+	goreleaser release --clean
+
+release-snapshot:
+	goreleaser release --snapshot --clean
