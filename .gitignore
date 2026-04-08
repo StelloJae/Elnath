@@ -11,3 +11,11 @@
 
 # OMC state
 .omc/
+
+# Secrets / config (defense-in-depth)
+*.env
+*.env.*
+config.yaml
+*.pem
+*.key
+*.p12
