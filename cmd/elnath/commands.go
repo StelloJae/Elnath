@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"log/slog"
@@ -64,15 +65,24 @@ func cmdHelp(_ context.Context, _ []string) error {
 }
 
 // loadLocale reads the locale from the existing config, defaulting to English.
+// Cached via sync.Once to avoid re-parsing config on every help/error call.
+var (
+	cachedLocale     onboarding.Locale
+	cachedLocaleOnce sync.Once
+)
+
 func loadLocale() onboarding.Locale {
-	cfgPath := extractConfigFlag(os.Args)
-	if cfgPath == "" {
-		cfgPath = config.DefaultConfigPath()
-	}
-	if cfg, err := config.Load(cfgPath); err == nil && cfg.Locale != "" {
-		return onboarding.Locale(cfg.Locale)
-	}
-	return onboarding.En
+	cachedLocaleOnce.Do(func() {
+		cachedLocale = onboarding.En
+		cfgPath := extractConfigFlag(os.Args)
+		if cfgPath == "" {
+			cfgPath = config.DefaultConfigPath()
+		}
+		if cfg, err := config.Load(cfgPath); err == nil && cfg.Locale != "" {
+			cachedLocale = onboarding.Locale(cfg.Locale)
+		}
+	})
+	return cachedLocale
 }
 
 func cmdSetup(_ context.Context, _ []string) error {
@@ -100,7 +110,7 @@ func cmdSetup(_ context.Context, _ []string) error {
 
 	// Back up existing config if present.
 	if _, err := os.Stat(cfgPath); err == nil {
-		backupPath := cfgPath + ".bak"
+		backupPath := cfgPath + ".bak." + time.Now().Format("20060102-150405")
 		data, err := os.ReadFile(cfgPath)
 		if err != nil {
 			return fmt.Errorf("read existing config for backup: %w", err)

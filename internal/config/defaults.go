@@ -12,6 +12,7 @@ func DefaultConfig() *Config {
 	return &Config{
 		DataDir:  filepath.Join(base, "data"),
 		WikiDir:  filepath.Join(base, "wiki"),
+		Locale:   "en",
 		LogLevel: "info",
 
 		Anthropic: ProviderConfig{
