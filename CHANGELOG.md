@@ -1,5 +1,50 @@
 # Changelog
 
+## v0.3.0 (2026-04-08)
+
+### Onboarding Wizard
+- **Bubbletea TUI wizard**: Polished first-run experience with Charm CLI aesthetics (Lipgloss styling, spinners, progress indicators)
+- **Dual-path onboarding**: Quick Start (3 steps, 2 min) and Full Setup (8 steps, 5 min)
+- **Full CLI i18n**: English/Korean with locale persistence in config.yaml, `ELNATH_LOCALE` env var
+- **Non-interactive fallback**: `--non-interactive` flag + environment variable config for CI/pipe environments
+- **MCP catalog**: Curated checkbox list of MCP servers grouped by category
+- **API key live validation**: Spinner + real HTTP call to verify keys
+- **Rerun mode**: `elnath setup` pre-fills existing config values with "reconfigure" badge
+
+### Architecture Fixes
+- **Wiki Karpathy completion**: LLM-based entity/concept extraction pipeline (`extract.go`), auto-creates typed wiki pages from conversations at session end
+- **Research workflow wired**: `ResearchDeps` now injected — research intent triggers the full hypothesis→experiment→wiki loop
+- **Context window compression activated**: `CompressMessages()` with LLM topic-based summarization (was always hard-snipping). Configurable `compress_threshold` and `max_context_tokens` in config.yaml
+- **IntentWikiQuery routing**: Wiki queries now correctly classified and routed
+- **RoutingContext heuristic**: File-count estimation enables team workflow for multi-file tasks
+- **Session dual-persist**: `SessionPersister` interface for SQLite backup alongside JSONL primary
+- **OpenAI output tokens**: Cost tracking now includes completion tokens
+
+### Claude Code Feature Parity
+- **Prompt caching**: `cache_control: ephemeral` on system prompt + last tool definition. Cache read/write token tracking
+- **Parallel tool execution**: 2-phase pattern — sequential permission check, then goroutine-parallel execution with ordered result collection
+- **Web search**: Real DuckDuckGo HTML search (stub removed)
+- **Session resume**: `--continue` (latest session) and `--session <id>` CLI flags
+- **Extended thinking**: `ThinkingBlock` type, `ThinkingBudget` parameter, SSE thinking delta handling
+- **Image support**: `ImageBlock` with base64 source, Anthropic API image format marshaling
+- **Token estimation**: JSON/code density detection (~3.5 chars/token vs ~4 for prose), image block estimation
+
+### Distribution
+- **goreleaser**: Cross-platform release builds (darwin/linux/windows, amd64/arm64)
+- **Homebrew**: `brew install StelloJae/tap/elnath` (via goreleaser auto-generated formula)
+- **go install**: `go install github.com/stello/elnath/cmd/elnath@latest`
+
+### Improvements
+- Locale validation in config (rejects unsupported locales)
+- 70+ new tests across onboarding, config, wiki, and tools packages
+- Test coverage: onboarding 76.6%, config 92.6%, wiki 66%+, all packages 60%+
+
+### Known Limitations (carried from v0.2.0)
+- Auto-doc session ingestion does not filter sensitive information
+- MCP response ID not validated
+- Daemon bypasses orchestrator/wiki/session layers
+- Bash/ReadTool output size unbounded
+
 ## v0.2.0 (2026-04-07)
 
 ### New Features
@@ -24,7 +69,7 @@
 - README rewritten for public release with MCP/Hooks/Permission documentation
 
 ### Known Limitations
-- Research workflow deps not wired (always falls back to single)
+- ~~Research workflow deps not wired~~ → Fixed in v0.3.0
 - Auto-doc session ingestion does not filter sensitive information
 - MCP response ID not validated
 - Daemon bypasses orchestrator/wiki/session layers
