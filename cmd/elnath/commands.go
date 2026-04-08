@@ -883,11 +883,21 @@ func buildProvider(cfg *config.Config) (llm.Provider, string, error) {
 		}
 	}
 
-	codexToken, codexModel, codexAccountID := loadCodexAuth()
-	if codexToken != "" {
-		reg.Register("openai-responses", llm.NewResponsesProvider(codexToken, codexModel, codexAccountID))
+	// Codex OAuth provider (preferred — auto-refreshes tokens).
+	if llm.CodexOAuthAvailable() {
+		codexModel := loadCodexModel()
+		reg.Register("codex", llm.NewCodexOAuthProvider(codexModel))
 		if model == "" {
 			model = codexModel
+		}
+	} else {
+		// Fallback: use access_token as static API key (no refresh).
+		codexToken, codexModel, codexAccountID := loadCodexAuth()
+		if codexToken != "" {
+			reg.Register("openai-responses", llm.NewResponsesProvider(codexToken, codexModel, codexAccountID))
+			if model == "" {
+				model = codexModel
+			}
 		}
 	}
 
@@ -928,10 +938,12 @@ func buildProvider(cfg *config.Config) (llm.Provider, string, error) {
 	canonical := llm.ResolveModel(model)
 	detectedProvider := llm.DetectProvider(canonical)
 
-	// Codex Responses provider preferred over plain OpenAI for the same model names.
-	if detectedProvider == "openai" && codexToken != "" {
-		p, err := reg.Get("openai-responses")
-		if err == nil {
+	// Codex provider preferred over plain OpenAI for the same model names.
+	if detectedProvider == "openai" {
+		if p, err := reg.Get("codex"); err == nil {
+			return p, canonical, nil
+		}
+		if p, err := reg.Get("openai-responses"); err == nil {
 			return p, canonical, nil
 		}
 	}
@@ -979,6 +991,28 @@ func loadCodexAuth() (token, model, accountID string) {
 		model = "gpt-4o"
 	}
 	return auth.Tokens.AccessToken, model, accountID
+}
+
+// loadCodexModel reads the model from ~/.codex/config.toml, defaulting to o4-mini.
+func loadCodexModel() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "o4-mini"
+	}
+	cfgData, err := os.ReadFile(filepath.Join(home, ".codex", "config.toml"))
+	if err != nil {
+		return "o4-mini"
+	}
+	for _, line := range strings.Split(string(cfgData), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "model") && !strings.HasPrefix(line, "model_") {
+			parts := strings.SplitN(line, "=", 2)
+			if len(parts) == 2 {
+				return strings.Trim(strings.TrimSpace(parts[1]), "\"")
+			}
+		}
+	}
+	return "o4-mini"
 }
 
 func buildRouter(cfg orchestrator.WorkflowConfig) *orchestrator.Router {
