@@ -17,9 +17,11 @@ func NeedsOnboarding(cfgPath string) bool {
 
 // OnboardingResult holds the user's choices from the onboarding flow.
 type OnboardingResult struct {
-	APIKey  string
-	WikiDir string
-	DataDir string
+	APIKey         string
+	WikiDir        string
+	DataDir        string
+	PermissionMode string
+	MCPServers     []MCPServerConfig
 }
 
 // RunOnboarding runs the interactive first-run setup.
@@ -59,32 +61,69 @@ func RunOnboarding(cfgPath string, reader io.Reader, writer io.Writer) (*Onboard
 		wikiDir = defaultWikiDir
 	}
 
-	// Create directories
-	if err := os.MkdirAll(dataDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create data dir: %w", err)
-	}
-	if err := os.MkdirAll(wikiDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create wiki dir: %w", err)
+	result := &OnboardingResult{
+		APIKey:  apiKey,
+		WikiDir: wikiDir,
+		DataDir: dataDir,
 	}
 
-	// Write config file
-	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
-		return nil, fmt.Errorf("create config dir: %w", err)
+	if err := WriteFromResult(cfgPath, result); err != nil {
+		return nil, err
 	}
+
+	fmt.Fprintln(writer)
+	fmt.Fprintln(writer, "Setup complete! Run 'elnath run' to start chatting.")
+
+	return result, nil
+}
+
+// WriteFromResult persists an OnboardingResult to disk: creates directories,
+// writes config.yaml, and creates the getting-started wiki page.
+// Shared by both the interactive TUI wizard and the legacy text-based onboarding.
+func WriteFromResult(cfgPath string, result *OnboardingResult) error {
+	if err := os.MkdirAll(result.DataDir, 0o755); err != nil {
+		return fmt.Errorf("create data dir: %w", err)
+	}
+	if err := os.MkdirAll(result.WikiDir, 0o755); err != nil {
+		return fmt.Errorf("create wiki dir: %w", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
+	}
+	permMode := result.PermissionMode
+	if permMode == "" {
+		permMode = "default"
+	}
+
 	cfg := fmt.Sprintf(`# Elnath configuration
 data_dir: %q
 wiki_dir: %q
 anthropic:
   api_key: %q
   model: claude-sonnet-4-20250514
-`, dataDir, wikiDir, apiKey)
+permission:
+  mode: %s
+`, result.DataDir, result.WikiDir, result.APIKey, permMode)
 
-	if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
-		return nil, fmt.Errorf("write config: %w", err)
+	if len(result.MCPServers) > 0 {
+		cfg += "mcp_servers:\n"
+		for _, s := range result.MCPServers {
+			cfg += fmt.Sprintf("  - name: %q\n    command: %q\n", s.Name, s.Command)
+			if len(s.Args) > 0 {
+				cfg += "    args:\n"
+				for _, a := range s.Args {
+					cfg += fmt.Sprintf("      - %q\n", a)
+				}
+			}
+		}
 	}
 
-	// Create getting-started wiki page if it doesn't exist.
-	gettingStarted := filepath.Join(wikiDir, "getting-started.md")
+	if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+
+	gettingStarted := filepath.Join(result.WikiDir, "getting-started.md")
 	if _, err := os.Stat(gettingStarted); os.IsNotExist(err) {
 		content := `---
 title: Getting Started
@@ -96,16 +135,8 @@ Welcome to your Elnath wiki! This is your personal knowledge base.
 
 Use wiki tools to create, search, and manage pages.
 `
-		// Non-fatal: best-effort page creation.
 		_ = os.WriteFile(gettingStarted, []byte(content), 0o644)
 	}
 
-	fmt.Fprintln(writer)
-	fmt.Fprintln(writer, "Setup complete! Run 'elnath run' to start chatting.")
-
-	return &OnboardingResult{
-		APIKey:  apiKey,
-		WikiDir: wikiDir,
-		DataDir: dataDir,
-	}, nil
+	return nil
 }

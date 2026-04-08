@@ -14,6 +14,7 @@ import (
 
 	"log/slog"
 
+	"github.com/mattn/go-isatty"
 	"github.com/stello/elnath/internal/agent"
 	"github.com/stello/elnath/internal/config"
 	"github.com/stello/elnath/internal/conversation"
@@ -23,6 +24,7 @@ import (
 	"github.com/stello/elnath/internal/mcp"
 	"github.com/stello/elnath/internal/orchestrator"
 	"github.com/stello/elnath/internal/self"
+	"github.com/stello/elnath/internal/onboarding"
 	"github.com/stello/elnath/internal/tools"
 	"github.com/stello/elnath/internal/wiki"
 )
@@ -81,10 +83,35 @@ func cmdRun(ctx context.Context, args []string) error {
 		cfgPath = config.DefaultConfigPath()
 	}
 
-	// First-run onboarding.
+	// First-run onboarding: TUI wizard for terminals, legacy text for pipes/CI.
 	if config.NeedsOnboarding(cfgPath) {
-		if _, err := config.RunOnboarding(cfgPath, os.Stdin, os.Stdout); err != nil {
-			return fmt.Errorf("onboarding: %w", err)
+		if isatty.IsTerminal(os.Stdin.Fd()) || isatty.IsCygwinTerminal(os.Stdin.Fd()) {
+			result, err := onboarding.Run(cfgPath, version)
+			if err != nil {
+				return fmt.Errorf("onboarding: %w", err)
+			}
+			var mcpServers []config.MCPServerConfig
+			for _, s := range result.MCPServers {
+				mcpServers = append(mcpServers, config.MCPServerConfig{
+					Name:    s.Name,
+					Command: s.Command,
+					Args:    s.Args,
+				})
+			}
+			cfgResult := &config.OnboardingResult{
+				APIKey:         result.APIKey,
+				DataDir:        result.DataDir,
+				WikiDir:        result.WikiDir,
+				PermissionMode: result.PermissionMode,
+				MCPServers:     mcpServers,
+			}
+			if err := config.WriteFromResult(cfgPath, cfgResult); err != nil {
+				return fmt.Errorf("write config: %w", err)
+			}
+		} else {
+			if _, err := config.RunOnboarding(cfgPath, os.Stdin, os.Stdout); err != nil {
+				return fmt.Errorf("onboarding: %w", err)
+			}
 		}
 	}
 

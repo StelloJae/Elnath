@@ -1,0 +1,317 @@
+package onboarding
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+
+	tea "github.com/charmbracelet/bubbletea"
+)
+
+// Step represents a wizard screen.
+type Step int
+
+const (
+	StepWelcome Step = iota
+	StepLanguage
+	StepAPIKey
+	StepPermission
+	StepMCP
+	StepDirectory
+	StepDone
+)
+
+// stepBackMsg is emitted by sub-models when the user presses Esc.
+type stepBackMsg struct{}
+
+// Result holds the wizard's collected choices.
+type Result struct {
+	Path           PathChoice
+	Locale         Locale
+	APIKey         string
+	PermissionMode string
+	MCPServers     []MCPSelection
+	DataDir        string
+	WikiDir        string
+}
+
+// Option configures the root model.
+type Option func(*Model)
+
+// WithRerunMode marks this as a re-run from `elnath setup` (E3 prep).
+func WithRerunMode() Option {
+	return func(m *Model) {
+		m.rerun = true
+	}
+}
+
+// Model is the root Bubbletea model that orchestrates wizard steps.
+type Model struct {
+	cfgPath   string
+	version   string
+	rerun     bool
+	step      Step
+	locale    Locale
+	result    Result
+	welcome    WelcomeModel
+	language   LanguageModel
+	apikey     APIKeyModel
+	permission PermissionModel
+	mcp        MCPModel
+	directory  DirectoryModel
+	err        error
+}
+
+// New creates a new onboarding wizard model.
+func New(cfgPath, version string, opts ...Option) Model {
+	locale := En
+	m := Model{
+		cfgPath:  cfgPath,
+		version:  version,
+		step:     StepWelcome,
+		locale:   locale,
+		welcome:  NewWelcomeModel(locale, version),
+		language: NewLanguageModel(locale),
+	}
+	for _, opt := range opts {
+		opt(&m)
+	}
+	return m
+}
+
+func (m Model) Init() tea.Cmd {
+	return m.welcome.Init()
+}
+
+func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		if msg.String() == "ctrl+c" {
+			return m, tea.Quit
+		}
+
+	case stepBackMsg:
+		return m.goBack()
+
+	case WelcomeDoneMsg:
+		m.result.Path = msg.Path
+		m.step = StepLanguage
+		m.language = NewLanguageModel(m.locale)
+		return m, m.language.Init()
+
+	case LanguageDoneMsg:
+		m.locale = msg.Locale
+		m.result.Locale = msg.Locale
+		m.step = StepAPIKey
+		m.apikey = NewAPIKeyModel(m.locale)
+		return m, m.apikey.Init()
+
+	case APIKeyDoneMsg:
+		m.result.APIKey = msg.Key
+		return m.afterAPIKey()
+
+	case PermissionDoneMsg:
+		m.result.PermissionMode = msg.Mode
+		return m.afterPermission()
+
+	case MCPDoneMsg:
+		m.result.MCPServers = msg.Servers
+		return m.afterMCP()
+
+	case DirectoryDoneMsg:
+		m.result.DataDir = msg.DataDir
+		m.result.WikiDir = msg.WikiDir
+		m.step = StepDone
+		return m, tea.Quit
+	}
+
+	return m.updateCurrentStep(msg)
+}
+
+func (m Model) View() string {
+	switch m.step {
+	case StepWelcome:
+		return m.welcome.View()
+	case StepLanguage:
+		return m.language.View()
+	case StepAPIKey:
+		return m.apikey.View()
+	case StepPermission:
+		return m.permission.View()
+	case StepMCP:
+		return m.mcp.View()
+	case StepDirectory:
+		return m.directory.View()
+	case StepDone:
+		return ""
+	}
+	return ""
+}
+
+// Done returns true when the wizard has completed.
+func (m Model) Done() bool {
+	return m.step == StepDone
+}
+
+// WizardResult returns the collected wizard choices.
+func (m Model) WizardResult() Result {
+	return m.result
+}
+
+// Err returns any error that occurred during the wizard.
+func (m Model) Err() error {
+	return m.err
+}
+
+// afterAPIKey routes to the next step based on the selected path.
+// Quick: skip to Done with defaults.
+// Full: go to Permission step.
+func (m Model) afterAPIKey() (tea.Model, tea.Cmd) {
+	switch m.result.Path {
+	case PathQuick:
+		home, _ := os.UserHomeDir()
+		base := filepath.Join(home, ".elnath")
+		m.result.DataDir = filepath.Join(base, "data")
+		m.result.WikiDir = filepath.Join(base, "wiki")
+		m.result.PermissionMode = "default"
+		m.step = StepDone
+		return m, tea.Quit
+	default:
+		m.step = StepPermission
+		m.permission = NewPermissionModel(m.locale)
+		return m, m.permission.Init()
+	}
+}
+
+// afterPermission routes to MCP catalog (Full path only).
+func (m Model) afterPermission() (tea.Model, tea.Cmd) {
+	m.step = StepMCP
+	m.mcp = NewMCPModel(m.locale)
+	return m, m.mcp.Init()
+}
+
+// afterMCP routes to Directory step (Full path only).
+func (m Model) afterMCP() (tea.Model, tea.Cmd) {
+	m.step = StepDirectory
+	m.directory = NewDirectoryModel(m.locale)
+	return m, m.directory.Init()
+}
+
+// goBack moves to the previous step.
+func (m Model) goBack() (tea.Model, tea.Cmd) {
+	switch m.step {
+	case StepLanguage:
+		m.step = StepWelcome
+		m.welcome = NewWelcomeModel(m.locale, m.version)
+		return m, m.welcome.Init()
+	case StepAPIKey:
+		m.step = StepLanguage
+		m.language = NewLanguageModel(m.locale)
+		return m, m.language.Init()
+	case StepPermission:
+		m.step = StepAPIKey
+		m.apikey = NewAPIKeyModel(m.locale)
+		return m, m.apikey.Init()
+	case StepMCP:
+		m.step = StepPermission
+		m.permission = NewPermissionModel(m.locale)
+		return m, m.permission.Init()
+	case StepDirectory:
+		m.step = StepMCP
+		m.mcp = NewMCPModel(m.locale)
+		return m, m.mcp.Init()
+	}
+	return m, nil
+}
+
+// updateCurrentStep delegates the message to the active step's sub-model.
+func (m Model) updateCurrentStep(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+
+	switch m.step {
+	case StepWelcome:
+		updated, c := m.welcome.Update(msg)
+		wm, ok := updated.(WelcomeModel)
+		if !ok {
+			m.err = fmt.Errorf("unexpected model type from welcome update: %T", updated)
+			return m, tea.Quit
+		}
+		m.welcome = wm
+		cmd = c
+	case StepLanguage:
+		updated, c := m.language.Update(msg)
+		lm, ok := updated.(LanguageModel)
+		if !ok {
+			m.err = fmt.Errorf("unexpected model type from language update: %T", updated)
+			return m, tea.Quit
+		}
+		m.language = lm
+		cmd = c
+	case StepAPIKey:
+		updated, c := m.apikey.Update(msg)
+		am, ok := updated.(APIKeyModel)
+		if !ok {
+			m.err = fmt.Errorf("unexpected model type from apikey update: %T", updated)
+			return m, tea.Quit
+		}
+		m.apikey = am
+		cmd = c
+	case StepPermission:
+		updated, c := m.permission.Update(msg)
+		pm, ok := updated.(PermissionModel)
+		if !ok {
+			m.err = fmt.Errorf("unexpected model type from permission update: %T", updated)
+			return m, tea.Quit
+		}
+		m.permission = pm
+		cmd = c
+	case StepMCP:
+		updated, c := m.mcp.Update(msg)
+		mm, ok := updated.(MCPModel)
+		if !ok {
+			m.err = fmt.Errorf("unexpected model type from mcp update: %T", updated)
+			return m, tea.Quit
+		}
+		m.mcp = mm
+		cmd = c
+	case StepDirectory:
+		updated, c := m.directory.Update(msg)
+		dm, ok := updated.(DirectoryModel)
+		if !ok {
+			m.err = fmt.Errorf("unexpected model type from directory update: %T", updated)
+			return m, tea.Quit
+		}
+		m.directory = dm
+		cmd = c
+	}
+
+	return m, cmd
+}
+
+// Run starts the onboarding wizard and returns the user's choices.
+// This is the public entry point called from cmdRun.
+func Run(cfgPath, version string, opts ...Option) (*Result, error) {
+	m := New(cfgPath, version, opts...)
+	p := tea.NewProgram(m, tea.WithAltScreen())
+
+	finalModel, err := p.Run()
+	if err != nil {
+		return nil, fmt.Errorf("onboarding wizard: %w", err)
+	}
+
+	final, ok := finalModel.(Model)
+	if !ok {
+		return nil, fmt.Errorf("onboarding wizard: unexpected model type")
+	}
+
+	if !final.Done() {
+		return nil, fmt.Errorf("onboarding wizard: cancelled by user")
+	}
+
+	if final.Err() != nil {
+		return nil, final.Err()
+	}
+
+	result := final.WizardResult()
+	return &result, nil
+}
