@@ -11,6 +11,12 @@ const dynamicBoundary = "__DYNAMIC_BOUNDARY__"
 // The prompt is split into a static section (cacheable) and a dynamic section.
 // The __DYNAMIC_BOUNDARY__ marker tells the LLM API where prompt caching should stop.
 func BuildSystemPrompt(state *SelfState, wikiSummary string) string {
+	return BuildSystemPromptWithPersona(state, wikiSummary, "")
+}
+
+// BuildSystemPromptWithPersona generates the system prompt with an optional persona preset.
+// If personaExtra is non-empty it is appended as a behavioral directive.
+func BuildSystemPromptWithPersona(state *SelfState, wikiSummary, personaExtra string) string {
 	var b strings.Builder
 
 	id := state.GetIdentity()
@@ -23,6 +29,11 @@ func BuildSystemPrompt(state *SelfState, wikiSummary string) string {
 	b.WriteString("Personality parameters:\n")
 	b.WriteString(fmt.Sprintf("  curiosity=%.2f  verbosity=%.2f  caution=%.2f\n", p.Curiosity, p.Verbosity, p.Caution))
 	b.WriteString(fmt.Sprintf("  creativity=%.2f  persistence=%.2f\n\n", p.Creativity, p.Persistence))
+
+	if personaExtra != "" {
+		b.WriteString(personaExtra)
+		b.WriteString("\n\n")
+	}
 
 	b.WriteString("You have access to tools for reading and writing files, executing shell commands,\n")
 	b.WriteString("searching the web, and interacting with git repositories.\n\n")

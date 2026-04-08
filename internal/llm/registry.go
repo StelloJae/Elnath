@@ -110,6 +110,15 @@ func DetectProvider(model string) string {
 		return "openai"
 	case strings.HasPrefix(canonical, "grok"):
 		return "xai"
+	case strings.HasPrefix(canonical, "ollama/"),
+		strings.HasPrefix(canonical, "llama"),
+		strings.HasPrefix(canonical, "mistral"),
+		strings.HasPrefix(canonical, "codellama"),
+		strings.HasPrefix(canonical, "deepseek"),
+		strings.HasPrefix(canonical, "qwen"),
+		strings.HasPrefix(canonical, "gemma"),
+		strings.HasPrefix(canonical, "phi"):
+		return "ollama"
 	}
 	return ""
 }

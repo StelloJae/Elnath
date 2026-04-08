@@ -15,6 +15,7 @@ type Config struct {
 
 	Anthropic ProviderConfig `yaml:"anthropic"`
 	OpenAI    ProviderConfig `yaml:"openai"`
+	Ollama    OllamaConfig   `yaml:"ollama"`
 
 	Permission PermissionConfig `yaml:"permission"`
 	Daemon     DaemonConfig     `yaml:"daemon"`
@@ -37,6 +38,12 @@ type PermissionConfig struct {
 type DaemonConfig struct {
 	SocketPath string `yaml:"socket_path"`
 	MaxWorkers int    `yaml:"max_workers"`
+}
+
+type OllamaConfig struct {
+	BaseURL string `yaml:"base_url"`
+	Model   string `yaml:"model"`
+	APIKey  string `yaml:"api_key"` // optional, Ollama doesn't require auth by default
 }
 
 type ResearchConfig struct {
@@ -90,6 +97,12 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("ELNATH_OPENAI_API_KEY"); v != "" {
 		cfg.OpenAI.APIKey = v
+	}
+	if v := os.Getenv("ELNATH_OLLAMA_BASE_URL"); v != "" {
+		cfg.Ollama.BaseURL = v
+	}
+	if v := os.Getenv("ELNATH_OLLAMA_MODEL"); v != "" {
+		cfg.Ollama.Model = v
 	}
 	if v := os.Getenv("ELNATH_PERMISSION_MODE"); v != "" {
 		cfg.Permission.Mode = v

@@ -110,6 +110,16 @@ func TestDetectProvider(t *testing.T) {
 		{"grok-3", "xai"},
 		{"o1-mini", "openai"},
 		{"openai/gpt-4.1", "openai"},
+		// Ollama-routed models
+		{"llama3.2", "ollama"},
+		{"llama3.1:70b", "ollama"},
+		{"mistral-7b", "ollama"},
+		{"codellama:13b", "ollama"},
+		{"deepseek-coder:6.7b", "ollama"},
+		{"qwen2:7b", "ollama"},
+		{"gemma2:9b", "ollama"},
+		{"phi3:mini", "ollama"},
+		{"ollama/custom-model", "ollama"},
 		{"unknown-model", ""},
 	}
 	for _, tc := range tests {
@@ -120,6 +130,47 @@ func TestDetectProvider(t *testing.T) {
 				t.Errorf("DetectProvider(%q) = %q, want %q", tc.model, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestRegistrySetDefaultNotFound(t *testing.T) {
+	r := NewRegistry()
+	err := r.SetDefault("nonexistent")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, core.ErrNotFound) {
+		t.Errorf("expected core.ErrNotFound, got %v", err)
+	}
+}
+
+func TestRegistryDefaultEmpty(t *testing.T) {
+	r := NewRegistry()
+	_, err := r.Default()
+	if err == nil {
+		t.Fatal("expected error for empty registry, got nil")
+	}
+}
+
+func TestRegistryList(t *testing.T) {
+	r := NewRegistry()
+	r.Register("a", &mockProvider{name: "a"})
+	r.Register("b", &mockProvider{name: "b"})
+
+	names := r.List()
+	if len(names) != 2 {
+		t.Errorf("List() returned %d names, want 2", len(names))
+	}
+}
+
+func TestOllamaProviderName(t *testing.T) {
+	p := NewOllamaProvider("", "llama3.2")
+	if p.Name() != "ollama" {
+		t.Errorf("Name() = %q, want %q", p.Name(), "ollama")
+	}
+	models := p.Models()
+	if len(models) != 1 || models[0].ID != "llama3.2" {
+		t.Errorf("Models() = %+v, want [{ID:llama3.2}]", models)
 	}
 }
 

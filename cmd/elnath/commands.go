@@ -93,6 +93,20 @@ func cmdRun(ctx context.Context, args []string) error {
 		selfState = self.New(cfg.DataDir)
 	}
 
+	// Apply persona preset if specified.
+	personaExtra := ""
+	if pName := extractPersonaFlag(os.Args); pName != "" {
+		preset := self.PresetName(pName)
+		persona, extra := self.Preset(preset)
+		if extra != "" {
+			selfState.Persona = persona
+			personaExtra = extra
+			app.Logger.Info("persona preset applied", "preset", pName)
+		} else {
+			app.Logger.Warn("unknown persona preset, using defaults", "preset", pName)
+		}
+	}
+
 	provider, model, err := buildProvider(cfg)
 	if err != nil {
 		return core.NewUserError("No LLM provider configured. Set ELNATH_ANTHROPIC_API_KEY or add anthropic.api_key to config.yaml", err)
@@ -138,7 +152,7 @@ func cmdRun(ctx context.Context, args []string) error {
 	// Build workflow router.
 	wfCfg := orchestrator.WorkflowConfig{
 		Model:        model,
-		SystemPrompt: self.BuildSystemPrompt(selfState, ""),
+		SystemPrompt: self.BuildSystemPromptWithPersona(selfState, "", personaExtra),
 	}
 	router := buildRouter(wfCfg)
 
@@ -647,6 +661,21 @@ func buildProvider(cfg *config.Config) (llm.Provider, string, error) {
 			m = "gpt-4o"
 		}
 		reg.Register("openai", llm.NewOpenAIProvider(cfg.OpenAI.APIKey, m, opts...))
+		if model == "" {
+			model = m
+		}
+	}
+
+	if cfg.Ollama.Model != "" || cfg.Ollama.BaseURL != "" {
+		var opts []llm.OllamaOption
+		if cfg.Ollama.BaseURL != "" {
+			opts = append(opts, llm.WithOllamaBaseURL(cfg.Ollama.BaseURL))
+		}
+		m := cfg.Ollama.Model
+		if m == "" {
+			m = "llama3.2"
+		}
+		reg.Register("ollama", llm.NewOllamaProvider(cfg.Ollama.APIKey, m, opts...))
 		if model == "" {
 			model = m
 		}

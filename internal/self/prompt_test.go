@@ -71,6 +71,77 @@ func TestBuildSystemPrompt_CustomPersona(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPromptWithPersona(t *testing.T) {
+	state := New(t.TempDir())
+
+	prompt := BuildSystemPromptWithPersona(state, "", "Focus on research: generate hypotheses.")
+
+	if !strings.Contains(prompt, "Focus on research") {
+		t.Error("persona extra text not included in prompt")
+	}
+	// Persona text should come before the tools section.
+	personaIdx := strings.Index(prompt, "Focus on research")
+	toolsIdx := strings.Index(prompt, "You have access to tools")
+	if personaIdx > toolsIdx {
+		t.Error("persona text should appear before tools description")
+	}
+}
+
+func TestBuildSystemPromptWithPersona_Empty(t *testing.T) {
+	state := New(t.TempDir())
+
+	withExtra := BuildSystemPromptWithPersona(state, "", "")
+	withoutExtra := BuildSystemPrompt(state, "")
+
+	if withExtra != withoutExtra {
+		t.Error("empty personaExtra should produce same output as BuildSystemPrompt")
+	}
+}
+
+func TestPreset(t *testing.T) {
+	presets := ValidPresets()
+	if len(presets) != 4 {
+		t.Fatalf("expected 4 presets, got %d", len(presets))
+	}
+
+	for _, name := range presets {
+		t.Run(string(name), func(t *testing.T) {
+			persona, extra := Preset(name)
+			if extra == "" {
+				t.Errorf("preset %q should have non-empty extra text", name)
+			}
+			// All persona values should be in [0, 1].
+			for _, v := range []float64{persona.Curiosity, persona.Verbosity, persona.Caution, persona.Creativity, persona.Persistence} {
+				if v < 0 || v > 1 {
+					t.Errorf("preset %q has out-of-range value %.2f", name, v)
+				}
+			}
+		})
+	}
+}
+
+func TestPreset_Default(t *testing.T) {
+	persona, extra := Preset(PresetDefault)
+	if extra != "" {
+		t.Error("default preset should have empty extra text")
+	}
+	def := DefaultPersona()
+	if persona != def {
+		t.Errorf("default preset persona = %+v, want %+v", persona, def)
+	}
+}
+
+func TestPreset_Unknown(t *testing.T) {
+	persona, extra := Preset(PresetName("nonexistent"))
+	if extra != "" {
+		t.Error("unknown preset should return empty extra")
+	}
+	def := DefaultPersona()
+	if persona != def {
+		t.Errorf("unknown preset should return default persona")
+	}
+}
+
 func TestBuildSystemPrompt_BoundaryPosition(t *testing.T) {
 	state := New(t.TempDir())
 

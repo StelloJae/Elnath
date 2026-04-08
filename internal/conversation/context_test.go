@@ -153,6 +153,99 @@ func TestContextWindowFit_Trim(t *testing.T) {
 	}
 }
 
+func TestMessageImportance(t *testing.T) {
+	tests := []struct {
+		name    string
+		msg     llm.Message
+		wantMin int
+	}{
+		{
+			name:    "plain text",
+			msg:     llm.NewUserMessage("hello"),
+			wantMin: 1,
+		},
+		{
+			name: "tool use block",
+			msg: llm.Message{
+				Role: llm.RoleAssistant,
+				Content: []llm.ContentBlock{
+					llm.ToolUseBlock{ID: "t1", Name: "bash", Input: []byte(`{}`)},
+				},
+			},
+			wantMin: 4, // 1 base + 3 tool
+		},
+		{
+			name: "error result",
+			msg: llm.Message{
+				Role: llm.RoleUser,
+				Content: []llm.ContentBlock{
+					llm.ToolResultBlock{ToolUseID: "t1", Content: "failed", IsError: true},
+				},
+			},
+			wantMin: 6, // 1 base + 2 tool_result + 3 error
+		},
+		{
+			name:    "text with decision marker",
+			msg:     llm.NewAssistantMessage("Decision: we will use PostgreSQL"),
+			wantMin: 3, // 1 base + 2 marker
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := messageImportance(tt.msg)
+			if got < tt.wantMin {
+				t.Errorf("messageImportance = %d, want >= %d", got, tt.wantMin)
+			}
+		})
+	}
+}
+
+func TestSegmentByTopic(t *testing.T) {
+	messages := []llm.Message{
+		llm.NewUserMessage("topic 1"),
+		llm.NewAssistantMessage("answer 1"),
+		llm.NewUserMessage("topic 2"),
+		llm.NewAssistantMessage("answer 2a"),
+		llm.NewAssistantMessage("answer 2b"),
+		llm.NewUserMessage("topic 3"),
+		llm.NewAssistantMessage("answer 3"),
+	}
+
+	segments := segmentByTopic(messages)
+
+	if len(segments) != 3 {
+		t.Fatalf("got %d segments, want 3", len(segments))
+	}
+	if len(segments[0].messages) != 2 {
+		t.Errorf("segment 0: got %d messages, want 2", len(segments[0].messages))
+	}
+	if len(segments[1].messages) != 3 {
+		t.Errorf("segment 1: got %d messages, want 3", len(segments[1].messages))
+	}
+	if len(segments[2].messages) != 2 {
+		t.Errorf("segment 2: got %d messages, want 2", len(segments[2].messages))
+	}
+}
+
+func TestSegmentByTopic_Empty(t *testing.T) {
+	segments := segmentByTopic(nil)
+	if len(segments) != 0 {
+		t.Errorf("got %d segments for nil input, want 0", len(segments))
+	}
+}
+
+func TestSegmentByTopic_AssistantOnly(t *testing.T) {
+	messages := []llm.Message{
+		llm.NewAssistantMessage("only assistant messages"),
+		llm.NewAssistantMessage("still going"),
+	}
+	segments := segmentByTopic(messages)
+	if len(segments) != 1 {
+		t.Errorf("got %d segments, want 1", len(segments))
+	}
+}
+
 func TestContextWindowFit_TrimKeepsRecent(t *testing.T) {
 	cw := NewContextWindow()
 	ctx := context.Background()
