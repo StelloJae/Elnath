@@ -99,11 +99,12 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, onText func(str
 
 	for iter := 0; iter < a.maxIterations; iter++ {
 		req := llm.Request{
-			Model:     a.model,
-			Messages:  messages,
-			Tools:     toolDefs,
-			System:    a.systemPrompt,
-			MaxTokens: defaultMaxTokens,
+			Model:       a.model,
+			Messages:    messages,
+			Tools:       toolDefs,
+			System:      a.systemPrompt,
+			MaxTokens:   defaultMaxTokens,
+			EnableCache: a.provider.Name() == "anthropic",
 		}
 
 		assistantMsg, usage, err := a.streamWithRetry(ctx, req, onText)

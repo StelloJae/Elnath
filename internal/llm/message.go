@@ -48,6 +48,21 @@ type ToolResultBlock struct {
 
 func (b ToolResultBlock) BlockType() string { return "tool_result" }
 
+// ThinkingBlock holds extended thinking content from the model.
+type ThinkingBlock struct {
+	Thinking string `json:"thinking"`
+}
+
+func (b ThinkingBlock) BlockType() string { return "thinking" }
+
+// ImageBlock holds an image for multimodal messages.
+type ImageBlock struct {
+	MediaType string `json:"media_type"` // e.g. "image/jpeg", "image/png"
+	Data      string `json:"data"`       // base64-encoded image data
+}
+
+func (b ImageBlock) BlockType() string { return "image" }
+
 // Message is a single turn in a conversation.
 // The message array is the ONLY state — no hidden state machines.
 type Message struct {
@@ -107,17 +122,30 @@ func (m Message) MarshalJSON() ([]byte, error) {
 }
 
 func marshalBlock(b ContentBlock) (json.RawMessage, error) {
-	inner, err := json.Marshal(b)
-	if err != nil {
-		return nil, err
+	switch blk := b.(type) {
+	case ImageBlock:
+		// Anthropic image blocks use a nested source structure.
+		return json.Marshal(map[string]interface{}{
+			"type": "image",
+			"source": map[string]string{
+				"type":       "base64",
+				"media_type": blk.MediaType,
+				"data":       blk.Data,
+			},
+		})
+	default:
+		inner, err := json.Marshal(b)
+		if err != nil {
+			return nil, err
+		}
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(inner, &m); err != nil {
+			return nil, err
+		}
+		typeBytes, _ := json.Marshal(b.BlockType())
+		m["type"] = typeBytes
+		return json.Marshal(m)
 	}
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal(inner, &m); err != nil {
-		return nil, err
-	}
-	typeBytes, _ := json.Marshal(b.BlockType())
-	m["type"] = typeBytes
-	return json.Marshal(m)
 }
 
 // UnmarshalJSON deserialises Message, reconstructing typed ContentBlocks.
@@ -167,6 +195,24 @@ func unmarshalBlock(blockType string, raw json.RawMessage) (ContentBlock, error)
 			return nil, err
 		}
 		return b, nil
+	case "thinking":
+		var b ThinkingBlock
+		if err := json.Unmarshal(raw, &b); err != nil {
+			return nil, err
+		}
+		return b, nil
+	case "image":
+		var b struct {
+			Source struct {
+				Type      string `json:"type"`
+				MediaType string `json:"media_type"`
+				Data      string `json:"data"`
+			} `json:"source"`
+		}
+		if err := json.Unmarshal(raw, &b); err != nil {
+			return nil, err
+		}
+		return ImageBlock{MediaType: b.Source.MediaType, Data: b.Source.Data}, nil
 	default:
 		return TextBlock{Text: string(raw)}, nil
 	}

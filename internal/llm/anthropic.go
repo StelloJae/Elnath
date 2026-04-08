@@ -101,12 +101,18 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req Request, cb func(Str
 // --- request building ---
 
 type anthropicRequest struct {
-	Model     string             `json:"model"`
-	MaxTokens int                `json:"max_tokens"`
-	System    string             `json:"system,omitempty"`
-	Messages  []anthropicMessage `json:"messages"`
-	Tools     []anthropicTool    `json:"tools,omitempty"`
-	Stream    bool               `json:"stream"`
+	Model     string              `json:"model"`
+	MaxTokens int                 `json:"max_tokens"`
+	System    json.RawMessage     `json:"system,omitempty"`
+	Messages  []anthropicMessage  `json:"messages"`
+	Tools     []anthropicTool     `json:"tools,omitempty"`
+	Stream    bool                `json:"stream"`
+	Thinking  *anthropicThinking  `json:"thinking,omitempty"`
+}
+
+type anthropicThinking struct {
+	Type         string `json:"type"`
+	BudgetTokens int    `json:"budget_tokens"`
 }
 
 type anthropicMessage struct {
@@ -115,9 +121,14 @@ type anthropicMessage struct {
 }
 
 type anthropicTool struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	InputSchema json.RawMessage `json:"input_schema"`
+	Name         string          `json:"name"`
+	Description  string          `json:"description,omitempty"`
+	InputSchema  json.RawMessage `json:"input_schema"`
+	CacheControl *cacheControl   `json:"cache_control,omitempty"`
+}
+
+type cacheControl struct {
+	Type string `json:"type"` // "ephemeral"
 }
 
 var defaultInputSchema = json.RawMessage(`{"type":"object","properties":{}}`)
@@ -135,20 +146,53 @@ func buildAnthropicRequest(req Request, defaultModel string) ([]byte, error) {
 	ar := anthropicRequest{
 		Model:     model,
 		MaxTokens: maxTokens,
-		System:    req.System,
 		Stream:    true,
 	}
 
-	for _, t := range req.Tools {
+	// Build system prompt as structured block(s) with optional cache_control.
+	if req.System != "" {
+		sysBlock := map[string]interface{}{
+			"type": "text",
+			"text": req.System,
+		}
+		if req.EnableCache {
+			sysBlock["cache_control"] = map[string]string{"type": "ephemeral"}
+		}
+		sysBlocks := []interface{}{sysBlock}
+		sysJSON, err := json.Marshal(sysBlocks)
+		if err != nil {
+			return nil, fmt.Errorf("marshal system: %w", err)
+		}
+		ar.System = sysJSON
+	}
+
+	// Extended thinking support.
+	if req.ThinkingBudget > 0 {
+		ar.Thinking = &anthropicThinking{
+			Type:         "enabled",
+			BudgetTokens: req.ThinkingBudget,
+		}
+		// Thinking requires max_tokens to be at least budget + 1.
+		if ar.MaxTokens <= req.ThinkingBudget {
+			ar.MaxTokens = req.ThinkingBudget + 4096
+		}
+	}
+
+	for i, t := range req.Tools {
 		schema := t.InputSchema
 		if len(schema) == 0 {
 			schema = defaultInputSchema
 		}
-		ar.Tools = append(ar.Tools, anthropicTool{
+		tool := anthropicTool{
 			Name:        t.Name,
 			Description: t.Description,
 			InputSchema: schema,
-		})
+		}
+		// Add cache_control to the last tool for prompt caching.
+		if req.EnableCache && i == len(req.Tools)-1 {
+			tool.CacheControl = &cacheControl{Type: "ephemeral"}
+		}
+		ar.Tools = append(ar.Tools, tool)
 	}
 
 	for _, msg := range req.Messages {
@@ -186,6 +230,7 @@ func parseAnthropicSSE(r io.Reader, cb func(StreamEvent)) error {
 		input strings.Builder
 	}
 	tools := map[int]*toolState{}
+	thinkingIndices := map[int]bool{}
 	var currentToolIndex int
 
 	var usage UsageStats
@@ -217,17 +262,19 @@ func parseAnthropicSSE(r io.Reader, cb func(StreamEvent)) error {
 
 		switch evType {
 		case "message_start":
-			// extract input token count
 			var ms struct {
 				Message struct {
 					Usage struct {
-						InputTokens int `json:"input_tokens"`
+						InputTokens        int `json:"input_tokens"`
+						CacheReadTokens    int `json:"cache_read_input_tokens"`
+						CacheCreationTokens int `json:"cache_creation_input_tokens"`
 					} `json:"usage"`
 				} `json:"message"`
 			}
 			if err := json.Unmarshal([]byte(data), &ms); err == nil {
 				usage.InputTokens = ms.Message.Usage.InputTokens
-				// Emit a no-content event carrying the input token count.
+				usage.CacheRead = ms.Message.Usage.CacheReadTokens
+				usage.CacheWrite = ms.Message.Usage.CacheCreationTokens
 				cb(StreamEvent{InputTokens: usage.InputTokens})
 			}
 
@@ -243,7 +290,8 @@ func parseAnthropicSSE(r io.Reader, cb func(StreamEvent)) error {
 			if err := json.Unmarshal([]byte(data), &cbs); err != nil {
 				continue
 			}
-			if cbs.ContentBlock.Type == "tool_use" {
+			switch cbs.ContentBlock.Type {
+			case "tool_use":
 				currentToolIndex = cbs.Index
 				tools[cbs.Index] = &toolState{
 					id:   cbs.ContentBlock.ID,
@@ -256,6 +304,9 @@ func parseAnthropicSSE(r io.Reader, cb func(StreamEvent)) error {
 						Name: cbs.ContentBlock.Name,
 					},
 				})
+			case "thinking":
+				// Extended thinking block started — tracked by index.
+				thinkingIndices[cbs.Index] = true
 			}
 
 		case "content_block_delta":
@@ -272,7 +323,13 @@ func parseAnthropicSSE(r io.Reader, cb func(StreamEvent)) error {
 			}
 			switch cbd.Delta.Type {
 			case "text_delta":
-				cb(StreamEvent{Type: EventTextDelta, Content: cbd.Delta.Text})
+				if thinkingIndices[cbd.Index] {
+					// Thinking delta — skip streaming to user (internal reasoning).
+				} else {
+					cb(StreamEvent{Type: EventTextDelta, Content: cbd.Delta.Text})
+				}
+			case "thinking_delta":
+				// Extended thinking content — silently consumed.
 			case "input_json_delta":
 				if ts, ok := tools[cbd.Index]; ok {
 					ts.input.WriteString(cbd.Delta.PartialJSON)

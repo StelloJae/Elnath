@@ -532,9 +532,19 @@ func TestBuildAnthropicRequest(t *testing.T) {
 	}
 
 	checkStringField("model", "claude-opus-4-20250514")
-	checkStringField("system", "You are a test assistant.")
 	checkBoolField("stream", true)
 	checkIntField("max_tokens", 1024)
+
+	// Verify system is an array with text block.
+	var sysBlocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(got["system"], &sysBlocks); err != nil {
+		t.Errorf("system field: %v", err)
+	} else if len(sysBlocks) != 1 || sysBlocks[0].Text != "You are a test assistant." {
+		t.Errorf("system text = %q, want %q", sysBlocks[0].Text, "You are a test assistant.")
+	}
 
 	// Verify tools array has one entry with the expected name.
 	var tools []map[string]json.RawMessage

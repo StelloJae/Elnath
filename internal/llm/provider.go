@@ -61,12 +61,14 @@ type Usage struct {
 
 // ChatRequest is the provider-agnostic input to an LLM call.
 type ChatRequest struct {
-	Model       string
-	Messages    []Message
-	Tools       []ToolDef
-	MaxTokens   int
-	Temperature float64
-	System      string
+	Model          string
+	Messages       []Message
+	Tools          []ToolDef
+	MaxTokens      int
+	Temperature    float64
+	System         string
+	ThinkingBudget int  // If > 0, enables extended thinking with this token budget.
+	EnableCache    bool // If true, adds prompt caching hints to system + tools.
 }
 
 // ChatResponse is the complete (non-streaming) response from a provider.
