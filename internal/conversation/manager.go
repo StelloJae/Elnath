@@ -18,6 +18,8 @@ type IntentClassifier interface {
 // ContextWindowManager manages token budget and message compression.
 type ContextWindowManager interface {
 	Fit(ctx context.Context, messages []llm.Message, maxTokens int) ([]llm.Message, error)
+	// CompressMessages applies the full 3-stage pipeline with LLM-based summarization.
+	CompressMessages(ctx context.Context, provider llm.Provider, messages []llm.Message, maxTokens int) ([]llm.Message, error)
 }
 
 // HistoryStore persists and retrieves conversation history.
@@ -30,13 +32,14 @@ type HistoryStore interface {
 // Manager wraps agent.Session and provides higher-level conversation management.
 // It coordinates intent classification, context window management, and history persistence.
 type Manager struct {
-	db        *sql.DB
-	dataDir   string
-	logger    *slog.Logger
-	provider  llm.Provider
-	classifier IntentClassifier
-	context    ContextWindowManager
-	history    HistoryStore
+	db               *sql.DB
+	dataDir          string
+	logger           *slog.Logger
+	provider         llm.Provider
+	classifier       IntentClassifier
+	context          ContextWindowManager
+	history          HistoryStore
+	maxContextTokens int
 }
 
 // NewManager creates a Manager with the given database and data directory.
@@ -71,6 +74,13 @@ func (m *Manager) WithContextWindow(cw ContextWindowManager) *Manager {
 // WithHistoryStore sets the history store.
 func (m *Manager) WithHistoryStore(hs HistoryStore) *Manager {
 	m.history = hs
+	return m
+}
+
+// WithMaxContextTokens sets the maximum token budget for the context window.
+// If not set, defaults to 100,000.
+func (m *Manager) WithMaxContextTokens(n int) *Manager {
+	m.maxContextTokens = n
 	return m
 }
 
@@ -129,16 +139,22 @@ func (m *Manager) SendMessage(ctx context.Context, sessionID, userMsg string) ([
 	userMessage := llm.NewUserMessage(userMsg)
 	messages = append(messages, userMessage)
 
-	// Fit messages to context window if available.
+	// Compress messages to fit context window if available.
 	if m.context != nil {
-		const defaultMaxTokens = 100_000
-		messages, err = m.context.Fit(ctx, messages, defaultMaxTokens)
+		maxTokens := m.maxContextTokens
+		if maxTokens == 0 {
+			maxTokens = 100_000
+		}
+		if m.provider != nil {
+			messages, err = m.context.CompressMessages(ctx, m.provider, messages, maxTokens)
+		} else {
+			messages, err = m.context.Fit(ctx, messages, maxTokens)
+		}
 		if err != nil {
-			m.logger.Warn("context window fit failed, using original messages",
+			m.logger.Warn("context compression failed, using original messages",
 				"session_id", sessionID,
 				"error", err,
 			)
-			// Revert to original messages + user message on error.
 			messages = append(s.Messages, userMessage)
 		}
 	}

@@ -18,6 +18,9 @@ type Config struct {
 	OpenAI    ProviderConfig `yaml:"openai"`
 	Ollama    OllamaConfig   `yaml:"ollama"`
 
+	MaxContextTokens  int     `yaml:"max_context_tokens"`
+	CompressThreshold float64 `yaml:"compress_threshold"`
+
 	Permission PermissionConfig `yaml:"permission"`
 	Daemon     DaemonConfig     `yaml:"daemon"`
 	Research   ResearchConfig   `yaml:"research"`

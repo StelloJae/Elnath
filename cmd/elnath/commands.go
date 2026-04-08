@@ -204,11 +204,17 @@ func cmdRun(ctx context.Context, args []string) error {
 	// Build conversation manager with all dependencies.
 	historyStore := conversation.NewHistoryStore(db.Main)
 	classifier := conversation.NewLLMClassifier()
-	ctxWindow := conversation.NewContextWindow()
+	var ctxWindow conversation.ContextWindowManager
+	if cfg.CompressThreshold > 0 {
+		ctxWindow = conversation.NewContextWindowWithThreshold(cfg.CompressThreshold)
+	} else {
+		ctxWindow = conversation.NewContextWindow()
+	}
 	mgr := conversation.NewManager(db.Main, cfg.DataDir).
 		WithProvider(provider).
 		WithClassifier(classifier).
 		WithContextWindow(ctxWindow).
+		WithMaxContextTokens(cfg.MaxContextTokens).
 		WithHistoryStore(historyStore).
 		WithLogger(app.Logger)
 

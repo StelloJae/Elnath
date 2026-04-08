@@ -21,7 +21,8 @@ func (m *mockClassifier) Classify(_ context.Context, _ llm.Provider, _ string, _
 }
 
 type mockContextWindow struct {
-	fitFn func(ctx context.Context, messages []llm.Message, maxTokens int) ([]llm.Message, error)
+	fitFn      func(ctx context.Context, messages []llm.Message, maxTokens int) ([]llm.Message, error)
+	compressFn func(ctx context.Context, provider llm.Provider, messages []llm.Message, maxTokens int) ([]llm.Message, error)
 }
 
 func (m *mockContextWindow) Fit(ctx context.Context, messages []llm.Message, maxTokens int) ([]llm.Message, error) {
@@ -29,6 +30,14 @@ func (m *mockContextWindow) Fit(ctx context.Context, messages []llm.Message, max
 		return m.fitFn(ctx, messages, maxTokens)
 	}
 	return messages, nil
+}
+
+func (m *mockContextWindow) CompressMessages(ctx context.Context, provider llm.Provider, messages []llm.Message, maxTokens int) ([]llm.Message, error) {
+	if m.compressFn != nil {
+		return m.compressFn(ctx, provider, messages, maxTokens)
+	}
+	// Default: delegate to Fit.
+	return m.Fit(ctx, messages, maxTokens)
 }
 
 type mockHistoryStore struct {

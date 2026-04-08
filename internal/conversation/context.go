@@ -30,13 +30,27 @@ Output only the summary, no preamble.`
 
 // ContextWindow manages token budget and message compression via a 3-stage pipeline.
 type ContextWindow struct {
-	logger *slog.Logger
+	logger    *slog.Logger
+	threshold float64 // fraction of maxTokens at which auto-compression triggers (0.0-1.0)
 }
 
-// NewContextWindow creates a new ContextWindow manager.
+// NewContextWindow creates a new ContextWindow manager with the default threshold (80%).
 func NewContextWindow() *ContextWindow {
 	return &ContextWindow{
-		logger: slog.Default(),
+		logger:    slog.Default(),
+		threshold: autoCompressThreshold,
+	}
+}
+
+// NewContextWindowWithThreshold creates a ContextWindow with a custom compression threshold.
+// Threshold is a fraction (0.0-1.0) of maxTokens at which auto-compression triggers.
+func NewContextWindowWithThreshold(threshold float64) *ContextWindow {
+	if threshold <= 0 || threshold > 1.0 {
+		threshold = autoCompressThreshold
+	}
+	return &ContextWindow{
+		logger:    slog.Default(),
+		threshold: threshold,
 	}
 }
 
@@ -112,7 +126,7 @@ func (cw *ContextWindow) CompressMessages(ctx context.Context, provider llm.Prov
 			break
 		}
 
-		threshold := int(float64(maxTokens) * autoCompressThreshold)
+		threshold := int(float64(maxTokens) * cw.threshold)
 		if estimated > threshold && provider != nil {
 			// Stage 2: LLM summary.
 			compressed, err := cw.autoCompress(ctx, provider, messages)
