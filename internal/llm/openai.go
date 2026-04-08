@@ -120,7 +120,7 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req Request, cb func(Stream
 // parseSSE reads the SSE stream and emits StreamEvents via cb.
 func (p *OpenAIProvider) parseSSE(r io.Reader, cb func(StreamEvent)) error {
 	scanner := bufio.NewScanner(r)
-	var inputTokens int
+	var inputTokens, outputTokens int
 	// index → tool call ID, used to correlate argument delta chunks.
 	pendingToolIDs := map[int]string{}
 
@@ -137,7 +137,8 @@ func (p *OpenAIProvider) parseSSE(r io.Reader, cb func(StreamEvent)) error {
 			cb(StreamEvent{
 				Type: EventDone,
 				Usage: &UsageStats{
-					InputTokens: inputTokens,
+					InputTokens:  inputTokens,
+					OutputTokens: outputTokens,
 				},
 			})
 			return nil
@@ -152,6 +153,7 @@ func (p *OpenAIProvider) parseSSE(r io.Reader, cb func(StreamEvent)) error {
 		// Capture usage if present (some endpoints send it in the final chunk).
 		if chunk.Usage != nil {
 			inputTokens = chunk.Usage.PromptTokens
+			outputTokens = chunk.Usage.CompletionTokens
 		}
 
 		for _, choice := range chunk.Choices {
@@ -205,7 +207,7 @@ func (p *OpenAIProvider) parseSSE(r io.Reader, cb func(StreamEvent)) error {
 	// Stream ended without [DONE] — emit done anyway.
 	cb(StreamEvent{
 		Type:  EventDone,
-		Usage: &UsageStats{InputTokens: inputTokens},
+		Usage: &UsageStats{InputTokens: inputTokens, OutputTokens: outputTokens},
 	})
 	return nil
 }

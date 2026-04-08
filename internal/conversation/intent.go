@@ -132,7 +132,7 @@ func parseIntentResponse(raw string) (IntentResult, error) {
 	parsed := Intent(intent)
 	switch parsed {
 	case IntentQuestion, IntentSimpleTask, IntentComplexTask,
-		IntentProject, IntentResearch, IntentUnclear, IntentChat:
+		IntentProject, IntentResearch, IntentWikiQuery, IntentUnclear, IntentChat:
 		// valid
 	default:
 		return IntentResult{}, fmt.Errorf("unknown intent category %q", intent)

@@ -250,6 +250,14 @@ func cmdRun(ctx context.Context, args []string) error {
 		}
 	}
 
+	// Open wiki store for research workflow (failures are non-fatal).
+	var wikiStore *wiki.Store
+	if cfg.WikiDir != "" {
+		if ws, werr := wiki.NewStore(cfg.WikiDir); werr == nil {
+			wikiStore = ws
+		}
+	}
+
 	// Build workflow router.
 	wfCfg := orchestrator.WorkflowConfig{
 		Model:        model,
@@ -271,7 +279,7 @@ func cmdRun(ctx context.Context, args []string) error {
 	// Parse optional initial prompt from args.
 	if len(args) > 0 {
 		prompt := strings.Join(args, " ")
-		messages, err = runOrchestrated(ctx, mgr, router, provider, reg, perm, sess, messages, prompt, wfCfg, wikiIdx, app)
+		messages, err = runOrchestrated(ctx, mgr, router, provider, reg, perm, sess, messages, prompt, wfCfg, wikiIdx, wikiStore, app)
 		if err != nil {
 			return err
 		}
@@ -296,7 +304,7 @@ func cmdRun(ctx context.Context, args []string) error {
 			break
 		}
 
-		messages, err = runOrchestrated(ctx, mgr, router, provider, reg, perm, sess, messages, line, wfCfg, wikiIdx, app)
+		messages, err = runOrchestrated(ctx, mgr, router, provider, reg, perm, sess, messages, line, wfCfg, wikiIdx, wikiStore, app)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			continue
@@ -346,6 +354,7 @@ func runOrchestrated(
 	userInput string,
 	wfCfg orchestrator.WorkflowConfig,
 	wikiIdx *wiki.Index,
+	wikiStore *wiki.Store,
 	app *core.App,
 ) ([]llm.Message, error) {
 	// Classify intent and prepare messages via conversation manager.
@@ -356,8 +365,9 @@ func runOrchestrated(
 		intent = conversation.IntentUnclear
 	}
 
-	// Route intent to workflow.
-	wf := router.Route(intent, nil)
+	// Route intent to workflow with basic heuristics.
+	routeCtx := &orchestrator.RoutingContext{EstimatedFiles: estimateFiles(userInput)}
+	wf := router.Route(intent, routeCtx)
 	if wf == nil {
 		return nil, fmt.Errorf("no workflow available for intent %q", intent)
 	}
@@ -386,6 +396,16 @@ func runOrchestrated(
 		Provider: provider,
 		Config:   cfg,
 		OnText:   func(s string) { fmt.Print(s) },
+	}
+
+	// Wire research dependencies when routing to research workflow.
+	if wf.Name() == "research" && wikiIdx != nil && wikiStore != nil {
+		input.Extra = &orchestrator.ResearchDeps{
+			WikiIndex:  wikiIdx,
+			WikiStore:  wikiStore,
+			MaxRounds:  5,
+			CostCapUSD: 1.0,
+		}
 	}
 
 	fmt.Println()
@@ -1075,6 +1095,23 @@ func onboardingResultToConfig(result *onboarding.Result) *config.OnboardingResul
 		PermissionMode: result.PermissionMode,
 		MCPServers:     mcpServers,
 	}
+}
+
+// estimateFiles guesses how many files the user's request might touch
+// based on simple heuristics (file-path-like tokens).
+func estimateFiles(input string) int {
+	count := 0
+	for _, word := range strings.Fields(input) {
+		if strings.Contains(word, "/") || strings.Contains(word, ".go") ||
+			strings.Contains(word, ".ts") || strings.Contains(word, ".py") ||
+			strings.Contains(word, ".js") || strings.Contains(word, ".yaml") {
+			count++
+		}
+	}
+	if count == 0 {
+		count = 1 // default: assume single file
+	}
+	return count
 }
 
 // cliPrompter asks the user for interactive permission approval.
