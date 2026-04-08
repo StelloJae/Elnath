@@ -84,4 +84,8 @@ var (
 
 	progressEmptyStyle = lipgloss.NewStyle().
 				Foreground(subtleColor)
+
+	accentStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#F59E0B")).
+			Bold(true)
 )

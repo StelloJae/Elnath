@@ -47,7 +47,7 @@ func executeCommand(ctx context.Context, name string, args []string) error {
 	registry := commandRegistry()
 	cmd, ok := registry[name]
 	if !ok {
-		fmt.Fprintf(os.Stderr, "unknown command: %s\n", name)
+		fmt.Fprintln(os.Stderr, fmt.Sprintf(onboarding.T(loadLocale(), "cli.unknown_command"), name))
 		return cmdHelp(ctx, args)
 	}
 	return cmd(ctx, args)
@@ -59,30 +59,43 @@ func cmdVersion(_ context.Context, _ []string) error {
 }
 
 func cmdHelp(_ context.Context, _ []string) error {
-	fmt.Println(`Usage: elnath <command> [args]
-
-Commands:
-  run       Interactive chat mode
-  setup     Re-run the setup wizard
-  daemon    Background daemon mode
-  wiki      Wiki management (search, lint, ingest)
-  search    Search past conversations
-  version   Show version
-  help      Show this help
-
-Daemon subcommands:
-  daemon start              Start the daemon (blocks until stopped)
-  daemon submit <task>      Submit a task to the running daemon
-  daemon status             List queued and running tasks
-  daemon stop               Gracefully stop the running daemon
-  daemon install            Install launchd plist for auto-start`)
+	fmt.Println(onboarding.T(loadLocale(), "cli.help"))
 	return nil
+}
+
+// loadLocale reads the locale from the existing config, defaulting to English.
+func loadLocale() onboarding.Locale {
+	cfgPath := extractConfigFlag(os.Args)
+	if cfgPath == "" {
+		cfgPath = config.DefaultConfigPath()
+	}
+	if cfg, err := config.Load(cfgPath); err == nil && cfg.Locale != "" {
+		return onboarding.Locale(cfg.Locale)
+	}
+	return onboarding.En
 }
 
 func cmdSetup(_ context.Context, _ []string) error {
 	cfgPath := extractConfigFlag(os.Args)
 	if cfgPath == "" {
 		cfgPath = config.DefaultConfigPath()
+	}
+
+	// Load existing config for locale and rerun defaults.
+	locale := onboarding.En
+	var rerunOpts []onboarding.Option
+	rerunOpts = append(rerunOpts, onboarding.WithRerunMode())
+	if existing, err := config.Load(cfgPath); err == nil {
+		if existing.Locale != "" {
+			locale = onboarding.Locale(existing.Locale)
+		}
+		rerunOpts = append(rerunOpts, onboarding.WithExistingConfig(onboarding.ExistingConfig{
+			Locale:         onboarding.Locale(existing.Locale),
+			APIKey:         existing.Anthropic.APIKey,
+			PermissionMode: existing.Permission.Mode,
+			DataDir:        existing.DataDir,
+			WikiDir:        existing.WikiDir,
+		}))
 	}
 
 	// Back up existing config if present.
@@ -95,29 +108,15 @@ func cmdSetup(_ context.Context, _ []string) error {
 		if err := os.WriteFile(backupPath, data, 0o600); err != nil {
 			return fmt.Errorf("write config backup: %w", err)
 		}
-		fmt.Printf(onboarding.T(onboarding.En, "setup.backup")+"\n", backupPath)
+		fmt.Printf(onboarding.T(locale, "setup.backup")+"\n", backupPath)
 	}
 
-	result, err := onboarding.Run(cfgPath, version, onboarding.WithRerunMode())
+	result, err := onboarding.Run(cfgPath, version, rerunOpts...)
 	if err != nil {
 		return fmt.Errorf("setup wizard: %w", err)
 	}
 
-	var mcpServers []config.MCPServerConfig
-	for _, s := range result.MCPServers {
-		mcpServers = append(mcpServers, config.MCPServerConfig{
-			Name:    s.Name,
-			Command: s.Command,
-			Args:    s.Args,
-		})
-	}
-	cfgResult := &config.OnboardingResult{
-		APIKey:         result.APIKey,
-		DataDir:        result.DataDir,
-		WikiDir:        result.WikiDir,
-		PermissionMode: result.PermissionMode,
-		MCPServers:     mcpServers,
-	}
+	cfgResult := onboardingResultToConfig(result)
 	return config.WriteFromResult(cfgPath, cfgResult)
 }
 
@@ -127,32 +126,26 @@ func cmdRun(ctx context.Context, args []string) error {
 		cfgPath = config.DefaultConfigPath()
 	}
 
-	// First-run onboarding: TUI wizard for terminals, legacy text for pipes/CI.
+	// First-run onboarding: TUI wizard for terminals, text fallback for pipes/CI.
+	nonInteractive := hasFlag(os.Args, "--non-interactive")
 	if config.NeedsOnboarding(cfgPath) {
-		if isatty.IsTerminal(os.Stdin.Fd()) || isatty.IsCygwinTerminal(os.Stdin.Fd()) {
+		isTTY := isatty.IsTerminal(os.Stdin.Fd()) || isatty.IsCygwinTerminal(os.Stdin.Fd())
+		if isTTY && !nonInteractive {
 			result, err := onboarding.Run(cfgPath, version)
 			if err != nil {
 				return fmt.Errorf("onboarding: %w", err)
 			}
-			var mcpServers []config.MCPServerConfig
-			for _, s := range result.MCPServers {
-				mcpServers = append(mcpServers, config.MCPServerConfig{
-					Name:    s.Name,
-					Command: s.Command,
-					Args:    s.Args,
-				})
-			}
-			cfgResult := &config.OnboardingResult{
-				APIKey:         result.APIKey,
-				DataDir:        result.DataDir,
-				WikiDir:        result.WikiDir,
-				PermissionMode: result.PermissionMode,
-				MCPServers:     mcpServers,
-			}
+			cfgResult := onboardingResultToConfig(result)
 			if err := config.WriteFromResult(cfgPath, cfgResult); err != nil {
 				return fmt.Errorf("write config: %w", err)
 			}
+		} else if nonInteractive {
+			// Fully non-interactive: env vars + defaults only.
+			if _, err := config.RunNonInteractiveOnboarding(cfgPath); err != nil {
+				return fmt.Errorf("onboarding: %w", err)
+			}
 		} else {
+			// Piped stdin: text-based prompts with env var priority.
 			if _, err := config.RunOnboarding(cfgPath, os.Stdin, os.Stdout); err != nil {
 				return fmt.Errorf("onboarding: %w", err)
 			}
@@ -1062,6 +1055,26 @@ func defaultSystemPrompt() string {
 		"You have access to tools for reading and writing files, executing shell commands,\n" +
 		"searching the web, and interacting with git repositories.\n" +
 		"Be concise, accurate, and helpful."
+}
+
+// onboardingResultToConfig converts an onboarding wizard Result to a config OnboardingResult.
+func onboardingResultToConfig(result *onboarding.Result) *config.OnboardingResult {
+	var mcpServers []config.MCPServerConfig
+	for _, s := range result.MCPServers {
+		mcpServers = append(mcpServers, config.MCPServerConfig{
+			Name:    s.Name,
+			Command: s.Command,
+			Args:    s.Args,
+		})
+	}
+	return &config.OnboardingResult{
+		APIKey:         result.APIKey,
+		Locale:         string(result.Locale),
+		DataDir:        result.DataDir,
+		WikiDir:        result.WikiDir,
+		PermissionMode: result.PermissionMode,
+		MCPServers:     mcpServers,
+	}
 }
 
 // cliPrompter asks the user for interactive permission approval.

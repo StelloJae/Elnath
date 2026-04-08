@@ -59,6 +59,15 @@ func extractPersonaFlag(args []string) string {
 	return ""
 }
 
+func hasFlag(args []string, flag string) bool {
+	for _, arg := range args {
+		if arg == flag {
+			return true
+		}
+	}
+	return false
+}
+
 func recoverPanic() {
 	if r := recover(); r != nil {
 		fmt.Fprintf(os.Stderr, "elnath panic: %v\n%s\n", r, debug.Stack())

@@ -30,17 +30,26 @@ const (
 
 // APIKeyModel is the Bubbletea model for the API key input screen.
 type APIKeyModel struct {
-	locale    Locale
-	textInput textinput.Model
-	spinner   spinner.Model
-	state     apiKeyState
-	validated *ValidationResult
+	locale      Locale
+	textInput   textinput.Model
+	spinner     spinner.Model
+	state       apiKeyState
+	validated   *ValidationResult
+	existingKey string
 }
 
 // NewAPIKeyModel creates a new API key input model.
-func NewAPIKeyModel(locale Locale) APIKeyModel {
+// An optional existingKey shows a masked hint that a key is already configured.
+func NewAPIKeyModel(locale Locale, existingKey ...string) APIKeyModel {
 	ti := textinput.New()
 	ti.Placeholder = T(locale, "apikey.placeholder")
+	if len(existingKey) > 0 && existingKey[0] != "" {
+		// Show masked hint of existing key as placeholder.
+		k := existingKey[0]
+		if len(k) > 8 {
+			ti.Placeholder = "••••" + k[len(k)-4:] + " (enter to keep)"
+		}
+	}
 	ti.EchoMode = textinput.EchoPassword
 	ti.EchoCharacter = '•'
 	ti.CharLimit = 200
@@ -51,11 +60,16 @@ func NewAPIKeyModel(locale Locale) APIKeyModel {
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(accentColor)
 
+	existing := ""
+	if len(existingKey) > 0 {
+		existing = existingKey[0]
+	}
 	return APIKeyModel{
-		locale:    locale,
-		textInput: ti,
-		spinner:   s,
-		state:     apiKeyInput,
+		locale:      locale,
+		textInput:   ti,
+		spinner:     s,
+		state:       apiKeyInput,
+		existingKey: existing,
 	}
 }
 
@@ -78,8 +92,9 @@ func (m APIKeyModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case apiKeyInput:
 				key := strings.TrimSpace(m.textInput.Value())
 				if key == "" {
-					// Skip — use empty key (can be set via env var later).
-					return m, func() tea.Msg { return APIKeyDoneMsg{Key: ""} }
+					// In rerun mode, keep the existing key; otherwise skip.
+					kept := m.existingKey
+					return m, func() tea.Msg { return APIKeyDoneMsg{Key: kept} }
 				}
 				m.state = apiKeyValidating
 				return m, tea.Batch(

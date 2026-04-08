@@ -32,8 +32,18 @@ type PermissionModel struct {
 }
 
 // NewPermissionModel creates a new permission mode selector.
-func NewPermissionModel(locale Locale) PermissionModel {
-	return PermissionModel{locale: locale, cursor: 0}
+// An optional existingMode pre-selects the cursor to the matching mode.
+func NewPermissionModel(locale Locale, existingMode ...string) PermissionModel {
+	cursor := 0
+	if len(existingMode) > 0 && existingMode[0] != "" {
+		for i, pm := range permModes {
+			if pm.id == existingMode[0] {
+				cursor = i
+				break
+			}
+		}
+	}
+	return PermissionModel{locale: locale, cursor: cursor}
 }
 
 func (m PermissionModel) Init() tea.Cmd {

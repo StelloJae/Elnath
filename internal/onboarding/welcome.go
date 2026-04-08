@@ -24,15 +24,18 @@ type WelcomeDoneMsg struct {
 type WelcomeModel struct {
 	locale  Locale
 	version string
+	rerun   bool
 	cursor  int
 	choices []PathChoice
 }
 
 // NewWelcomeModel creates a new welcome screen model.
-func NewWelcomeModel(locale Locale, version string) WelcomeModel {
+func NewWelcomeModel(locale Locale, version string, rerun ...bool) WelcomeModel {
+	r := len(rerun) > 0 && rerun[0]
 	return WelcomeModel{
 		locale:  locale,
 		version: version,
+		rerun:   r,
 		cursor:  0,
 		choices: []PathChoice{PathQuick, PathFull},
 	}
@@ -73,10 +76,12 @@ func (m WelcomeModel) View() string {
 
 	b.WriteString(titleStyle.Render(T(m.locale, "welcome.title")))
 	b.WriteString("\n")
-	b.WriteString(subtitleStyle.Render(
-		T(m.locale, "welcome.subtitle") + "  " +
-			fmt.Sprintf(T(m.locale, "welcome.version"), m.version),
-	))
+	subtitle := T(m.locale, "welcome.subtitle") + "  " +
+		fmt.Sprintf(T(m.locale, "welcome.version"), m.version)
+	if m.rerun {
+		subtitle += "  " + accentStyle.Render("[ "+T(m.locale, "setup.reconfigure")+" ]")
+	}
+	b.WriteString(subtitleStyle.Render(subtitle))
 	b.WriteString("\n\n")
 
 	for i, choice := range m.choices {

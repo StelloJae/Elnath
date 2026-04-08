@@ -9,8 +9,9 @@ import (
 )
 
 type Config struct {
-	DataDir string `yaml:"data_dir"`
-	WikiDir string `yaml:"wiki_dir"`
+	DataDir  string `yaml:"data_dir"`
+	WikiDir  string `yaml:"wiki_dir"`
+	Locale   string `yaml:"locale"`
 	LogLevel string `yaml:"log_level"`
 
 	Anthropic ProviderConfig `yaml:"anthropic"`
@@ -133,6 +134,9 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("ELNATH_PERMISSION_MODE"); v != "" {
 		cfg.Permission.Mode = v
 	}
+	if v := os.Getenv("ELNATH_LOCALE"); v != "" {
+		cfg.Locale = v
+	}
 }
 
 func validate(cfg *Config) error {
@@ -146,6 +150,12 @@ func validate(cfg *Config) error {
 	info, err := os.Stat(cfg.WikiDir)
 	if err == nil && !info.IsDir() {
 		return fmt.Errorf("wiki_dir %q is not a directory", cfg.WikiDir)
+	}
+
+	switch cfg.Locale {
+	case "", "en", "ko":
+	default:
+		return fmt.Errorf("unsupported locale: %q (supported: en, ko)", cfg.Locale)
 	}
 
 	switch cfg.Permission.Mode {

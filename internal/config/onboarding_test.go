@@ -164,3 +164,114 @@ func TestRunOnboarding_ConfigFilePermissions(t *testing.T) {
 		t.Errorf("expected config permissions 0600, got %04o", perm)
 	}
 }
+
+func TestRunNonInteractiveOnboarding_EnvVars(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+
+	t.Setenv("ELNATH_ANTHROPIC_API_KEY", "sk-env-key")
+	t.Setenv("ELNATH_DATA_DIR", filepath.Join(dir, "envdata"))
+	t.Setenv("ELNATH_WIKI_DIR", filepath.Join(dir, "envwiki"))
+	t.Setenv("ELNATH_PERMISSION_MODE", "plan")
+	t.Setenv("ELNATH_LOCALE", "ko")
+
+	result, err := RunNonInteractiveOnboarding(cfgPath)
+	if err != nil {
+		t.Fatalf("RunNonInteractiveOnboarding failed: %v", err)
+	}
+
+	if result.APIKey != "sk-env-key" {
+		t.Errorf("expected APIKey from env, got %q", result.APIKey)
+	}
+	if result.DataDir != filepath.Join(dir, "envdata") {
+		t.Errorf("expected DataDir from env, got %q", result.DataDir)
+	}
+	if result.WikiDir != filepath.Join(dir, "envwiki") {
+		t.Errorf("expected WikiDir from env, got %q", result.WikiDir)
+	}
+	if result.PermissionMode != "plan" {
+		t.Errorf("expected permission mode 'plan' from env, got %q", result.PermissionMode)
+	}
+	if result.Locale != "ko" {
+		t.Errorf("expected locale 'ko' from env, got %q", result.Locale)
+	}
+
+	// Verify config file was created with correct values.
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "sk-env-key") {
+		t.Error("config missing api key from env")
+	}
+	if !strings.Contains(content, `locale: "ko"`) {
+		t.Error("config missing locale")
+	}
+	if !strings.Contains(content, `mode: "plan"`) {
+		t.Error("config missing permission mode")
+	}
+}
+
+func TestRunNonInteractiveOnboarding_Defaults(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+
+	// No env vars set — should use defaults.
+	result, err := RunNonInteractiveOnboarding(cfgPath)
+	if err != nil {
+		t.Fatalf("RunNonInteractiveOnboarding failed: %v", err)
+	}
+
+	if result.DataDir == "" {
+		t.Error("expected DataDir to be set with default")
+	}
+	if result.WikiDir == "" {
+		t.Error("expected WikiDir to be set with default")
+	}
+}
+
+func TestRunOnboarding_EnvVarPriority(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+
+	t.Setenv("ELNATH_ANTHROPIC_API_KEY", "sk-from-env")
+
+	// Provide empty lines so scanner doesn't hang; env var should win.
+	input := "\n\n"
+	var out bytes.Buffer
+
+	result, err := RunOnboarding(cfgPath, strings.NewReader(input), &out)
+	if err != nil {
+		t.Fatalf("RunOnboarding failed: %v", err)
+	}
+
+	if result.APIKey != "sk-from-env" {
+		t.Errorf("expected env var API key, got %q", result.APIKey)
+	}
+}
+
+func TestWriteFromResult_LocaleSaved(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+
+	result := &OnboardingResult{
+		APIKey:  "test-key",
+		Locale:  "ko",
+		DataDir: filepath.Join(dir, "data"),
+		WikiDir: filepath.Join(dir, "wiki"),
+	}
+
+	if err := WriteFromResult(cfgPath, result); err != nil {
+		t.Fatalf("WriteFromResult failed: %v", err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load config failed: %v", err)
+	}
+
+	if cfg.Locale != "ko" {
+		t.Errorf("expected locale 'ko' in loaded config, got %q", cfg.Locale)
+	}
+}

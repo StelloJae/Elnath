@@ -1,6 +1,7 @@
 package onboarding
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -292,6 +293,78 @@ func TestModel_WithRerunMode(t *testing.T) {
 		t.Error("expected rerun to be true")
 	}
 }
+
+func TestModel_WithExistingConfig_Locale(t *testing.T) {
+	m := New("/tmp/config.yaml", "0.3.0",
+		WithRerunMode(),
+		WithExistingConfig(ExistingConfig{
+			Locale:         Ko,
+			APIKey:         "sk-existing",
+			PermissionMode: "accept_edits",
+			DataDir:        "/existing/data",
+			WikiDir:        "/existing/wiki",
+		}),
+	)
+	if m.locale != Ko {
+		t.Errorf("expected Ko locale from existing config, got %q", m.locale)
+	}
+	if !m.rerun {
+		t.Error("expected rerun to be true")
+	}
+	if m.existing == nil {
+		t.Fatal("expected existing config to be set")
+	}
+	if m.existing.APIKey != "sk-existing" {
+		t.Errorf("expected sk-existing, got %q", m.existing.APIKey)
+	}
+}
+
+func TestModel_RerunMode_WelcomeShowsReconfigure(t *testing.T) {
+	m := New("/tmp/config.yaml", "0.3.0", WithRerunMode())
+	view := m.View()
+	// The welcome view should contain the reconfigure indicator.
+	if !strings.Contains(view, "Reconfiguration") && !strings.Contains(view, "재설정") {
+		t.Error("expected rerun mode indicator in welcome view")
+	}
+}
+
+func TestModel_RerunMode_ExistingAPIKey_Kept(t *testing.T) {
+	m := New("/tmp/config.yaml", "0.3.0",
+		WithRerunMode(),
+		WithExistingConfig(ExistingConfig{APIKey: "sk-keep-me"}),
+	)
+	m.step = StepAPIKey
+	m.apikey = m.newAPIKeyModel()
+
+	// Simulate pressing enter with empty input (keep existing key).
+	updated, cmd := m.apikey.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.apikey = updated.(APIKeyModel)
+	if cmd == nil {
+		t.Fatal("expected cmd from enter")
+	}
+	msg := cmd()
+	done, ok := msg.(APIKeyDoneMsg)
+	if !ok {
+		t.Fatal("expected APIKeyDoneMsg")
+	}
+	if done.Key != "sk-keep-me" {
+		t.Errorf("expected existing key to be kept, got %q", done.Key)
+	}
+}
+
+func TestModel_RerunMode_PermissionPreselected(t *testing.T) {
+	ec := ExistingConfig{PermissionMode: "plan"}
+	m := New("/tmp/config.yaml", "0.3.0",
+		WithRerunMode(),
+		WithExistingConfig(ec),
+	)
+	pm := m.newPermissionModel()
+	// "plan" is index 2 in permModes (default=0, accept_edits=1, plan=2, bypass=3).
+	if pm.cursor != 2 {
+		t.Errorf("expected cursor at index 2 (plan), got %d", pm.cursor)
+	}
+}
+
 
 func TestModel_FullFlowEndToEnd(t *testing.T) {
 	m := New("/tmp/config.yaml", "0.3.0")

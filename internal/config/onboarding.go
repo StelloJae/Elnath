@@ -18,63 +18,90 @@ func NeedsOnboarding(cfgPath string) bool {
 // OnboardingResult holds the user's choices from the onboarding flow.
 type OnboardingResult struct {
 	APIKey         string
+	Locale         string
 	WikiDir        string
 	DataDir        string
 	PermissionMode string
 	MCPServers     []MCPServerConfig
 }
 
-// RunOnboarding runs the interactive first-run setup.
-// It prompts for API key, data directory, and wiki directory,
-// then writes a config file and initializes directories.
-// The reader and writer params allow testing with fake input/output.
+// RunOnboarding runs the text-based first-run setup for non-interactive environments.
+// Environment variables take priority: ELNATH_ANTHROPIC_API_KEY, ELNATH_DATA_DIR,
+// ELNATH_WIKI_DIR, ELNATH_PERMISSION_MODE, ELNATH_LOCALE.
+// If reader is nil (fully non-interactive), only env vars and defaults are used.
 func RunOnboarding(cfgPath string, reader io.Reader, writer io.Writer) (*OnboardingResult, error) {
-	scanner := bufio.NewScanner(reader)
-
-	fmt.Fprintln(writer, "Welcome to Elnath! Let's set up your environment.")
-	fmt.Fprintln(writer)
-
-	// API Key
-	fmt.Fprint(writer, "Anthropic API key (ELNATH_ANTHROPIC_API_KEY): ")
-	scanner.Scan()
-	apiKey := strings.TrimSpace(scanner.Text())
-
-	// Data directory
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("determine home directory: %w", err)
 	}
 	defaultDataDir := filepath.Join(home, ".elnath", "data")
-	fmt.Fprintf(writer, "Data directory [%s]: ", defaultDataDir)
-	scanner.Scan()
-	dataDir := strings.TrimSpace(scanner.Text())
+	defaultWikiDir := filepath.Join(home, ".elnath", "wiki")
+
+	// Start from env vars.
+	apiKey := os.Getenv("ELNATH_ANTHROPIC_API_KEY")
+	dataDir := os.Getenv("ELNATH_DATA_DIR")
+	wikiDir := os.Getenv("ELNATH_WIKI_DIR")
+	permMode := os.Getenv("ELNATH_PERMISSION_MODE")
+	locale := os.Getenv("ELNATH_LOCALE")
+
+	// Fill defaults.
 	if dataDir == "" {
 		dataDir = defaultDataDir
 	}
-
-	// Wiki directory
-	defaultWikiDir := filepath.Join(home, ".elnath", "wiki")
-	fmt.Fprintf(writer, "Wiki directory [%s]: ", defaultWikiDir)
-	scanner.Scan()
-	wikiDir := strings.TrimSpace(scanner.Text())
 	if wikiDir == "" {
 		wikiDir = defaultWikiDir
 	}
 
+	// If reader is available, prompt for missing values interactively.
+	if reader != nil {
+		scanner := bufio.NewScanner(reader)
+
+		fmt.Fprintln(writer, "Welcome to Elnath! Let's set up your environment.")
+		fmt.Fprintln(writer)
+
+		if apiKey == "" {
+			fmt.Fprint(writer, "Anthropic API key (ELNATH_ANTHROPIC_API_KEY): ")
+			scanner.Scan()
+			apiKey = strings.TrimSpace(scanner.Text())
+		}
+
+		fmt.Fprintf(writer, "Data directory [%s]: ", dataDir)
+		scanner.Scan()
+		if v := strings.TrimSpace(scanner.Text()); v != "" {
+			dataDir = v
+		}
+
+		fmt.Fprintf(writer, "Wiki directory [%s]: ", wikiDir)
+		scanner.Scan()
+		if v := strings.TrimSpace(scanner.Text()); v != "" {
+			wikiDir = v
+		}
+	}
+
 	result := &OnboardingResult{
-		APIKey:  apiKey,
-		WikiDir: wikiDir,
-		DataDir: dataDir,
+		APIKey:         apiKey,
+		Locale:         locale,
+		WikiDir:        wikiDir,
+		DataDir:        dataDir,
+		PermissionMode: permMode,
 	}
 
 	if err := WriteFromResult(cfgPath, result); err != nil {
 		return nil, err
 	}
 
-	fmt.Fprintln(writer)
-	fmt.Fprintln(writer, "Setup complete! Run 'elnath run' to start chatting.")
+	if writer != nil {
+		fmt.Fprintln(writer)
+		fmt.Fprintln(writer, "Setup complete! Run 'elnath run' to start chatting.")
+	}
 
 	return result, nil
+}
+
+// RunNonInteractiveOnboarding creates a config purely from env vars and defaults.
+// Used when --non-interactive flag is set or stdin is not a TTY.
+func RunNonInteractiveOnboarding(cfgPath string) (*OnboardingResult, error) {
+	return RunOnboarding(cfgPath, nil, io.Discard)
 }
 
 // WriteFromResult persists an OnboardingResult to disk: creates directories,
@@ -95,16 +122,21 @@ func WriteFromResult(cfgPath string, result *OnboardingResult) error {
 	if permMode == "" {
 		permMode = "default"
 	}
+	locale := result.Locale
+	if locale == "" {
+		locale = "en"
+	}
 
 	cfg := fmt.Sprintf(`# Elnath configuration
 data_dir: %q
 wiki_dir: %q
+locale: %q
 anthropic:
   api_key: %q
   model: claude-sonnet-4-20250514
 permission:
   mode: %q
-`, result.DataDir, result.WikiDir, result.APIKey, permMode)
+`, result.DataDir, result.WikiDir, locale, result.APIKey, permMode)
 
 	if len(result.MCPServers) > 0 {
 		cfg += "mcp_servers:\n"

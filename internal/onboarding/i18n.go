@@ -95,6 +95,31 @@ var translations = map[Locale]map[string]string{
 
 		"setup.backup":  "Existing config backed up to %s",
 		"setup.rerun":   "Re-running setup wizard...",
+		"setup.reconfigure": "Reconfiguration Mode",
+
+		"cli.help": `Usage: elnath <command> [args]
+
+Commands:
+  run       Interactive chat mode
+  setup     Re-run the setup wizard
+  daemon    Background daemon mode
+  wiki      Wiki management (search, lint, ingest)
+  search    Search past conversations
+  version   Show version
+  help      Show this help
+
+Daemon subcommands:
+  daemon start              Start the daemon (blocks until stopped)
+  daemon submit <task>      Submit a task to the running daemon
+  daemon status             List queued and running tasks
+  daemon stop               Gracefully stop the running daemon
+  daemon install            Install launchd plist for auto-start`,
+		"cli.unknown_command":   "unknown command: %s",
+		"cli.onboarding_error":  "onboarding: %s",
+		"cli.setup_error":       "setup wizard: %s",
+		"cli.config_load_error": "load config: %s",
+		"cli.write_config_error": "write config: %s",
+		"cli.no_provider":       "No LLM provider configured. Set ELNATH_ANTHROPIC_API_KEY or add anthropic.api_key to config.yaml",
 	},
 	Ko: {
 		"welcome.title":      "Elnath에 오신 것을 환영합니다",
@@ -182,6 +207,31 @@ var translations = map[Locale]map[string]string{
 
 		"setup.backup":  "기존 설정이 %s에 백업되었습니다",
 		"setup.rerun":   "설정 마법사를 다시 실행합니다...",
+		"setup.reconfigure": "재설정 모드",
+
+		"cli.help": `사용법: elnath <명령> [인자]
+
+명령:
+  run       대화형 채팅 모드
+  setup     설정 마법사 다시 실행
+  daemon    백그라운드 데몬 모드
+  wiki      위키 관리 (검색, 린트, 수집)
+  search    이전 대화 검색
+  version   버전 표시
+  help      이 도움말 표시
+
+데몬 하위 명령:
+  daemon start              데몬 시작 (종료까지 실행)
+  daemon submit <작업>      실행 중인 데몬에 작업 제출
+  daemon status             대기 및 실행 중인 작업 목록
+  daemon stop               데몬 정상 종료
+  daemon install            자동 시작 launchd plist 설치`,
+		"cli.unknown_command":   "알 수 없는 명령: %s",
+		"cli.onboarding_error":  "온보딩: %s",
+		"cli.setup_error":       "설정 마법사: %s",
+		"cli.config_load_error": "설정 로드: %s",
+		"cli.write_config_error": "설정 쓰기: %s",
+		"cli.no_provider":       "LLM 프로바이더가 설정되지 않았습니다. ELNATH_ANTHROPIC_API_KEY를 설정하거나 config.yaml에 anthropic.api_key를 추가하세요",
 	},
 }
 

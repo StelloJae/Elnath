@@ -34,11 +34,20 @@ type DirectoryModel struct {
 }
 
 // NewDirectoryModel creates a new directory setup model.
-func NewDirectoryModel(locale Locale) DirectoryModel {
+// Optional existingDirs [dataDir, wikiDir] pre-fills the text inputs.
+func NewDirectoryModel(locale Locale, existingDirs ...string) DirectoryModel {
 	home, _ := os.UserHomeDir()
 	base := filepath.Join(home, ".elnath")
 	defaultData := filepath.Join(base, "data")
 	defaultWiki := filepath.Join(base, "wiki")
+
+	// Use existing values as defaults if provided.
+	if len(existingDirs) >= 1 && existingDirs[0] != "" {
+		defaultData = existingDirs[0]
+	}
+	if len(existingDirs) >= 2 && existingDirs[1] != "" {
+		defaultWiki = existingDirs[1]
+	}
 
 	di := textinput.New()
 	di.Placeholder = defaultData
