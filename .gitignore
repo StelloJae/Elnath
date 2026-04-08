@@ -14,6 +14,13 @@
 .omc/
 .omx/
 
+# Local-only internal planning / agent context docs
+/ULTRAPLAN_PROMPT.md
+/IMPLEMENTATION_PLAN.md
+/CLAUDE.md
+/CLAW_CODE_ANALYSIS.md
+/ADR-001-v01-architecture.md
+
 # Secrets / config (defense-in-depth)
 *.env
 *.env.*
