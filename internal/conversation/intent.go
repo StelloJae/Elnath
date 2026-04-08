@@ -45,6 +45,13 @@ Intent categories:
 - "chat": User is making conversation, sharing thoughts, or giving feedback
 - "unclear": Intent cannot be determined from the message
 
+Decision rules:
+- Prefer "wiki_query" over "question" when the user is asking about remembered project history, prior sessions, stored notes, or "what changed / what do we know".
+- Prefer "research" over "question" when the user wants investigation, comparison, analysis, or evidence gathering rather than a direct factual answer.
+- Prefer "project" over "complex_task" when the user is kicking off a larger initiative, release, or multi-phase build; use "complex_task" for bounded execution work inside an existing project.
+- Prefer "simple_task" only for clearly bounded one-step edits or commands.
+- Prefer "question" for direct factual/conceptual questions that do not require stored-history lookup.
+
 Be decisive. Default to "unclear" only when truly ambiguous.`
 
 // LLMClassifier implements IntentClassifier using an LLM provider.

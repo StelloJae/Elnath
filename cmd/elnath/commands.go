@@ -23,9 +23,9 @@ import (
 	"github.com/stello/elnath/internal/daemon"
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/mcp"
+	"github.com/stello/elnath/internal/onboarding"
 	"github.com/stello/elnath/internal/orchestrator"
 	"github.com/stello/elnath/internal/self"
-	"github.com/stello/elnath/internal/onboarding"
 	"github.com/stello/elnath/internal/tools"
 	"github.com/stello/elnath/internal/wiki"
 )
@@ -207,43 +207,6 @@ func cmdRun(ctx context.Context, args []string) error {
 	app.RegisterCloser("database", db)
 
 	// Initialize conversation history schema.
-	if err := conversation.InitSchema(db.Main); err != nil {
-		return fmt.Errorf("init conversation schema: %w", err)
-	}
-
-	// Build conversation manager with all dependencies.
-	historyStore := conversation.NewHistoryStore(db.Main)
-	classifier := conversation.NewLLMClassifier()
-	var ctxWindow conversation.ContextWindowManager
-	if cfg.CompressThreshold > 0 {
-		ctxWindow = conversation.NewContextWindowWithThreshold(cfg.CompressThreshold)
-	} else {
-		ctxWindow = conversation.NewContextWindow()
-	}
-	mgr := conversation.NewManager(db.Main, cfg.DataDir).
-		WithProvider(provider).
-		WithClassifier(classifier).
-		WithContextWindow(ctxWindow).
-		WithMaxContextTokens(cfg.MaxContextTokens).
-		WithHistoryStore(historyStore).
-		WithLogger(app.Logger)
-
-	// Build tool registry (with wiki tools if wiki is available).
-	cwd, _ := os.Getwd()
-	reg := buildToolRegistry(cwd)
-	gitSync, wikiIdx := registerWikiTools(reg, cfg.WikiDir, db.Wiki)
-	reg.Register(conversation.NewConversationSearchTool(historyStore))
-
-	// Register cross-project search tools if projects are configured.
-	if len(cfg.Projects) > 0 {
-		registerCrossProjectTools(reg, cfg.Projects, app)
-	}
-
-	// Start MCP servers and register their tools (failures are non-fatal).
-	if len(cfg.MCPServers) > 0 {
-		registerMCPTools(ctx, reg, cfg.MCPServers, app)
-	}
-
 	// Build permission engine.
 	mode := parsePermissionMode(cfg.Permission.Mode)
 	perm := agent.NewPermission(
@@ -252,56 +215,39 @@ func cmdRun(ctx context.Context, args []string) error {
 		agent.WithDenyList(cfg.Permission.Deny...),
 		agent.WithPrompter(&cliPrompter{}),
 	)
-
-	// Build hooks from config.
-	var hooks *agent.HookRegistry
-	if len(cfg.Hooks) > 0 {
-		hooks = agent.NewHookRegistry()
-		for _, hc := range cfg.Hooks {
-			hooks.Add(&agent.CommandHook{
-				Matcher: hc.Matcher,
-				PreCmd:  hc.PreCommand,
-				PostCmd: hc.PostCommand,
-			})
-		}
+	rt, err := buildExecutionRuntime(
+		ctx,
+		cfg,
+		app,
+		db,
+		provider,
+		model,
+		self.BuildSystemPromptWithPersona(selfState, "", personaExtra),
+		perm,
+	)
+	if err != nil {
+		return err
 	}
-
-	// Open wiki store for research workflow (failures are non-fatal).
-	var wikiStore *wiki.Store
-	if cfg.WikiDir != "" {
-		if ws, werr := wiki.NewStore(cfg.WikiDir); werr == nil {
-			wikiStore = ws
-		}
-	}
-
-	// Build workflow router.
-	wfCfg := orchestrator.WorkflowConfig{
-		Model:        model,
-		SystemPrompt: self.BuildSystemPromptWithPersona(selfState, "", personaExtra),
-		Hooks:        hooks,
-		Permission:   perm,
-	}
-	router := buildRouter(wfCfg)
 
 	// Create or resume session.
 	var sess *agent.Session
 	var messages []llm.Message
 	if sid := extractSessionFlag(os.Args); sid != "" {
-		sess, err = mgr.LoadSession(sid)
+		sess, err = rt.mgr.LoadSession(sid)
 		if err != nil {
 			return fmt.Errorf("resume session %s: %w", sid, err)
 		}
 		messages = sess.Messages
 		app.Logger.Info("resumed session", "id", sess.ID, "messages", len(messages))
 	} else if hasFlag(os.Args, "--continue") {
-		sess, err = mgr.LoadLatestSession()
+		sess, err = rt.mgr.LoadLatestSession()
 		if err != nil {
 			return fmt.Errorf("resume latest session: %w", err)
 		}
 		messages = sess.Messages
 		app.Logger.Info("resumed latest session", "id", sess.ID, "messages", len(messages))
 	} else {
-		sess, err = mgr.NewSession()
+		sess, err = rt.mgr.NewSession()
 		if err != nil {
 			return fmt.Errorf("create session: %w", err)
 		}
@@ -311,15 +257,11 @@ func cmdRun(ctx context.Context, args []string) error {
 	// Parse optional initial prompt from args.
 	if len(args) > 0 {
 		prompt := strings.Join(args, " ")
-		messages, err = runOrchestrated(ctx, mgr, router, provider, reg, perm, sess, messages, prompt, wfCfg, wikiIdx, wikiStore, app)
+		messages, _, err = rt.runTask(ctx, sess, messages, prompt, cliOrchestrationOutput())
 		if err != nil {
 			return err
 		}
-		if gitSync != nil {
-			if cerr := gitSync.Commit("auto: wiki update"); cerr != nil {
-				app.Logger.Warn("wiki git commit failed", "error", cerr)
-			}
-		}
+		rt.maybeCommitWiki("auto: wiki update")
 	}
 
 	// REPL loop.
@@ -336,127 +278,21 @@ func cmdRun(ctx context.Context, args []string) error {
 			break
 		}
 
-		messages, err = runOrchestrated(ctx, mgr, router, provider, reg, perm, sess, messages, line, wfCfg, wikiIdx, wikiStore, app)
+		messages, _, err = rt.runTask(ctx, sess, messages, line, cliOrchestrationOutput())
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			continue
 		}
-		if gitSync != nil {
-			if cerr := gitSync.Commit("auto: wiki update"); cerr != nil {
-				app.Logger.Warn("wiki git commit failed", "error", cerr)
-			}
-		}
+		rt.maybeCommitWiki("auto: wiki update")
 	}
 
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("stdin: %w", err)
 	}
 
-	// Auto-document session to wiki.
-	if cfg.WikiDir != "" {
-		wikiStore, werr := wiki.NewStore(cfg.WikiDir)
-		if werr == nil {
-			ad := wiki.NewAutoDocumenter(wikiStore, provider, app.Logger)
-			if ierr := ad.IngestSession(ctx, sess.ID, messages); ierr != nil {
-				app.Logger.Warn("auto-documentation failed", "error", ierr)
-			} else {
-				app.Logger.Info("session auto-documented to wiki", "session", sess.ID)
-				if gitSync != nil {
-					if cerr := gitSync.Commit("auto: document session " + sess.ID); cerr != nil {
-						app.Logger.Warn("wiki git commit failed", "error", cerr)
-					}
-				}
-			}
-		}
-	}
+	rt.maybeAutoDocumentSession(ctx, sess.ID, messages)
 
 	return nil
-}
-
-// runOrchestrated processes a user message through intent classification → routing → workflow execution.
-func runOrchestrated(
-	ctx context.Context,
-	mgr *conversation.Manager,
-	router *orchestrator.Router,
-	provider llm.Provider,
-	reg *tools.Registry,
-	perm *agent.Permission,
-	sess *agent.Session,
-	messages []llm.Message,
-	userInput string,
-	wfCfg orchestrator.WorkflowConfig,
-	wikiIdx *wiki.Index,
-	wikiStore *wiki.Store,
-	app *core.App,
-) ([]llm.Message, error) {
-	// Classify intent and prepare messages via conversation manager.
-	prepared, intent, err := mgr.SendMessage(ctx, sess.ID, userInput)
-	if err != nil {
-		app.Logger.Warn("conversation manager fallback", "error", err)
-		prepared = append(messages, llm.NewUserMessage(userInput))
-		intent = conversation.IntentUnclear
-	}
-
-	// Route intent to workflow with basic heuristics.
-	routeCtx := &orchestrator.RoutingContext{EstimatedFiles: estimateFiles(userInput)}
-	wf := router.Route(intent, routeCtx)
-	if wf == nil {
-		return nil, fmt.Errorf("no workflow available for intent %q", intent)
-	}
-
-	app.Logger.Info("routed",
-		"intent", string(intent),
-		"workflow", wf.Name(),
-		"session", sess.ID,
-	)
-	fmt.Printf("[%s → %s]\n", intent, wf.Name())
-
-	// Inject wiki RAG context into system prompt.
-	cfg := wfCfg
-	if wikiIdx != nil {
-		if ragCtx := wiki.BuildRAGContext(ctx, wikiIdx, userInput, 3); ragCtx != "" {
-			cfg.SystemPrompt += "\n\n" + ragCtx
-		}
-	}
-
-	// Execute workflow.
-	input := orchestrator.WorkflowInput{
-		Message:  userInput,
-		Messages: prepared,
-		Session:  sess,
-		Tools:    reg,
-		Provider: provider,
-		Config:   cfg,
-		OnText:   func(s string) { fmt.Print(s) },
-	}
-
-	// Wire research dependencies when routing to research workflow.
-	if wf.Name() == "research" && wikiIdx != nil && wikiStore != nil {
-		input.Extra = &orchestrator.ResearchDeps{
-			WikiIndex:  wikiIdx,
-			WikiStore:  wikiStore,
-			MaxRounds:  5,
-			CostCapUSD: 1.0,
-		}
-	}
-
-	fmt.Println()
-	result, err := wf.Run(ctx, input)
-	fmt.Println()
-	if err != nil {
-		return nil, fmt.Errorf("workflow %s: %w", wf.Name(), err)
-	}
-
-	if summary := llm.FormatUsageSummary(wfCfg.Model, result.Usage); summary != "" {
-		fmt.Println(summary)
-	}
-
-	// Persist new messages.
-	if err := sess.AppendMessages(result.Messages[len(prepared):]); err != nil {
-		app.Logger.Warn("session persist failed", "error", err)
-	}
-
-	return result.Messages, nil
 }
 
 func cmdDaemon(ctx context.Context, args []string) error {
@@ -509,14 +345,10 @@ func cmdDaemonStart(ctx context.Context) error {
 	}
 	app.RegisterCloser("database", db)
 
-	provider, _, err := buildProvider(cfg)
+	provider, model, err := buildProvider(cfg)
 	if err != nil {
 		return fmt.Errorf("build provider: %w", err)
 	}
-
-	cwd, _ := os.Getwd()
-	reg := buildToolRegistry(cwd)
-	registerWikiTools(reg, cfg.WikiDir, db.Wiki)
 
 	mode := parsePermissionMode(cfg.Permission.Mode)
 	perm := agent.NewPermission(
@@ -531,13 +363,18 @@ func cmdDaemonStart(ctx context.Context) error {
 		selfState = self.New(cfg.DataDir)
 	}
 	daemonPrompt := self.BuildSystemPrompt(selfState, "")
-
-	factory := func(factoryCtx context.Context) (*agent.Agent, error) {
-		return agent.New(provider, reg,
-			agent.WithPermission(perm),
-			agent.WithSystemPrompt(daemonPrompt),
-			agent.WithLogger(app.Logger),
-		), nil
+	rt, err := buildExecutionRuntime(
+		ctx,
+		cfg,
+		app,
+		db,
+		provider,
+		model,
+		daemonPrompt,
+		perm,
+	)
+	if err != nil {
+		return err
 	}
 
 	queue, err := daemon.NewQueue(db.Main)
@@ -545,7 +382,7 @@ func cmdDaemonStart(ctx context.Context) error {
 		return fmt.Errorf("create queue: %w", err)
 	}
 
-	d := daemon.New(queue, cfg.Daemon.SocketPath, cfg.Daemon.MaxWorkers, factory, app.Logger)
+	d := daemon.New(queue, cfg.Daemon.SocketPath, cfg.Daemon.MaxWorkers, rt.newDaemonTaskRunner(), app.Logger)
 	return d.Start(ctx)
 }
 

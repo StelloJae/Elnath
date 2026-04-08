@@ -23,6 +23,8 @@ func TestTeamWorkflow_E2E(t *testing.T) {
 
 	wf := NewTeamWorkflow()
 	input := testInput("Design a blog API", provider)
+	var streamed strings.Builder
+	input.OnText = func(s string) { streamed.WriteString(s) }
 
 	result, err := wf.Run(ctx, input)
 	if err != nil {
@@ -45,13 +47,19 @@ func TestTeamWorkflow_E2E(t *testing.T) {
 	if result.Usage.InputTokens == 0 {
 		t.Error("usage input tokens should be > 0")
 	}
+	if !strings.Contains(streamed.String(), "[team]") {
+		t.Errorf("expected team progress output, got %q", streamed.String())
+	}
+	if !strings.Contains(streamed.String(), "Combined") {
+		t.Errorf("expected synthesized stream output, got %q", streamed.String())
+	}
 }
 
 func TestTeamWorkflow_FallbackToSingle(t *testing.T) {
 	ctx := context.Background()
 
 	provider := newTestProvider(
-		"[]",                    // planner returns empty subtasks
+		"[]",                   // planner returns empty subtasks
 		"Direct single answer", // fallback single workflow
 	)
 

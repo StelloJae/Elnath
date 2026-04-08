@@ -54,6 +54,42 @@ func TestBashTimeout(t *testing.T) {
 	}
 }
 
+func TestBashOutputTruncatesStdout(t *testing.T) {
+	tool := NewBashTool(t.TempDir())
+
+	res, err := tool.Execute(context.Background(), makeBashParams(t, "head -c 70000 /dev/zero | tr '\\000' 'a'", nil))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error result: %s", res.Output)
+	}
+	if len(res.Output) > toolMaxOutputBytes {
+		t.Fatalf("output len = %d, want <= %d", len(res.Output), toolMaxOutputBytes)
+	}
+	if !strings.Contains(res.Output, "output truncated") {
+		t.Fatalf("expected truncation marker, got %q", res.Output[len(res.Output)-80:])
+	}
+}
+
+func TestBashOutputTruncatesCombinedStreams(t *testing.T) {
+	tool := NewBashTool(t.TempDir())
+
+	res, err := tool.Execute(context.Background(), makeBashParams(t, "head -c 70000 /dev/zero | tr '\\000' 'b' 1>&2", nil))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error result: %s", res.Output)
+	}
+	if len(res.Output) > toolMaxOutputBytes {
+		t.Fatalf("output len = %d, want <= %d", len(res.Output), toolMaxOutputBytes)
+	}
+	if !strings.Contains(res.Output, "output truncated") {
+		t.Fatalf("expected truncation marker, got %q", res.Output[len(res.Output)-80:])
+	}
+}
+
 func TestBashWorkingDir(t *testing.T) {
 	dir := t.TempDir()
 	tool := NewBashTool(t.TempDir()) // tool's own default workDir is irrelevant here

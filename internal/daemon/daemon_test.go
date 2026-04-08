@@ -6,63 +6,27 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net"
 	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/stello/elnath/internal/agent"
-	"github.com/stello/elnath/internal/llm"
-	"github.com/stello/elnath/internal/tools"
-
 	_ "modernc.org/sqlite"
 )
 
-// mockProvider is a minimal llm.Provider that returns a fixed text response.
-type mockProvider struct {
+type mockTaskRunner struct {
 	text string
 	err  error
 }
 
-func (m *mockProvider) Name() string { return "mock" }
-
-func (m *mockProvider) Models() []llm.ModelInfo { return nil }
-
-func (m *mockProvider) Chat(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
-	if m.err != nil {
-		return nil, m.err
+func (r mockTaskRunner) run(_ context.Context, _ string, onText func(string)) (string, error) {
+	if r.err != nil {
+		return "", r.err
 	}
-	return &llm.ChatResponse{Content: m.text}, nil
-}
-
-func (m *mockProvider) Stream(_ context.Context, _ llm.ChatRequest, cb func(llm.StreamEvent)) error {
-	if m.err != nil {
-		return m.err
+	if onText != nil && r.text != "" {
+		onText(r.text)
 	}
-	if m.text != "" {
-		cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: m.text})
-	}
-	cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{}})
-	return nil
-}
-
-// newMockAgent builds a real *agent.Agent backed by the given mock provider.
-func newMockAgent(p llm.Provider) *agent.Agent {
-	reg := tools.NewRegistry()
-	return agent.New(p, reg)
-}
-
-// mockAgentFactory returns an AgentFactory that creates agents with the given provider.
-func mockAgentFactory(p llm.Provider) AgentFactory {
-	return func(ctx context.Context) (*agent.Agent, error) {
-		return newMockAgent(p), nil
-	}
-}
-
-// failingAgentFactory returns an AgentFactory whose agents always fail during Run.
-func failingAgentFactory(providerErr error) AgentFactory {
-	return mockAgentFactory(&mockProvider{err: providerErr})
+	return r.text, nil
 }
 
 // sendIPC connects to the Unix socket, writes a JSON-line request, and reads
@@ -92,10 +56,10 @@ func sendIPC(t *testing.T, socketPath string, req IPCRequest) IPCResponse {
 
 // startDaemon spins up a Daemon in a background goroutine and waits until the
 // Unix socket is ready. It registers a t.Cleanup to stop the daemon.
-func startDaemon(t *testing.T, q *Queue, socketPath string, factory AgentFactory, workers int) *Daemon {
+func startDaemon(t *testing.T, q *Queue, socketPath string, runner TaskRunner, workers int) *Daemon {
 	t.Helper()
 
-	d := New(q, socketPath, workers, factory, nil)
+	d := New(q, socketPath, workers, runner, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -158,8 +122,7 @@ func TestDaemonSubmitAndStatus(t *testing.T) {
 	}
 
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
-	factory := mockAgentFactory(&mockProvider{text: "hello from mock"})
-	startDaemon(t, q, socketPath, factory, 1)
+	startDaemon(t, q, socketPath, mockTaskRunner{text: "hello from mock"}.run, 1)
 
 	// Submit a task via IPC.
 	submitResp := sendIPC(t, socketPath, IPCRequest{
@@ -207,7 +170,7 @@ func TestDaemonSubmitEmptyPayload(t *testing.T) {
 	}
 
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
-	startDaemon(t, q, socketPath, mockAgentFactory(&mockProvider{text: "ok"}), 1)
+	startDaemon(t, q, socketPath, mockTaskRunner{text: "ok"}.run, 1)
 
 	resp := sendIPC(t, socketPath, IPCRequest{
 		Command: "submit",
@@ -230,7 +193,7 @@ func TestDaemonSubmitNoPayload(t *testing.T) {
 	}
 
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
-	startDaemon(t, q, socketPath, mockAgentFactory(&mockProvider{text: "ok"}), 1)
+	startDaemon(t, q, socketPath, mockTaskRunner{text: "ok"}.run, 1)
 
 	resp := sendIPC(t, socketPath, IPCRequest{Command: "submit"})
 	if resp.OK {
@@ -247,7 +210,7 @@ func TestDaemonStopCommand(t *testing.T) {
 	}
 
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
-	d := New(q, socketPath, 1, mockAgentFactory(&mockProvider{text: "ok"}), nil)
+	d := New(q, socketPath, 1, mockTaskRunner{text: "ok"}.run, nil)
 
 	startDone := make(chan error, 1)
 	go func() {
@@ -289,7 +252,7 @@ func TestDaemonUnknownCommand(t *testing.T) {
 	}
 
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
-	startDaemon(t, q, socketPath, mockAgentFactory(&mockProvider{text: "ok"}), 1)
+	startDaemon(t, q, socketPath, mockTaskRunner{text: "ok"}.run, 1)
 
 	resp := sendIPC(t, socketPath, IPCRequest{Command: "frobnicate"})
 	if resp.OK {
@@ -311,7 +274,7 @@ func TestDaemonWorkerCompletion(t *testing.T) {
 
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
 	const wantResult = "agent output text"
-	startDaemon(t, q, socketPath, mockAgentFactory(&mockProvider{text: wantResult}), 1)
+	startDaemon(t, q, socketPath, mockTaskRunner{text: wantResult}.run, 1)
 
 	resp := sendIPC(t, socketPath, IPCRequest{
 		Command: "submit",
@@ -338,8 +301,8 @@ func TestDaemonWorkerFailure(t *testing.T) {
 	}
 
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
-	providerErr := errors.New("provider error 500")
-	startDaemon(t, q, socketPath, failingAgentFactory(providerErr), 1)
+	runnerErr := errors.New("provider error 500")
+	startDaemon(t, q, socketPath, mockTaskRunner{err: runnerErr}.run, 1)
 
 	resp := sendIPC(t, socketPath, IPCRequest{
 		Command: "submit",
@@ -365,7 +328,7 @@ func TestDaemonInvalidJSON(t *testing.T) {
 	}
 
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
-	startDaemon(t, q, socketPath, mockAgentFactory(&mockProvider{text: "ok"}), 1)
+	startDaemon(t, q, socketPath, mockTaskRunner{text: "ok"}.run, 1)
 
 	conn, err := net.Dial("unix", socketPath)
 	if err != nil {
@@ -435,12 +398,6 @@ func extractTasks(t *testing.T, resp IPCResponse) []map[string]interface{} {
 	return out
 }
 
-// Compile-time assertion: mockProvider must implement llm.Provider.
-var _ llm.Provider = (*mockProvider)(nil)
-
 // Compile-time assertion: openTestDB is shared with queue_test.go in the same
 // package; this blank import ensures the sqlite driver is registered exactly once.
 var _ *sql.DB = nil
-
-// Ensure fmt is used (for failingAgentFactory error wrapping in daemon.go).
-var _ = fmt.Sprintf

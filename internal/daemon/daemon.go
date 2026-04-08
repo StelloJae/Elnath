@@ -11,9 +11,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/stello/elnath/internal/agent"
-	"github.com/stello/elnath/internal/llm"
 )
 
 // IPCRequest is a JSON-line command sent over the Unix socket.
@@ -29,24 +26,24 @@ type IPCResponse struct {
 	Err  string      `json:"error,omitempty"`
 }
 
-// AgentFactory creates a fresh agent for each task execution.
-// This abstraction lets the daemon work without knowing about specific providers.
-type AgentFactory func(ctx context.Context) (*agent.Agent, error)
+// TaskRunner executes one queued task and returns its final result text.
+// Callers may forward streamed text through onText during execution.
+type TaskRunner func(ctx context.Context, payload string, onText func(string)) (string, error)
 
 // Daemon runs background task processing with Unix domain socket IPC.
 type Daemon struct {
-	queue        *Queue
-	listener     net.Listener
-	socketPath   string
-	maxWorkers   int
-	agentFactory AgentFactory
-	logger       *slog.Logger
-	cancel       context.CancelFunc
-	wg           sync.WaitGroup
+	queue      *Queue
+	listener   net.Listener
+	socketPath string
+	maxWorkers int
+	taskRunner TaskRunner
+	logger     *slog.Logger
+	cancel     context.CancelFunc
+	wg         sync.WaitGroup
 }
 
 // New creates a Daemon. Call Start to begin listening and processing.
-func New(queue *Queue, socketPath string, maxWorkers int, factory AgentFactory, logger *slog.Logger) *Daemon {
+func New(queue *Queue, socketPath string, maxWorkers int, runner TaskRunner, logger *slog.Logger) *Daemon {
 	if maxWorkers < 1 {
 		maxWorkers = 1
 	}
@@ -54,11 +51,11 @@ func New(queue *Queue, socketPath string, maxWorkers int, factory AgentFactory, 
 		logger = slog.Default()
 	}
 	return &Daemon{
-		queue:        queue,
-		socketPath:   socketPath,
-		maxWorkers:   maxWorkers,
-		agentFactory: factory,
-		logger:       logger,
+		queue:      queue,
+		socketPath: socketPath,
+		maxWorkers: maxWorkers,
+		taskRunner: runner,
+		logger:     logger,
 	}
 }
 
@@ -294,31 +291,23 @@ func (d *Daemon) worker(ctx context.Context, id int) {
 }
 
 func (d *Daemon) runTask(ctx context.Context, task *Task) (string, error) {
-	ag, err := d.agentFactory(ctx)
-	if err != nil {
-		return "", fmt.Errorf("daemon: create agent: %w", err)
+	if d.taskRunner == nil {
+		return "", fmt.Errorf("daemon: task runner is nil")
 	}
 
-	messages := []llm.Message{llm.NewUserMessage(task.Payload)}
-
 	var output strings.Builder
-	result, err := ag.Run(ctx, messages, func(text string) {
+	result, err := d.taskRunner(ctx, task.Payload, func(text string) {
 		output.WriteString(text)
 	})
 	if err != nil {
-		return "", fmt.Errorf("daemon: agent run: %w", err)
+		return "", fmt.Errorf("daemon: run task: %w", err)
 	}
 
 	if output.Len() > 0 {
 		return output.String(), nil
 	}
 
-	if len(result.Messages) > 0 {
-		last := result.Messages[len(result.Messages)-1]
-		return last.Text(), nil
-	}
-
-	return "", nil
+	return result, nil
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) {

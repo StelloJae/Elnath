@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 
@@ -37,6 +38,7 @@ type subtask struct {
 type subtaskResult struct {
 	subtask subtask
 	result  *agent.RunResult
+	stream  string
 	err     error
 }
 
@@ -46,6 +48,9 @@ type subtaskResult struct {
 // 3. Collect results via a channel; propagate any context cancellation.
 // 4. synthesise — ask LLM to combine the subtask results into a final answer.
 func (w *TeamWorkflow) Run(ctx context.Context, input WorkflowInput) (*WorkflowResult, error) {
+	if input.OnText != nil {
+		input.OnText("[team] planning subtasks\n")
+	}
 	subtasks, err := w.planSubtasks(ctx, input)
 	if err != nil {
 		return nil, fmt.Errorf("team workflow: plan: %w", err)
@@ -57,6 +62,9 @@ func (w *TeamWorkflow) Run(ctx context.Context, input WorkflowInput) (*WorkflowR
 	}
 
 	w.logger.Info("team workflow: subtasks planned", "count", len(subtasks))
+	if input.OnText != nil {
+		input.OnText(fmt.Sprintf("[team] planned %d subtasks\n", len(subtasks)))
+	}
 
 	results, totalUsage, err := w.runSubtasks(ctx, input, subtasks)
 	if err != nil {
@@ -166,8 +174,10 @@ func (w *TeamWorkflow) runSubtasks(ctx context.Context, input WorkflowInput, sub
 		}(st)
 	}
 
-	wg.Wait()
-	close(resultCh)
+	go func() {
+		wg.Wait()
+		close(resultCh)
+	}()
 
 	var results []subtaskResult
 	totalUsage := llm.UsageStats{}
@@ -175,12 +185,25 @@ func (w *TeamWorkflow) runSubtasks(ctx context.Context, input WorkflowInput, sub
 		if r.err != nil {
 			return nil, llm.UsageStats{}, fmt.Errorf("subtask %d %q: %w", r.subtask.ID, r.subtask.Title, r.err)
 		}
+		if input.OnText != nil {
+			input.OnText(fmt.Sprintf("[team] completed subtask %d: %s\n", r.subtask.ID, r.subtask.Title))
+			if r.stream != "" {
+				input.OnText(r.stream)
+				if !strings.HasSuffix(r.stream, "\n") {
+					input.OnText("\n")
+				}
+			}
+		}
 		totalUsage.InputTokens += r.result.Usage.InputTokens
 		totalUsage.OutputTokens += r.result.Usage.OutputTokens
 		totalUsage.CacheRead += r.result.Usage.CacheRead
 		totalUsage.CacheWrite += r.result.Usage.CacheWrite
 		results = append(results, r)
 	}
+
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].subtask.ID < results[j].subtask.ID
+	})
 
 	return results, totalUsage, nil
 }
@@ -200,8 +223,11 @@ func (w *TeamWorkflow) runOne(ctx context.Context, input WorkflowInput, st subta
 	a := agent.New(input.Provider, input.Tools, opts...)
 
 	messages := []llm.Message{llm.NewUserMessage(st.Instruction)}
-	result, err := a.Run(ctx, messages, nil)
-	return subtaskResult{subtask: st, result: result, err: err}
+	var stream strings.Builder
+	result, err := a.Run(ctx, messages, func(text string) {
+		stream.WriteString(text)
+	})
+	return subtaskResult{subtask: st, result: result, stream: stream.String(), err: err}
 }
 
 // synthesise asks the LLM to combine all subtask outputs into a coherent final answer.
@@ -226,7 +252,7 @@ func (w *TeamWorkflow) synthesise(ctx context.Context, input WorkflowInput, resu
 	opts := agentOptions(input.Config)
 	a := agent.New(input.Provider, input.Tools, opts...)
 
-	result, err := a.Run(ctx, synthMessages, nil)
+	result, err := a.Run(ctx, synthMessages, input.OnText)
 	if err != nil {
 		return nil, "", llm.UsageStats{}, fmt.Errorf("synthesiser agent: %w", err)
 	}

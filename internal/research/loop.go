@@ -30,6 +30,7 @@ type Loop struct {
 	maxRounds    int
 	costCapUSD   float64
 	logger       *slog.Logger
+	onText       func(string)
 }
 
 // LoopOption configures a Loop.
@@ -48,6 +49,11 @@ func WithCostCap(usd float64) LoopOption {
 // WithSessionID scopes usage tracking to a specific session.
 func WithSessionID(id string) LoopOption {
 	return func(l *Loop) { l.sessionID = id }
+}
+
+// WithOnText streams workflow progress text to the provided callback.
+func WithOnText(cb func(string)) LoopOption {
+	return func(l *Loop) { l.onText = cb }
 }
 
 // NewLoop creates a research Loop with sensible defaults.
@@ -83,8 +89,10 @@ func NewLoop(
 // Run executes the full research loop for the given topic.
 func (l *Loop) Run(ctx context.Context, topic string) (*ResearchResult, error) {
 	var rounds []RoundResult
+	l.emitf("[research] topic: %s\n", topic)
 
 	for round := 0; round < l.maxRounds; round++ {
+		l.emitf("[research] round %d/%d\n", round+1, l.maxRounds)
 		if l.usageTracker != nil {
 			cost, err := l.usageTracker.TotalCost(ctx, l.sessionID)
 			if err == nil && cost >= l.costCapUSD {
@@ -99,11 +107,14 @@ func (l *Loop) Run(ctx context.Context, topic string) (*ResearchResult, error) {
 		if err != nil {
 			return nil, fmt.Errorf("research: round %d: generate: %w", round, err)
 		}
+		l.emitf("[research] generated %d hypotheses\n", len(hypotheses))
 
 		for _, hyp := range hypotheses {
+			l.emitf("[research] hypothesis %s: %s\n", hyp.ID, hyp.Statement)
 			expResult, err := l.experimenter.Run(ctx, hyp)
 			if err != nil {
 				l.logger.Error("experiment failed", "hypothesis", hyp.ID, "error", err)
+				l.emitf("[research] hypothesis %s failed: %v\n", hyp.ID, err)
 				continue
 			}
 
@@ -112,6 +123,7 @@ func (l *Loop) Run(ctx context.Context, topic string) (*ResearchResult, error) {
 				Hypothesis: hyp,
 				Result:     *expResult,
 			})
+			l.emitf("[research] result %s supported=%t confidence=%s\n", hyp.ID, expResult.Supported, expResult.Confidence)
 
 			if l.usageTracker != nil {
 				_ = l.usageTracker.Record(ctx, l.provider.Name(), l.model, l.sessionID, expResult.Usage)
@@ -122,11 +134,13 @@ func (l *Loop) Run(ctx context.Context, topic string) (*ResearchResult, error) {
 
 		if l.shouldStop(rounds) {
 			l.logger.Info("convergence detected, stopping", "round", round)
+			l.emitf("[research] convergence detected at round %d\n", round+1)
 			break
 		}
 	}
 
 	summary := l.summarize(ctx, topic, rounds)
+	l.emitf("[research] summary ready\n")
 
 	var totalCost float64
 	if l.usageTracker != nil {
@@ -139,6 +153,12 @@ func (l *Loop) Run(ctx context.Context, topic string) (*ResearchResult, error) {
 		Summary:   summary,
 		TotalCost: totalCost,
 	}, nil
+}
+
+func (l *Loop) emitf(format string, args ...any) {
+	if l.onText != nil {
+		l.onText(fmt.Sprintf(format, args...))
+	}
 }
 
 // shouldStop returns true when the research has converged or stagnated.

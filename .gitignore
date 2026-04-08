@@ -12,6 +12,7 @@
 
 # OMC state
 .omc/
+.omx/
 
 # Secrets / config (defense-in-depth)
 *.env

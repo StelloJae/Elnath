@@ -3,6 +3,7 @@ package conversation
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stello/elnath/internal/llm"
@@ -10,10 +11,10 @@ import (
 
 func TestParseIntentResponse(t *testing.T) {
 	cases := []struct {
-		name        string
-		input       string
-		wantIntent  Intent
-		wantErr     bool
+		name       string
+		input      string
+		wantIntent Intent
+		wantErr    bool
 	}{
 		{
 			name:       "plain JSON question",
@@ -212,6 +213,15 @@ func TestLLMClassifierClassify_HistoryTruncation(t *testing.T) {
 	if len(capturedReq.Messages) != want {
 		t.Errorf("captured %d messages, want %d (8 history + 1 classify)", len(capturedReq.Messages), want)
 	}
+	if capturedReq.System != classificationPrompt {
+		t.Errorf("system prompt mismatch")
+	}
+	if capturedReq.MaxTokens != 64 {
+		t.Errorf("MaxTokens = %d, want 64", capturedReq.MaxTokens)
+	}
+	if capturedReq.Temperature != 0.0 {
+		t.Errorf("Temperature = %v, want 0.0", capturedReq.Temperature)
+	}
 }
 
 func TestLLMClassifierClassify_ShortHistory(t *testing.T) {
@@ -251,6 +261,7 @@ func TestLLMClassifierClassify_AllIntents(t *testing.T) {
 		{`{"intent":"complex_task","confidence":0.7}`, IntentComplexTask},
 		{`{"intent":"project","confidence":0.6}`, IntentProject},
 		{`{"intent":"research","confidence":0.95}`, IntentResearch},
+		{`{"intent":"wiki_query","confidence":0.92}`, IntentWikiQuery},
 		{`{"intent":"unclear","confidence":0.3}`, IntentUnclear},
 		{`{"intent":"chat","confidence":1.0}`, IntentChat},
 	}
@@ -272,5 +283,18 @@ func TestLLMClassifierClassify_AllIntents(t *testing.T) {
 				t.Errorf("intent = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestClassificationPromptBoundaryGuidance(t *testing.T) {
+	for _, needle := range []string{
+		`Prefer "wiki_query" over "question"`,
+		`Prefer "research" over "question"`,
+		`Prefer "project" over "complex_task"`,
+		`Prefer "simple_task" only for clearly bounded one-step edits or commands.`,
+	} {
+		if !strings.Contains(classificationPrompt, needle) {
+			t.Fatalf("classificationPrompt missing %q", needle)
+		}
 	}
 }

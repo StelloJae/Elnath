@@ -52,7 +52,8 @@ func (w *ResearchWorkflow) Run(ctx context.Context, input WorkflowInput) (*Workf
 	}
 
 	hypGen := research.NewHypothesisGenerator(input.Provider, input.Config.Model, w.logger)
-	expRunner := research.NewExperimentRunner(input.Provider, input.Tools, input.Config.Model, w.logger)
+	expRunner := research.NewExperimentRunner(input.Provider, input.Tools, input.Config.Model, w.logger).
+		WithOnText(input.OnText)
 
 	var opts []research.LoopOption
 	if deps.MaxRounds > 0 {
@@ -63,6 +64,9 @@ func (w *ResearchWorkflow) Run(ctx context.Context, input WorkflowInput) (*Workf
 	}
 	if input.Session != nil {
 		opts = append(opts, research.WithSessionID(input.Session.ID))
+	}
+	if input.OnText != nil {
+		opts = append(opts, research.WithOnText(input.OnText))
 	}
 
 	loop := research.NewLoop(

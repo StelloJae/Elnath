@@ -43,6 +43,39 @@ func TestReadTool(t *testing.T) {
 	}
 }
 
+func TestReadToolTruncatesLargeOutput(t *testing.T) {
+	dir := t.TempDir()
+	largeLine := strings.Repeat("a", 2000)
+	var content strings.Builder
+	for i := 0; i < 80; i++ {
+		content.WriteString(largeLine)
+		content.WriteByte('\n')
+	}
+	if err := os.WriteFile(filepath.Join(dir, "large.txt"), []byte(content.String()), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	tool := NewReadTool(dir)
+	res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{
+		"file_path": "large.txt",
+	}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.Output)
+	}
+	if len(res.Output) > toolMaxOutputBytes {
+		t.Fatalf("output len = %d, want <= %d", len(res.Output), toolMaxOutputBytes)
+	}
+	if !strings.Contains(res.Output, "output truncated") {
+		t.Fatalf("expected truncation marker in output")
+	}
+	if !strings.Contains(res.Output, "     1\t") {
+		t.Fatalf("expected numbered read output, got %q", res.Output[:40])
+	}
+}
+
 // TestWriteTool writes via WriteTool then reads back and checks content.
 func TestWriteTool(t *testing.T) {
 	dir := t.TempDir()

@@ -34,8 +34,10 @@ type ReadTool struct{ baseDir string }
 
 func NewReadTool(baseDir string) *ReadTool { return &ReadTool{baseDir: baseDir} }
 
-func (t *ReadTool) Name() string        { return "read_file" }
-func (t *ReadTool) Description() string { return "Read the contents of a file with optional line range." }
+func (t *ReadTool) Name() string { return "read_file" }
+func (t *ReadTool) Description() string {
+	return "Read the contents of a file with optional line range."
+}
 
 func (t *ReadTool) Schema() json.RawMessage {
 	return Object(map[string]Property{
@@ -96,7 +98,7 @@ func (t *ReadTool) Execute(_ context.Context, params json.RawMessage) (*Result, 
 	for i, line := range lines {
 		fmt.Fprintf(&sb, "%6d\t%s\n", start+i+1, line)
 	}
-	return SuccessResult(sb.String()), nil
+	return SuccessResult(truncateOutput(sb.String(), toolMaxOutputBytes)), nil
 }
 
 // ---------------------------------------------------------------------------

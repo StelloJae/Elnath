@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.4.0 (2026-04-08)
+
+### Execution Parity
+- **Shared daemon orchestration seam**: daemon submitted tasks now reuse the same routed conversation/session/wiki path as interactive execution.
+- **Workflow visibility**: team and research workflows emit progress/output through `OnText` instead of running silently.
+- **Intent tuning**: classifier prompt now gives stronger boundary guidance for `wiki_query`, `research`, `project`, and `complex_task`.
+
+### Safety and Limits
+- **Output caps**: bash and `read_file` responses are deterministically truncated to keep tool output bounded.
+- **Integration coverage**: added `cmd/elnath` seam tests plus daemon/workflow coverage around the v0.4.0 execution paths.
+
+### Release Notes
+- The old daemon bypass path and unbounded bash/read output limitation are now resolved in this release.
+
 ## v0.3.0 (2026-04-08)
 
 ### Onboarding Wizard
@@ -42,8 +56,6 @@
 ### Known Limitations (carried from v0.2.0)
 - Auto-doc session ingestion does not filter sensitive information
 - MCP response ID not validated
-- Daemon bypasses orchestrator/wiki/session layers
-- Bash/ReadTool output size unbounded
 
 ## v0.2.0 (2026-04-07)
 

@@ -28,6 +28,7 @@ type ExperimentRunner struct {
 	tools    *tools.Registry
 	model    string
 	logger   *slog.Logger
+	onText   func(string)
 }
 
 // NewExperimentRunner creates an ExperimentRunner.
@@ -38,6 +39,12 @@ func NewExperimentRunner(provider llm.Provider, toolReg *tools.Registry, model s
 		model:    model,
 		logger:   logger,
 	}
+}
+
+// WithOnText forwards streamed experiment output to the provided callback.
+func (r *ExperimentRunner) WithOnText(cb func(string)) *ExperimentRunner {
+	r.onText = cb
+	return r
 }
 
 const experimentSystemPrompt = `You are a research experiment executor. Test the following hypothesis by gathering evidence using available tools. Investigate thoroughly, then provide your findings.
@@ -71,7 +78,7 @@ func (r *ExperimentRunner) Run(ctx context.Context, hyp Hypothesis) (*Experiment
 	userMsg := fmt.Sprintf("Hypothesis: %s\n\nTest Plan: %s\n\nExecute this test plan and report results.", hyp.Statement, hyp.TestPlan)
 	messages := []llm.Message{llm.NewUserMessage(userMsg)}
 
-	result, err := a.Run(ctx, messages, nil)
+	result, err := a.Run(ctx, messages, r.onText)
 	if err != nil {
 		return nil, fmt.Errorf("experiment: run agent: %w", err)
 	}

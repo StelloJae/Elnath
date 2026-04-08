@@ -90,6 +90,7 @@ func (t *BashTool) Execute(ctx context.Context, params json.RawMessage) (*Result
 		}
 		combined += stderr.String()
 	}
+	combined = truncateOutput(combined, toolMaxOutputBytes)
 
 	if execCtx.Err() == context.DeadlineExceeded {
 		return ErrorResult(fmt.Sprintf("command timed out after %s", timeout)), nil
