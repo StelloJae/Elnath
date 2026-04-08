@@ -85,10 +85,12 @@ func (l *Loop) Run(ctx context.Context, topic string) (*ResearchResult, error) {
 	var rounds []RoundResult
 
 	for round := 0; round < l.maxRounds; round++ {
-		cost, err := l.usageTracker.TotalCost(ctx, l.sessionID)
-		if err == nil && cost >= l.costCapUSD {
-			l.logger.Warn("cost cap reached", "cost", cost, "cap", l.costCapUSD)
-			break
+		if l.usageTracker != nil {
+			cost, err := l.usageTracker.TotalCost(ctx, l.sessionID)
+			if err == nil && cost >= l.costCapUSD {
+				l.logger.Warn("cost cap reached", "cost", cost, "cap", l.costCapUSD)
+				break
+			}
 		}
 
 		knowledge, _ := l.wikiIndex.Search(ctx, wiki.SearchOpts{Query: topic, Limit: 10})
@@ -126,7 +128,10 @@ func (l *Loop) Run(ctx context.Context, topic string) (*ResearchResult, error) {
 
 	summary := l.summarize(ctx, topic, rounds)
 
-	totalCost, _ := l.usageTracker.TotalCost(ctx, l.sessionID)
+	var totalCost float64
+	if l.usageTracker != nil {
+		totalCost, _ = l.usageTracker.TotalCost(ctx, l.sessionID)
+	}
 
 	return &ResearchResult{
 		Topic:     topic,

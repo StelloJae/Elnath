@@ -206,9 +206,11 @@ func buildCodexRequest(req ChatRequest, defaultModel string) ([]byte, error) {
 		"store":  false,
 	}
 
-	if req.System != "" {
-		payload["instructions"] = req.System
+	instructions := req.System
+	if instructions == "" {
+		instructions = "You are a helpful assistant."
 	}
+	payload["instructions"] = instructions
 
 	// Convert messages to Codex input format.
 	var input []map[string]any
