@@ -59,6 +59,7 @@ type Model struct {
 	permission PermissionModel
 	mcp        MCPModel
 	directory  DirectoryModel
+	hasNpm     bool
 	err        error
 }
 
@@ -72,6 +73,7 @@ func New(cfgPath, version string, opts ...Option) Model {
 		locale:   locale,
 		welcome:  NewWelcomeModel(locale, version),
 		language: NewLanguageModel(locale),
+		hasNpm:   DetectNpm(),
 	}
 	for _, opt := range opts {
 		opt(&m)
@@ -186,7 +188,7 @@ func (m Model) afterAPIKey() (tea.Model, tea.Cmd) {
 // afterPermission routes to MCP catalog (Full path only).
 func (m Model) afterPermission() (tea.Model, tea.Cmd) {
 	m.step = StepMCP
-	m.mcp = NewMCPModel(m.locale)
+	m.mcp = NewMCPModel(m.locale, m.hasNpm)
 	return m, m.mcp.Init()
 }
 
@@ -218,7 +220,7 @@ func (m Model) goBack() (tea.Model, tea.Cmd) {
 		return m, m.permission.Init()
 	case StepDirectory:
 		m.step = StepMCP
-		m.mcp = NewMCPModel(m.locale)
+		m.mcp = NewMCPModel(m.locale, m.hasNpm)
 		return m, m.mcp.Init()
 	}
 	return m, nil

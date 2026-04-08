@@ -360,3 +360,89 @@ func TestValidate(t *testing.T) {
 		})
 	}
 }
+
+// --- WriteFromResult ---
+
+func TestWriteFromResult_BasicRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+
+	result := &OnboardingResult{
+		APIKey:         "sk-test-123",
+		DataDir:        filepath.Join(dir, "data"),
+		WikiDir:        filepath.Join(dir, "wiki"),
+		PermissionMode: "accept_edits",
+	}
+	if err := WriteFromResult(cfgPath, result); err != nil {
+		t.Fatalf("WriteFromResult: %v", err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Permission.Mode != "accept_edits" {
+		t.Errorf("expected permission mode %q, got %q", "accept_edits", cfg.Permission.Mode)
+	}
+	if cfg.Anthropic.APIKey != "sk-test-123" {
+		t.Errorf("expected api key %q, got %q", "sk-test-123", cfg.Anthropic.APIKey)
+	}
+}
+
+func TestWriteFromResult_WithMCPServers(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+
+	result := &OnboardingResult{
+		APIKey:         "sk-test",
+		DataDir:        filepath.Join(dir, "data"),
+		WikiDir:        filepath.Join(dir, "wiki"),
+		PermissionMode: "default",
+		MCPServers: []MCPServerConfig{
+			{Name: "GitHub", Command: "npx", Args: []string{"-y", "@modelcontextprotocol/server-github"}},
+			{Name: "Filesystem", Command: "npx", Args: []string{"-y", "@modelcontextprotocol/server-filesystem"}},
+		},
+	}
+	if err := WriteFromResult(cfgPath, result); err != nil {
+		t.Fatalf("WriteFromResult: %v", err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load round-trip: %v", err)
+	}
+	if len(cfg.MCPServers) != 2 {
+		t.Fatalf("expected 2 MCP servers, got %d", len(cfg.MCPServers))
+	}
+	if cfg.MCPServers[0].Name != "GitHub" {
+		t.Errorf("expected first server name %q, got %q", "GitHub", cfg.MCPServers[0].Name)
+	}
+	if cfg.MCPServers[0].Command != "npx" {
+		t.Errorf("expected command %q, got %q", "npx", cfg.MCPServers[0].Command)
+	}
+	if len(cfg.MCPServers[0].Args) != 2 {
+		t.Errorf("expected 2 args, got %d", len(cfg.MCPServers[0].Args))
+	}
+}
+
+func TestWriteFromResult_DefaultPermission(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+
+	result := &OnboardingResult{
+		APIKey:  "sk-test",
+		DataDir: filepath.Join(dir, "data"),
+		WikiDir: filepath.Join(dir, "wiki"),
+	}
+	if err := WriteFromResult(cfgPath, result); err != nil {
+		t.Fatalf("WriteFromResult: %v", err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Permission.Mode != "default" {
+		t.Errorf("expected default permission, got %q", cfg.Permission.Mode)
+	}
+}

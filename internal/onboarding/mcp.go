@@ -91,12 +91,17 @@ type MCPModel struct {
 	hasNpm   bool
 }
 
-// NewMCPModel creates a new MCP catalog model.
-func NewMCPModel(locale Locale) MCPModel {
-	items := buildFlatItems()
+// DetectNpm checks whether npm and npx are available on PATH.
+func DetectNpm() bool {
 	_, npmErr := exec.LookPath("npm")
 	_, npxErr := exec.LookPath("npx")
-	hasNpm := npmErr == nil && npxErr == nil
+	return npmErr == nil && npxErr == nil
+}
+
+// NewMCPModel creates a new MCP catalog model.
+// hasNpm should be obtained from DetectNpm() once at startup.
+func NewMCPModel(locale Locale, hasNpm bool) MCPModel {
+	items := buildFlatItems()
 
 	return MCPModel{
 		locale:   locale,

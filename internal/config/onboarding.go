@@ -103,7 +103,7 @@ anthropic:
   api_key: %q
   model: claude-sonnet-4-20250514
 permission:
-  mode: %s
+  mode: %q
 `, result.DataDir, result.WikiDir, result.APIKey, permMode)
 
 	if len(result.MCPServers) > 0 {

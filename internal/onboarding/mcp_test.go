@@ -7,7 +7,7 @@ import (
 )
 
 func TestMCPModel_InitialState(t *testing.T) {
-	m := NewMCPModel(En)
+	m := NewMCPModel(En, true)
 	if len(m.items) == 0 {
 		t.Error("expected non-empty items")
 	}
@@ -20,7 +20,7 @@ func TestMCPModel_InitialState(t *testing.T) {
 }
 
 func TestMCPModel_CursorSkipsCategories(t *testing.T) {
-	m := NewMCPModel(En)
+	m := NewMCPModel(En, true)
 	startCursor := m.cursor
 
 	// Move down
@@ -42,7 +42,7 @@ func TestMCPModel_CursorSkipsCategories(t *testing.T) {
 }
 
 func TestMCPModel_SpaceTogglesSelection(t *testing.T) {
-	m := NewMCPModel(En)
+	m := NewMCPModel(En, true)
 	item := m.items[m.cursor]
 
 	// Toggle on
@@ -61,7 +61,7 @@ func TestMCPModel_SpaceTogglesSelection(t *testing.T) {
 }
 
 func TestMCPModel_EnterConfirms(t *testing.T) {
-	m := NewMCPModel(En)
+	m := NewMCPModel(En, true)
 
 	// Select first item
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
@@ -84,7 +84,7 @@ func TestMCPModel_EnterConfirms(t *testing.T) {
 }
 
 func TestMCPModel_EnterWithNoSelection(t *testing.T) {
-	m := NewMCPModel(En)
+	m := NewMCPModel(En, true)
 
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
@@ -101,7 +101,7 @@ func TestMCPModel_EnterWithNoSelection(t *testing.T) {
 }
 
 func TestMCPModel_EscGoesBack(t *testing.T) {
-	m := NewMCPModel(En)
+	m := NewMCPModel(En, true)
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if cmd == nil {
 		t.Fatal("expected cmd on esc")
@@ -113,7 +113,7 @@ func TestMCPModel_EscGoesBack(t *testing.T) {
 }
 
 func TestMCPModel_CtrlCQuits(t *testing.T) {
-	m := NewMCPModel(En)
+	m := NewMCPModel(En, true)
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	if cmd == nil {
 		t.Error("expected quit cmd on ctrl+c")
@@ -121,7 +121,7 @@ func TestMCPModel_CtrlCQuits(t *testing.T) {
 }
 
 func TestMCPModel_MultipleSelections(t *testing.T) {
-	m := NewMCPModel(En)
+	m := NewMCPModel(En, true)
 
 	// Select first server
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
@@ -166,7 +166,7 @@ func TestMCPModel_CatalogHasAllCategories(t *testing.T) {
 func TestMCPModel_ViewRendersLocales(t *testing.T) {
 	for _, locale := range []Locale{En, Ko} {
 		t.Run(string(locale), func(t *testing.T) {
-			m := NewMCPModel(locale)
+			m := NewMCPModel(locale, true)
 			view := m.View()
 			if view == "" {
 				t.Error("expected non-empty view")
@@ -198,8 +198,29 @@ func TestBuildFlatItems(t *testing.T) {
 	}
 }
 
+func TestMCPModel_NpmWarningShown(t *testing.T) {
+	m := NewMCPModel(En, false)
+	view := m.View()
+	if !containsStr(view, "npm") {
+		t.Error("expected npm warning in view when hasNpm=false")
+	}
+}
+
+func containsStr(s, sub string) bool {
+	return len(s) > 0 && len(sub) > 0 && indexOf(s, sub) >= 0
+}
+
+func indexOf(s, sub string) int {
+	for i := 0; i <= len(s)-len(sub); i++ {
+		if s[i:i+len(sub)] == sub {
+			return i
+		}
+	}
+	return -1
+}
+
 func TestMCPSelection_HasRequiredFields(t *testing.T) {
-	m := NewMCPModel(En)
+	m := NewMCPModel(En, true)
 	// Select first server
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
 	m = updated.(MCPModel)
