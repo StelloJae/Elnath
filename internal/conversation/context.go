@@ -55,7 +55,8 @@ func NewContextWindowWithThreshold(threshold float64) *ContextWindow {
 }
 
 // EstimateTokens estimates the token count for a slice of messages.
-// Uses the chars/4 heuristic, which is accurate within ~20% for English text.
+// Uses a refined heuristic: ~4 chars/token for English prose, ~3.5 for code/JSON,
+// plus per-message overhead for role formatting.
 func (cw *ContextWindow) EstimateTokens(messages []llm.Message) int {
 	total := 0
 	for _, m := range messages {
@@ -64,15 +65,43 @@ func (cw *ContextWindow) EstimateTokens(messages []llm.Message) int {
 		for _, block := range m.Content {
 			switch b := block.(type) {
 			case llm.TextBlock:
-				total += len(b.Text) / 4
+				total += estimateTextTokens(b.Text)
 			case llm.ToolUseBlock:
-				total += (len(b.Name) + len(b.Input)) / 4
+				// Tool name + JSON input (JSON is denser than prose).
+				total += len(b.Name)/4 + len(b.Input)*2/7
 			case llm.ToolResultBlock:
-				total += len(b.Content) / 4
+				total += estimateTextTokens(b.Content)
+			case llm.ThinkingBlock:
+				total += estimateTextTokens(b.Thinking)
+			case llm.ImageBlock:
+				// Images are roughly 1600 tokens for a standard resolution.
+				total += 1600
 			}
 		}
 	}
 	return total
+}
+
+// estimateTextTokens applies a refined character-based heuristic.
+// JSON/code-heavy text uses ~3.5 chars/token; prose uses ~4 chars/token.
+func estimateTextTokens(text string) int {
+	if len(text) == 0 {
+		return 0
+	}
+	// Heuristic: count braces and brackets as a signal for JSON/code density.
+	jsonChars := 0
+	for _, c := range text {
+		if c == '{' || c == '}' || c == '[' || c == ']' || c == '"' {
+			jsonChars++
+		}
+	}
+	ratio := float64(jsonChars) / float64(len(text))
+	if ratio > 0.05 {
+		// JSON/code-heavy: ~3.5 chars per token.
+		return len(text) * 2 / 7
+	}
+	// Prose: ~4 chars per token.
+	return len(text) / 4
 }
 
 // Fit applies the 3-stage compression pipeline to bring messages within maxTokens.

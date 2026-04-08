@@ -12,12 +12,30 @@ import (
 	"github.com/stello/elnath/internal/llm"
 )
 
+// SessionPersister is an optional secondary persistence backend for sessions.
+// Implementations (e.g., SQLite history store) are injected to avoid circular deps.
+type SessionPersister interface {
+	PersistSession(sessionID string, messages []llm.Message) error
+}
+
 // Session is a persisted conversation stored as a JSONL file.
 // Format: first line is a sessionHeader, subsequent lines are llm.Message.
 type Session struct {
-	ID       string
-	path     string
-	Messages []llm.Message
+	ID        string
+	path      string
+	Messages  []llm.Message
+	persister SessionPersister // optional secondary persistence
+	logger    func(msg string, args ...any)
+}
+
+// WithPersister sets an optional secondary persistence backend.
+func (s *Session) WithPersister(p SessionPersister) {
+	s.persister = p
+}
+
+// WithLogger sets a logger for persistence warnings.
+func (s *Session) WithSessionLogger(fn func(msg string, args ...any)) {
+	s.logger = fn
 }
 
 type sessionHeader struct {
@@ -108,10 +126,19 @@ func (s *Session) AppendMessage(msg llm.Message) error {
 }
 
 // AppendMessages appends multiple messages in a single write for efficiency.
+// Also syncs to secondary persister (e.g., SQLite) if configured.
 func (s *Session) AppendMessages(msgs []llm.Message) error {
 	for _, m := range msgs {
 		if err := s.AppendMessage(m); err != nil {
 			return err
+		}
+	}
+	// Secondary persistence: best-effort, never blocks primary JSONL.
+	if s.persister != nil {
+		if err := s.persister.PersistSession(s.ID, s.Messages); err != nil {
+			if s.logger != nil {
+				s.logger("secondary persist failed", "session_id", s.ID, "error", err)
+			}
 		}
 	}
 	return nil
