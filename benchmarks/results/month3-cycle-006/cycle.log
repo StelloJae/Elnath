@@ -1,0 +1,11 @@
+[1/9] validate bugfix corpus
+Corpus OK: version=v1 tasks=2
+[2/9] run bugfix current
+Current run complete: system=elnath-current results=2 output=benchmarks/results/month3-cycle-006/bugfix-current-scorecard.json
+[3/9] run bugfix baseline
+Baseline run complete: baseline=claude-codex-omx-omc results=2 output=benchmarks/results/month3-cycle-006/bugfix-baseline-scorecard.json
+[4/9] write bugfix report
+Benchmark report written: benchmarks/results/month3-cycle-006/bugfix-report.md
+[5/9] validate canary corpus
+Corpus OK: version=v1 tasks=4
+[6/9] run canary current
