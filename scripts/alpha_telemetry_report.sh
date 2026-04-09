@@ -87,6 +87,10 @@ def table_exists(cur, name: str) -> bool:
     return row is not None
 
 
+def table_columns(cur, name: str) -> set[str]:
+    return {row[1] for row in cur.execute(f"PRAGMA table_info({name})")}
+
+
 def ratio(numerator: int, denominator: int) -> float:
     if denominator <= 0:
         return 0.0
@@ -102,6 +106,7 @@ cur = conn.cursor()
 
 report = {
     "database": str(db_path),
+    "schema_warnings": [],
     "tasks": {
         "total": 0,
         "pending": 0,
@@ -136,8 +141,16 @@ report = {
 }
 
 if table_exists(cur, "task_queue"):
+    task_cols = table_columns(cur, "task_queue")
+    required_task_cols = {"session_id", "completion", "timeout_class", "completed_at"}
+    missing_task_cols = sorted(required_task_cols - task_cols)
+    if missing_task_cols:
+        report["schema_warnings"].append(
+            "task_queue missing columns required for some alpha telemetry signals: "
+            + ", ".join(missing_task_cols)
+        )
     row = cur.execute(
-        """
+        f"""
         SELECT
           COUNT(*) AS total,
           SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending,
@@ -145,12 +158,12 @@ if table_exists(cur, "task_queue"):
           SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS done,
           SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
           SUM(CASE WHEN status IN ('done', 'failed') THEN 1 ELSE 0 END) AS terminal,
-          SUM(CASE WHEN COALESCE(session_id, '') != '' THEN 1 ELSE 0 END) AS session_bound,
-          SUM(CASE WHEN status IN ('done', 'failed') AND COALESCE(session_id, '') != '' THEN 1 ELSE 0 END) AS terminal_session_bound,
-          SUM(CASE WHEN COALESCE(completion, '') != '' THEN 1 ELSE 0 END) AS completion_contracts,
-          SUM(CASE WHEN status IN ('done', 'failed') AND COALESCE(session_id, '') != '' AND COALESCE(completion, '') != '' THEN 1 ELSE 0 END) AS completion_handoffs,
-          SUM(CASE WHEN timeout_class = 'idle' THEN 1 ELSE 0 END) AS idle_timeout_recoveries,
-          SUM(CASE WHEN timeout_class = 'active_but_killed' THEN 1 ELSE 0 END) AS active_but_killed_recoveries
+          {"SUM(CASE WHEN COALESCE(session_id, '') != '' THEN 1 ELSE 0 END)" if "session_id" in task_cols else "0"} AS session_bound,
+          {"SUM(CASE WHEN status IN ('done', 'failed') AND COALESCE(session_id, '') != '' THEN 1 ELSE 0 END)" if "session_id" in task_cols else "0"} AS terminal_session_bound,
+          {"SUM(CASE WHEN COALESCE(completion, '') != '' THEN 1 ELSE 0 END)" if "completion" in task_cols else "0"} AS completion_contracts,
+          {"SUM(CASE WHEN status IN ('done', 'failed') AND COALESCE(session_id, '') != '' AND COALESCE(completion, '') != '' THEN 1 ELSE 0 END)" if {"session_id", "completion"}.issubset(task_cols) else "0"} AS completion_handoffs,
+          {"SUM(CASE WHEN timeout_class = 'idle' THEN 1 ELSE 0 END)" if "timeout_class" in task_cols else "0"} AS idle_timeout_recoveries,
+          {"SUM(CASE WHEN timeout_class = 'active_but_killed' THEN 1 ELSE 0 END)" if "timeout_class" in task_cols else "0"} AS active_but_killed_recoveries
         FROM task_queue
         """
     ).fetchone()
@@ -186,13 +199,18 @@ if table_exists(cur, "task_queue"):
     report["tasks"]["completion_rate"] = ratio(report["tasks"]["done"], report["tasks"]["terminal"])
 
 if table_exists(cur, "conversations"):
+    conversation_cols = table_columns(cur, "conversations")
+    if not {"created_at", "updated_at"}.issubset(conversation_cols):
+        report["schema_warnings"].append(
+            "conversations missing created_at/updated_at columns required for repeat-use telemetry"
+        )
     row = cur.execute(
-        """
+        f"""
         SELECT
           COUNT(*) AS total,
-          SUM(CASE WHEN date(updated_at) > date(created_at) THEN 1 ELSE 0 END) AS repeat_use_sessions,
-          SUM(CASE WHEN updated_at >= datetime('now', '-7 days') THEN 1 ELSE 0 END) AS updated_last_7d,
-          COUNT(DISTINCT CASE WHEN updated_at >= datetime('now', '-7 days') THEN date(updated_at) END) AS distinct_active_days_last_7d
+          {"SUM(CASE WHEN date(updated_at) > date(created_at) THEN 1 ELSE 0 END)" if {"created_at", "updated_at"}.issubset(conversation_cols) else "0"} AS repeat_use_sessions,
+          {"SUM(CASE WHEN updated_at >= datetime('now', '-7 days') THEN 1 ELSE 0 END)" if "updated_at" in conversation_cols else "0"} AS updated_last_7d,
+          {"COUNT(DISTINCT CASE WHEN updated_at >= datetime('now', '-7 days') THEN date(updated_at) END)" if "updated_at" in conversation_cols else "0"} AS distinct_active_days_last_7d
         FROM conversations
         """
     ).fetchone()
@@ -212,20 +230,30 @@ if table_exists(cur, "conversations"):
     )
 
 if table_exists(cur, "conversation_messages"):
-    row = cur.execute(
-        """
-        SELECT COUNT(*)
-        FROM (
-          SELECT session_id
-          FROM conversation_messages
-          GROUP BY session_id
-          HAVING COUNT(*) > 0
+    message_cols = table_columns(cur, "conversation_messages")
+    if "session_id" not in message_cols:
+        report["schema_warnings"].append(
+            "conversation_messages missing session_id column required for message coverage telemetry"
         )
-        """
-    ).fetchone()
-    report["sessions"]["with_messages"] = row[0] or 0
+    else:
+        row = cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM (
+              SELECT session_id
+              FROM conversation_messages
+              GROUP BY session_id
+              HAVING COUNT(*) > 0
+            )
+            """
+        ).fetchone()
+        report["sessions"]["with_messages"] = row[0] or 0
 
-if table_exists(cur, "task_queue") and table_exists(cur, "conversations"):
+if (
+    table_exists(cur, "task_queue")
+    and table_exists(cur, "conversations")
+    and {"session_id", "completed_at"}.issubset(table_columns(cur, "task_queue"))
+):
     row = cur.execute(
         """
         WITH terminal_task_sessions AS (
@@ -254,6 +282,10 @@ if table_exists(cur, "task_queue") and table_exists(cur, "conversations"):
         report["sessions"]["resume_followup_sessions"],
         report["sessions"]["task_linked"],
     )
+elif table_exists(cur, "task_queue") and table_exists(cur, "conversations"):
+    report["schema_warnings"].append(
+        "task_queue missing session_id/completed_at columns required for resume follow-up telemetry"
+    )
 
 json_payload = json.dumps(report, indent=2, sort_keys=True)
 if out_path is not None:
@@ -268,6 +300,10 @@ print("Month 4 closed-alpha telemetry summary")
 print(f"database: {report['database']}")
 if out_path is not None:
     print(f"artifact: {out_path}")
+if report["schema_warnings"]:
+    print("schema_warnings:")
+    for warning in report["schema_warnings"]:
+        print(f"  - {warning}")
 print()
 print("Tasks")
 print(f"  total: {report['tasks']['total']}")

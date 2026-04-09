@@ -6,6 +6,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/elnath-alpha-telemetry-test.XXXXXX")"
 DB_PATH="$TMP_DIR/elnath.db"
 JSON_PATH="$TMP_DIR/report.json"
+LEGACY_DB_PATH="$TMP_DIR/legacy-elnath.db"
 
 cleanup() {
   rm -rf "$TMP_DIR"
@@ -119,3 +120,56 @@ assert stdout_payload["sessions"]["repeat_use_rate"] == 0.667
 PY
 
 echo "PASS: alpha telemetry report summarizes and archives task/session signals"
+
+python3 - "$LEGACY_DB_PATH" <<'PY'
+import sqlite3
+import sys
+
+conn = sqlite3.connect(sys.argv[1])
+cur = conn.cursor()
+cur.executescript(
+    """
+    CREATE TABLE task_queue (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      payload TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      result TEXT NOT NULL DEFAULT '',
+      created_at INTEGER NOT NULL,
+      started_at INTEGER NOT NULL DEFAULT 0,
+      completed_at INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE conversations (
+      id TEXT PRIMARY KEY,
+      created_at DATETIME NOT NULL,
+      updated_at DATETIME NOT NULL
+    );
+    CREATE TABLE conversation_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at DATETIME NOT NULL
+    );
+    """
+)
+cur.execute(
+    "INSERT INTO task_queue (payload, status, result, created_at, started_at, completed_at) VALUES ('legacy task', 'done', 'ok', 0, 0, 0)"
+)
+cur.execute(
+    "INSERT INTO conversations (id, created_at, updated_at) VALUES ('legacy-sess', '2026-04-08 09:00:00', '2026-04-09 09:00:00')"
+)
+cur.execute(
+    "INSERT INTO conversation_messages (session_id, role, content, created_at) VALUES ('legacy-sess', 'user', '{}', '2026-04-09 09:00:00')"
+)
+conn.commit()
+conn.close()
+PY
+
+LEGACY_OUTPUT="$($REPO_ROOT/scripts/alpha_telemetry_report.sh --db "$LEGACY_DB_PATH")"
+grep -F "schema_warnings:" <<<"$LEGACY_OUTPUT" >/dev/null
+grep -F "task_queue missing columns required for some alpha telemetry signals" <<<"$LEGACY_OUTPUT" >/dev/null
+grep -F "session_bound: 0" <<<"$LEGACY_OUTPUT" >/dev/null
+grep -F "completion_handoffs: 0" <<<"$LEGACY_OUTPUT" >/dev/null
+grep -F "resume_followup_sessions: 0" <<<"$LEGACY_OUTPUT" >/dev/null
+
+echo "PASS: alpha telemetry report tolerates legacy task_queue schemas"
