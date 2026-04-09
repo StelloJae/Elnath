@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -15,8 +16,10 @@ import (
 
 	"github.com/stello/elnath/internal/agent"
 	"github.com/stello/elnath/internal/conversation"
+	"github.com/stello/elnath/internal/core"
 	"github.com/stello/elnath/internal/daemon"
 	"github.com/stello/elnath/internal/onboarding"
+	"github.com/stello/elnath/internal/telegram"
 )
 
 func captureOutput(t *testing.T, fn func()) (string, string) {
@@ -52,6 +55,84 @@ func captureOutput(t *testing.T, fn func()) (string, string) {
 		t.Fatalf("read stderr: %v", err)
 	}
 	return string(stdout), string(stderr)
+}
+
+func TestRunTelegramShellRetriesTransientGetUpdatesErrors(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	bot := &scriptedTelegramBot{}
+	shell, _ := openTelegramCommandTestShell(t, bot)
+
+	bot.getFn = func(ctx context.Context, call int, offset int64, timeout int) ([]telegram.Update, error) {
+		switch call {
+		case 0:
+			return nil, errors.New("temporary telegram outage")
+		case 1:
+			return []telegram.Update{{
+				ID: 7,
+				Message: telegram.Message{
+					ChatID: "12345",
+					Text:   "/status",
+				},
+			}}, nil
+		default:
+			cancel()
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- runTelegramShell(ctx, shell, bot, 1, nil)
+	}()
+
+	err := <-errCh
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("runTelegramShell error = %v, want context canceled", err)
+	}
+
+	sent := bot.Sent()
+	if len(sent) == 0 {
+		t.Fatalf("sent messages = 0, want at least 1")
+	}
+	if !strings.Contains(sent[0], "No daemon tasks.") {
+		t.Fatalf("first reply = %q, want status response", sent[0])
+	}
+
+	offset, err := shell.NextOffset()
+	if err != nil {
+		t.Fatalf("NextOffset: %v", err)
+	}
+	if offset != 8 {
+		t.Fatalf("persisted offset = %d, want 8", offset)
+	}
+}
+
+func TestRunTelegramShellLoadsPersistedOffset(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	bot := &scriptedTelegramBot{}
+	shell, _ := openTelegramCommandTestShell(t, bot)
+	if err := shell.RememberOffset(88); err != nil {
+		t.Fatalf("RememberOffset: %v", err)
+	}
+
+	bot.getFn = func(ctx context.Context, call int, offset int64, timeout int) ([]telegram.Update, error) {
+		if call == 0 && offset != 88 {
+			t.Fatalf("initial offset = %d, want 88", offset)
+		}
+		cancel()
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+
+	err := runTelegramShell(ctx, shell, bot, 1, nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("runTelegramShell error = %v, want context canceled", err)
+	}
 }
 
 func writeTestConfig(t *testing.T, locale onboarding.Locale) string {
@@ -95,6 +176,66 @@ func withArgs(t *testing.T, args []string) {
 func resetLoadLocaleCache() {
 	cachedLocale = ""
 	cachedLocaleOnce = sync.Once{}
+}
+
+type scriptedTelegramBot struct {
+	mu       sync.Mutex
+	offsets  []int64
+	sent     []string
+	getFn    func(ctx context.Context, call int, offset int64, timeout int) ([]telegram.Update, error)
+	getCalls int
+}
+
+func (b *scriptedTelegramBot) SendMessage(_ context.Context, _ string, text string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.sent = append(b.sent, text)
+	return nil
+}
+
+func (b *scriptedTelegramBot) GetUpdates(ctx context.Context, offset int64, timeout int) ([]telegram.Update, error) {
+	b.mu.Lock()
+	call := b.getCalls
+	b.getCalls++
+	b.offsets = append(b.offsets, offset)
+	fn := b.getFn
+	b.mu.Unlock()
+	if fn == nil {
+		return nil, nil
+	}
+	return fn(ctx, call, offset, timeout)
+}
+
+func (b *scriptedTelegramBot) Sent() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]string, len(b.sent))
+	copy(out, b.sent)
+	return out
+}
+
+func openTelegramCommandTestShell(t *testing.T, bot telegram.BotClient) (*telegram.Shell, *daemon.Queue) {
+	t.Helper()
+
+	db, err := core.OpenDB(t.TempDir())
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	queue, err := daemon.NewQueue(db.Main)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+	approvals, err := daemon.NewApprovalStore(db.Main)
+	if err != nil {
+		t.Fatalf("NewApprovalStore: %v", err)
+	}
+	shell, err := telegram.NewShell(queue, approvals, bot, "12345", filepath.Join(t.TempDir(), "telegram-shell-state.json"))
+	if err != nil {
+		t.Fatalf("NewShell: %v", err)
+	}
+	return shell, queue
 }
 
 func TestCommandRegistryContainsExpectedCommands(t *testing.T) {

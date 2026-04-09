@@ -38,6 +38,7 @@ type Shell struct {
 
 type shellState struct {
 	NotifiedCompletionIDs []int64 `json:"notified_completion_ids"`
+	NextUpdateOffset      int64   `json:"next_update_offset,omitempty"`
 }
 
 func NewShell(queue *daemon.Queue, approvals *daemon.ApprovalStore, bot BotClient, chatID, statePath string) (*Shell, error) {
@@ -115,6 +116,29 @@ func (s *Shell) NotifyCompletions(ctx context.Context) error {
 		notified[task.ID] = struct{}{}
 		state.NotifiedCompletionIDs = append(state.NotifiedCompletionIDs, task.ID)
 	}
+	return s.saveState(state)
+}
+
+func (s *Shell) NextOffset() (int64, error) {
+	state, err := s.loadState()
+	if err != nil {
+		return 0, err
+	}
+	if state.NextUpdateOffset < 0 {
+		return 0, nil
+	}
+	return state.NextUpdateOffset, nil
+}
+
+func (s *Shell) RememberOffset(nextOffset int64) error {
+	state, err := s.loadState()
+	if err != nil {
+		return err
+	}
+	if nextOffset <= state.NextUpdateOffset {
+		return nil
+	}
+	state.NextUpdateOffset = nextOffset
 	return s.saveState(state)
 }
 

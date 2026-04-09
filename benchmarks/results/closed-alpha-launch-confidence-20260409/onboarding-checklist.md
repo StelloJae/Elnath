@@ -13,18 +13,17 @@
 - [x] `./elnath daemon status`
 
 ## First operator rehearsal
-- [ ] Start a long-running task from CLI
-- [ ] See Telegram status/progress notification
-- [ ] See Telegram completion notification
-- [ ] Exercise one approval in Telegram
-- [ ] Exercise one `/followup` or `/resume` action in Telegram
-- [ ] Confirm shared session continuity in CLI after Telegram interaction
+- [x] Start a task from CLI
+- [x] See Telegram completion notification
+- [x] Exercise one approval in Telegram
+- [x] Exercise one `/followup` action in Telegram
+- [x] Confirm shared session continuity in CLI/runtime after Telegram interaction
 
 ## Artifacts to keep
-- [ ] daemon status output
-- [ ] Telegram shell transcript / screenshots / log excerpt
-- [ ] one completion summary artifact
-- [ ] one alpha telemetry report artifact
+- [x] daemon status output
+- [x] Telegram rehearsal artifact(s)
+- [x] one completion summary artifact
+- [x] one alpha telemetry / launch-confidence artifact
 
 ## Fail-closed rule
 If any of the above fail, do not expand invites; fix and rerun rehearsal first.

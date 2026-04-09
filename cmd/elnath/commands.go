@@ -528,14 +528,39 @@ func runTelegramShell(ctx context.Context, shell *telegram.Shell, bot telegram.B
 	if pollTimeout <= 0 {
 		pollTimeout = 30
 	}
-	var offset int64
+	offset, err := shell.NextOffset()
+	if err != nil {
+		return fmt.Errorf("telegram load shell state: %w", err)
+	}
 	for {
 		if err := shell.NotifyCompletions(ctx); err != nil {
-			return fmt.Errorf("telegram notify completions: %w", err)
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if logger != nil {
+				logger.Error("telegram notify completions", "error", err)
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(2 * time.Second):
+			}
+			continue
 		}
 		updates, err := bot.GetUpdates(ctx, offset, pollTimeout)
 		if err != nil {
-			return fmt.Errorf("telegram get updates: %w", err)
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if logger != nil {
+				logger.Error("telegram get updates", "offset", offset, "error", err)
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(2 * time.Second):
+			}
+			continue
 		}
 		for _, update := range updates {
 			if update.ID >= offset {
@@ -543,6 +568,14 @@ func runTelegramShell(ctx context.Context, shell *telegram.Shell, bot telegram.B
 			}
 			if err := shell.HandleUpdate(ctx, update); err != nil && logger != nil {
 				logger.Error("telegram handle update", "update_id", update.ID, "error", err)
+			}
+		}
+		if err := shell.RememberOffset(offset); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if logger != nil {
+				logger.Error("telegram persist offset", "offset", offset, "error", err)
 			}
 		}
 		select {
