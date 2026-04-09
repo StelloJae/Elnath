@@ -1,0 +1,57 @@
+{
+  "version": "v1",
+  "system": "baseline-runner",
+  "baseline": "claude-codex-omx-omc",
+  "context": "benchmark",
+  "repeated_runs": 1,
+  "results": [
+    {
+      "run": 1,
+      "task_id": "GO-BF-001",
+      "track": "brownfield_feature",
+      "language": "go",
+      "success": false,
+      "intervention_count": 0,
+      "intervention_needed": false,
+      "failure_family": "execution_timeout",
+      "duration_seconds": 182,
+      "notes": "baseline command timed out before producing a working-tree diff"
+    },
+    {
+      "run": 1,
+      "task_id": "TS-BF-001",
+      "track": "brownfield_feature",
+      "language": "typescript",
+      "success": false,
+      "intervention_count": 0,
+      "intervention_needed": false,
+      "failure_family": "execution_timeout",
+      "duration_seconds": 193,
+      "notes": "baseline command timed out before producing a working-tree diff"
+    },
+    {
+      "run": 1,
+      "task_id": "GO-BF-002",
+      "track": "brownfield_feature",
+      "language": "go",
+      "success": false,
+      "intervention_count": 0,
+      "intervention_needed": false,
+      "failure_family": "execution_timeout",
+      "duration_seconds": 182,
+      "notes": "baseline command timed out before producing a working-tree diff"
+    },
+    {
+      "run": 1,
+      "task_id": "TS-BF-002",
+      "track": "brownfield_feature",
+      "language": "typescript",
+      "success": false,
+      "intervention_count": 0,
+      "intervention_needed": false,
+      "failure_family": "execution_timeout",
+      "duration_seconds": 190,
+      "notes": "baseline command timed out before producing a working-tree diff"
+    }
+  ]
+}

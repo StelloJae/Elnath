@@ -47,6 +47,20 @@
       "recovery_attempted": true,
       "duration_seconds": 92,
       "notes": "task completed without creating a working-tree diff"
+    },
+    {
+      "run": 1,
+      "task_id": "TS-BF-002",
+      "track": "brownfield_feature",
+      "language": "typescript",
+      "success": false,
+      "intervention_count": 0,
+      "intervention_needed": false,
+      "verification_command": "./node_modules/.bin/mocha packages/common/test/module-utils/configurable-module.builder.spec.ts --require ts-node/register --require tsconfig-paths/register --require node_modules/reflect-metadata/Reflect.js --require hooks/mocha-init-hook.ts",
+      "failure_family": "no_changes",
+      "recovery_attempted": true,
+      "duration_seconds": 122,
+      "notes": "task completed without creating a working-tree diff"
     }
   ]
 }
