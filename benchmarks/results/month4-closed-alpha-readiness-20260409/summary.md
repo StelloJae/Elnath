@@ -6,7 +6,8 @@ This artifact records the verification pass for the Month 4 closed-alpha readine
 
 - `bash -n scripts/check_month4_alpha_readiness.sh scripts/test_month4_alpha_readiness_gate.sh scripts/run_month4_closed_alpha_checks.sh scripts/alpha_telemetry_report.sh`
 - `./scripts/test_month4_alpha_readiness_gate.sh`
-- `bash scripts/check_month4_alpha_readiness.sh .`
+- `bash scripts/test_alpha_telemetry_report.sh`
+- `go test ./...`
 - `make lint`
 - `make test`
 - `make build`
@@ -15,12 +16,13 @@ This artifact records the verification pass for the Month 4 closed-alpha readine
 
 | Check | Result | Evidence |
 | --- | --- | --- |
-| Shell verifier syntax | PASS | `bash -n ...` succeeded for the updated Month 4 readiness scripts |
-| Shell fixture gate test | PASS | `PASS: month4 readiness gate rejects docs-only evidence and passes once every required artifact exists` |
-| Repository readiness gate | FAIL | confirmatory checkpoint, operator docs, and timeout telemetry pass; Telegram operator shell implementation is still missing |
+| Shell verifier syntax + fixture gate test | PASS | `PASS: month4 readiness gate flags missing evidence and passes once fixtures satisfy every gate` |
+| Telemetry reporter self-test | PASS | `PASS: alpha telemetry report summarizes and archives task/session signals` |
+| Go test suite | PASS | `go test ./...` passed across `cmd/elnath` and all `internal/*` packages |
 | Lint | PASS | `go vet ./...` passed; `staticcheck` unavailable so the Makefile skipped it intentionally |
 | Go test suite | PASS | `make test` passed across `cmd/elnath` and all `internal/*` packages |
 | Build | PASS | `go build -ldflags "-X main.version=0.4.0" -o elnath ./cmd/elnath` completed successfully |
+| Repository readiness gate | PASS | `scripts/check_month4_alpha_readiness.sh .` now reports `Overall: PASS` |
 
 ## Readiness gate output
 
@@ -28,12 +30,23 @@ This artifact records the verification pass for the Month 4 closed-alpha readine
 | --- | --- | --- |
 | PASS | confirmatory_canary | `./benchmarks/results/month4-closed-alpha-readiness-20260409/confirmatory-month3-checkpoint.md` |
 | PASS | continuity_runtime_core | `internal/daemon/queue_test.go` + `internal/daemon/daemon_test.go` + `cmd/elnath/runtime_test.go` |
-| FAIL | telegram_operator_shell | no Telegram operator shell implementation found in `cmd/internal` |
-| PASS | alpha_onboarding_docs | `wiki/closed-alpha-setup.md` + `wiki/closed-alpha-runbook.md` + `wiki/closed-alpha-known-limits.md` |
+| PASS | telegram_operator_shell | `./internal/daemon/task_payload_test.go` |
+| PASS | alpha_onboarding_docs | `./README.md` |
 | PASS | telemetry_timeouts | `internal/daemon/queue.go` + `internal/daemon/queue_test.go` timeout metrics coverage |
 
 ## Interpretation
 
-The repository now has a frozen Month 3 checkpoint memo and the checked-in closed-alpha operator docs the plan asked for, but the Month 4 gate is still **fail-closed** because there is still no thin Telegram operator-shell implementation under `cmd/` or `internal/`.
+The repository evidence gate is now **green** for the scoped Month 4 readiness checks:
 
-This is the intended result of the tightened verifier: documentation and telemetry helpers count as support material, not as proof that the Telegram lane exists.
+1. the confirmatory Month 3 checkpoint is frozen in-repo,
+2. the thin Telegram operator shell exists on the shared runtime substrate,
+3. closed-alpha onboarding / troubleshooting / known-limits docs are present, and
+4. timeout + continuity-runtime coverage still pass.
+
+However, this should still be interpreted carefully:
+
+- the gate above is a **repository evidence gate**, not a guarantee that live operator rehearsals have all been re-run in this pane;
+- telemetry is stronger than before (including approval and continuation counts), but remains local SQLite evidence rather than hosted analytics;
+- live daemon/Telegram rehearsals with real credentials should still be treated as the final operational confidence step before broadening alpha usage.
+
+Current judgment: **repo gate open; operational confidence still depends on live rehearsal discipline.**
