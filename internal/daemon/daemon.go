@@ -206,6 +206,7 @@ func (d *Daemon) handleStatus(ctx context.Context, conn net.Conn) {
 		Progress    string `json:"progress"`
 		Summary     string `json:"summary"`
 		Result      string `json:"result,omitempty"`
+		Completion  any    `json:"completion"`
 		CreatedAt   int64  `json:"created_at"`
 		UpdatedAt   int64  `json:"updated_at"`
 		CompletedAt int64  `json:"completed_at"`
@@ -221,6 +222,7 @@ func (d *Daemon) handleStatus(ctx context.Context, conn net.Conn) {
 			Progress:    t.Progress,
 			Summary:     t.Summary,
 			Result:      t.Result,
+			Completion:  t.Completion.View(),
 			CreatedAt:   t.CreatedAt.UnixMilli(),
 			UpdatedAt:   t.UpdatedAt.UnixMilli(),
 			CompletedAt: t.CompletedAt.UnixMilli(),
