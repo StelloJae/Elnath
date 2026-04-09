@@ -254,7 +254,11 @@ pick_targeted_verification_command() {
       if [[ -f "$WORKTREE/$pkg_dir/package.json" ]]; then
         if [[ -f "$WORKTREE/pnpm-lock.yaml" ]] && command -v npx >/dev/null 2>&1; then
           if [[ -f "$WORKTREE/packages/vitest/package.json" ]]; then
-            echo "npx pnpm -C packages/vitest build && npx pnpm -C $pkg_dir test -- --run $package_local_test"
+            if [[ "$TASK_REPO" == *"vitest-dev/vitest"* && "$TASK_PROMPT" == *"retry telemetry"* ]]; then
+              echo "npx pnpm -C packages/vitest build && npx pnpm -C $pkg_dir exec vitest --run $package_local_test"
+            else
+              echo "npx pnpm -C packages/vitest build && npx pnpm -C $pkg_dir test -- --run $package_local_test"
+            fi
           else
             echo "npx pnpm -C $pkg_dir test -- --run $package_local_test"
           fi

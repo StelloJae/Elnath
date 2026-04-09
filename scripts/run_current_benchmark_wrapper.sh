@@ -329,7 +329,11 @@ pick_targeted_verification_command() {
       if [[ -f "$WORKTREE/$pkg_dir/package.json" ]]; then
         if [[ -f "$WORKTREE/pnpm-lock.yaml" ]] && command -v npx >/dev/null 2>&1; then
           if [[ -f "$WORKTREE/packages/vitest/package.json" ]]; then
-            echo "npx pnpm -C packages/vitest build && npx pnpm -C $pkg_dir test -- --run $package_local_test"
+            if [[ "$TASK_REPO" == *"vitest-dev/vitest"* && "$TASK_PROMPT" == *"retry telemetry"* ]]; then
+              echo "npx pnpm -C packages/vitest build && npx pnpm -C $pkg_dir exec vitest --run $package_local_test"
+            else
+              echo "npx pnpm -C packages/vitest build && npx pnpm -C $pkg_dir test -- --run $package_local_test"
+            fi
           else
             echo "npx pnpm -C $pkg_dir test -- --run $package_local_test"
           fi
@@ -471,6 +475,9 @@ Vitest-specific guidance:
   2. \`test/cli/test/reported-tasks.test.ts\` (as the canonical assertion pattern)
   3. \`test/cli/fixtures/reported-tasks/1_first.test.ts\` (existing retry fixture if useful)
 - Prefer the existing reported-tasks testing pattern in \`test/cli/test/reported-tasks.test.ts\` over inventing a new state-inspection pattern from scratch.
+- \`rpc().onTaskUpdate\` for this path should keep the packed reporter payload shape (\`[task.id, result, task.meta]\`) rather than forwarding live mutable task objects.
+- For retry telemetry, prefer cloning/snapshotting the per-task \`result\` payload before sending it to RPC so later mutations do not overwrite the retry-visible \`retryCount\` / \`state: 'run'\` snapshot.
+- In the regression test, assert the reporter-visible retry packs themselves (for example via \`packs.find(([taskId]) => taskId === id)\`) and confirm the retry snapshots carry incrementing \`retryCount\` values while the retry event is still in the \`run\` state.
 - For this task, prefer a worker-only CLI assertion over OTEL/browser matrix coverage; use reporter-visible task updates / reported entities before inventing new OpenTelemetry fixtures.
 - Avoid \`test/cli/test/open-telemetry.test.ts\` and browser-oriented fixtures unless worker retry telemetry truly cannot be verified through reported tasks.
 - Do not replace the narrow worker-only regression with a broad browser/open-telemetry matrix test."
