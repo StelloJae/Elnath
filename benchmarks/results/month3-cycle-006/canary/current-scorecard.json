@@ -21,6 +21,20 @@
       "recovery_succeeded": true,
       "duration_seconds": 248,
       "notes": "verification passed after one recovery attempt"
+    },
+    {
+      "run": 1,
+      "task_id": "TS-BF-001",
+      "track": "brownfield_feature",
+      "language": "typescript",
+      "success": false,
+      "intervention_count": 0,
+      "intervention_needed": false,
+      "verification_command": "npx pnpm -C packages/vitest build \u0026\u0026 npx pnpm -C test/cli test -- --run test/worker-retry-telemetry.test.ts",
+      "failure_family": "verification_failed",
+      "recovery_attempted": true,
+      "duration_seconds": 836,
+      "notes": "verification still failing after one recovery attempt"
     }
   ]
 }
