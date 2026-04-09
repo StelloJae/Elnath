@@ -213,30 +213,42 @@ func buildCodexRequest(req ChatRequest, defaultModel string) ([]byte, error) {
 	payload["instructions"] = instructions
 
 	// Convert messages to Codex input format.
-	var input []map[string]any
+	var input []any
 	for _, msg := range req.Messages {
-		entry := map[string]any{"role": msg.Role}
-		// Build content — text only for now, tool results handled separately.
+		var textParts []map[string]any
 		for _, block := range msg.Content {
 			switch b := block.(type) {
 			case TextBlock:
-				entry["content"] = b.Text
+				textParts = append(textParts, map[string]any{
+					"type": "input_text",
+					"text": b.Text,
+				})
 			case ToolResultBlock:
-				entry = map[string]any{
+				if len(textParts) > 0 {
+					input = append(input, buildRoleMessage(msg.Role, textParts))
+					textParts = nil
+				}
+				input = append(input, map[string]any{
 					"type":         "function_call_output",
 					"call_id":      b.ToolUseID,
 					"output":       b.Content,
-				}
+				})
 			case ToolUseBlock:
-				entry = map[string]any{
+				if len(textParts) > 0 {
+					input = append(input, buildRoleMessage(msg.Role, textParts))
+					textParts = nil
+				}
+				input = append(input, map[string]any{
 					"type":      "function_call",
-					"id":        b.ID,
+					"call_id":   b.ID,
 					"name":      b.Name,
 					"arguments": string(b.Input),
-				}
+				})
 			}
 		}
-		input = append(input, entry)
+		if len(textParts) > 0 {
+			input = append(input, buildRoleMessage(msg.Role, textParts))
+		}
 	}
 	payload["input"] = input
 
@@ -268,6 +280,14 @@ func buildCodexRequest(req ChatRequest, defaultModel string) ([]byte, error) {
 // parseCodexSSE reads the Codex Responses API SSE stream.
 func parseCodexSSE(r io.Reader, cb func(StreamEvent)) error {
 	scanner := bufio.NewScanner(r)
+	dumpPath := os.Getenv("ELNATH_CODEX_SSE_DUMP")
+	var dumpFile *os.File
+	if dumpPath != "" {
+		if f, err := os.OpenFile(dumpPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
+			dumpFile = f
+			defer dumpFile.Close()
+		}
+	}
 
 	type toolState struct {
 		id    string
@@ -286,6 +306,9 @@ func parseCodexSSE(r io.Reader, cb func(StreamEvent)) error {
 		if data == "" || data == "[DONE]" {
 			continue
 		}
+		if dumpFile != nil {
+			_, _ = dumpFile.WriteString(data + "\n")
+		}
 
 		var event struct {
 			Type     string `json:"type"`
@@ -294,7 +317,7 @@ func parseCodexSSE(r io.Reader, cb func(StreamEvent)) error {
 			ItemID   string `json:"item_id"`
 			CallID   string `json:"call_id"`
 			Name     string `json:"name"`
-			Response struct {
+		Response struct {
 				Usage struct {
 					InputTokens  int `json:"input_tokens"`
 					OutputTokens int `json:"output_tokens"`
@@ -310,8 +333,15 @@ func parseCodexSSE(r io.Reader, cb func(StreamEvent)) error {
 					} `json:"content"`
 					Arguments string `json:"arguments"`
 				} `json:"output"`
-			} `json:"response"`
-		}
+		} `json:"response"`
+		Item *struct {
+			Type      string `json:"type"`
+			ID        string `json:"id"`
+			Name      string `json:"name"`
+			CallID    string `json:"call_id"`
+			Arguments string `json:"arguments"`
+		} `json:"item,omitempty"`
+	}
 		if err := json.Unmarshal([]byte(data), &event); err != nil {
 			continue
 		}
@@ -323,7 +353,10 @@ func parseCodexSSE(r io.Reader, cb func(StreamEvent)) error {
 			}
 
 		case "response.output_text.done":
-			// Fallback: full text when no deltas arrived.
+			// Fallback: some responses send only the final text here with no prior deltas.
+			if event.Text != "" {
+				cb(StreamEvent{Type: EventTextDelta, Content: event.Text})
+			}
 
 		case "response.function_call_arguments.delta":
 			id := event.ItemID
@@ -343,7 +376,20 @@ func parseCodexSSE(r io.Reader, cb func(StreamEvent)) error {
 			}
 
 		case "response.output_item.added":
-			// A new output item (could be function_call).
+			// A new output item (could be function_call). Codex may send it either
+			// in event.item or embedded under response.output.
+			if event.Item != nil && event.Item.Type == "function_call" {
+				ts := &toolState{id: event.Item.CallID, name: event.Item.Name}
+				pendingTools[event.Item.ID] = ts
+				cb(StreamEvent{
+					Type: EventToolUseStart,
+					ToolCall: &ToolUseEvent{
+						ID:   event.Item.CallID,
+						Name: event.Item.Name,
+					},
+				})
+				continue
+			}
 			for _, item := range event.Response.Output {
 				if item.Type == "function_call" {
 					ts := &toolState{id: item.CallID, name: item.Name}

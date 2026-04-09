@@ -156,8 +156,10 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, onText func(str
 func (a *Agent) streamWithRetry(ctx context.Context, req llm.Request, onText func(string)) (llm.Message, llm.UsageStats, error) {
 	var lastErr error
 	delay := retryBaseDelay
+	currentReq := req
 
 	for attempt := 0; attempt < retryMaxAttempts; attempt++ {
+		reqForAttempt := currentReq
 		if attempt > 0 {
 			a.logger.Warn("retrying after provider error",
 				"attempt", attempt,
@@ -172,10 +174,24 @@ func (a *Agent) streamWithRetry(ctx context.Context, req llm.Request, onText fun
 			delay *= 2
 		}
 
-		msg, usage, err := a.stream(ctx, req, onText)
-		if err == nil {
-			return msg, usage, nil
-		}
+			msg, usage, err := a.stream(ctx, reqForAttempt, onText)
+			if err == nil {
+				if isEmptyAssistantMessage(msg) {
+					fallbackMsg, fallbackUsage, fbErr := a.chatFallback(ctx, reqForAttempt, onText)
+					if fbErr == nil && !isEmptyAssistantMessage(fallbackMsg) {
+						return fallbackMsg, fallbackUsage, nil
+					}
+					if fbErr == nil {
+						fbErr = fmt.Errorf("empty assistant response")
+					}
+					currentReq.Messages = append(reqForAttempt.Messages, llm.NewUserMessage(
+						"The previous attempt returned an empty response. You must either provide a concrete answer or call tools. Do not return empty content.",
+					))
+					lastErr = fbErr
+					continue
+				}
+				return msg, usage, nil
+			}
 
 		if isRetryable(err) {
 			lastErr = err
@@ -185,6 +201,38 @@ func (a *Agent) streamWithRetry(ctx context.Context, req llm.Request, onText fun
 	}
 
 	return llm.Message{}, llm.UsageStats{}, fmt.Errorf("%w: %w", core.ErrProviderError, lastErr)
+}
+
+func (a *Agent) chatFallback(ctx context.Context, req llm.Request, onText func(string)) (llm.Message, llm.UsageStats, error) {
+	resp, err := a.provider.Chat(ctx, llm.ChatRequest(req))
+	if err != nil {
+		return llm.Message{}, llm.UsageStats{}, fmt.Errorf("chat fallback: %w", err)
+	}
+
+	if onText != nil && resp.Content != "" {
+		onText(resp.Content)
+	}
+
+	toolCalls := make([]llm.CompletedToolCall, 0, len(resp.ToolCalls))
+	for _, tc := range resp.ToolCalls {
+		toolCalls = append(toolCalls, llm.CompletedToolCall{
+			ID:    tc.ID,
+			Name:  tc.Name,
+			Input: tc.Input,
+		})
+	}
+
+	msg := llm.BuildAssistantMessage([]string{resp.Content}, toolCalls)
+	return msg, llm.UsageStats{
+		InputTokens:  resp.Usage.InputTokens,
+		OutputTokens: resp.Usage.OutputTokens,
+		CacheRead:    resp.Usage.CacheRead,
+		CacheWrite:   resp.Usage.CacheWrite,
+	}, nil
+}
+
+func isEmptyAssistantMessage(msg llm.Message) bool {
+	return len(msg.Content) == 0 || (msg.Text() == "" && len(llm.ExtractToolUseBlocks(msg)) == 0)
 }
 
 // stream calls the provider once and accumulates the response into a Message.

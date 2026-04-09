@@ -103,6 +103,7 @@ Commands:
   run       Interactive chat mode
   setup     Re-run the setup wizard
   daemon    Background daemon mode
+  eval      Benchmark/eval utilities
   wiki      Wiki management (search, lint, ingest)
   search    Search past conversations
   version   Show version
@@ -215,6 +216,7 @@ Daemon subcommands:
   run       대화형 채팅 모드
   setup     설정 마법사 다시 실행
   daemon    백그라운드 데몬 모드
+  eval      벤치마크/평가 유틸리티
   wiki      위키 관리 (검색, 린트, 수집)
   search    이전 대화 검색
   version   버전 표시

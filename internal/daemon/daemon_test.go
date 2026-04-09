@@ -19,14 +19,14 @@ type mockTaskRunner struct {
 	err  error
 }
 
-func (r mockTaskRunner) run(_ context.Context, _ string, onText func(string)) (string, error) {
+func (r mockTaskRunner) run(_ context.Context, _ string, onText func(string)) (TaskResult, error) {
 	if r.err != nil {
-		return "", r.err
+		return TaskResult{}, r.err
 	}
 	if onText != nil && r.text != "" {
 		onText(r.text)
 	}
-	return r.text, nil
+	return TaskResult{Result: r.text, Summary: r.text, SessionID: "sess-test"}, nil
 }
 
 // sendIPC connects to the Unix socket, writes a JSON-line request, and reads
@@ -148,6 +148,12 @@ func TestDaemonSubmitAndStatus(t *testing.T) {
 	for _, tv := range tasks {
 		if int64(tv["id"].(float64)) == taskID {
 			found = true
+			if _, ok := tv["progress"]; !ok {
+				t.Fatalf("expected progress field in task view: %+v", tv)
+			}
+			if _, ok := tv["session_id"]; !ok {
+				t.Fatalf("expected session_id field in task view: %+v", tv)
+			}
 		}
 	}
 	if !found {
@@ -158,6 +164,9 @@ func TestDaemonSubmitAndStatus(t *testing.T) {
 	done := pollTaskStatus(t, q, taskID, StatusDone, 5*time.Second)
 	if done.Result != "hello from mock" {
 		t.Errorf("task result = %q, want %q", done.Result, "hello from mock")
+	}
+	if done.SessionID != "sess-test" {
+		t.Errorf("session_id = %q, want %q", done.SessionID, "sess-test")
 	}
 }
 

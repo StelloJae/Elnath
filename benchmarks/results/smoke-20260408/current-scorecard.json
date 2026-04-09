@@ -1,0 +1,40 @@
+{
+  "version": "v1",
+  "system": "elnath-current",
+  "baseline": "self",
+  "context": "smoke",
+  "repeated_runs": 1,
+  "intervention_notes": false,
+  "results": [
+    {
+      "task_id": "GO-BF-001",
+      "track": "brownfield_feature",
+      "language": "go",
+      "success": true,
+      "intervention_count": 0,
+      "intervention_needed": false,
+      "verification_command": "go test ./...",
+      "verification_passed": true,
+      "failure_family": "",
+      "recovery_attempted": false,
+      "recovery_succeeded": false,
+      "duration_seconds": 182,
+      "notes": "verification passed on first attempt"
+    },
+    {
+      "task_id": "GO-BF-002",
+      "track": "brownfield_feature",
+      "language": "go",
+      "success": true,
+      "intervention_count": 0,
+      "intervention_needed": false,
+      "verification_command": "go test ./...",
+      "verification_passed": true,
+      "failure_family": "",
+      "recovery_attempted": true,
+      "recovery_succeeded": true,
+      "duration_seconds": 503,
+      "notes": "verification passed after one recovery attempt"
+    }
+  ]
+}

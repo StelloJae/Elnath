@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/stello/elnath/internal/llm"
 )
 
 func TestTeamWorkflow_E2E(t *testing.T) {
@@ -121,5 +123,42 @@ func TestParseSubtasks(t *testing.T) {
 				t.Errorf("got %d subtasks, want %d", len(got), tt.want)
 			}
 		})
+	}
+}
+
+type promptCaptureProvider struct {
+	prompt string
+}
+
+func (p *promptCaptureProvider) Name() string { return "test" }
+func (p *promptCaptureProvider) Models() []llm.ModelInfo { return nil }
+func (p *promptCaptureProvider) Chat(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+	return nil, nil
+}
+func (p *promptCaptureProvider) Stream(_ context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
+	if len(req.Messages) > 0 {
+		p.prompt = req.Messages[len(req.Messages)-1].Text()
+	}
+	cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: `[]`})
+	cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{InputTokens: 10, OutputTokens: 5}})
+	return nil
+}
+
+func TestTeamPlannerPromptIncludesBrownfieldRules(t *testing.T) {
+	provider := &promptCaptureProvider{}
+	wf := NewTeamWorkflow()
+	input := testInput("Modify the existing server middleware and verify the change with tests", provider)
+
+	_, _ = wf.planSubtasks(context.Background(), input)
+
+	for _, needle := range []string{
+		"at least one subtask MUST modify code",
+		"at least one subtask MUST verify the change",
+		"Do not return analysis-only subtasks",
+		"actual working-tree diff",
+	} {
+		if !strings.Contains(provider.prompt, needle) {
+			t.Fatalf("planner prompt missing %q:\n%s", needle, provider.prompt)
+		}
 	}
 }

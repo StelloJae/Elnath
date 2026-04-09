@@ -1,0 +1,19 @@
+{
+  "version": "v1",
+  "baseline": "claude-codex-omx-omc",
+  "corpus_path": "benchmarks/public-corpus.v1.json",
+  "command_template": "\"$BASELINE_BIN\" {{task_output}} {{task_id}} {{task_track}} {{task_language}} {{task_prompt}} {{task_repo}} {{task_repo_ref}} {{task_repo_class}} {{task_benchmark_family}}",
+  "output_path": "benchmarks/results/baseline-scorecard.v1.json",
+  "context": "benchmark",
+  "repeated_runs": 2,
+  "intervention_notes": false,
+  "required_env": [
+    "BASELINE_BIN"
+  ],
+  "notes": [
+    "Replace BASELINE_BIN with the wrapper that runs Claude Code / Codex CLI under your OMX/OMC workflow.",
+    "The wrapper command should write one RunResult JSON object to the provided {{task_output}} path.",
+    "RunResult may omit task_id/track/language; the runner will backfill from the corpus.",
+    "Do not count hidden manual rescue as a clean success."
+  ]
+}

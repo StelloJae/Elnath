@@ -1,0 +1,73 @@
+{
+  "version": "v1",
+  "tasks": [
+    {
+      "id": "GO-BF-001",
+      "title": "Add structured request-id logging middleware",
+      "track": "brownfield_feature",
+      "language": "go",
+      "repo_class": "service_backend",
+      "benchmark_family": "month2_canary",
+      "prompt": "Add request-id middleware to the existing HTTP server and thread the request id into structured logs without breaking current handlers.",
+      "repo": "https://github.com/gin-gonic/gin",
+      "source_url": "https://github.com/gin-gonic/gin",
+      "acceptance_criteria": [
+        "request id is attached to incoming requests",
+        "logs include the request id",
+        "existing tests still pass"
+      ],
+      "repo_ref": "d3ffc9985281dcf4d3bef604cce4e662b1a327a6"
+    },
+    {
+      "id": "TS-BF-001",
+      "title": "Add explicit retry telemetry to an async worker",
+      "track": "brownfield_feature",
+      "language": "typescript",
+      "repo_class": "cli_dev_tool",
+      "benchmark_family": "month2_canary",
+      "prompt": "Extend an existing TypeScript worker flow to emit retry telemetry without regressing current behavior.",
+      "repo": "https://github.com/vitest-dev/vitest",
+      "source_url": "https://github.com/vitest-dev/vitest",
+      "acceptance_criteria": [
+        "retry telemetry is emitted on retry paths",
+        "non-retry paths stay unchanged",
+        "tests cover the new behavior"
+      ],
+      "repo_ref": "ac04bac206f49d793e7277084f707aee718aa936"
+    },
+    {
+      "id": "GO-BF-002",
+      "title": "Add graceful shutdown logging to worker service",
+      "track": "brownfield_feature",
+      "language": "go",
+      "repo_class": "service_backend",
+      "benchmark_family": "month2_canary",
+      "prompt": "Extend an existing Go worker service so graceful shutdown emits structured progress logging and does not regress existing worker behavior.",
+      "repo": "https://github.com/caddyserver/caddy",
+      "source_url": "https://github.com/caddyserver/caddy",
+      "acceptance_criteria": [
+        "shutdown path emits structured log markers",
+        "existing worker/service behavior remains intact",
+        "tests verify the new shutdown behavior"
+      ],
+      "repo_ref": "d7834676aac1c9718ca78ac4bab421f261fa789e"
+    },
+    {
+      "id": "TS-BF-002",
+      "title": "Add explicit cancellation tracing to async tasks",
+      "track": "brownfield_feature",
+      "language": "typescript",
+      "repo_class": "service_backend",
+      "benchmark_family": "month2_canary",
+      "prompt": "Extend an existing TypeScript async task flow to emit explicit cancellation tracing without changing success-path semantics.",
+      "repo": "https://github.com/nestjs/nest",
+      "source_url": "https://github.com/nestjs/nest",
+      "acceptance_criteria": [
+        "cancellation path emits trace markers",
+        "success path stays behaviorally unchanged",
+        "tests verify cancellation handling"
+      ],
+      "repo_ref": "f59cc55b6f9a130931706d18c1c77c598185a76f"
+    }
+  ]
+}

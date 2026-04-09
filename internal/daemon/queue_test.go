@@ -166,7 +166,7 @@ func TestMarkDone(t *testing.T) {
 	q.Enqueue(ctx, "do something")
 	task, _ := q.Next(ctx)
 
-	if err := q.MarkDone(ctx, task.ID, "all good"); err != nil {
+	if err := q.MarkDone(ctx, task.ID, "all good", "summary text"); err != nil {
 		t.Fatalf("MarkDone: %v", err)
 	}
 
@@ -179,6 +179,9 @@ func TestMarkDone(t *testing.T) {
 	}
 	if got.Result != "all good" {
 		t.Errorf("result = %q, want %q", got.Result, "all good")
+	}
+	if got.Summary != "summary text" {
+		t.Errorf("summary = %q, want %q", got.Summary, "summary text")
 	}
 	if got.CompletedAt.UnixMilli() == 0 {
 		t.Error("completed_at should be set")
@@ -274,7 +277,7 @@ func TestList(t *testing.T) {
 
 	q.Next(ctx)
 	task2, _ := q.Next(ctx)
-	q.MarkDone(ctx, task2.ID, "done")
+	q.MarkDone(ctx, task2.ID, "done", "done summary")
 
 	tasks, err := q.List(ctx)
 	if err != nil {

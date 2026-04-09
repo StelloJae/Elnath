@@ -2,8 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
 
 	"github.com/stello/elnath/internal/agent"
 	"github.com/stello/elnath/internal/config"
@@ -45,6 +50,18 @@ type executionRuntime struct {
 	wikiIdx   *wiki.Index
 	wikiStore *wiki.Store
 	gitSync   *wiki.GitSync
+	workDir   string
+}
+
+type routeAuditRecord struct {
+	Timestamp        string              `json:"timestamp"`
+	SessionID        string              `json:"session_id"`
+	Input            string              `json:"input"`
+	EstimatedFiles   int                 `json:"estimated_files"`
+	ExistingCode     bool                `json:"existing_code"`
+	VerificationHint bool                `json:"verification_hint"`
+	Intent           conversation.Intent `json:"intent"`
+	Workflow         string              `json:"workflow"`
 }
 
 func buildExecutionRuntime(
@@ -116,6 +133,7 @@ func buildExecutionRuntime(
 		wikiIdx:   wikiIdx,
 		wikiStore: wikiStore,
 		gitSync:   gitSync,
+		workDir:   cwd,
 	}, nil
 }
 
@@ -149,7 +167,7 @@ func (rt *executionRuntime) runTask(
 		intent = conversation.IntentUnclear
 	}
 
-	routeCtx := &orchestrator.RoutingContext{EstimatedFiles: estimateFiles(userInput)}
+	routeCtx := buildRoutingContext(userInput)
 	wf := rt.router.Route(intent, routeCtx)
 	if wf == nil {
 		return nil, "", fmt.Errorf("no workflow available for intent %q", intent)
@@ -163,12 +181,31 @@ func (rt *executionRuntime) runTask(
 	if output.OnWorkflow != nil {
 		output.OnWorkflow(intent, wf.Name())
 	}
+	rt.appendRouteAudit(routeAuditRecord{
+		Timestamp:        time.Now().UTC().Format(time.RFC3339),
+		SessionID:        sess.ID,
+		Input:            userInput,
+		EstimatedFiles:   routeCtx.EstimatedFiles,
+		ExistingCode:     routeCtx.ExistingCode,
+		VerificationHint: routeCtx.VerificationHint,
+		Intent:           intent,
+		Workflow:         wf.Name(),
+	})
 
 	cfg := rt.wfCfg
 	if rt.wikiIdx != nil {
 		if ragCtx := wiki.BuildRAGContext(ctx, rt.wikiIdx, userInput, 3); ragCtx != "" {
 			cfg.SystemPrompt += "\n\n" + ragCtx
 		}
+	}
+	if routeCtx.ExistingCode {
+		cfg.SystemPrompt += "\n\nBrownfield execution guidance:\n- Inspect existing files, tests, and nearby patterns before editing.\n- Keep scope bounded to the smallest correct change.\n- Prefer repo-native verification commands and reuse existing abstractions.\n- Ask the user only when missing information would materially change the outcome or the decision is costly to reverse."
+		if hints := likelyRepoFiles(rt.workDir, userInput, 8); len(hints) > 0 {
+			cfg.SystemPrompt += "\n- Likely relevant files:\n  - " + strings.Join(hints, "\n  - ")
+		}
+	}
+	if routeCtx.VerificationHint {
+		cfg.SystemPrompt += "\n- This task explicitly emphasizes verification or regression safety; prioritize proving the change with tests or repo-native checks."
 	}
 
 	input := orchestrator.WorkflowInput{
@@ -206,23 +243,149 @@ func (rt *executionRuntime) runTask(
 }
 
 func (rt *executionRuntime) newDaemonTaskRunner() daemon.TaskRunner {
-	return func(ctx context.Context, payload string, onText func(string)) (string, error) {
+	return func(ctx context.Context, payload string, onText func(string)) (daemon.TaskResult, error) {
 		sess, err := rt.mgr.NewSession()
 		if err != nil {
-			return "", fmt.Errorf("create session: %w", err)
+			return daemon.TaskResult{}, fmt.Errorf("create session: %w", err)
 		}
 
 		messages, summary, err := rt.runTask(ctx, sess, nil, payload, orchestrationOutput{
 			OnText: onText,
 		})
 		if err != nil {
-			return "", err
+			return daemon.TaskResult{}, err
 		}
 
 		rt.maybeCommitWiki("auto: wiki update")
 		rt.maybeAutoDocumentSession(ctx, sess.ID, messages)
-		return summary, nil
+		return daemon.TaskResult{
+			Result:    summary,
+			Summary:   summary,
+			SessionID: sess.ID,
+		}, nil
 	}
+}
+
+func likelyRepoFiles(root, prompt string, limit int) []string {
+	if root == "" || limit <= 0 {
+		return nil
+	}
+	keywords := keywordHints(prompt)
+	if len(keywords) == 0 {
+		return nil
+	}
+
+	type candidate struct {
+		path  string
+		score int
+	}
+	var candidates []candidate
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			name := d.Name()
+			if name == ".git" || name == "node_modules" || name == "vendor" || name == "dist" || name == ".github" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return nil
+		}
+		lower := strings.ToLower(rel)
+		score := 0
+		for _, kw := range keywords {
+			if strings.Contains(lower, kw) {
+				score += 2
+			}
+		}
+		if strings.HasPrefix(lower, "test/") || strings.HasPrefix(lower, "examples/") {
+			score -= 2
+		}
+		if strings.Contains(lower, "/fixtures/") {
+			score -= 2
+		}
+		if strings.Contains(lower, "/runtime/") || strings.Contains(lower, "/worker") || strings.Contains(lower, "/workers/") {
+			score += 2
+		}
+		if strings.HasSuffix(lower, ".go") || strings.HasSuffix(lower, ".ts") || strings.HasSuffix(lower, ".tsx") || strings.HasSuffix(lower, ".js") {
+			score++
+		}
+		if score < 2 {
+			contentScore := scoreFileContents(path, keywords)
+			score += contentScore
+		}
+		if score > 0 {
+			candidates = append(candidates, candidate{path: rel, score: score})
+		}
+		return nil
+	})
+
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].score == candidates[j].score {
+			return candidates[i].path < candidates[j].path
+		}
+		return candidates[i].score > candidates[j].score
+	})
+	if len(candidates) > limit {
+		candidates = candidates[:limit]
+	}
+	out := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		out = append(out, c.path)
+	}
+	return out
+}
+
+func scoreFileContents(path string, keywords []string) int {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	if len(data) > 8192 {
+		data = data[:8192]
+	}
+	lower := strings.ToLower(string(data))
+	score := 0
+	for _, kw := range keywords {
+		if strings.Contains(lower, kw) {
+			score++
+		}
+	}
+	return score
+}
+
+func keywordHints(prompt string) []string {
+	stop := map[string]struct{}{
+		"the": {}, "and": {}, "with": {}, "into": {}, "without": {}, "existing": {}, "repository": {},
+		"codebase": {}, "task": {}, "this": {}, "that": {}, "must": {}, "should": {}, "make": {},
+		"smallest": {}, "correct": {}, "change": {}, "verify": {}, "verification": {}, "tests": {},
+		"test": {}, "feature": {}, "brownfield": {}, "track": {}, "language": {}, "repo": {},
+		"extend": {}, "current": {}, "behavior": {}, "regressing": {}, "emit": {}, "flow": {},
+		"service": {},
+	}
+	fields := strings.FieldsFunc(strings.ToLower(prompt), func(r rune) bool {
+		return !(r == '-' || r == '_' || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'))
+	})
+	seen := map[string]struct{}{}
+	var out []string
+	for _, field := range fields {
+		if len(field) < 4 {
+			continue
+		}
+		if _, ok := stop[field]; ok {
+			continue
+		}
+		if _, ok := seen[field]; ok {
+			continue
+		}
+		seen[field] = struct{}{}
+		out = append(out, field)
+	}
+	return out
 }
 
 func (rt *executionRuntime) maybeCommitWiki(message string) {
@@ -247,4 +410,32 @@ func (rt *executionRuntime) maybeAutoDocumentSession(ctx context.Context, sessio
 
 	rt.app.Logger.Info("session auto-documented to wiki", "session", sessionID)
 	rt.maybeCommitWiki("auto: document session " + sessionID)
+}
+
+func (rt *executionRuntime) appendRouteAudit(record routeAuditRecord) {
+	path := os.Getenv("ELNATH_EVAL_AUDIT_LOG")
+	if path == "" {
+		return
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		rt.app.Logger.Warn("route audit mkdir failed", "path", path, "error", err)
+		return
+	}
+
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		rt.app.Logger.Warn("route audit open failed", "path", path, "error", err)
+		return
+	}
+	defer f.Close()
+
+	data, err := json.Marshal(record)
+	if err != nil {
+		rt.app.Logger.Warn("route audit marshal failed", "error", err)
+		return
+	}
+	if _, err := f.Write(append(data, '\n')); err != nil {
+		rt.app.Logger.Warn("route audit write failed", "path", path, "error", err)
+	}
 }

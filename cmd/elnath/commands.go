@@ -21,6 +21,7 @@ import (
 	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/core"
 	"github.com/stello/elnath/internal/daemon"
+	"github.com/stello/elnath/internal/eval"
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/mcp"
 	"github.com/stello/elnath/internal/onboarding"
@@ -41,6 +42,7 @@ func commandRegistry() map[string]commandRunner {
 		"daemon":  cmdDaemon,
 		"wiki":    cmdWiki,
 		"search":  cmdSearch,
+		"eval":    cmdEval,
 	}
 }
 
@@ -451,9 +453,12 @@ func cmdDaemonStatus(ctx context.Context) error {
 	data, _ := json.Marshal(resp.Data)
 	var result struct {
 		Tasks []struct {
-			ID      float64 `json:"id"`
-			Status  string  `json:"status"`
-			Payload string  `json:"payload"`
+			ID        float64 `json:"id"`
+			Status    string  `json:"status"`
+			Payload   string  `json:"payload"`
+			SessionID string  `json:"session_id"`
+			Progress  string  `json:"progress"`
+			Summary   string  `json:"summary"`
 		} `json:"tasks"`
 	}
 	if err := json.Unmarshal(data, &result); err != nil {
@@ -465,14 +470,26 @@ func cmdDaemonStatus(ctx context.Context) error {
 		return nil
 	}
 
-	fmt.Printf("%-6s  %-12s  %s\n", "ID", "STATUS", "PAYLOAD")
-	fmt.Printf("%-6s  %-12s  %s\n", "------", "------------", "------------------------------------------------------------")
+	fmt.Printf("%-6s  %-12s  %-16s  %-28s  %-28s  %s\n", "ID", "STATUS", "SESSION", "PROGRESS", "SUMMARY", "PAYLOAD")
+	fmt.Printf("%-6s  %-12s  %-16s  %-28s  %-28s  %s\n", "------", "------------", "----------------", "----------------------------", "----------------------------", "------------------------------------------------------------")
 	for _, t := range result.Tasks {
 		payload := t.Payload
 		if len(payload) > 60 {
 			payload = payload[:57] + "..."
 		}
-		fmt.Printf("%-6.0f  %-12s  %s\n", t.ID, t.Status, payload)
+		progress := t.Progress
+		if len(progress) > 28 {
+			progress = progress[:25] + "..."
+		}
+		sessionID := t.SessionID
+		if len(sessionID) > 16 {
+			sessionID = sessionID[:13] + "..."
+		}
+		summary := t.Summary
+		if len(summary) > 28 {
+			summary = summary[:25] + "..."
+		}
+		fmt.Printf("%-6.0f  %-12s  %-16s  %-28s  %-28s  %s\n", t.ID, t.Status, sessionID, progress, summary, payload)
 	}
 	return nil
 }
@@ -596,6 +613,224 @@ func cmdSearch(ctx context.Context, args []string) error {
 			r.Snippet)
 	}
 	return nil
+}
+
+func cmdEval(_ context.Context, args []string) error {
+	if len(args) == 0 {
+		fmt.Println(`Usage: elnath eval <subcommand> <file>
+
+Subcommands:
+  validate <corpus.json>     Validate a benchmark corpus file
+  summarize <scorecard.json> Summarize a benchmark scorecard
+  diff <current.json> <baseline.json> Compare two scorecards
+  report <corpus.json> <current.json> <baseline.json> <output.md> Write a markdown benchmark report
+  gate-month2 <corpus.json> <current.json> <baseline.json> Evaluate Month-2 brownfield proof gate
+  rules <corpus.json> <scorecard.json> Check anti-vanity benchmark rules
+  run-baseline <plan.json>   Execute a baseline runner plan and write a scorecard
+  run-current <plan.json>    Execute a current-system runner plan and write a scorecard
+  scaffold-baseline <output.json>     Write a baseline runner scaffold
+  scaffold-current <output.json>      Write a current-system runner scaffold`)
+		return nil
+	}
+
+	switch args[0] {
+	case "validate":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: elnath eval validate <corpus.json>")
+		}
+		corpus, err := eval.LoadCorpus(args[1])
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Corpus OK: version=%s tasks=%d\n", corpus.Version, len(corpus.Tasks))
+		return nil
+	case "summarize":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: elnath eval summarize <scorecard.json>")
+		}
+		scorecard, err := eval.LoadScorecard(args[1])
+		if err != nil {
+			return err
+		}
+		summary := scorecard.Summary()
+		fmt.Printf("System: %s\n", scorecard.System)
+		if scorecard.Baseline != "" {
+			fmt.Printf("Baseline: %s\n", scorecard.Baseline)
+		}
+		fmt.Printf("Overall: total=%d success=%d success_rate=%.2f intervention_rate=%.2f\n",
+			summary.Total, summary.Successes, summary.SuccessRate, summary.InterventionRate)
+		fmt.Printf("Verification: pass_rate=%.2f recovery_success_rate=%.2f\n",
+			summary.VerificationPassRate, summary.RecoverySuccessRate)
+		for _, track := range []eval.Track{eval.TrackBrownfieldFeature, eval.TrackBugfix, eval.TrackGreenfield} {
+			trackSummary, ok := summary.ByTrack[track]
+			if !ok || trackSummary.Total == 0 {
+				continue
+			}
+			fmt.Printf("Track %s: total=%d success=%d success_rate=%.2f intervention_rate=%.2f verification_pass_rate=%.2f recovery_success_rate=%.2f\n",
+				track, trackSummary.Total, trackSummary.Successes, trackSummary.SuccessRate, trackSummary.InterventionRate, trackSummary.VerificationPassRate, trackSummary.RecoverySuccessRate)
+		}
+		if len(summary.FailureFamilies) > 0 {
+			fmt.Println("Failure families:")
+			for family, count := range summary.FailureFamilies {
+				fmt.Printf("  %s=%d\n", family, count)
+			}
+		}
+		return nil
+	case "diff":
+		if len(args) < 3 {
+			return fmt.Errorf("usage: elnath eval diff <current.json> <baseline.json>")
+		}
+		current, err := eval.LoadScorecard(args[1])
+		if err != nil {
+			return err
+		}
+		baseline, err := eval.LoadScorecard(args[2])
+		if err != nil {
+			return err
+		}
+		diff, err := eval.Diff(current, baseline)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Overall delta: success_rate_delta=%.2f verification_pass_delta=%.2f recovery_success_delta=%.2f\n",
+			diff.SuccessRateDelta, diff.VerificationPassDelta, diff.RecoverySuccessDelta)
+		for _, track := range []eval.Track{eval.TrackBrownfieldFeature, eval.TrackBugfix, eval.TrackGreenfield} {
+			trackDiff := diff.ByTrack[track]
+			if trackDiff.Current.Total == 0 && trackDiff.Baseline.Total == 0 {
+				continue
+			}
+			fmt.Printf("Track %s delta: success_rate_delta=%.2f verification_pass_delta=%.2f recovery_success_delta=%.2f\n",
+				track, trackDiff.SuccessRateDelta, trackDiff.VerificationPassDelta, trackDiff.RecoverySuccessDelta)
+		}
+		return nil
+	case "report":
+		if len(args) < 5 {
+			return fmt.Errorf("usage: elnath eval report <corpus.json> <current.json> <baseline.json> <output.md>")
+		}
+		corpus, err := eval.LoadCorpus(args[1])
+		if err != nil {
+			return err
+		}
+		current, err := eval.LoadScorecard(args[2])
+		if err != nil {
+			return err
+		}
+		baseline, err := eval.LoadScorecard(args[3])
+		if err != nil {
+			return err
+		}
+		if err := eval.WriteMarkdownReport(args[4], corpus, current, baseline); err != nil {
+			return err
+		}
+		fmt.Printf("Benchmark report written: %s\n", args[4])
+		return nil
+	case "gate-month2":
+		if len(args) < 4 {
+			return fmt.Errorf("usage: elnath eval gate-month2 <corpus.json> <current.json> <baseline.json>")
+		}
+		corpus, err := eval.LoadCorpus(args[1])
+		if err != nil {
+			return err
+		}
+		current, err := eval.LoadScorecard(args[2])
+		if err != nil {
+			return err
+		}
+		baseline, err := eval.LoadScorecard(args[3])
+		if err != nil {
+			return err
+		}
+		gate, err := eval.EvaluateMonth2Gate(corpus, current, baseline)
+		if err != nil {
+			return err
+		}
+		if gate.Pass {
+			fmt.Println("Month 2 gate: PASS")
+		} else {
+			fmt.Println("Month 2 gate: FAIL")
+		}
+		for _, reason := range gate.Reasons {
+			fmt.Printf("reason: %s\n", reason)
+		}
+		for _, warning := range gate.Warnings {
+			fmt.Printf("warning: %s\n", warning)
+		}
+		if !gate.Pass {
+			return fmt.Errorf("month 2 gate failed")
+		}
+		return nil
+	case "rules":
+		if len(args) < 3 {
+			return fmt.Errorf("usage: elnath eval rules <corpus.json> <scorecard.json>")
+		}
+		corpus, err := eval.LoadCorpus(args[1])
+		if err != nil {
+			return err
+		}
+		scorecard, err := eval.LoadScorecard(args[2])
+		if err != nil {
+			return err
+		}
+		violations := eval.CheckAntiVanityRules(corpus, scorecard)
+		if len(violations) == 0 {
+			fmt.Println("Anti-vanity rules OK")
+			return nil
+		}
+		for _, violation := range violations {
+			fmt.Printf("[%s] %s: %s\n", violation.Severity, violation.Rule, violation.Message)
+		}
+		return fmt.Errorf("anti-vanity rules failed: %d violation(s)", len(violations))
+	case "run-baseline":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: elnath eval run-baseline <plan.json>")
+		}
+		plan, err := eval.LoadBaselineRunPlan(args[1])
+		if err != nil {
+			return err
+		}
+		scorecard, err := eval.RunBaselinePlan(plan)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Baseline run complete: baseline=%s results=%d output=%s\n", scorecard.Baseline, len(scorecard.Results), plan.OutputPath)
+		return nil
+	case "run-current":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: elnath eval run-current <plan.json>")
+		}
+		plan, err := eval.LoadBaselineRunPlan(args[1])
+		if err != nil {
+			return err
+		}
+		scorecard, err := eval.RunBaselinePlan(plan)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Current run complete: system=%s results=%d output=%s\n", scorecard.System, len(scorecard.Results), plan.OutputPath)
+		return nil
+	case "scaffold-baseline":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: elnath eval scaffold-baseline <output.json>")
+		}
+		plan := eval.NewBaselineRunPlan("benchmarks/public-corpus.v1.json")
+		if err := eval.WriteBaselineRunPlan(args[1], plan); err != nil {
+			return err
+		}
+		fmt.Printf("Baseline scaffold written: %s\n", args[1])
+		return nil
+	case "scaffold-current":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: elnath eval scaffold-current <output.json>")
+		}
+		plan := eval.NewCurrentRunPlan("benchmarks/public-corpus.v1.json")
+		if err := eval.WriteBaselineRunPlan(args[1], plan); err != nil {
+			return err
+		}
+		fmt.Printf("Current scaffold written: %s\n", args[1])
+		return nil
+	default:
+		return fmt.Errorf("unknown eval subcommand: %s", args[0])
+	}
 }
 
 func cmdWiki(ctx context.Context, args []string) error {
@@ -1015,6 +1250,38 @@ func estimateFiles(input string) int {
 		count = 1 // default: assume single file
 	}
 	return count
+}
+
+func buildRoutingContext(input string) *orchestrator.RoutingContext {
+	lower := strings.ToLower(input)
+	existingCodeCues := []string{
+		"existing", "current", "repo", "repository", "module", "handler", "middleware",
+		"regression", "refactor", "fix", "bug", "test", "tests", "coverage",
+		"runtime", "service", "worker", "cli", "command",
+	}
+	verificationCues := []string{
+		"test", "tests", "verify", "verification", "regression", "coverage", "lint", "build",
+	}
+
+	ctx := &orchestrator.RoutingContext{
+		EstimatedFiles: estimateFiles(input),
+	}
+	for _, cue := range existingCodeCues {
+		if strings.Contains(lower, cue) {
+			ctx.ExistingCode = true
+			break
+		}
+	}
+	for _, cue := range verificationCues {
+		if strings.Contains(lower, cue) {
+			ctx.VerificationHint = true
+			break
+		}
+	}
+	if ctx.ExistingCode && ctx.VerificationHint && ctx.EstimatedFiles < 2 {
+		ctx.EstimatedFiles = 2
+	}
+	return ctx
 }
 
 // cliPrompter asks the user for interactive permission approval.

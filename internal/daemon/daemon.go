@@ -26,9 +26,16 @@ type IPCResponse struct {
 	Err  string      `json:"error,omitempty"`
 }
 
-// TaskRunner executes one queued task and returns its final result text.
+// TaskResult is the outcome of executing one queued daemon task.
+type TaskResult struct {
+	Result    string `json:"result"`
+	Summary   string `json:"summary,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+}
+
+// TaskRunner executes one queued task and returns structured task output.
 // Callers may forward streamed text through onText during execution.
-type TaskRunner func(ctx context.Context, payload string, onText func(string)) (string, error)
+type TaskRunner func(ctx context.Context, payload string, onText func(string)) (TaskResult, error)
 
 // Daemon runs background task processing with Unix domain socket IPC.
 type Daemon struct {
@@ -192,21 +199,31 @@ func (d *Daemon) handleStatus(ctx context.Context, conn net.Conn) {
 	}
 
 	type taskView struct {
-		ID        int64  `json:"id"`
-		Payload   string `json:"payload"`
-		Status    string `json:"status"`
-		Result    string `json:"result,omitempty"`
-		CreatedAt int64  `json:"created_at"`
+		ID          int64  `json:"id"`
+		Payload     string `json:"payload"`
+		SessionID   string `json:"session_id"`
+		Status      string `json:"status"`
+		Progress    string `json:"progress"`
+		Summary     string `json:"summary"`
+		Result      string `json:"result,omitempty"`
+		CreatedAt   int64  `json:"created_at"`
+		UpdatedAt   int64  `json:"updated_at"`
+		CompletedAt int64  `json:"completed_at"`
 	}
 
 	views := make([]taskView, 0, len(tasks))
 	for _, t := range tasks {
 		views = append(views, taskView{
-			ID:        t.ID,
-			Payload:   t.Payload,
-			Status:    string(t.Status),
-			Result:    t.Result,
-			CreatedAt: t.CreatedAt.UnixMilli(),
+			ID:          t.ID,
+			Payload:     t.Payload,
+			SessionID:   t.SessionID,
+			Status:      string(t.Status),
+			Progress:    t.Progress,
+			Summary:     t.Summary,
+			Result:      t.Result,
+			CreatedAt:   t.CreatedAt.UnixMilli(),
+			UpdatedAt:   t.UpdatedAt.UnixMilli(),
+			CompletedAt: t.CompletedAt.UnixMilli(),
 		})
 	}
 
@@ -284,30 +301,62 @@ func (d *Daemon) worker(ctx context.Context, id int) {
 			"worker_id", id,
 			"task_id", task.ID,
 		)
-		if markErr := d.queue.MarkDone(ctx, task.ID, result); markErr != nil {
+		if markErr := d.queue.MarkDone(ctx, task.ID, result.Result, result.Summary); markErr != nil {
 			d.logger.Error("worker: mark done", "task_id", task.ID, "error", markErr)
 		}
 	}
 }
 
-func (d *Daemon) runTask(ctx context.Context, task *Task) (string, error) {
+func (d *Daemon) runTask(ctx context.Context, task *Task) (TaskResult, error) {
 	if d.taskRunner == nil {
-		return "", fmt.Errorf("daemon: task runner is nil")
+		return TaskResult{}, fmt.Errorf("daemon: task runner is nil")
 	}
 
 	var output strings.Builder
 	result, err := d.taskRunner(ctx, task.Payload, func(text string) {
 		output.WriteString(text)
+		progress := summarizeProgress(output.String())
+		if progress != "" {
+			if updateErr := d.queue.UpdateProgress(ctx, task.ID, progress); updateErr != nil {
+				d.logger.Debug("worker: update progress", "task_id", task.ID, "error", updateErr)
+			}
+		}
 	})
 	if err != nil {
-		return "", fmt.Errorf("daemon: run task: %w", err)
+		return TaskResult{}, fmt.Errorf("daemon: run task: %w", err)
+	}
+	if result.SessionID != "" {
+		if bindErr := d.queue.BindSession(ctx, task.ID, result.SessionID); bindErr != nil {
+			d.logger.Debug("worker: bind session", "task_id", task.ID, "error", bindErr)
+		}
 	}
 
 	if output.Len() > 0 {
-		return output.String(), nil
+		result.Result = output.String()
 	}
-
+	if result.Result == "" {
+		result.Result = result.Summary
+	}
 	return result, nil
+}
+
+func summarizeProgress(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	lines := strings.Split(text, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		if len(line) > 120 {
+			return line[:117] + "..."
+		}
+		return line
+	}
+	return ""
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) {

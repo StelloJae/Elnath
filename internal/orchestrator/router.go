@@ -10,6 +10,10 @@ type RoutingContext struct {
 	// EstimatedFiles is a rough count of files the task is expected to touch.
 	// Values ≥ 4 trigger the team workflow for complex_task intents.
 	EstimatedFiles int
+	// ExistingCode indicates the task is clearly about changing an existing codebase.
+	ExistingCode bool
+	// VerificationHint indicates the task explicitly mentions tests, regressions, or validation.
+	VerificationHint bool
 }
 
 // Router maps a classified Intent to the appropriate Workflow.
@@ -38,12 +42,21 @@ func NewRouter(workflows map[string]Workflow) *Router {
 func (r *Router) Route(intent conversation.Intent, ctx *RoutingContext) Workflow {
 	switch intent {
 	case conversation.IntentComplexTask:
+		if ctx != nil && ctx.ExistingCode && ctx.VerificationHint {
+			return r.get("ralph")
+		}
+		if ctx != nil && ctx.ExistingCode && ctx.EstimatedFiles >= 1 {
+			return r.get("team")
+		}
 		if ctx != nil && ctx.EstimatedFiles < 4 {
 			return r.get("single")
 		}
 		return r.get("team")
 
 	case conversation.IntentProject:
+		if ctx != nil && ctx.ExistingCode {
+			return r.get("team")
+		}
 		return r.get("autopilot")
 
 	case conversation.IntentResearch:

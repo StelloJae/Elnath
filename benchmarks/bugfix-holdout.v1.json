@@ -1,0 +1,23 @@
+{
+  "version": "v1",
+  "tasks": [
+    {
+      "id": "GO-BUG-002",
+      "title": "Fix configuration reload regression",
+      "track": "bugfix",
+      "language": "go",
+      "repo_class": "service_backend",
+      "benchmark_family": "bugfix_holdout",
+      "holdout": true,
+      "prompt": "Identify and fix a configuration reload regression in a Go service and verify the fix with targeted regression coverage.",
+      "repo": "https://github.com/spf13/viper",
+      "source_url": "https://github.com/spf13/viper",
+      "acceptance_criteria": [
+        "root cause is identified",
+        "regression test captures the bad behavior",
+        "reloaded configuration behaves correctly after the fix"
+      ],
+      "repo_ref": "528f7416c4b56a4948673984b190bf8713f0c3c4"
+    }
+  ]
+}

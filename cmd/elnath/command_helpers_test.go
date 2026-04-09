@@ -81,7 +81,7 @@ func resetLoadLocaleCache() {
 
 func TestCommandRegistryContainsExpectedCommands(t *testing.T) {
 	reg := commandRegistry()
-	for _, name := range []string{"version", "help", "run", "setup", "daemon", "wiki", "search"} {
+	for _, name := range []string{"version", "help", "run", "setup", "daemon", "wiki", "search", "eval"} {
 		if _, ok := reg[name]; !ok {
 			t.Fatalf("missing command %q", name)
 		}
@@ -199,6 +199,17 @@ func TestHelperBuilders(t *testing.T) {
 	if got := estimateFiles("touch a.go and b.py plus notes.txt"); got < 2 {
 		t.Fatalf("estimateFiles = %d, want >= 2", got)
 	}
+
+	ctx := buildRoutingContext("fix regression in existing handler and add tests for middleware.go")
+	if !ctx.ExistingCode {
+		t.Fatal("expected ExistingCode = true")
+	}
+	if !ctx.VerificationHint {
+		t.Fatal("expected VerificationHint = true")
+	}
+	if ctx.EstimatedFiles < 2 {
+		t.Fatalf("expected EstimatedFiles >= 2 for brownfield verification task, got %d", ctx.EstimatedFiles)
+	}
 }
 
 func TestOnboardingResultToConfig(t *testing.T) {
@@ -308,4 +319,264 @@ func TestCLIOrchestrationOutputPrints(t *testing.T) {
 	if !strings.Contains(stdout, "hello") || !strings.Contains(stdout, "usage summary") {
 		t.Fatalf("stdout missing text/usage: %q", stdout)
 	}
+}
+
+func TestCmdEval(t *testing.T) {
+	dir := t.TempDir()
+	corpusPath := filepath.Join(dir, "corpus.json")
+	scorecardPath := filepath.Join(dir, "scorecard.json")
+	if err := os.WriteFile(scorecardPath, []byte(`{"version":"v1","system":"elnath","baseline":"claude+omx","results":[{"task_id":"BF-001","track":"brownfield_feature","language":"go","success":true,"intervention_count":1,"intervention_needed":true,"intervention_class":"necessary","verification_passed":true,"failure_family":"repo_context_miss","recovery_attempted":true,"recovery_succeeded":true,"duration_seconds":2}]}`), 0o644); err != nil {
+		t.Fatalf("write scorecard: %v", err)
+	}
+	corpusPath = filepath.Join(dir, "corpus.json")
+	if err := os.WriteFile(corpusPath, []byte(`{"version":"v1","tasks":[{"id":"BF-001","title":"task","track":"brownfield_feature","language":"go","repo_class":"cli_dev_tool","benchmark_family":"brownfield_primary","prompt":"do it","repo":"https://github.com/example/repo","repo_ref":"deadbeef","acceptance_criteria":["tests pass"]}]}`), 0o644); err != nil {
+		t.Fatalf("rewrite corpus: %v", err)
+	}
+	scorecardPath = filepath.Join(dir, "scorecard.json")
+	if err := os.WriteFile(scorecardPath, []byte(`{"version":"v1","system":"elnath","baseline":"claude+omx","context":"benchmark","repeated_runs":1,"intervention_notes":true,"results":[{"task_id":"BF-001","track":"brownfield_feature","language":"go","success":true,"intervention_count":1,"intervention_needed":true,"intervention_class":"necessary","verification_passed":true,"failure_family":"repo_context_miss","recovery_attempted":true,"recovery_succeeded":true,"duration_seconds":2}]}`), 0o644); err != nil {
+		t.Fatalf("rewrite scorecard: %v", err)
+	}
+
+	t.Run("usage", func(t *testing.T) {
+		stdout, _ := captureOutput(t, func() {
+			if err := cmdEval(context.Background(), nil); err != nil {
+				t.Fatalf("cmdEval usage: %v", err)
+			}
+		})
+		if !strings.Contains(stdout, "Usage: elnath eval") {
+			t.Fatalf("stdout = %q, want usage", stdout)
+		}
+	})
+
+	t.Run("validate", func(t *testing.T) {
+		stdout, _ := captureOutput(t, func() {
+			if err := cmdEval(context.Background(), []string{"validate", corpusPath}); err != nil {
+				t.Fatalf("cmdEval validate: %v", err)
+			}
+		})
+		if !strings.Contains(stdout, "Corpus OK") {
+			t.Fatalf("stdout = %q, want Corpus OK", stdout)
+		}
+	})
+
+	t.Run("summarize", func(t *testing.T) {
+		stdout, _ := captureOutput(t, func() {
+			if err := cmdEval(context.Background(), []string{"summarize", scorecardPath}); err != nil {
+				t.Fatalf("cmdEval summarize: %v", err)
+			}
+		})
+		if !strings.Contains(stdout, "Overall: total=1 success=1") {
+			t.Fatalf("stdout = %q, want overall summary", stdout)
+		}
+		if !strings.Contains(stdout, "Track brownfield_feature") {
+			t.Fatalf("stdout = %q, want track summary", stdout)
+		}
+	})
+
+	t.Run("diff", func(t *testing.T) {
+		baselinePath := filepath.Join(dir, "baseline.json")
+		if err := os.WriteFile(baselinePath, []byte(`{"version":"v1","system":"baseline","results":[{"task_id":"BF-001","track":"brownfield_feature","language":"go","success":false,"intervention_count":0,"intervention_needed":false,"verification_passed":false,"failure_family":"weak_verification_path","recovery_attempted":true,"recovery_succeeded":false,"duration_seconds":3}]}`), 0o644); err != nil {
+			t.Fatalf("write baseline: %v", err)
+		}
+		stdout, _ := captureOutput(t, func() {
+			if err := cmdEval(context.Background(), []string{"diff", scorecardPath, baselinePath}); err != nil {
+				t.Fatalf("cmdEval diff: %v", err)
+			}
+		})
+		if !strings.Contains(stdout, "Overall delta") || !strings.Contains(stdout, "verification_pass_delta") {
+			t.Fatalf("stdout = %q, want diff summary", stdout)
+		}
+	})
+
+	t.Run("rules ok", func(t *testing.T) {
+		stdout, _ := captureOutput(t, func() {
+			if err := cmdEval(context.Background(), []string{"rules", corpusPath, scorecardPath}); err != nil {
+				t.Fatalf("cmdEval rules: %v", err)
+			}
+		})
+		if !strings.Contains(stdout, "Anti-vanity rules OK") {
+			t.Fatalf("stdout = %q, want OK", stdout)
+		}
+	})
+
+	t.Run("rules fail", func(t *testing.T) {
+		badScorecardPath := filepath.Join(dir, "bad-scorecard.json")
+		if err := os.WriteFile(badScorecardPath, []byte(`{"version":"v1","system":"elnath","context":"launch","repeated_runs":0,"intervention_notes":false,"results":[{"task_id":"BF-001","track":"brownfield_feature","language":"go","success":true,"intervention_count":1,"intervention_needed":true,"intervention_class":"late","duration_seconds":2}]}`), 0o644); err != nil {
+			t.Fatalf("write bad scorecard: %v", err)
+		}
+		stdout, _ := captureOutput(t, func() {
+			err := cmdEval(context.Background(), []string{"rules", corpusPath, badScorecardPath})
+			if err == nil {
+				t.Fatalf("expected rules failure")
+			}
+		})
+		if !strings.Contains(stdout, "hidden_human_rescue") && !strings.Contains(stdout, "one_shot_launch_claim") && !strings.Contains(stdout, "repeated_runs_required") {
+			t.Fatalf("stdout = %q, want rule violations", stdout)
+		}
+	})
+
+	t.Run("report", func(t *testing.T) {
+		baselinePath := filepath.Join(dir, "baseline-report.json")
+		if err := os.WriteFile(baselinePath, []byte(`{"version":"v1","system":"baseline","results":[{"task_id":"BF-001","track":"brownfield_feature","language":"go","success":false,"intervention_count":0,"intervention_needed":false,"verification_passed":false,"failure_family":"weak_verification_path","recovery_attempted":true,"recovery_succeeded":false,"duration_seconds":3}]}`), 0o644); err != nil {
+			t.Fatalf("write baseline report: %v", err)
+		}
+		reportPath := filepath.Join(dir, "benchmark-report.md")
+		stdout, _ := captureOutput(t, func() {
+			if err := cmdEval(context.Background(), []string{"report", corpusPath, scorecardPath, baselinePath, reportPath}); err != nil {
+				t.Fatalf("cmdEval report: %v", err)
+			}
+		})
+		if !strings.Contains(stdout, "Benchmark report written") {
+			t.Fatalf("stdout = %q, want report message", stdout)
+		}
+		report, err := os.ReadFile(reportPath)
+		if err != nil {
+			t.Fatalf("read report: %v", err)
+		}
+		if !strings.Contains(string(report), "Repo Class Summary") {
+			t.Fatalf("unexpected report contents: %s", string(report))
+		}
+	})
+
+	t.Run("gate-month2 pass", func(t *testing.T) {
+		gateCorpusPath := filepath.Join(dir, "gate-corpus.json")
+		if err := os.WriteFile(gateCorpusPath, []byte(`{"version":"v1","tasks":[
+{"id":"BF-001","title":"task","track":"brownfield_feature","language":"go","repo_class":"cli_dev_tool","benchmark_family":"brownfield_primary","prompt":"do it","repo":"https://github.com/example/repo","repo_ref":"deadbeef","acceptance_criteria":["tests pass"]},
+{"id":"BUG-001","title":"holdout","track":"bugfix","language":"go","repo_class":"service_backend","benchmark_family":"brownfield_holdout","holdout":true,"prompt":"fix it","repo":"https://github.com/example/repo2","repo_ref":"feedface","acceptance_criteria":["tests pass"]}
+]}`), 0o644); err != nil {
+			t.Fatalf("write gate corpus: %v", err)
+		}
+		baselinePath := filepath.Join(dir, "baseline-gate.json")
+		if err := os.WriteFile(baselinePath, []byte(`{"version":"v1","system":"baseline","results":[{"task_id":"BF-001","track":"brownfield_feature","language":"go","success":false,"intervention_count":0,"intervention_needed":false,"verification_passed":false,"duration_seconds":3},{"task_id":"BUG-001","track":"bugfix","language":"go","success":false,"intervention_count":0,"intervention_needed":false,"verification_passed":false,"duration_seconds":1}]}`), 0o644); err != nil {
+			t.Fatalf("write baseline gate: %v", err)
+		}
+		currentGatePath := filepath.Join(dir, "current-gate.json")
+		if err := os.WriteFile(currentGatePath, []byte(`{"version":"v1","system":"elnath","results":[{"task_id":"BF-001","track":"brownfield_feature","language":"go","success":true,"intervention_count":1,"intervention_needed":true,"intervention_class":"necessary","verification_passed":true,"failure_family":"repo_context_miss","duration_seconds":2},{"task_id":"BUG-001","track":"bugfix","language":"go","success":false,"intervention_count":0,"intervention_needed":false,"verification_passed":true,"failure_family":"weak_verification_path","duration_seconds":1}]}`), 0o644); err != nil {
+			t.Fatalf("write current gate: %v", err)
+		}
+		stdout, _ := captureOutput(t, func() {
+			if err := cmdEval(context.Background(), []string{"gate-month2", gateCorpusPath, currentGatePath, baselinePath}); err != nil {
+				t.Fatalf("cmdEval gate-month2: %v", err)
+			}
+		})
+		if !strings.Contains(stdout, "Month 2 gate: PASS") {
+			t.Fatalf("stdout = %q, want gate pass", stdout)
+		}
+	})
+
+	t.Run("scaffold-baseline", func(t *testing.T) {
+		outputPath := filepath.Join(dir, "baseline-scaffold.json")
+		stdout, _ := captureOutput(t, func() {
+			if err := cmdEval(context.Background(), []string{"scaffold-baseline", outputPath}); err != nil {
+				t.Fatalf("cmdEval scaffold-baseline: %v", err)
+			}
+		})
+		if !strings.Contains(stdout, "Baseline scaffold written") {
+			t.Fatalf("stdout = %q, want scaffold message", stdout)
+		}
+		data, err := os.ReadFile(outputPath)
+		if err != nil {
+			t.Fatalf("read scaffold: %v", err)
+		}
+		if !strings.Contains(string(data), `"baseline": "claude-codex-omx-omc"`) {
+			t.Fatalf("unexpected scaffold content: %s", string(data))
+		}
+	})
+
+	t.Run("scaffold-current", func(t *testing.T) {
+		outputPath := filepath.Join(dir, "current-scaffold.json")
+		stdout, _ := captureOutput(t, func() {
+			if err := cmdEval(context.Background(), []string{"scaffold-current", outputPath}); err != nil {
+				t.Fatalf("cmdEval scaffold-current: %v", err)
+			}
+		})
+		if !strings.Contains(stdout, "Current scaffold written") {
+			t.Fatalf("stdout = %q, want scaffold message", stdout)
+		}
+		data, err := os.ReadFile(outputPath)
+		if err != nil {
+			t.Fatalf("read scaffold: %v", err)
+		}
+		if !strings.Contains(string(data), `"system": "elnath-current"`) {
+			t.Fatalf("unexpected current scaffold content: %s", string(data))
+		}
+	})
+
+	t.Run("run-baseline", func(t *testing.T) {
+		wrapperPath := filepath.Join(dir, "baseline-wrapper.sh")
+		wrapper := `#!/bin/sh
+out="$1"
+task_id="$2"
+track="$3"
+language="$4"
+cat > "$out" <<EOF
+{"task_id":"$task_id","track":"$track","language":"$language","success":true,"intervention_count":0,"intervention_needed":false,"duration_seconds":1}
+EOF
+`
+		if err := os.WriteFile(wrapperPath, []byte(wrapper), 0o755); err != nil {
+			t.Fatalf("write wrapper: %v", err)
+		}
+		t.Setenv("BASELINE_BIN", wrapperPath)
+		planPath := filepath.Join(dir, "baseline-plan.json")
+		if err := os.WriteFile(planPath, []byte(`{
+  "version":"v1",
+  "baseline":"claude-codex-omx-omc",
+  "corpus_path":"`+corpusPath+`",
+  "command_template":"\"$BASELINE_BIN\" {{task_output}} {{task_id}} {{task_track}} {{task_language}}",
+  "output_path":"`+filepath.Join(dir, "baseline-scorecard.json")+`",
+  "context":"benchmark",
+  "repeated_runs":2,
+  "required_env":["BASELINE_BIN"]
+}`), 0o644); err != nil {
+			t.Fatalf("write plan: %v", err)
+		}
+		stdout, _ := captureOutput(t, func() {
+			if err := cmdEval(context.Background(), []string{"run-baseline", planPath}); err != nil {
+				t.Fatalf("cmdEval run-baseline: %v", err)
+			}
+		})
+		if !strings.Contains(stdout, "Baseline run complete") {
+			t.Fatalf("stdout = %q, want run-baseline summary", stdout)
+		}
+	})
+
+	t.Run("run-current", func(t *testing.T) {
+		wrapperPath := filepath.Join(dir, "current-wrapper.sh")
+		wrapper := `#!/bin/sh
+out="$1"
+task_id="$2"
+track="$3"
+language="$4"
+cat > "$out" <<EOF
+{"task_id":"$task_id","track":"$track","language":"$language","success":true,"intervention_count":1,"intervention_needed":true,"intervention_class":"necessary","verification_passed":true,"failure_family":"repo_context_miss","recovery_attempted":true,"recovery_succeeded":true,"duration_seconds":1}
+EOF
+`
+		if err := os.WriteFile(wrapperPath, []byte(wrapper), 0o755); err != nil {
+			t.Fatalf("write wrapper: %v", err)
+		}
+		t.Setenv("CURRENT_BIN", wrapperPath)
+		planPath := filepath.Join(dir, "current-plan.json")
+		if err := os.WriteFile(planPath, []byte(`{
+  "version":"v1",
+  "system":"elnath-current",
+  "baseline":"self",
+  "corpus_path":"`+corpusPath+`",
+  "command_template":"\"$CURRENT_BIN\" {{task_output}} {{task_id}} {{task_track}} {{task_language}}",
+  "output_path":"`+filepath.Join(dir, "current-scorecard.json")+`",
+  "context":"benchmark",
+  "repeated_runs":1,
+  "intervention_notes":true,
+  "required_env":["CURRENT_BIN"]
+}`), 0o644); err != nil {
+			t.Fatalf("write current plan: %v", err)
+		}
+		stdout, _ := captureOutput(t, func() {
+			if err := cmdEval(context.Background(), []string{"run-current", planPath}); err != nil {
+				t.Fatalf("cmdEval run-current: %v", err)
+			}
+		})
+		if !strings.Contains(stdout, "Current run complete") {
+			t.Fatalf("stdout = %q, want run-current summary", stdout)
+		}
+	})
 }

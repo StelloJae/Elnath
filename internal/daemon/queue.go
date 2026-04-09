@@ -13,9 +13,13 @@ const createQueueTable = `
 CREATE TABLE IF NOT EXISTS task_queue (
 	id           INTEGER PRIMARY KEY AUTOINCREMENT,
 	payload      TEXT    NOT NULL,
+	session_id   TEXT    NOT NULL DEFAULT '',
 	status       TEXT    NOT NULL DEFAULT 'pending',
+	progress     TEXT    NOT NULL DEFAULT '',
+	summary      TEXT    NOT NULL DEFAULT '',
 	result       TEXT    NOT NULL DEFAULT '',
 	created_at   INTEGER NOT NULL,
+	updated_at   INTEGER NOT NULL DEFAULT 0,
 	started_at   INTEGER NOT NULL DEFAULT 0,
 	completed_at INTEGER NOT NULL DEFAULT 0
 );
@@ -39,9 +43,13 @@ const (
 type Task struct {
 	ID          int64
 	Payload     string
+	SessionID   string
 	Status      TaskStatus
+	Progress    string
+	Summary     string
 	Result      string
 	CreatedAt   time.Time
+	UpdatedAt   time.Time
 	StartedAt   time.Time
 	CompletedAt time.Time
 }
@@ -59,6 +67,9 @@ func NewQueue(db *sql.DB) (*Queue, error) {
 	}
 
 	q := &Queue{db: db}
+	if err := q.ensureColumns(context.Background()); err != nil {
+		return nil, fmt.Errorf("queue: ensure schema columns: %w", err)
+	}
 
 	if _, err := q.RecoverStale(context.Background(), defaultStaleTimeout); err != nil {
 		return nil, fmt.Errorf("queue: recover stale: %w", err)
@@ -69,10 +80,11 @@ func NewQueue(db *sql.DB) (*Queue, error) {
 
 // Enqueue inserts a new pending task and returns its ID.
 func (q *Queue) Enqueue(ctx context.Context, payload string) (int64, error) {
+	now := time.Now().UnixMilli()
 	res, err := q.db.ExecContext(ctx, `
-		INSERT INTO task_queue (payload, status, created_at)
-		VALUES (?, ?, ?)`,
-		payload, string(StatusPending), time.Now().UnixMilli(),
+		INSERT INTO task_queue (payload, status, created_at, updated_at)
+		VALUES (?, ?, ?, ?)`,
+		payload, string(StatusPending), now, now,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("queue: enqueue: %w", err)
@@ -96,16 +108,16 @@ func (q *Queue) Next(ctx context.Context) (*Task, error) {
 
 	var t Task
 	var statusStr string
-	var createdMs, startedMs, completedMs int64
+	var createdMs, updatedMs, startedMs, completedMs int64
 
 	err = tx.QueryRowContext(ctx, `
-		SELECT id, payload, status, result, created_at, started_at, completed_at
+		SELECT id, payload, session_id, status, progress, summary, result, created_at, updated_at, started_at, completed_at
 		FROM task_queue
 		WHERE status = ?
 		ORDER BY created_at ASC
 		LIMIT 1`,
 		string(StatusPending),
-	).Scan(&t.ID, &t.Payload, &statusStr, &t.Result, &createdMs, &startedMs, &completedMs)
+	).Scan(&t.ID, &t.Payload, &t.SessionID, &statusStr, &t.Progress, &t.Summary, &t.Result, &createdMs, &updatedMs, &startedMs, &completedMs)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -116,8 +128,8 @@ func (q *Queue) Next(ctx context.Context) (*Task, error) {
 
 	now := time.Now().UnixMilli()
 	_, err = tx.ExecContext(ctx, `
-		UPDATE task_queue SET status = ?, started_at = ? WHERE id = ?`,
-		string(StatusRunning), now, t.ID,
+		UPDATE task_queue SET status = ?, started_at = ?, updated_at = ? WHERE id = ?`,
+		string(StatusRunning), now, now, t.ID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("queue: next: update: %w", err)
@@ -129,16 +141,41 @@ func (q *Queue) Next(ctx context.Context) (*Task, error) {
 
 	t.Status = StatusRunning
 	t.CreatedAt = time.UnixMilli(createdMs)
+	t.UpdatedAt = time.UnixMilli(now)
 	t.StartedAt = time.UnixMilli(now)
 	t.CompletedAt = time.UnixMilli(completedMs)
 	return &t, nil
 }
 
+// BindSession associates a task with the execution session that is processing it.
+func (q *Queue) BindSession(ctx context.Context, id int64, sessionID string) error {
+	_, err := q.db.ExecContext(ctx, `
+		UPDATE task_queue SET session_id = ?, updated_at = ? WHERE id = ?`,
+		sessionID, time.Now().UnixMilli(), id,
+	)
+	if err != nil {
+		return fmt.Errorf("queue: bind session: %w", err)
+	}
+	return nil
+}
+
+// UpdateProgress stores a short progress string and refreshes updated_at.
+func (q *Queue) UpdateProgress(ctx context.Context, id int64, progress string) error {
+	_, err := q.db.ExecContext(ctx, `
+		UPDATE task_queue SET progress = ?, updated_at = ? WHERE id = ?`,
+		progress, time.Now().UnixMilli(), id,
+	)
+	if err != nil {
+		return fmt.Errorf("queue: update progress: %w", err)
+	}
+	return nil
+}
+
 // MarkDone sets a task to done with the given result.
-func (q *Queue) MarkDone(ctx context.Context, id int64, result string) error {
+func (q *Queue) MarkDone(ctx context.Context, id int64, result, summary string) error {
 	res, err := q.db.ExecContext(ctx, `
-		UPDATE task_queue SET status = ?, result = ?, completed_at = ? WHERE id = ? AND status = ?`,
-		string(StatusDone), result, time.Now().UnixMilli(), id, string(StatusRunning),
+		UPDATE task_queue SET status = ?, progress = ?, summary = ?, result = ?, updated_at = ?, completed_at = ? WHERE id = ? AND status = ?`,
+		string(StatusDone), "completed", summary, result, time.Now().UnixMilli(), time.Now().UnixMilli(), id, string(StatusRunning),
 	)
 	if err != nil {
 		return fmt.Errorf("queue: mark done: %w", err)
@@ -153,8 +190,8 @@ func (q *Queue) MarkDone(ctx context.Context, id int64, result string) error {
 // MarkFailed sets a task to failed with the given error message.
 func (q *Queue) MarkFailed(ctx context.Context, id int64, errMsg string) error {
 	res, err := q.db.ExecContext(ctx, `
-		UPDATE task_queue SET status = ?, result = ?, completed_at = ? WHERE id = ? AND status = ?`,
-		string(StatusFailed), errMsg, time.Now().UnixMilli(), id, string(StatusRunning),
+		UPDATE task_queue SET status = ?, progress = ?, summary = ?, result = ?, updated_at = ?, completed_at = ? WHERE id = ? AND status = ?`,
+		string(StatusFailed), "failed", "", errMsg, time.Now().UnixMilli(), time.Now().UnixMilli(), id, string(StatusRunning),
 	)
 	if err != nil {
 		return fmt.Errorf("queue: mark failed: %w", err)
@@ -169,7 +206,7 @@ func (q *Queue) MarkFailed(ctx context.Context, id int64, errMsg string) error {
 // List returns all tasks ordered by created_at descending.
 func (q *Queue) List(ctx context.Context) ([]Task, error) {
 	rows, err := q.db.QueryContext(ctx, `
-		SELECT id, payload, status, result, created_at, started_at, completed_at
+		SELECT id, payload, session_id, status, progress, summary, result, created_at, updated_at, started_at, completed_at
 		FROM task_queue
 		ORDER BY created_at DESC`)
 	if err != nil {
@@ -181,13 +218,14 @@ func (q *Queue) List(ctx context.Context) ([]Task, error) {
 	for rows.Next() {
 		var t Task
 		var statusStr string
-		var createdMs, startedMs, completedMs int64
-		if err := rows.Scan(&t.ID, &t.Payload, &statusStr, &t.Result,
-			&createdMs, &startedMs, &completedMs); err != nil {
+		var createdMs, updatedMs, startedMs, completedMs int64
+		if err := rows.Scan(&t.ID, &t.Payload, &t.SessionID, &statusStr, &t.Progress, &t.Summary, &t.Result,
+			&createdMs, &updatedMs, &startedMs, &completedMs); err != nil {
 			return nil, fmt.Errorf("queue: list: scan: %w", err)
 		}
 		t.Status = TaskStatus(statusStr)
 		t.CreatedAt = time.UnixMilli(createdMs)
+		t.UpdatedAt = time.UnixMilli(updatedMs)
 		t.StartedAt = time.UnixMilli(startedMs)
 		t.CompletedAt = time.UnixMilli(completedMs)
 		tasks = append(tasks, t)
@@ -199,14 +237,14 @@ func (q *Queue) List(ctx context.Context) ([]Task, error) {
 func (q *Queue) Get(ctx context.Context, id int64) (*Task, error) {
 	var t Task
 	var statusStr string
-	var createdMs, startedMs, completedMs int64
+	var createdMs, updatedMs, startedMs, completedMs int64
 
 	err := q.db.QueryRowContext(ctx, `
-		SELECT id, payload, status, result, created_at, started_at, completed_at
+		SELECT id, payload, session_id, status, progress, summary, result, created_at, updated_at, started_at, completed_at
 		FROM task_queue
 		WHERE id = ?`, id,
-	).Scan(&t.ID, &t.Payload, &statusStr, &t.Result,
-		&createdMs, &startedMs, &completedMs)
+	).Scan(&t.ID, &t.Payload, &t.SessionID, &statusStr, &t.Progress, &t.Summary, &t.Result,
+		&createdMs, &updatedMs, &startedMs, &completedMs)
 
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("queue: get: %w", core.ErrNotFound)
@@ -217,6 +255,7 @@ func (q *Queue) Get(ctx context.Context, id int64) (*Task, error) {
 
 	t.Status = TaskStatus(statusStr)
 	t.CreatedAt = time.UnixMilli(createdMs)
+	t.UpdatedAt = time.UnixMilli(updatedMs)
 	t.StartedAt = time.UnixMilli(startedMs)
 	t.CompletedAt = time.UnixMilli(completedMs)
 	return &t, nil
@@ -229,9 +268,9 @@ func (q *Queue) RecoverStale(ctx context.Context, staleTimeout time.Duration) (i
 
 	res, err := q.db.ExecContext(ctx, `
 		UPDATE task_queue
-		SET status = ?, started_at = 0
+		SET status = ?, progress = ?, started_at = 0, updated_at = ?
 		WHERE status = ? AND started_at > 0 AND started_at < ?`,
-		string(StatusPending), string(StatusRunning), cutoff,
+		string(StatusPending), "recovered", time.Now().UnixMilli(), string(StatusRunning), cutoff,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("queue: recover stale: %w", err)
@@ -239,4 +278,42 @@ func (q *Queue) RecoverStale(ctx context.Context, staleTimeout time.Duration) (i
 
 	n, _ := res.RowsAffected()
 	return int(n), nil
+}
+
+func (q *Queue) ensureColumns(ctx context.Context) error {
+	rows, err := q.db.QueryContext(ctx, `PRAGMA table_info(task_queue)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	cols := map[string]struct{}{}
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt interface{}
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return err
+		}
+		cols[name] = struct{}{}
+	}
+	type migration struct {
+		name string
+		sql  string
+	}
+	for _, m := range []migration{
+		{name: "session_id", sql: `ALTER TABLE task_queue ADD COLUMN session_id TEXT NOT NULL DEFAULT ''`},
+		{name: "progress", sql: `ALTER TABLE task_queue ADD COLUMN progress TEXT NOT NULL DEFAULT ''`},
+		{name: "summary", sql: `ALTER TABLE task_queue ADD COLUMN summary TEXT NOT NULL DEFAULT ''`},
+		{name: "updated_at", sql: `ALTER TABLE task_queue ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0`},
+	} {
+		if _, ok := cols[m.name]; ok {
+			continue
+		}
+		if _, err := q.db.ExecContext(ctx, m.sql); err != nil {
+			return err
+		}
+	}
+	return nil
 }

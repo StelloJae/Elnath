@@ -1,0 +1,19 @@
+{
+  "version": "v1",
+  "system": "elnath-current",
+  "baseline": "self",
+  "corpus_path": "benchmarks/public-corpus.v1.json",
+  "command_template": "\"$CURRENT_BIN\" {{task_output}} {{task_id}} {{task_track}} {{task_language}} {{task_prompt}} {{task_repo}} {{task_repo_ref}} {{task_repo_class}} {{task_benchmark_family}}",
+  "output_path": "benchmarks/results/current-scorecard.v1.json",
+  "context": "benchmark",
+  "repeated_runs": 1,
+  "intervention_notes": true,
+  "required_env": [
+    "CURRENT_BIN"
+  ],
+  "notes": [
+    "Replace CURRENT_BIN with the wrapper that executes Elnath on one task and writes one RunResult JSON file.",
+    "Use the same task contract as the external baseline so diffs remain fair.",
+    "Record intervention metadata honestly if human steering occurred."
+  ]
+}

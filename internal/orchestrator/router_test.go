@@ -58,11 +58,34 @@ func TestRouteComplexTaskSmall(t *testing.T) {
 	}
 }
 
+func TestRouteComplexTaskBrownfieldMultiFile(t *testing.T) {
+	r := newTestRouter()
+	wf := r.Route(conversation.IntentComplexTask, &RoutingContext{
+		EstimatedFiles:    1,
+		ExistingCode:      true,
+		VerificationHint:  true,
+	})
+	if wf.Name() != "ralph" {
+		t.Errorf("got %q, want %q", wf.Name(), "ralph")
+	}
+}
+
 func TestRouteProject(t *testing.T) {
 	r := newTestRouter()
 	wf := r.Route(conversation.IntentProject, nil)
 	if wf.Name() != "autopilot" {
 		t.Errorf("got %q, want %q", wf.Name(), "autopilot")
+	}
+}
+
+func TestRouteProjectWithExistingCodeFallsBackToTeam(t *testing.T) {
+	r := newTestRouter()
+	wf := r.Route(conversation.IntentProject, &RoutingContext{
+		EstimatedFiles: 3,
+		ExistingCode:   true,
+	})
+	if wf.Name() != "team" {
+		t.Errorf("got %q, want %q", wf.Name(), "team")
 	}
 }
 

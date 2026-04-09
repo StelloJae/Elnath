@@ -1,0 +1,11 @@
+{
+  "version": "v1",
+  "system": "baseline-smoke",
+  "baseline": "claude-codex-omx-omc",
+  "corpus_path": "benchmarks/current-smoke-corpus.v1.json",
+  "command_template": "omx exec --dangerously-bypass-approvals-and-sandbox -C . {{task_prompt}}",
+  "output_path": "benchmarks/results/baseline-smoke-scorecard.v1.json",
+  "context": "benchmark",
+  "repeated_runs": 1,
+  "required_env": []
+}

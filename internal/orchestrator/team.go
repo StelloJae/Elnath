@@ -101,6 +101,13 @@ Respond with ONLY a JSON array. Each element must have exactly these fields:
   "title": short title (≤10 words)
   "instruction": complete self-contained instruction for a separate agent
 
+Planning rules:
+- If the task is about changing an existing codebase, at least one subtask MUST modify code and at least one subtask MUST verify the change.
+- For brownfield coding work, include explicit action-oriented subtasks such as: inspect the relevant code path, implement the bounded patch, verify with repo-native checks.
+- Do not return analysis-only subtasks for every slot when the task explicitly asks for implementation.
+- Benchmark tasks that request a code change require an actual working-tree diff; planning-only output is failure.
+- Keep subtasks self-contained, but ensure the overall set can actually finish the task rather than only analyze it.
+
 Example:
 [
   {"id":1,"title":"Research API options","instruction":"List the top 3 REST API design patterns for this use case."},
@@ -210,8 +217,15 @@ func (w *TeamWorkflow) runSubtasks(ctx context.Context, input WorkflowInput, sub
 
 // runOne executes a single subtask with its own Agent instance.
 func (w *TeamWorkflow) runOne(ctx context.Context, input WorkflowInput, st subtask) subtaskResult {
-	subtaskSystemPrompt := fmt.Sprintf("You are a specialist agent working on subtask %d: %s\n\nOriginal task context: %s",
-		st.ID, st.Title, input.Message)
+	subtaskSystemPrompt := fmt.Sprintf(`You are a specialist agent working on subtask %d: %s
+
+Original task context: %s
+
+Execution rules:
+- If the subtask requires implementation, you must directly use tools to inspect and modify the repository.
+- If the overall task is a brownfield code-change request, analysis-only output is not sufficient.
+- Prefer the smallest correct patch and verify it with repo-native commands when possible.
+- If you are the verification subtask, run the verification and report concrete pass/fail evidence.`, st.ID, st.Title, input.Message)
 
 	opts := agentOptions(WorkflowConfig{
 		Model:         input.Config.Model,

@@ -1,0 +1,17 @@
+{
+  "version": "v1",
+  "baseline": "claude-codex-omx-omc",
+  "corpus_path": "benchmarks/bugfix-primary.v1.json",
+  "command_template": "\"$BASELINE_BIN\" {{task_output}} {{task_id}} {{task_track}} {{task_language}} {{task_prompt}} {{task_repo}} {{task_repo_class}} {{task_benchmark_family}}",
+  "output_path": "benchmarks/results/month3-cycle-001/bugfix-baseline-scorecard.json",
+  "context": "benchmark",
+  "repeated_runs": 1,
+  "intervention_notes": false,
+  "required_env": [
+    "BASELINE_BIN"
+  ],
+  "notes": [
+    "Month 3 bugfix primary plan for the external baseline wrapper.",
+    "The wrapper should write one RunResult JSON per task output path."
+  ]
+}

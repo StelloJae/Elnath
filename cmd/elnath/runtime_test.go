@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -156,8 +158,11 @@ func TestDaemonTaskRunnerCreatesSessionAndUsesClassifier(t *testing.T) {
 	if err != nil {
 		t.Fatalf("daemon task runner: %v", err)
 	}
-	if !strings.Contains(result, "daemon answer") {
-		t.Fatalf("result = %q, want daemon answer", result)
+	if !strings.Contains(result.Result, "daemon answer") {
+		t.Fatalf("result = %q, want daemon answer", result.Result)
+	}
+	if result.SessionID == "" {
+		t.Fatal("expected daemon task result to include session ID")
 	}
 	if provider.chatCalls == 0 {
 		t.Fatal("expected classifier chat call before daemon execution")
@@ -173,11 +178,138 @@ func TestDaemonTaskRunnerCreatesSessionAndUsesClassifier(t *testing.T) {
 	if sess.ID == "" {
 		t.Fatal("expected persisted session ID")
 	}
+	if result.SessionID != sess.ID {
+		t.Fatalf("task result session_id = %q, want %q", result.SessionID, sess.ID)
+	}
 	last := sess.Messages[len(sess.Messages)-1].Text()
 	if !strings.Contains(last, "daemon answer") {
 		t.Fatalf("last session message = %q, want daemon answer", last)
 	}
 	if streamed.Len() == 0 {
 		t.Fatal("expected streamed daemon output")
+	}
+}
+
+func TestExecutionRuntimeWritesRouteAuditWhenEnabled(t *testing.T) {
+	provider := &countingProvider{streamText: "hello from runtime"}
+	rt := newTestExecutionRuntime(t, provider)
+
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	auditPath := filepath.Join(t.TempDir(), "route-audit.jsonl")
+	t.Setenv("ELNATH_EVAL_AUDIT_LOG", auditPath)
+
+	_, _, err = rt.runTask(context.Background(), sess, nil, "fix regression in existing handler and add tests for middleware.go", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask: %v", err)
+	}
+
+	data, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatalf("ReadFile audit: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("audit lines = %d, want 1", len(lines))
+	}
+	var record routeAuditRecord
+	if err := json.Unmarshal([]byte(lines[0]), &record); err != nil {
+		t.Fatalf("unmarshal audit: %v", err)
+	}
+	if record.SessionID != sess.ID {
+		t.Fatalf("session_id = %q, want %q", record.SessionID, sess.ID)
+	}
+	if record.Workflow != "single" || record.Intent != conversation.IntentQuestion {
+		t.Fatalf("unexpected audit record: %+v", record)
+	}
+	if record.EstimatedFiles == 0 {
+		t.Fatalf("expected estimated_files > 0")
+	}
+	if !record.ExistingCode {
+		t.Fatalf("expected existing_code=true in audit record")
+	}
+}
+
+func TestLikelyRepoFiles(t *testing.T) {
+	root := t.TempDir()
+	for _, path := range []string{
+		"internal/middleware/request_id.go",
+		"internal/logging/logger.go",
+		"cmd/server/main.go",
+		"pkg/transport/context.go",
+		"test/integration/request_id.test.ts",
+	} {
+		full := filepath.Join(root, path)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		body := "package test\n"
+		if strings.HasSuffix(path, "context.go") {
+			body = "package test\n// request id middleware logger structured logging\n"
+		}
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+
+	hints := likelyRepoFiles(root, "add request id middleware and thread logging", 5)
+	if len(hints) == 0 {
+		t.Fatal("expected non-empty hints")
+	}
+	if !strings.Contains(strings.Join(hints, "\n"), "request_id.go") {
+		t.Fatalf("expected request_id.go in hints, got %v", hints)
+	}
+	if !strings.Contains(strings.Join(hints, "\n"), "context.go") {
+		t.Fatalf("expected content-matched context.go in hints, got %v", hints)
+	}
+}
+
+func TestLikelyRepoFilesPrefersRuntimeOverTests(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]string{
+		"packages/vitest/src/runtime/worker.ts":          "retry telemetry worker runtime",
+		"packages/vitest/src/node/types/worker.ts":       "retry telemetry worker type",
+		"test/cli/test/retry-telemetry.test.ts":          "retry telemetry worker test",
+		"examples/opentelemetry/src/basic.test.ts":       "retry telemetry example",
+		"test/browser/fixtures/user-event/retry.test.ts": "retry telemetry fixture",
+	}
+	for path, body := range files {
+		full := filepath.Join(root, path)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+
+	hints := likelyRepoFiles(root, "extend an existing TypeScript worker flow to emit retry telemetry without regressing current behavior", 5)
+	if len(hints) == 0 {
+		t.Fatal("expected non-empty hints")
+	}
+	joined := strings.Join(hints, "\n")
+	if !strings.Contains(joined, "packages/vitest/src/runtime/worker.ts") {
+		t.Fatalf("expected runtime worker hint, got %v", hints)
+	}
+	if strings.Index(joined, "test/cli/test/retry-telemetry.test.ts") != -1 && strings.Index(joined, "packages/vitest/src/runtime/worker.ts") > strings.Index(joined, "test/cli/test/retry-telemetry.test.ts") {
+		t.Fatalf("expected runtime worker file to rank ahead of test file, got %v", hints)
+	}
+}
+
+func TestKeywordHintsSkipsGenericBrownfieldWords(t *testing.T) {
+	hints := keywordHints("extend an existing TypeScript worker flow to emit retry telemetry without regressing current behavior")
+	joined := strings.Join(hints, ",")
+	for _, banned := range []string{"extend", "existing", "flow", "emit", "current", "behavior", "regressing"} {
+		if strings.Contains(joined, banned) {
+			t.Fatalf("expected %q to be filtered from keyword hints, got %v", banned, hints)
+		}
+	}
+	for _, want := range []string{"retry", "telemetry", "worker"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("expected %q in keyword hints, got %v", want, hints)
+		}
 	}
 }

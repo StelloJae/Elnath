@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/stello/elnath/internal/llm"
 )
 
 func TestRalphWorkflow_PassOnFirst(t *testing.T) {
@@ -40,10 +42,10 @@ func TestRalphWorkflow_RetryThenPass(t *testing.T) {
 	ctx := context.Background()
 
 	provider := newTestProvider(
-		"Incomplete answer",             // attempt 1
-		"FAIL: missing error handling",  // verify 1 → fail
+		"Incomplete answer",                   // attempt 1
+		"FAIL: missing error handling",        // verify 1 → fail
 		"Complete answer with error handling", // attempt 2
-		"PASS",                          // verify 2 → pass
+		"PASS",                                // verify 2 → pass
 	)
 
 	wf := NewRalphWorkflow()
@@ -144,3 +146,124 @@ func TestRalphWorkflow_VerifyParsing(t *testing.T) {
 }
 
 func ctx() context.Context { return context.Background() }
+
+func TestBuildRecoveryPrompt(t *testing.T) {
+	prompt := buildRecoveryPrompt("Fix the HTTP handler", "missing verification")
+	for _, needle := range []string{
+		"Original task:",
+		"Fix the HTTP handler",
+		"Verifier feedback:",
+		"missing verification",
+		"prefer the smallest correct change",
+		"use repo-native tests or verification commands",
+		"modified files",
+		"verification command/result",
+	} {
+		if !strings.Contains(prompt, needle) {
+			t.Fatalf("prompt missing %q:\n%s", needle, prompt)
+		}
+	}
+}
+
+func TestSanitizeRetryMessages(t *testing.T) {
+	msgs := []llm.Message{
+		{Role: llm.RoleAssistant, Content: nil},
+		llm.NewAssistantMessage(""),
+		llm.NewUserMessage("keep me"),
+		llm.Message{Role: llm.RoleAssistant, Content: []llm.ContentBlock{llm.ToolUseBlock{ID: "t1", Name: "bash", Input: []byte(`{}`)}}},
+	}
+	got := sanitizeRetryMessages(msgs)
+	if len(got) != 2 {
+		t.Fatalf("len(got) = %d, want 2", len(got))
+	}
+	if got[0].Role != llm.RoleUser {
+		t.Fatalf("expected first kept message to be user, got %q", got[0].Role)
+	}
+	if got[1].Role != llm.RoleAssistant || len(llm.ExtractToolUseBlocks(got[1])) != 1 {
+		t.Fatalf("expected tool-use assistant to be kept, got %+v", got[1])
+	}
+}
+
+type verificationPromptCaptureProvider struct {
+	prompt string
+}
+
+func (p *verificationPromptCaptureProvider) Name() string            { return "test" }
+func (p *verificationPromptCaptureProvider) Models() []llm.ModelInfo { return nil }
+func (p *verificationPromptCaptureProvider) Chat(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+	return &llm.ChatResponse{Content: "PASS"}, nil
+}
+func (p *verificationPromptCaptureProvider) Stream(_ context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
+	if len(req.Messages) > 0 {
+		p.prompt = req.Messages[len(req.Messages)-1].Text()
+	}
+	cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: "PASS"})
+	cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{InputTokens: 10, OutputTokens: 5}})
+	return nil
+}
+
+func TestBuildVerificationEvidenceIncludesAssistantAndToolResults(t *testing.T) {
+	longAnswer := strings.Repeat("details-", 40)
+	msgs := []llm.Message{
+		llm.NewUserMessage("original task"),
+		{
+			Role: llm.RoleUser,
+			Content: []llm.ContentBlock{
+				llm.ToolResultBlock{ToolUseID: "bash-1", Content: "go test ./...\nok\n", IsError: false},
+			},
+		},
+		llm.NewAssistantMessage(longAnswer),
+	}
+
+	evidence := buildVerificationEvidence(msgs)
+	for _, needle := range []string{
+		"Final assistant answer:",
+		longAnswer,
+		"Recent tool evidence:",
+		"go test ./...",
+		"bash-1",
+	} {
+		if !strings.Contains(evidence, needle) {
+			t.Fatalf("verification evidence missing %q:\n%s", needle, evidence)
+		}
+	}
+}
+
+func TestRalphVerifyPromptUsesExecutionEvidence(t *testing.T) {
+	provider := &verificationPromptCaptureProvider{}
+	wf := NewRalphWorkflow()
+	input := testInput("add request-id middleware", provider)
+	result := &WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("task"),
+			{
+				Role: llm.RoleUser,
+				Content: []llm.ContentBlock{
+					llm.ToolResultBlock{ToolUseID: "bash-verify", Content: "go test ./...\nok\n", IsError: false},
+				},
+			},
+			llm.NewAssistantMessage(strings.Repeat("implemented patch with verification evidence ", 8)),
+		},
+	}
+
+	ok, _, _, err := wf.verify(context.Background(), input, result)
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected PASS verdict")
+	}
+	for _, needle := range []string{
+		"Execution evidence:",
+		"Recent tool evidence:",
+		"go test ./...",
+		"implemented patch with verification evidence",
+	} {
+		if !strings.Contains(provider.prompt, needle) {
+			t.Fatalf("verification prompt missing %q:\n%s", needle, provider.prompt)
+		}
+	}
+	if strings.Contains(provider.prompt, "Answer to evaluate:") {
+		t.Fatalf("verification prompt should use execution evidence wording:\n%s", provider.prompt)
+	}
+}

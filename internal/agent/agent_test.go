@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stello/elnath/internal/core"
@@ -214,6 +215,107 @@ func TestRunNoToolCalls(t *testing.T) {
 	}
 	if last.Text() != "Hello, world!" {
 		t.Errorf("last message text = %q, want %q", last.Text(), "Hello, world!")
+	}
+}
+
+func TestRunFallsBackToChatOnEmptyStream(t *testing.T) {
+	reg := tools.NewRegistry()
+	p := &mockProvider{
+		streamFn: func(ctx context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
+			cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{InputTokens: 10, OutputTokens: 0}})
+			return nil
+		},
+		chatFn: func(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+			return &llm.ChatResponse{
+				Content: "fallback answer",
+				Usage:   llm.Usage{InputTokens: 11, OutputTokens: 5},
+			}, nil
+		},
+	}
+
+	a := New(p, reg)
+	var received string
+	result, err := a.Run(context.Background(), []llm.Message{llm.NewUserMessage("hello")}, func(s string) {
+		received += s
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(received, "fallback answer") {
+		t.Fatalf("received = %q, want fallback answer", received)
+	}
+	last := result.Messages[len(result.Messages)-1]
+	if last.Text() != "fallback answer" {
+		t.Fatalf("last.Text() = %q, want fallback answer", last.Text())
+	}
+}
+
+func TestRunRetriesOnEmptyStreamAndEmptyChatFallback(t *testing.T) {
+	reg := tools.NewRegistry()
+	streamCalls := 0
+	chatCalls := 0
+	p := &mockProvider{
+		streamFn: func(ctx context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
+			streamCalls++
+			cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{InputTokens: 10}})
+			return nil
+		},
+		chatFn: func(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+			chatCalls++
+			if chatCalls < 3 {
+				return &llm.ChatResponse{}, nil
+			}
+			return &llm.ChatResponse{
+				Content: "recovered after empty responses",
+				Usage:   llm.Usage{InputTokens: 10, OutputTokens: 4},
+			}, nil
+		},
+	}
+
+	a := New(p, reg)
+	result, err := a.Run(context.Background(), []llm.Message{llm.NewUserMessage("hello")}, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if streamCalls < 3 || chatCalls < 3 {
+		t.Fatalf("expected retries, got streamCalls=%d chatCalls=%d", streamCalls, chatCalls)
+	}
+	last := result.Messages[len(result.Messages)-1]
+	if last.Text() != "recovered after empty responses" {
+		t.Fatalf("last.Text() = %q", last.Text())
+	}
+}
+
+func TestRunAddsNudgeAfterEmptyResponse(t *testing.T) {
+	reg := tools.NewRegistry()
+	streamCalls := 0
+	var seenNudge bool
+	p := &mockProvider{
+		streamFn: func(ctx context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
+			streamCalls++
+			if len(req.Messages) > 1 && strings.Contains(req.Messages[len(req.Messages)-1].Text(), "empty response") {
+				seenNudge = true
+				cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: "recovered with nudge"})
+			}
+			cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{InputTokens: 10, OutputTokens: 4}})
+			return nil
+		},
+		chatFn: func(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+			return &llm.ChatResponse{}, nil
+		},
+	}
+
+	a := New(p, reg)
+	result, err := a.Run(context.Background(), []llm.Message{llm.NewUserMessage("hello")}, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !seenNudge || streamCalls < 2 {
+		t.Fatalf("expected nudged retry, seenNudge=%v streamCalls=%d", seenNudge, streamCalls)
+	}
+	last := result.Messages[len(result.Messages)-1]
+	if last.Text() != "recovered with nudge" {
+		t.Fatalf("last.Text() = %q", last.Text())
 	}
 }
 
