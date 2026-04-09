@@ -115,7 +115,7 @@ func (w *AutopilotWorkflow) Run(ctx context.Context, input WorkflowInput) (*Work
 		result, err := single.Run(ctx, stageInput)
 		if err != nil {
 			w.logger.Warn("autopilot: stage failed", "stage", s.name, "error", err)
-			errSummary := fmt.Sprintf("Autopilot stopped at stage %q: %v", s.name, err)
+			errSummary := fmt.Sprintf("Autopilot stage %q failed: %v", s.name, err)
 			if input.OnText != nil {
 				input.OnText(fmt.Sprintf("[autopilot] %s\n", errSummary))
 			}
