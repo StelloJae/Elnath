@@ -88,6 +88,35 @@ func TestParseExtractionResult(t *testing.T) {
 		}
 	})
 
+	t.Run("duplicate JSON objects", func(t *testing.T) {
+		raw := `{"entities":[{"name":"Go","type":"language","summary":"Programming language","facts":["Fast"]}],"concepts":[]}{"entities":[{"name":"Rust","type":"language","summary":"Another language","facts":[]}],"concepts":[]}`
+
+		result, err := parseExtractionResult(raw)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result.Entities) != 1 {
+			t.Fatalf("want 1 entity (first object only), got %d", len(result.Entities))
+		}
+		if result.Entities[0].Name != "Go" {
+			t.Errorf("entity name: want %q, got %q", "Go", result.Entities[0].Name)
+		}
+	})
+
+	t.Run("JSON with trailing text", func(t *testing.T) {
+		raw := `{"entities":[],"concepts":[]}
+
+Here is the extraction result above.`
+
+		result, err := parseExtractionResult(raw)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result.Entities) != 0 || len(result.Concepts) != 0 {
+			t.Errorf("expected empty result")
+		}
+	})
+
 	t.Run("invalid JSON returns error", func(t *testing.T) {
 		_, err := parseExtractionResult("not json at all")
 		if err == nil {

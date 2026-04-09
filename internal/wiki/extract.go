@@ -137,11 +137,52 @@ func parseExtractionResult(raw string) (*extractionResult, error) {
 		cleaned = strings.Join(lines, "\n")
 	}
 
+	cleaned = extractFirstJSONObject(cleaned)
+
 	var result extractionResult
 	if err := json.Unmarshal([]byte(cleaned), &result); err != nil {
 		return nil, fmt.Errorf("parse extraction json: %w", err)
 	}
 	return &result, nil
+}
+
+// extractFirstJSONObject finds the first balanced {...} in the input.
+// This handles cases where the LLM returns multiple concatenated JSON objects.
+func extractFirstJSONObject(s string) string {
+	start := strings.IndexByte(s, '{')
+	if start == -1 {
+		return s
+	}
+	depth := 0
+	inString := false
+	escaped := false
+	for i := start; i < len(s); i++ {
+		if escaped {
+			escaped = false
+			continue
+		}
+		c := s[i]
+		if c == '\\' && inString {
+			escaped = true
+			continue
+		}
+		if c == '"' {
+			inString = !inString
+			continue
+		}
+		if inString {
+			continue
+		}
+		if c == '{' {
+			depth++
+		} else if c == '}' {
+			depth--
+			if depth == 0 {
+				return s[start : i+1]
+			}
+		}
+	}
+	return s[start:]
 }
 
 // upsertEntity creates or appends facts to an entity wiki page.
