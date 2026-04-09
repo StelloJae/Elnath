@@ -3,8 +3,7 @@ set -euo pipefail
 
 ROOT="${1:-.}"
 RESULTS_DIR="$ROOT/benchmarks/results"
-DOC_GLOBS=("$ROOT/README.md" "$ROOT/wiki" "$ROOT/docs")
-CODE_GLOBS=("$ROOT/internal" "$ROOT/cmd" "$ROOT/README.md" "$ROOT/wiki" "$ROOT/docs")
+TELEGRAM_CODE_GLOBS=("$ROOT/internal" "$ROOT/cmd")
 
 if [[ ! -d "$ROOT" ]]; then
   echo "root path not found: $ROOT" >&2
@@ -59,7 +58,7 @@ else
 fi
 
 telegramHit=""
-for target in "${CODE_GLOBS[@]}"; do
+for target in "${TELEGRAM_CODE_GLOBS[@]}"; do
   [[ -e "$target" ]] || continue
   if telegramHit=$(rg -il 'telegram' "$target" 2>/dev/null | head -n 1); [[ -n "$telegramHit" ]]; then
     break
@@ -68,20 +67,19 @@ done
 if [[ -n "$telegramHit" ]]; then
   record "telegram_operator_shell" "PASS" "$telegramHit"
 else
-  record "telegram_operator_shell" "FAIL" "no Telegram operator shell evidence found in cmd/internal/docs"
+  record "telegram_operator_shell" "FAIL" "no Telegram operator shell implementation found in cmd/internal"
 fi
 
-docHit=""
-for target in "${DOC_GLOBS[@]}"; do
-  [[ -e "$target" ]] || continue
-  if docHit=$(rg -il 'closed alpha|first successful task|known limits|troubleshooting' "$target" 2>/dev/null | head -n 1); [[ -n "$docHit" ]]; then
-    break
-  fi
-done
-if [[ -n "$docHit" ]]; then
-  record "alpha_onboarding_docs" "PASS" "$docHit"
+setupDoc="$ROOT/wiki/closed-alpha-setup.md"
+runbookDoc="$ROOT/wiki/closed-alpha-runbook.md"
+limitsDoc="$ROOT/wiki/closed-alpha-known-limits.md"
+if [[ -f "$setupDoc" && -f "$runbookDoc" && -f "$limitsDoc" ]] &&
+  grep -qi 'first successful task' "$setupDoc" &&
+  grep -qi 'telemetry snapshot' "$runbookDoc" &&
+  grep -qi 'thin companion shell' "$limitsDoc"; then
+  record "alpha_onboarding_docs" "PASS" "wiki/closed-alpha-setup.md + wiki/closed-alpha-runbook.md + wiki/closed-alpha-known-limits.md"
 else
-  record "alpha_onboarding_docs" "FAIL" "missing closed-alpha onboarding / troubleshooting / known-limits documentation evidence"
+  record "alpha_onboarding_docs" "FAIL" "missing closed-alpha setup/runbook/known-limits operator docs"
 fi
 
 queueGo="$ROOT/internal/daemon/queue.go"

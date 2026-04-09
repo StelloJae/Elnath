@@ -71,6 +71,7 @@ Month 4 lane-4 operator materials now live in the repo:
 - `scripts/alpha_telemetry_report.sh` — local SQLite summary for completion/session/timeout signals
 
 Use `bash scripts/run_month4_closed_alpha_checks.sh --report-out artifacts/month4-alpha-report.json` for the fast verification pass and a durable telemetry artifact per rehearsal.
+This bundle stays fail-closed on product gaps: checked-in docs and telemetry helpers do **not** count as Telegram operator-shell implementation evidence.
 
 ## Commands
 

@@ -103,26 +103,26 @@ The code currently exposes timeout classification metrics inside the queue layer
 
 **Implication:** the PRD's telemetry gate is not yet satisfied even though the false-timeout ingredients exist.
 
-### 5. Operator-facing alpha docs are still missing
+### 5. Operator-facing alpha docs now exist, but they do not open the gate on their own
 
-The repository has onboarding code, but not yet the explicit Month 4 docs the plan calls for:
+The repository now includes the explicit Month 4 operator docs the plan calls for:
 
-- closed alpha setup guide
-- troubleshooting/runbook
-- first successful task rehearsal
-- known-limits doc tuned for alpha users
+- `wiki/closed-alpha-setup.md`
+- `wiki/closed-alpha-runbook.md`
+- `wiki/closed-alpha-known-limits.md`
+- README pointers to the same rehearsal bundle and telemetry reporter
 
-**Implication:** the codebase is ahead of the docs; technical users would still need too much live context.
+**Implication:** rehearsal prep is now documented, but documentation is only supporting evidence. The alpha gate must still stay fail-closed until the missing Telegram shell, richer telemetry, and runtime rehearsals are real.
 
 ## Readiness judgment by workstream
 
 | Workstream | Current state | Evidence | Readiness |
 | --- | --- | --- | --- |
-| Confirmatory Month 3 checkpoint | Not documented in repo code/docs here | PRD/test spec only | Not yet captured in branch artifacts |
+| Confirmatory Month 3 checkpoint | Frozen in repo artifacts, but canary health is still only partial | `benchmarks/results/month4-closed-alpha-readiness-20260409/confirmatory-month3-checkpoint.md` | Entry checkpoint captured; do not overclaim beyond the frozen memo |
 | Shared continuity runtime substrate | Partial but real | `cmd/elnath/runtime.go`, `internal/daemon/queue.go`, `internal/daemon/progress.go` | Best current foundation |
-| Thin Telegram shell | Not started in this repo state | No Telegram code found | Blocked on runtime-first work |
-| Onboarding/docs | Partial in product, weak in operator docs | `internal/onboarding/*`, `internal/config/onboarding.go` | Needs alpha-specific documentation |
-| Telemetry/verification | Partial, daemon-centric | timeout metrics in `internal/daemon/queue.go` | Needs explicit alpha signals |
+| Thin Telegram shell | Not started in this repo state | No Telegram code found under `cmd/` or `internal/` | Blocked on runtime-first work |
+| Onboarding/docs | Operator docs checked in | `wiki/closed-alpha-setup.md`, `wiki/closed-alpha-runbook.md`, `wiki/closed-alpha-known-limits.md` | Documentation ready; rehearsal evidence still needed |
+| Telemetry/verification | Partial, daemon-centric | timeout metrics in `internal/daemon/queue.go`; `scripts/alpha_telemetry_report.sh` | Needs explicit alpha signals beyond queue timeouts |
 
 ## Month 4 stop/go interpretation for the current branch
 
@@ -138,7 +138,8 @@ The repository has onboarding code, but not yet the explicit Month 4 docs the pl
 
 - Shared CLI/daemon runtime direction is correct.
 - Durable completion and progress envelopes already exist.
-- Onboarding is real, not hypothetical.
+- The Month 3 checkpoint is now frozen in repo artifacts.
+- Operator setup/runbook/known-limits docs are checked in and linked from the README.
 - Queue timeout accounting is more mature than the public docs currently imply.
 
 ### What looks riskiest today
@@ -146,7 +147,7 @@ The repository has onboarding code, but not yet the explicit Month 4 docs the pl
 - Cross-surface continuity is not yet exercised because the second surface does not exist.
 - Resume trust is not yet proven by rehearsals/documented evidence.
 - Telemetry is too narrow for alpha retention claims.
-- Documentation does not yet protect operators from overclaiming readiness.
+- Gate automation must not treat docs-only mentions as product implementation evidence.
 
 ## Closed-alpha operator rehearsal checklist
 
@@ -192,11 +193,11 @@ Use this checklist before inviting external alpha users.
 
 Before Month 4 is called closed-alpha-ready, the repo should have checked-in evidence for:
 
-1. one confirmatory Month 3 closeout memo
+1. the frozen confirmatory Month 3 closeout memo (already present)
 2. one CLI-only continuity rehearsal record
 3. one onboarding dry-run record
 4. one telemetry sample for completion/resume/timeout metrics
-5. one Telegram-thin-scope operator doc, but only after the runtime-first gate is met
+5. one actual Telegram-thin-scope operator-shell implementation plus rehearsal artifact, but only after the runtime-first gate is met
 
 ## Verification commands for this audit
 
@@ -209,4 +210,4 @@ These commands should remain the default verification set for Month 4 readiness 
 
 ## Bottom line
 
-The current codebase is **not yet closed-alpha ready**, but it **does already contain the right substrate direction**: shared CLI/daemon execution, durable completion state, resumable sessions, structured progress events, and initial timeout telemetry. Month 4 should protect that advantage by hardening continuity, adding operator docs and alpha telemetry, and only then layering on a thin Telegram companion surface.
+The current codebase is **not yet closed-alpha ready**, but it **does already contain the right substrate direction**: shared CLI/daemon execution, durable completion state, resumable sessions, structured progress events, checked-in operator docs, and initial timeout telemetry. Month 4 should protect that advantage by hardening continuity, capturing rehearsal evidence, expanding alpha telemetry, and only then layering on a thin Telegram companion surface.
