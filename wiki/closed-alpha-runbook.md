@@ -48,9 +48,11 @@ What to verify:
 - `daemon status` renders a readable progress message, not a raw JSON envelope
 - completed tasks preserve a non-empty summary
 - tasks bind to session ids when the runtime creates one
+- `./elnath run --continue` reopens the newest session even if JSONL and SQLite timestamps are slightly out of sync
 - Telegram `/status` mirrors the shared daemon/session state rather than inventing its own view
 - Telegram `/followup <session_id> <message>` queues a session-bound continuation instead of starting a detached session
 - pending approval requests can be listed and resolved through `/approvals`, `/approve`, and `/deny`
+- malformed planner output degrades through a deterministic fallback or stage summary instead of surfacing an opaque `parse subtasks JSON` operator error
 - timeout counters stay visible in the telemetry summary
 
 If `elnath telegram shell` exits with a polling-conflict error, treat that as an operator lifecycle failure to fix immediately: stop the other poller for the same bot token, then rerun the rehearsal.
@@ -87,5 +89,7 @@ Stay in hardening if any of the following happen:
 - onboarding still requires operator rescue
 - multiple Telegram pollers race on the same bot token
 - `daemon status` only shows raw progress envelopes
+- `./elnath run --continue` selects a stale session after a fresh daemon/Telegram rehearsal
+- planner failures surface as raw `parse subtasks JSON` output instead of the hardened fallback summary
 - timeout recovery numbers move unexpectedly without an explained cause
 - rehearsals cannot produce both a completion summary and a telemetry snapshot

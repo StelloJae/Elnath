@@ -64,6 +64,16 @@ The repo already has a meaningful onboarding path:
 
 This means Month 4 does not start from zero on onboarding, but it still needs a closed-alpha-specific operator guide and rehearsal checklist.
 
+### 6. Latest-session resume selection is now explicit at the storage boundary
+
+The current branch no longer treats "latest session" as only a file-mtime convenience:
+
+- `internal/agent/session.go` lists JSONL transcript metadata directly from disk.
+- `internal/conversation/manager.go` merges those JSONL facts with SQLite-backed `HistoryStore` metadata before sorting latest-session candidates.
+- `internal/conversation/manager_test.go` now covers both "history newer than file" and "file newer than store" cases.
+
+This is the right structural direction for Month 4: JSONL remains the primary transcript, SQLite remains useful secondary metadata, and the resume path now makes that source-of-truth split explicit instead of leaving it implicit.
+
 ## What remains thin after the initial proof pass
 
 The following gaps are still visible in the current codebase, but they are no longer all pre-alpha blockers in the same way. The thin Telegram operator path is now real and live-rehearsed; the remaining work is about hardening and operational discipline, not pretending the surface does not exist.
@@ -98,16 +108,25 @@ Today the progress envelope is stored and rendered by `elnath daemon status`, bu
 
 ### 3. Resume exists at the session level, but resume-safe task snapshots are still narrow
 
-The current implementation supports resuming sessions from conversation history, but there is no explicit resume-safe snapshot contract for long-running background tasks beyond:
+The current implementation now has deterministic latest-session selection across JSONL + SQLite metadata, but there is still no explicit resume-safe snapshot contract for long-running background tasks beyond:
 
 - queue task state
 - bound `session_id`
 - persisted conversation/session history
 - task completion summary
 
-**Implication:** Month 4 should treat "resume without re-priming" as only partially implemented until repeated rehearsals prove it holds for interrupted long-running work.
+**Implication:** storage-boundary ambiguity is materially lower, but Month 4 should still treat "resume without re-priming" as only partially implemented until repeated rehearsals prove it holds for interrupted long-running work.
 
-### 4. Alpha telemetry is incomplete
+### 4. Planner/orchestrator recovery is now structurally safer, but rehearsals should still watch it
+
+The launch-confidence bundle captured one historical planner/subtask-JSON failure during an ambiguous CLI-seeded task. On the current branch, that exact class is no longer supposed to surface as an opaque operator surprise:
+
+- `internal/orchestrator/team_test.go` covers planner-output fallback when no usable subtask array can be parsed.
+- `internal/orchestrator/autopilot.go` now returns a deterministic stage-specific failure summary instead of pretending later stages succeeded.
+
+**Implication:** old rehearsal notes that mention `parse subtasks JSON` should be read as historical evidence from before hardening, not as the current expected operator experience. If a rehearsal reproduces the raw failure text again, treat it as a fresh regression.
+
+### 5. Alpha telemetry is incomplete
 
 The code now exposes a broader local telemetry summary via `scripts/alpha_telemetry_report.sh`, including:
 
@@ -172,7 +191,7 @@ The repository now includes the explicit Month 4 operator docs the plan calls fo
 - Cross-surface continuity now has a thin Telegram operator bridge, but broad confidence still depends on repeated rehearsals rather than a single proof pass.
 - Resume trust is not yet proven by rehearsals/documented evidence.
 - Telemetry is broader than timeout-only reporting now, but still too local and rehearsal-light for strong alpha retention claims.
-- Documentation does not yet protect operators from overclaiming readiness.
+- Historical evidence bundles still need date-aware reading so operators do not mistake pre-hardening planner/session caveats for current expected behavior.
 
 ## Closed-alpha operator rehearsal checklist
 
@@ -236,4 +255,4 @@ These commands should remain the default verification set for Month 4 readiness 
 
 ## Bottom line
 
-The current codebase is **ready for a small, controlled closed-alpha operator cohort on the current thin Telegram scope**, and it **already contains the right substrate direction**: shared CLI/daemon execution, durable completion state, resumable sessions, structured progress events, checked-in operator docs, and live Telegram rehearsal evidence. The next step is not feature expansion; it is to protect that advantage by hardening continuity, planner/session semantics, and telemetry before any broader rollout.
+The current codebase is **ready for a small, controlled closed-alpha operator cohort on the current thin Telegram scope**, and it **already contains the right substrate direction**: shared CLI/daemon execution, durable completion state, resumable sessions, structured progress events, checked-in operator docs, and live Telegram rehearsal evidence. The next step is not feature expansion; it is to keep proving repeated continuity/rehearsal behavior and strengthen telemetry without reopening the same planner/session ambiguity that the current hardening just reduced.

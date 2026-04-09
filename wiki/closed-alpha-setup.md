@@ -65,7 +65,10 @@ go test ./internal/config ./internal/onboarding
 3. If you are exercising the thin Telegram operator shell, configure it explicitly first.
 4. Submit one small task.
 5. Confirm `daemon status` shows a human-readable progress line and a completion summary.
-6. Capture the telemetry snapshot.
+6. Run `./elnath run --continue` and confirm it reopens the newest session without manually supplying a session id.
+7. Capture the telemetry snapshot.
+
+`--continue` now chooses the latest session by reconciling JSONL transcript metadata with the SQLite-backed history index. If it resumes an obviously older session, treat that as a continuity regression and stop the rehearsal.
 
 ### Optional thin Telegram operator setup
 

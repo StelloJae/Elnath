@@ -15,7 +15,7 @@ Elnath is a standalone Go daemon and interactive CLI that brings Claude Code-lev
 - **Hook system** — Pre/post tool execution hooks for validation, formatting, and custom workflows
 - **4 permission modes** — default (explicit approval), accept_edits (auto-approve file changes), plan (read-only), bypass (unrestricted)
 - **Self model with adaptive persona** — Maintains identity, system prompt, and persona that adjust based on context
-- **Session persistence with fork support** — JSONL format for reproducible session history and branching
+- **Session persistence with fork support** — JSONL transcripts stay primary while SQLite-backed history metadata helps reconcile latest-session resume selection
 - **Cross-project intelligence** — Search wiki and conversation history across linked projects
 
 ## Quick Start
@@ -86,6 +86,7 @@ Month 4 lane-4 operator materials now live in the repo:
 
 Use `bash scripts/run_month4_closed_alpha_checks.sh --report-out artifacts/month4-alpha-report.json` for the fast verification pass and a durable telemetry artifact per rehearsal.
 This bundle stays fail-closed on product gaps: checked-in docs and telemetry helpers do **not** count as Telegram operator-shell implementation evidence.
+Recent hardening also closed two structural follow-ups behind this operator flow: malformed planner output now degrades through deterministic recovery paths instead of opaque `parse subtasks JSON` failures, and latest-session resume now reconciles JSONL transcripts with SQLite-backed history metadata before choosing a continuation candidate. Historical rehearsal artifacts that mention the older failure modes should be read as time-scoped evidence, not current operator guidance.
 
 ## Commands
 
