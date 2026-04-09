@@ -263,7 +263,7 @@ func TestRecoverStale(t *testing.T) {
 	task, _ := q.Next(ctx)
 
 	staleTime := time.Now().Add(-10 * time.Minute).UnixMilli()
-	_, err = db.Exec("UPDATE task_queue SET started_at = ? WHERE id = ?", staleTime, task.ID)
+	_, err = db.Exec("UPDATE task_queue SET started_at = ?, updated_at = ? WHERE id = ?", staleTime, staleTime, task.ID)
 	if err != nil {
 		t.Fatalf("force stale: %v", err)
 	}
@@ -294,6 +294,120 @@ func TestRecoverStale(t *testing.T) {
 		t.Errorf("recovered fresh task unexpectedly: %d", recovered2)
 	}
 	_ = fresh
+}
+
+func TestRecoverStaleKeepsRecentlyActiveRunning(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+	ctx := context.Background()
+
+	q.Enqueue(ctx, "long running task")
+	task, _ := q.Next(ctx)
+
+	startedAt := time.Now().Add(-10 * time.Minute).UnixMilli()
+	recentActivity := time.Now().Add(-30 * time.Second).UnixMilli()
+	_, err = db.Exec(`
+		UPDATE task_queue
+		SET started_at = ?, updated_at = ?, progress = ?
+		WHERE id = ?`,
+		startedAt, recentActivity, "still working", task.ID,
+	)
+	if err != nil {
+		t.Fatalf("force activity window: %v", err)
+	}
+
+	recovered, err := q.RecoverStale(ctx, 5*time.Minute)
+	if err != nil {
+		t.Fatalf("RecoverStale: %v", err)
+	}
+	if recovered != 0 {
+		t.Fatalf("recovered = %d, want 0 for recently active task", recovered)
+	}
+
+	got, err := q.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status != StatusRunning {
+		t.Fatalf("status = %q, want %q", got.Status, StatusRunning)
+	}
+}
+
+func TestRecoverStaleTimeoutMetrics(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+	ctx := context.Background()
+
+	q.Enqueue(ctx, "idle task")
+	idleTask, _ := q.Next(ctx)
+	q.Enqueue(ctx, "active task")
+	activeTask, _ := q.Next(ctx)
+
+	startedAt := time.Now().Add(-12 * time.Minute).UnixMilli()
+	idleActivity := startedAt
+	activeActivity := time.Now().Add(-8 * time.Minute).UnixMilli()
+	_, err = db.Exec(`
+		UPDATE task_queue
+		SET started_at = ?, updated_at = ?
+		WHERE id = ?`,
+		startedAt, idleActivity, idleTask.ID,
+	)
+	if err != nil {
+		t.Fatalf("force idle stale window: %v", err)
+	}
+	_, err = db.Exec(`
+		UPDATE task_queue
+		SET started_at = ?, updated_at = ?, progress = ?
+		WHERE id = ?`,
+		startedAt, activeActivity, "completed verification step", activeTask.ID,
+	)
+	if err != nil {
+		t.Fatalf("force active stale window: %v", err)
+	}
+
+	recovered, err := q.RecoverStale(ctx, 5*time.Minute)
+	if err != nil {
+		t.Fatalf("RecoverStale: %v", err)
+	}
+	if recovered != 2 {
+		t.Fatalf("recovered = %d, want 2", recovered)
+	}
+
+	idle, err := q.Get(ctx, idleTask.ID)
+	if err != nil {
+		t.Fatalf("Get idle task: %v", err)
+	}
+	if idle.TimeoutClass != TimeoutClassIdle {
+		t.Fatalf("idle timeout class = %q, want %q", idle.TimeoutClass, TimeoutClassIdle)
+	}
+
+	active, err := q.Get(ctx, activeTask.ID)
+	if err != nil {
+		t.Fatalf("Get active task: %v", err)
+	}
+	if active.TimeoutClass != TimeoutClassActiveButKilled {
+		t.Fatalf("active timeout class = %q, want %q", active.TimeoutClass, TimeoutClassActiveButKilled)
+	}
+
+	metrics, err := q.TimeoutMetrics(ctx)
+	if err != nil {
+		t.Fatalf("TimeoutMetrics: %v", err)
+	}
+	if metrics.IdleRecoveries != 1 {
+		t.Fatalf("idle recoveries = %d, want 1", metrics.IdleRecoveries)
+	}
+	if metrics.ActiveButKilledRecoveries != 1 {
+		t.Fatalf("active-but-killed recoveries = %d, want 1", metrics.ActiveButKilledRecoveries)
+	}
+	if metrics.FalseTimeoutRate != 0.5 {
+		t.Fatalf("false timeout rate = %.2f, want 0.50", metrics.FalseTimeoutRate)
+	}
 }
 
 func TestList(t *testing.T) {

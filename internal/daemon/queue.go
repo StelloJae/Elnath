@@ -20,7 +20,9 @@ CREATE TABLE IF NOT EXISTS task_queue (
 	progress     TEXT    NOT NULL DEFAULT '',
 	summary      TEXT    NOT NULL DEFAULT '',
 	result       TEXT    NOT NULL DEFAULT '',
-	completion   TEXT    NOT NULL DEFAULT '',
+	timeout_class TEXT   NOT NULL DEFAULT '',
+	idle_timeout_count INTEGER NOT NULL DEFAULT 0,
+	active_timeout_count INTEGER NOT NULL DEFAULT 0,
 	created_at   INTEGER NOT NULL,
 	updated_at   INTEGER NOT NULL DEFAULT 0,
 	started_at   INTEGER NOT NULL DEFAULT 0,
@@ -42,31 +44,38 @@ const (
 	StatusFailed  TaskStatus = "failed"
 )
 
-// TaskCompletion is the durable, UI-safe completion contract for a finished task.
-type TaskCompletion struct {
-	TaskID      int64
-	SessionID   string
-	Summary     string
-	Status      TaskStatus
-	CreatedAt   time.Time
-	StartedAt   time.Time
-	CompletedAt time.Time
-}
+// TimeoutClass captures why a stale running task was recovered.
+type TimeoutClass string
+
+const (
+	TimeoutClassNone            TimeoutClass = ""
+	TimeoutClassIdle            TimeoutClass = "idle"
+	TimeoutClassActiveButKilled TimeoutClass = "active_but_killed"
+)
 
 // Task is a single unit of work in the queue.
 type Task struct {
-	ID          int64
-	Payload     string
-	SessionID   string
-	Status      TaskStatus
-	Progress    string
-	Summary     string
-	Result      string
-	Completion  *TaskCompletion
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
-	StartedAt   time.Time
-	CompletedAt time.Time
+	ID                 int64
+	Payload            string
+	SessionID          string
+	Status             TaskStatus
+	Progress           string
+	Summary            string
+	Result             string
+	TimeoutClass       TimeoutClass
+	IdleTimeoutCount   int
+	ActiveTimeoutCount int
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	StartedAt          time.Time
+	CompletedAt        time.Time
+}
+
+// TimeoutMetrics aggregates recovered-task timeout classifications.
+type TimeoutMetrics struct {
+	IdleRecoveries            int
+	ActiveButKilledRecoveries int
+	FalseTimeoutRate          float64
 }
 
 // Queue manages a SQLite-backed FIFO task queue.
@@ -127,13 +136,13 @@ func (q *Queue) Next(ctx context.Context) (*Task, error) {
 	var createdMs, updatedMs, startedMs, completedMs int64
 
 	err = tx.QueryRowContext(ctx, `
-		SELECT id, payload, session_id, status, progress, summary, result, completion, created_at, updated_at, started_at, completed_at
+		SELECT id, payload, session_id, status, progress, summary, result, timeout_class, idle_timeout_count, active_timeout_count, created_at, updated_at, started_at, completed_at
 		FROM task_queue
 		WHERE status = ?
 		ORDER BY created_at ASC
 		LIMIT 1`,
 		string(StatusPending),
-	).Scan(&t.ID, &t.Payload, &t.SessionID, &statusStr, &t.Progress, &t.Summary, &t.Result, &completionJSON, &createdMs, &updatedMs, &startedMs, &completedMs)
+	).Scan(&t.ID, &t.Payload, &t.SessionID, &statusStr, &t.Progress, &t.Summary, &t.Result, &t.TimeoutClass, &t.IdleTimeoutCount, &t.ActiveTimeoutCount, &createdMs, &updatedMs, &startedMs, &completedMs)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -235,7 +244,7 @@ func (q *Queue) MarkFailed(ctx context.Context, id int64, errMsg string) error {
 // List returns all tasks ordered by created_at descending.
 func (q *Queue) List(ctx context.Context) ([]Task, error) {
 	rows, err := q.db.QueryContext(ctx, `
-		SELECT id, payload, session_id, status, progress, summary, result, completion, created_at, updated_at, started_at, completed_at
+		SELECT id, payload, session_id, status, progress, summary, result, timeout_class, idle_timeout_count, active_timeout_count, created_at, updated_at, started_at, completed_at
 		FROM task_queue
 		ORDER BY created_at DESC`)
 	if err != nil {
@@ -249,7 +258,7 @@ func (q *Queue) List(ctx context.Context) ([]Task, error) {
 		var statusStr string
 		var completionJSON string
 		var createdMs, updatedMs, startedMs, completedMs int64
-		if err := rows.Scan(&t.ID, &t.Payload, &t.SessionID, &statusStr, &t.Progress, &t.Summary, &t.Result, &completionJSON,
+		if err := rows.Scan(&t.ID, &t.Payload, &t.SessionID, &statusStr, &t.Progress, &t.Summary, &t.Result, &t.TimeoutClass, &t.IdleTimeoutCount, &t.ActiveTimeoutCount,
 			&createdMs, &updatedMs, &startedMs, &completedMs); err != nil {
 			return nil, fmt.Errorf("queue: list: scan: %w", err)
 		}
@@ -276,10 +285,10 @@ func (q *Queue) Get(ctx context.Context, id int64) (*Task, error) {
 	var createdMs, updatedMs, startedMs, completedMs int64
 
 	err := q.db.QueryRowContext(ctx, `
-		SELECT id, payload, session_id, status, progress, summary, result, completion, created_at, updated_at, started_at, completed_at
+		SELECT id, payload, session_id, status, progress, summary, result, timeout_class, idle_timeout_count, active_timeout_count, created_at, updated_at, started_at, completed_at
 		FROM task_queue
 		WHERE id = ?`, id,
-	).Scan(&t.ID, &t.Payload, &t.SessionID, &statusStr, &t.Progress, &t.Summary, &t.Result, &completionJSON,
+	).Scan(&t.ID, &t.Payload, &t.SessionID, &statusStr, &t.Progress, &t.Summary, &t.Result, &t.TimeoutClass, &t.IdleTimeoutCount, &t.ActiveTimeoutCount,
 		&createdMs, &updatedMs, &startedMs, &completedMs)
 
 	if err == sql.ErrNoRows {
@@ -388,19 +397,75 @@ func (c *TaskCompletion) View() map[string]interface{} {
 // the given timeout back to 'pending'. Returns the number of recovered tasks.
 func (q *Queue) RecoverStale(ctx context.Context, staleTimeout time.Duration) (int, error) {
 	cutoff := time.Now().Add(-staleTimeout).UnixMilli()
+	now := time.Now().UnixMilli()
 
-	res, err := q.db.ExecContext(ctx, `
-		UPDATE task_queue
-		SET status = ?, progress = ?, started_at = 0, updated_at = ?
-		WHERE status = ? AND started_at > 0 AND started_at < ?`,
-		string(StatusPending), "recovered", time.Now().UnixMilli(), string(StatusRunning), cutoff,
+	tx, err := q.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("queue: recover stale: begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id, started_at, updated_at
+		FROM task_queue
+		WHERE status = ? AND started_at > 0 AND updated_at < ?`,
+		string(StatusRunning), cutoff,
 	)
 	if err != nil {
-		return 0, fmt.Errorf("queue: recover stale: %w", err)
+		return 0, fmt.Errorf("queue: recover stale: select: %w", err)
+	}
+	defer rows.Close()
+
+	var recovered int
+	for rows.Next() {
+		var id, startedAt, updatedAt int64
+		if err := rows.Scan(&id, &startedAt, &updatedAt); err != nil {
+			return 0, fmt.Errorf("queue: recover stale: scan: %w", err)
+		}
+
+		timeoutClass := classifyTimeout(startedAt, updatedAt)
+		idleInc, activeInc := 0, 0
+		if timeoutClass == TimeoutClassActiveButKilled {
+			activeInc = 1
+		} else {
+			timeoutClass = TimeoutClassIdle
+			idleInc = 1
+		}
+
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE task_queue
+			SET status = ?, progress = ?, timeout_class = ?, idle_timeout_count = idle_timeout_count + ?, active_timeout_count = active_timeout_count + ?, started_at = 0, updated_at = ?
+			WHERE id = ?`,
+			string(StatusPending), "recovered", string(timeoutClass), idleInc, activeInc, now, id,
+		); err != nil {
+			return 0, fmt.Errorf("queue: recover stale: update %d: %w", id, err)
+		}
+		recovered++
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("queue: recover stale: rows: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("queue: recover stale: commit: %w", err)
+	}
+	return recovered, nil
+}
+
+// TimeoutMetrics returns aggregate counts for recovered timeout classifications.
+func (q *Queue) TimeoutMetrics(ctx context.Context) (TimeoutMetrics, error) {
+	var metrics TimeoutMetrics
+	if err := q.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(idle_timeout_count), 0), COALESCE(SUM(active_timeout_count), 0)
+		FROM task_queue`,
+	).Scan(&metrics.IdleRecoveries, &metrics.ActiveButKilledRecoveries); err != nil {
+		return TimeoutMetrics{}, fmt.Errorf("queue: timeout metrics: %w", err)
 	}
 
-	n, _ := res.RowsAffected()
-	return int(n), nil
+	total := metrics.IdleRecoveries + metrics.ActiveButKilledRecoveries
+	if total > 0 {
+		metrics.FalseTimeoutRate = float64(metrics.ActiveButKilledRecoveries) / float64(total)
+	}
+	return metrics, nil
 }
 
 func (q *Queue) ensureColumns(ctx context.Context) error {
@@ -429,7 +494,9 @@ func (q *Queue) ensureColumns(ctx context.Context) error {
 		{name: "session_id", sql: `ALTER TABLE task_queue ADD COLUMN session_id TEXT NOT NULL DEFAULT ''`},
 		{name: "progress", sql: `ALTER TABLE task_queue ADD COLUMN progress TEXT NOT NULL DEFAULT ''`},
 		{name: "summary", sql: `ALTER TABLE task_queue ADD COLUMN summary TEXT NOT NULL DEFAULT ''`},
-		{name: "completion", sql: `ALTER TABLE task_queue ADD COLUMN completion TEXT NOT NULL DEFAULT ''`},
+		{name: "timeout_class", sql: `ALTER TABLE task_queue ADD COLUMN timeout_class TEXT NOT NULL DEFAULT ''`},
+		{name: "idle_timeout_count", sql: `ALTER TABLE task_queue ADD COLUMN idle_timeout_count INTEGER NOT NULL DEFAULT 0`},
+		{name: "active_timeout_count", sql: `ALTER TABLE task_queue ADD COLUMN active_timeout_count INTEGER NOT NULL DEFAULT 0`},
 		{name: "updated_at", sql: `ALTER TABLE task_queue ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0`},
 	} {
 		if _, ok := cols[m.name]; ok {
@@ -440,4 +507,11 @@ func (q *Queue) ensureColumns(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func classifyTimeout(startedAt, updatedAt int64) TimeoutClass {
+	if updatedAt > startedAt && startedAt > 0 {
+		return TimeoutClassActiveButKilled
+	}
+	return TimeoutClassIdle
 }
