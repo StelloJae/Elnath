@@ -38,6 +38,11 @@ type TaskResult struct {
 // Callers may forward streamed text through onText during execution.
 type TaskRunner func(ctx context.Context, payload string, onText func(string)) (TaskResult, error)
 
+// ProgressObserver receives real-time progress updates for running tasks.
+type ProgressObserver interface {
+	OnProgress(taskID int64, progress string)
+}
+
 // Daemon runs background task processing with Unix domain socket IPC.
 type Daemon struct {
 	queue             *Queue
@@ -50,6 +55,7 @@ type Daemon struct {
 	inactivityTimeout time.Duration
 	wallClockTimeout  time.Duration
 	watchdogInterval  time.Duration
+	progressObserver  ProgressObserver
 	cancel            context.CancelFunc
 	wg                sync.WaitGroup
 }
@@ -84,6 +90,13 @@ func (d *Daemon) WithDeliveryRouter(router *DeliveryRouter) {
 func (d *Daemon) WithTimeouts(inactivity, wallClock time.Duration) {
 	d.inactivityTimeout = inactivity
 	d.wallClockTimeout = wallClock
+}
+
+// WithProgressObserver registers an observer that receives real-time progress
+// updates for running tasks. Used by the Telegram sink to stream progress
+// via message editing.
+func (d *Daemon) WithProgressObserver(obs ProgressObserver) {
+	d.progressObserver = obs
 }
 
 func (d *Daemon) watchdogTick() time.Duration {
@@ -397,6 +410,9 @@ func (d *Daemon) runTask(ctx context.Context, task *Task) (TaskResult, error) {
 		}
 		if updateErr := d.queue.UpdateProgress(ctx, task.ID, progress); updateErr != nil {
 			d.logger.Debug("worker: update progress", "task_id", task.ID, "error", updateErr)
+		}
+		if d.progressObserver != nil {
+			d.progressObserver.OnProgress(task.ID, progress)
 		}
 	})
 	if err != nil {

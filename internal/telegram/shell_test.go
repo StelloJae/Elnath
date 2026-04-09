@@ -26,6 +26,15 @@ func (f *fakeBotClient) SendMessage(_ context.Context, chatID, text string) erro
 	return nil
 }
 
+func (f *fakeBotClient) SendMessageReturningID(_ context.Context, chatID, text string) (int64, error) {
+	f.sent = append(f.sent, sentMessage{chatID: chatID, text: text})
+	return int64(len(f.sent)), nil
+}
+
+func (f *fakeBotClient) EditMessage(_ context.Context, _ string, _ int64, _ string) error {
+	return nil
+}
+
 func (f *fakeBotClient) GetUpdates(context.Context, int64, int) ([]Update, error) {
 	return nil, nil
 }
@@ -189,5 +198,71 @@ func TestShellHandleUpdateApprovalsAndNotifyCompletions(t *testing.T) {
 	}
 	if len(bot.sent) != 3 {
 		t.Fatalf("completion notifications duplicated: %#v", bot.sent)
+	}
+}
+
+func TestShellSubmitCommand(t *testing.T) {
+	shell, queue, _, bot := newTestShell(t)
+
+	if err := shell.HandleUpdate(context.Background(), Update{
+		ID:      1,
+		Message: Message{ChatID: "chat-1", Text: "/submit Write a haiku about Go"},
+	}); err != nil {
+		t.Fatalf("HandleUpdate submit: %v", err)
+	}
+
+	if len(bot.sent) != 1 || !strings.Contains(bot.sent[0].text, "Task #") {
+		t.Fatalf("submit reply = %#v, want task confirmation", bot.sent)
+	}
+
+	tasks, _ := queue.List(context.Background())
+	if len(tasks) == 0 {
+		t.Fatal("expected at least 1 task after /submit")
+	}
+	payload := daemon.ParseTaskPayload(tasks[0].Payload)
+	if payload.Prompt != "Write a haiku about Go" {
+		t.Fatalf("prompt = %q, want 'Write a haiku about Go'", payload.Prompt)
+	}
+	if payload.Surface != "telegram" {
+		t.Fatalf("surface = %q, want telegram", payload.Surface)
+	}
+}
+
+func TestShellPlainTextAutoSubmit(t *testing.T) {
+	shell, queue, _, bot := newTestShell(t)
+
+	if err := shell.HandleUpdate(context.Background(), Update{
+		ID:      1,
+		Message: Message{ChatID: "chat-1", Text: "Refactor the auth module"},
+	}); err != nil {
+		t.Fatalf("HandleUpdate plain text: %v", err)
+	}
+
+	if len(bot.sent) != 1 || !strings.Contains(bot.sent[0].text, "Task #") {
+		t.Fatalf("plain text reply = %#v, want task confirmation", bot.sent)
+	}
+
+	tasks, _ := queue.List(context.Background())
+	if len(tasks) == 0 {
+		t.Fatal("expected at least 1 task after plain text")
+	}
+	payload := daemon.ParseTaskPayload(tasks[0].Payload)
+	if payload.Prompt != "Refactor the auth module" {
+		t.Fatalf("prompt = %q, want 'Refactor the auth module'", payload.Prompt)
+	}
+}
+
+func TestShellUnknownCommandStillErrors(t *testing.T) {
+	shell, _, _, bot := newTestShell(t)
+
+	if err := shell.HandleUpdate(context.Background(), Update{
+		ID:      1,
+		Message: Message{ChatID: "chat-1", Text: "/nonexistent"},
+	}); err != nil {
+		t.Fatalf("HandleUpdate: %v", err)
+	}
+
+	if len(bot.sent) != 1 || !strings.Contains(bot.sent[0].text, "Unknown command") {
+		t.Fatalf("reply = %#v, want unknown command error", bot.sent)
 	}
 }

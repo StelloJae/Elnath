@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/stello/elnath/internal/core"
 	"github.com/stello/elnath/internal/daemon"
 	"github.com/stello/elnath/internal/self"
+	"github.com/stello/elnath/internal/telegram"
 )
 
 func cmdDaemon(ctx context.Context, args []string) error {
@@ -121,6 +123,31 @@ func cmdDaemonStart(ctx context.Context) error {
 		time.Duration(cfg.Daemon.InactivityTimeout)*time.Second,
 		time.Duration(cfg.Daemon.WallClockTimeout)*time.Second,
 	)
+
+	if cfg.Telegram.Enabled && cfg.Telegram.BotToken != "" && cfg.Telegram.ChatID != "" {
+		approvalStore, approvalErr := daemon.NewApprovalStore(db.Main)
+		if approvalErr != nil {
+			return fmt.Errorf("create approval store for telegram: %w", approvalErr)
+		}
+		bot := telegram.NewHTTPClient(cfg.Telegram.BotToken, cfg.Telegram.APIBaseURL)
+		statePath := filepath.Join(cfg.DataDir, "telegram-shell-state.json")
+		shell, shellErr := telegram.NewShell(queue, approvalStore, bot, cfg.Telegram.ChatID, statePath)
+		if shellErr != nil {
+			return fmt.Errorf("create telegram shell: %w", shellErr)
+		}
+
+		tgSink := telegram.NewTelegramSink(bot, cfg.Telegram.ChatID, app.Logger)
+		router.Register(tgSink)
+		d.WithProgressObserver(tgSink)
+
+		go func() {
+			if err := runTelegramShell(ctx, shell, bot, cfg.Telegram.PollTimeoutSeconds, app.Logger); err != nil && ctx.Err() == nil {
+				app.Logger.Error("telegram shell stopped", "error", err)
+			}
+		}()
+		app.Logger.Info("telegram shell embedded in daemon")
+	}
+
 	return d.Start(ctx)
 }
 

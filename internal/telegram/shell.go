@@ -25,6 +25,8 @@ type Message struct {
 
 type BotClient interface {
 	SendMessage(ctx context.Context, chatID, text string) error
+	SendMessageReturningID(ctx context.Context, chatID, text string) (int64, error)
+	EditMessage(ctx context.Context, chatID string, messageID int64, text string) error
 	GetUpdates(ctx context.Context, offset int64, timeoutSeconds int) ([]Update, error)
 }
 
@@ -159,10 +161,15 @@ func (s *Shell) handleCommand(ctx context.Context, text string) (string, error) 
 		return s.resolveApproval(ctx, fields, false)
 	case "/followup", "/resume":
 		return s.enqueueFollowUp(ctx, text)
+	case "/submit":
+		return s.enqueueNewTask(ctx, text)
 	case "/help":
-		return "Commands: /status, /approvals, /approve <id>, /deny <id>, /followup <session_id> <message>", nil
+		return "Commands: /status, /submit <message>, /approvals, /approve <id>, /deny <id>, /followup <session_id> <message>", nil
 	default:
-		return "Unknown command. Use /help.", nil
+		if strings.HasPrefix(fields[0], "/") {
+			return "Unknown command. Use /help.", nil
+		}
+		return s.enqueueNewTask(ctx, text)
 	}
 }
 
@@ -220,6 +227,25 @@ func (s *Shell) resolveApproval(ctx context.Context, fields []string, approved b
 		return fmt.Sprintf("Approved request #%d.", id), nil
 	}
 	return fmt.Sprintf("Denied request #%d.", id), nil
+}
+
+func (s *Shell) enqueueNewTask(ctx context.Context, raw string) (string, error) {
+	prompt := strings.TrimSpace(raw)
+	if strings.HasPrefix(prompt, "/submit") {
+		prompt = strings.TrimSpace(strings.TrimPrefix(prompt, "/submit"))
+	}
+	if prompt == "" {
+		return "", fmt.Errorf("usage: /submit <message> or just type your message")
+	}
+	payload := daemon.TaskPayload{
+		Prompt:  prompt,
+		Surface: "telegram",
+	}
+	id, err := s.queue.Enqueue(ctx, daemon.EncodeTaskPayload(payload))
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Task #%d queued.", id), nil
 }
 
 func (s *Shell) enqueueFollowUp(ctx context.Context, raw string) (string, error) {

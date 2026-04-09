@@ -44,10 +44,45 @@ func NewHTTPClient(token, baseURL string) *HTTPClient {
 }
 
 func (c *HTTPClient) SendMessage(ctx context.Context, chatID, text string) error {
+	_, err := c.SendMessageReturningID(ctx, chatID, text)
+	return err
+}
+
+func (c *HTTPClient) SendMessageReturningID(ctx context.Context, chatID, text string) (int64, error) {
 	form := url.Values{}
 	form.Set("chat_id", chatID)
 	form.Set("text", text)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint("sendMessage"), strings.NewReader(form.Encode()))
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return 0, &APIError{Method: "sendMessage", StatusCode: resp.StatusCode}
+	}
+	var decoded struct {
+		OK     bool `json:"ok"`
+		Result struct {
+			MessageID int64 `json:"message_id"`
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+		return 0, nil
+	}
+	return decoded.Result.MessageID, nil
+}
+
+func (c *HTTPClient) EditMessage(ctx context.Context, chatID string, messageID int64, text string) error {
+	form := url.Values{}
+	form.Set("chat_id", chatID)
+	form.Set("message_id", strconv.FormatInt(messageID, 10))
+	form.Set("text", text)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint("editMessageText"), strings.NewReader(form.Encode()))
 	if err != nil {
 		return err
 	}
@@ -58,7 +93,7 @@ func (c *HTTPClient) SendMessage(ctx context.Context, chatID, text string) error
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return &APIError{Method: "sendMessage", StatusCode: resp.StatusCode}
+		return &APIError{Method: "editMessageText", StatusCode: resp.StatusCode}
 	}
 	return nil
 }

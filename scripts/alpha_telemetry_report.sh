@@ -172,7 +172,9 @@ if table_exists(cur, "task_queue"):
           {"SUM(CASE WHEN COALESCE(completion, '') != '' THEN 1 ELSE 0 END)" if "completion" in task_cols else "0"} AS completion_contracts,
           {"SUM(CASE WHEN status IN ('done', 'failed') AND COALESCE(session_id, '') != '' AND COALESCE(completion, '') != '' THEN 1 ELSE 0 END)" if {"session_id", "completion"}.issubset(task_cols) else "0"} AS completion_handoffs,
           {"SUM(CASE WHEN timeout_class = 'idle' THEN 1 ELSE 0 END)" if "timeout_class" in task_cols else "0"} AS idle_timeout_recoveries,
-          {"SUM(CASE WHEN timeout_class = 'active_but_killed' THEN 1 ELSE 0 END)" if "timeout_class" in task_cols else "0"} AS active_but_killed_recoveries
+          {"SUM(CASE WHEN timeout_class = 'active_but_killed' THEN 1 ELSE 0 END)" if "timeout_class" in task_cols else "0"} AS active_but_killed_recoveries,
+          SUM(CASE WHEN json_valid(payload) AND json_extract(payload, '$.surface') = 'telegram' AND COALESCE(json_extract(payload, '$.session_id'), '') != '' THEN 1 ELSE 0 END) AS telegram_followups,
+          SUM(CASE WHEN json_valid(payload) AND json_extract(payload, '$.surface') = 'telegram' AND COALESCE(json_extract(payload, '$.session_id'), '') = '' THEN 1 ELSE 0 END) AS continuation_requests
         FROM task_queue
         """
     ).fetchone()
@@ -189,6 +191,8 @@ if table_exists(cur, "task_queue"):
         "completion_handoffs": row["completion_handoffs"] or 0,
         "idle_timeout_recoveries": row["idle_timeout_recoveries"] or 0,
         "active_but_killed_recoveries": row["active_but_killed_recoveries"] or 0,
+        "continuation_requests": row["continuation_requests"] or 0,
+        "telegram_followups": row["telegram_followups"] or 0,
     })
     denom = report["tasks"]["idle_timeout_recoveries"] + report["tasks"]["active_but_killed_recoveries"]
     if denom:
