@@ -308,11 +308,14 @@ func TestManagerSendMessage_BadSessionID(t *testing.T) {
 	}
 }
 
-func TestManagerGetHistory_FromStore(t *testing.T) {
+func TestManagerGetHistory_PrefersCanonicalSessionFileOverStore(t *testing.T) {
 	sess, dir := newTestSession(t)
+	if err := sess.AppendMessage(llm.NewUserMessage("file-backed msg")); err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
 	store := &mockHistoryStore{
 		sessions: map[string][]llm.Message{
-			sess.ID: {llm.NewUserMessage("stored msg")},
+			sess.ID: {llm.NewUserMessage("stale store msg")},
 		},
 	}
 	mgr := NewManager(nil, dir).WithHistoryStore(store)
@@ -323,6 +326,9 @@ func TestManagerGetHistory_FromStore(t *testing.T) {
 	}
 	if len(msgs) != 1 {
 		t.Errorf("message count = %d, want 1", len(msgs))
+	}
+	if got := msgs[0].Text(); got != "file-backed msg" {
+		t.Fatalf("first message = %q, want canonical JSONL message", got)
 	}
 }
 
@@ -352,6 +358,27 @@ func TestManagerGetHistory_StoreLoadError_FallsBackToFile(t *testing.T) {
 	}
 	if len(msgs) != 0 {
 		t.Errorf("fallback message count = %d, want 0", len(msgs))
+	}
+}
+
+func TestManagerGetHistory_FallsBackToStoreWhenSessionFileMissing(t *testing.T) {
+	dir := t.TempDir()
+	store := &mockHistoryStore{
+		sessions: map[string][]llm.Message{
+			"store-only": {llm.NewUserMessage("stored msg")},
+		},
+	}
+	mgr := NewManager(nil, dir).WithHistoryStore(store)
+
+	msgs, err := mgr.GetHistory(context.Background(), "store-only")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("message count = %d, want 1", len(msgs))
+	}
+	if got := msgs[0].Text(); got != "stored msg" {
+		t.Fatalf("first message = %q, want store fallback message", got)
 	}
 }
 
