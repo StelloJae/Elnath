@@ -15,7 +15,7 @@ ELNATH_BIN=/Users/stello/elnath/elnath \
 ELNATH_BENCHMARK_KEEP_TMP=1 \
 ELNATH_TIMEOUT=180 \
 ./scripts/run_current_benchmark_wrapper.sh \
-  /tmp/go-bf-002-result.SWUSGU \
+  benchmarks/results/go-bf-002-targeted-rerun-20260409/result.json \
   GO-BF-002 brownfield_feature go \
   "Extend an existing Go worker service so graceful shutdown emits structured progress logging and does not regress existing worker behavior." \
   https://github.com/caddyserver/caddy \
@@ -25,7 +25,7 @@ ELNATH_TIMEOUT=180 \
 
 ## Verification snippet
 
-From the preserved temp run `elnath-current-benchmark.8FiC8q/verify.log`:
+From the preserved temporary run captured during the targeted rerun (the canonical outcome is stored in `result.json`):
 
 - `ok   github.com/caddyserver/caddy/v2 0.561s`
 - `ok   github.com/caddyserver/caddy/v2/caddyconfig/caddyfile 0.713s`
@@ -40,3 +40,10 @@ The preserved temp worktree diff touched:
 - `caddy_test.go`
 
 See `changed-files.txt` and `diffstat.txt` in this directory for the captured diff summary.
+
+
+## Code quality review
+
+- No blocking quality issues were found in the targeted-repair handoff artifacts.
+- The recorded outcome stays aligned with the explicit runtime policy and points at durable in-repo artifacts (`result.json`, `changed-files.txt`, `diffstat.txt`) instead of relying only on ephemeral temp output.
+- For the broader targeted-repair status, see `../canary-targeted-repair/review.md`.
