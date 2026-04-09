@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"database/sql"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
