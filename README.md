@@ -79,7 +79,7 @@ Month 4 lane-4 operator materials now live in the repo:
 - `wiki/closed-alpha-runbook.md` — rehearsal checklist and evidence capture flow
 - `wiki/closed-alpha-known-limits.md` — explicit pre-alpha constraints
 - `scripts/run_month4_closed_alpha_checks.sh` — lint/test/build + telemetry verification bundle with optional report archival
-- `scripts/alpha_telemetry_report.sh` — local SQLite summary for completion/session/timeout signals
+- `scripts/alpha_telemetry_report.sh` — local SQLite summary for completion/session/timeout/approval/continuation signals
 
 Use `bash scripts/run_month4_closed_alpha_checks.sh --report-out artifacts/month4-alpha-report.json` for the fast verification pass and a durable telemetry artifact per rehearsal.
 This bundle stays fail-closed on product gaps: checked-in docs and telemetry helpers do **not** count as Telegram operator-shell implementation evidence.

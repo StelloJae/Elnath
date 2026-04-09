@@ -68,7 +68,9 @@ The telemetry reporter currently reads local SQLite state and prints/archives:
 
 - total / pending / running / done / failed task counts
 - session-bound task counts
+- continuation requests and Telegram follow-up counts from structured daemon payloads
 - completion-contract coverage
+- approval decision counts and resolution rate
 - timeout recovery counts and false-timeout rate
 - derived completion/session-binding coverage ratios for alpha-gate review
 - recent session activity summary from conversation history

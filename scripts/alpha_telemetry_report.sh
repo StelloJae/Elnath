@@ -13,10 +13,10 @@ Defaults:
 Summarizes Month 4 closed-alpha telemetry signals from the local Elnath SQLite state:
 - task completion counts
 - session-bound task counts
-- completion handoff coverage
+- continuation / Telegram follow-up counts from structured daemon payloads
 - completion-contract coverage
 - timeout recovery / false-timeout metrics
-- resume follow-up summaries from task/session continuity
+- approval decision counts
 - repeat-use session summary from conversation history
 
 Options:
@@ -117,7 +117,8 @@ report = {
         "session_bound": 0,
         "terminal_session_bound": 0,
         "completion_contracts": 0,
-        "completion_handoffs": 0,
+        "continuation_requests": 0,
+        "telegram_followups": 0,
         "idle_timeout_recoveries": 0,
         "active_but_killed_recoveries": 0,
         "false_timeout_rate": 0.0,
@@ -125,6 +126,13 @@ report = {
         "completion_contract_coverage": 0.0,
         "completion_handoff_rate": 0.0,
         "completion_rate": 0.0,
+    },
+    "approvals": {
+        "total": 0,
+        "pending": 0,
+        "approved": 0,
+        "denied": 0,
+        "resolved_rate": 0.0,
     },
     "sessions": {
         "total": 0,
@@ -197,6 +205,49 @@ if table_exists(cur, "task_queue"):
         report["tasks"]["terminal_session_bound"],
     )
     report["tasks"]["completion_rate"] = ratio(report["tasks"]["done"], report["tasks"]["terminal"])
+
+    continuation_requests = 0
+    telegram_followups = 0
+    for task_row in cur.execute("SELECT payload FROM task_queue"):
+        raw_payload = (task_row["payload"] or "").strip()
+        if not raw_payload.startswith("{"):
+            continue
+        try:
+            payload = json.loads(raw_payload)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        session_id = str(payload.get("session_id", "") or "").strip()
+        surface = str(payload.get("surface", "") or "").strip().lower()
+        if session_id:
+            continuation_requests += 1
+            if surface == "telegram":
+                telegram_followups += 1
+    report["tasks"]["continuation_requests"] = continuation_requests
+    report["tasks"]["telegram_followups"] = telegram_followups
+
+if table_exists(cur, "approval_requests"):
+    row = cur.execute(
+        """
+        SELECT
+          COUNT(*) AS total,
+          SUM(CASE WHEN decision = 'pending' THEN 1 ELSE 0 END) AS pending,
+          SUM(CASE WHEN decision = 'approved' THEN 1 ELSE 0 END) AS approved,
+          SUM(CASE WHEN decision = 'denied' THEN 1 ELSE 0 END) AS denied
+        FROM approval_requests
+        """
+    ).fetchone()
+    report["approvals"].update({
+        "total": row["total"] or 0,
+        "pending": row["pending"] or 0,
+        "approved": row["approved"] or 0,
+        "denied": row["denied"] or 0,
+    })
+    report["approvals"]["resolved_rate"] = ratio(
+        report["approvals"]["approved"] + report["approvals"]["denied"],
+        report["approvals"]["total"],
+    )
 
 if table_exists(cur, "conversations"):
     conversation_cols = table_columns(cur, "conversations")
@@ -320,9 +371,18 @@ print(f"  completion_contract_coverage: {report['tasks']['completion_contract_co
 print(f"  completion_handoffs: {report['tasks']['completion_handoffs']}")
 print(f"  completion_handoff_rate: {report['tasks']['completion_handoff_rate']:.3f}")
 print(f"  completion_rate: {report['tasks']['completion_rate']:.3f}")
+print(f"  continuation_requests: {report['tasks']['continuation_requests']}")
+print(f"  telegram_followups: {report['tasks']['telegram_followups']}")
 print(f"  idle_timeout_recoveries: {report['tasks']['idle_timeout_recoveries']}")
 print(f"  active_but_killed_recoveries: {report['tasks']['active_but_killed_recoveries']}")
 print(f"  false_timeout_rate: {report['tasks']['false_timeout_rate']:.3f}")
+print()
+print("Approvals")
+print(f"  total: {report['approvals']['total']}")
+print(f"  pending: {report['approvals']['pending']}")
+print(f"  approved: {report['approvals']['approved']}")
+print(f"  denied: {report['approvals']['denied']}")
+print(f"  resolved_rate: {report['approvals']['resolved_rate']:.3f}")
 print()
 print("Sessions")
 print(f"  total: {report['sessions']['total']}")

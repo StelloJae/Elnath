@@ -98,15 +98,23 @@ The current implementation supports resuming sessions from conversation history,
 
 ### 4. Alpha telemetry is incomplete
 
-The code currently exposes timeout classification metrics inside the queue layer, but there is no visible implementation for:
+The code now exposes a broader local telemetry summary via `scripts/alpha_telemetry_report.sh`, including:
 
-- completion handoff success counters
-- resume success counters
-- repeat-use / retention summaries
-- approval friction metrics
-- alpha-session telemetry rollups
+- completion/task-state counts
+- session-binding coverage
+- continuation request / Telegram follow-up counts from structured daemon payloads
+- approval decision counts
+- timeout recovery classification and false-timeout rate
+- recent session activity summary from conversation history
 
-**Implication:** the PRD's telemetry gate is not yet satisfied even though the false-timeout ingredients exist.
+What is still missing:
+
+- completion handoff success counters across real operator rehearsals
+- proven resume-success counters rather than continuation-request proxies
+- hosted or aggregated retention analytics beyond local SQLite summaries
+- richer approval-friction quality signals beyond raw decision counts
+
+**Implication:** the PRD's telemetry gate is closer, but still not fully satisfied without real rehearsal evidence.
 
 ### 5. Operator-facing alpha docs now exist, but they do not open the gate on their own
 
@@ -151,8 +159,8 @@ The repository now includes the explicit Month 4 operator docs the plan calls fo
 
 - Cross-surface continuity now has a thin Telegram operator bridge, but it is not yet proven by repeated rehearsals.
 - Resume trust is not yet proven by rehearsals/documented evidence.
-- Telemetry is too narrow for alpha retention claims.
-- Gate automation must not treat docs-only mentions as product implementation evidence.
+- Telemetry is broader than timeout-only reporting now, but still too local and rehearsal-light for strong alpha retention claims.
+- Documentation does not yet protect operators from overclaiming readiness.
 
 ## Closed-alpha operator rehearsal checklist
 
@@ -192,7 +200,7 @@ Use this checklist before inviting external alpha users.
 - Approval workflow exists only for persisted operator decisions resolved through the shared store and shell.
 - Completion now notifies the configured Telegram operator chat, but it is not yet a generalized notification product surface.
 - Resume trust is supported structurally but not yet proven at the product level.
-- Telemetry is not yet sufficient to make repeat-use or retention claims.
+- Telemetry is useful for local rehearsal evidence, but it is not yet sufficient on its own to make strong repeat-use or retention claims.
 
 ## Recommended documentation and verification follow-through
 

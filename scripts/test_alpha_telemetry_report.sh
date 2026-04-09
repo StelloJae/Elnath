@@ -55,15 +55,23 @@ cur.executescript(
       content TEXT NOT NULL,
       created_at DATETIME NOT NULL
     );
+    CREATE TABLE approval_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tool_name TEXT NOT NULL,
+      input TEXT NOT NULL DEFAULT '',
+      decision TEXT NOT NULL DEFAULT 'pending',
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
     """
 )
 cur.executemany(
     "INSERT INTO task_queue (payload, session_id, status, completion, timeout_class, created_at, completed_at) VALUES (?, ?, ?, ?, ?, 0, ?)",
     [
-        ("task one", "sess-1", "done", '{"task_id":1}', "idle", to_ms("2026-04-08 10:00:00")),
-        ("task two", "sess-2", "done", '{"task_id":2}', "active_but_killed", to_ms("2026-04-09 10:00:00")),
-        ("task three", "", "failed", "", "", to_ms("2026-04-08 08:00:00")),
-        ("task four", "", "running", "", "", 0),
+        ('{"prompt":"task one","session_id":"sess-1","surface":"telegram"}', "sess-1", "done", '{"task_id":1}', "idle"),
+        ('{"prompt":"task two","session_id":"sess-2","surface":"cli"}', "sess-2", "done", '{"task_id":2}', "active_but_killed"),
+        ("task three", "", "failed", "", ""),
+        ("task four", "sess-3", "running", "", ""),
     ],
 )
 cur.executemany(
@@ -77,6 +85,14 @@ cur.executemany(
 cur.executemany(
     "INSERT INTO conversation_messages (session_id, role, content, created_at) VALUES (?, 'user', '{}', datetime('now'))",
     [("sess-1",), ("sess-1",), ("sess-2",)],
+)
+cur.executemany(
+    "INSERT INTO approval_requests (tool_name, input, decision, created_at, updated_at) VALUES (?, ?, ?, 0, 0)",
+    [
+        ("bash", '{"cmd":"git status"}', "approved"),
+        ("bash", '{"cmd":"npm test"}', "pending"),
+        ("git", '{"subcommand":"push"}', "denied"),
+    ],
 )
 conn.commit()
 conn.close()
@@ -95,6 +111,11 @@ grep -F "completion_handoffs: 2" <<<"$OUTPUT" >/dev/null
 grep -F "completion_handoff_rate: 1.000" <<<"$OUTPUT" >/dev/null
 grep -F "completion_rate: 0.667" <<<"$OUTPUT" >/dev/null
 grep -F "false_timeout_rate: 0.500" <<<"$OUTPUT" >/dev/null
+grep -F "continuation_requests: 2" <<<"$OUTPUT" >/dev/null
+grep -F "telegram_followups: 1" <<<"$OUTPUT" >/dev/null
+grep -F "pending: 1" <<<"$OUTPUT" >/dev/null
+grep -F "approved: 1" <<<"$OUTPUT" >/dev/null
+grep -F "denied: 1" <<<"$OUTPUT" >/dev/null
 grep -F "with_messages: 2" <<<"$OUTPUT" >/dev/null
 grep -F "task_linked: 2" <<<"$OUTPUT" >/dev/null
 grep -F "resume_followup_sessions: 1" <<<"$OUTPUT" >/dev/null
@@ -114,6 +135,11 @@ assert stdout_payload["tasks"]["session_binding_rate"] == 0.5
 assert stdout_payload["tasks"]["completion_contract_coverage"] == 0.667
 assert stdout_payload["tasks"]["completion_handoff_rate"] == 1.0
 assert stdout_payload["tasks"]["completion_rate"] == 0.667
+assert stdout_payload["tasks"]["continuation_requests"] == 2
+assert stdout_payload["tasks"]["telegram_followups"] == 1
+assert stdout_payload["approvals"]["pending"] == 1
+assert stdout_payload["approvals"]["approved"] == 1
+assert stdout_payload["approvals"]["denied"] == 1
 assert stdout_payload["sessions"]["recent_activity_rate"] == 0.667
 assert stdout_payload["sessions"]["resume_followup_rate"] == 0.5
 assert stdout_payload["sessions"]["repeat_use_rate"] == 0.667

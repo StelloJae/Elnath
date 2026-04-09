@@ -25,6 +25,7 @@ These are intentional Month 4 constraints, not launch surprises.
 
 - The lane-4 telemetry reporter summarizes local SQLite state and can archive JSON snapshots, but it is not a hosted dashboard.
 - Repeat-use is currently approximated from persisted conversation sessions and recent activity windows.
+- Approval counts and queued continuation/follow-up counts are now visible in the local telemetry report, but they are still local SQLite summaries rather than hosted product analytics.
 - Resume-success telemetry still depends on the continuity-runtime workstream emitting durable session/task state consistently.
 
 ## Rehearsal limits
