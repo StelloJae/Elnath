@@ -23,7 +23,7 @@ These are intentional Month 4 constraints, not launch surprises.
 
 ## Telemetry limits
 
-- The lane-4 telemetry reporter summarizes local SQLite state; it is not a hosted dashboard.
+- The lane-4 telemetry reporter summarizes local SQLite state and can archive JSON snapshots, but it is not a hosted dashboard.
 - Repeat-use is currently approximated from persisted conversation sessions and recent activity windows.
 - Resume-success telemetry still depends on the continuity-runtime workstream emitting durable session/task state consistently.
 

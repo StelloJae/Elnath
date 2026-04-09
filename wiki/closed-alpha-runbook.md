@@ -26,7 +26,7 @@ Before running alpha rehearsals, confirm the Month 3 checkpoint is already froze
 ## 2. Run the lane-4 verification bundle
 
 ```bash
-bash scripts/run_month4_closed_alpha_checks.sh
+bash scripts/run_month4_closed_alpha_checks.sh --report-out artifacts/month4-alpha-report.json
 ```
 
 This gives one reproducible pass over lint, tests, build, and telemetry script coverage.
@@ -37,7 +37,7 @@ This gives one reproducible pass over lint, tests, build, and telemetry script c
 ./elnath daemon start
 ./elnath daemon submit "analyze the repository layout"
 ./elnath daemon status
-bash scripts/alpha_telemetry_report.sh
+bash scripts/alpha_telemetry_report.sh --out artifacts/month4-alpha-report.json
 ./elnath daemon stop
 ```
 
@@ -60,15 +60,16 @@ These tests cover first-run defaults, path creation, config writing, i18n, and p
 
 ## 5. Record the telemetry snapshot
 
-The telemetry reporter currently reads local SQLite state and prints:
+The telemetry reporter currently reads local SQLite state and prints/archives:
 
 - total / pending / running / done / failed task counts
 - session-bound task counts
 - completion-contract coverage
 - timeout recovery counts and false-timeout rate
+- derived completion/session-binding coverage ratios for alpha-gate review
 - recent session activity summary from conversation history
 
-Archive one report per rehearsal alongside the operator notes.
+Archive one JSON report per rehearsal alongside the operator notes so the 5/5, 4/5, and 3/3 alpha thresholds have durable evidence bundles.
 
 ## 6. Escalation triggers
 

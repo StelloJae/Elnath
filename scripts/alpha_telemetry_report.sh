@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'USAGE'
 Usage:
-  scripts/alpha_telemetry_report.sh [--data-dir <dir> | --db <path>]
+  scripts/alpha_telemetry_report.sh [--data-dir <dir> | --db <path>] [--json] [--out <path>]
 
 Defaults:
   --data-dir ${ELNATH_DATA_DIR:-$HOME/.elnath/data}
@@ -16,11 +16,17 @@ Summarizes Month 4 closed-alpha telemetry signals from the local Elnath SQLite s
 - completion-contract coverage
 - timeout recovery / false-timeout metrics
 - repeat-use session summary from conversation history
+
+Options:
+  --json       Print JSON only
+  --out PATH   Write the JSON payload to PATH as an archival artifact
 USAGE
 }
 
 DATA_DIR="${ELNATH_DATA_DIR:-$HOME/.elnath/data}"
 DB_PATH=""
+OUTPUT_MODE="text"
+OUT_PATH=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -32,6 +38,15 @@ while [[ $# -gt 0 ]]; do
     --db)
       [[ $# -ge 2 ]] || { echo "error: --db requires a value" >&2; exit 1; }
       DB_PATH="$2"
+      shift 2
+      ;;
+    --json)
+      OUTPUT_MODE="json"
+      shift
+      ;;
+    --out)
+      [[ $# -ge 2 ]] || { echo "error: --out requires a value" >&2; exit 1; }
+      OUT_PATH="$2"
       shift 2
       ;;
     -h|--help)
@@ -55,7 +70,7 @@ if [[ ! -f "$DB_PATH" ]]; then
   exit 1
 fi
 
-python3 - "$DB_PATH" <<'PY'
+python3 - "$DB_PATH" "$OUTPUT_MODE" "$OUT_PATH" <<'PY'
 import json
 import sqlite3
 import sys
@@ -70,7 +85,15 @@ def table_exists(cur, name: str) -> bool:
     return row is not None
 
 
+def ratio(numerator: int, denominator: int) -> float:
+    if denominator <= 0:
+        return 0.0
+    return round(numerator / denominator, 3)
+
+
 db_path = Path(sys.argv[1])
+output_mode = sys.argv[2]
+out_path = Path(sys.argv[3]) if sys.argv[3] else None
 conn = sqlite3.connect(str(db_path))
 conn.row_factory = sqlite3.Row
 cur = conn.cursor()
@@ -83,17 +106,22 @@ report = {
         "running": 0,
         "done": 0,
         "failed": 0,
+        "terminal": 0,
         "session_bound": 0,
         "completion_contracts": 0,
         "idle_timeout_recoveries": 0,
         "active_but_killed_recoveries": 0,
         "false_timeout_rate": 0.0,
+        "session_binding_rate": 0.0,
+        "completion_contract_coverage": 0.0,
+        "completion_rate": 0.0,
     },
     "sessions": {
         "total": 0,
         "with_messages": 0,
         "updated_last_7d": 0,
         "distinct_active_days_last_7d": 0,
+        "recent_activity_rate": 0.0,
     },
 }
 
@@ -106,6 +134,7 @@ if table_exists(cur, "task_queue"):
           SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS running,
           SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS done,
           SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
+          SUM(CASE WHEN status IN ('done', 'failed') THEN 1 ELSE 0 END) AS terminal,
           SUM(CASE WHEN COALESCE(session_id, '') != '' THEN 1 ELSE 0 END) AS session_bound,
           SUM(CASE WHEN COALESCE(completion, '') != '' THEN 1 ELSE 0 END) AS completion_contracts,
           SUM(CASE WHEN timeout_class = 'idle' THEN 1 ELSE 0 END) AS idle_timeout_recoveries,
@@ -119,6 +148,7 @@ if table_exists(cur, "task_queue"):
         "running": row["running"] or 0,
         "done": row["done"] or 0,
         "failed": row["failed"] or 0,
+        "terminal": row["terminal"] or 0,
         "session_bound": row["session_bound"] or 0,
         "completion_contracts": row["completion_contracts"] or 0,
         "idle_timeout_recoveries": row["idle_timeout_recoveries"] or 0,
@@ -126,10 +156,16 @@ if table_exists(cur, "task_queue"):
     })
     denom = report["tasks"]["idle_timeout_recoveries"] + report["tasks"]["active_but_killed_recoveries"]
     if denom:
-        report["tasks"]["false_timeout_rate"] = round(
-            report["tasks"]["active_but_killed_recoveries"] / denom,
-            3,
+        report["tasks"]["false_timeout_rate"] = ratio(
+            report["tasks"]["active_but_killed_recoveries"],
+            denom,
         )
+    report["tasks"]["session_binding_rate"] = ratio(report["tasks"]["session_bound"], report["tasks"]["total"])
+    report["tasks"]["completion_contract_coverage"] = ratio(
+        report["tasks"]["completion_contracts"],
+        report["tasks"]["terminal"],
+    )
+    report["tasks"]["completion_rate"] = ratio(report["tasks"]["done"], report["tasks"]["terminal"])
 
 if table_exists(cur, "conversations"):
     row = cur.execute(
@@ -146,6 +182,10 @@ if table_exists(cur, "conversations"):
         "updated_last_7d": row["updated_last_7d"] or 0,
         "distinct_active_days_last_7d": row["distinct_active_days_last_7d"] or 0,
     })
+    report["sessions"]["recent_activity_rate"] = ratio(
+        report["sessions"]["updated_last_7d"],
+        report["sessions"]["total"],
+    )
 
 if table_exists(cur, "conversation_messages"):
     row = cur.execute(
@@ -161,8 +201,19 @@ if table_exists(cur, "conversation_messages"):
     ).fetchone()
     report["sessions"]["with_messages"] = row[0] or 0
 
+json_payload = json.dumps(report, indent=2, sort_keys=True)
+if out_path is not None:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json_payload + "\n")
+
+if output_mode == "json":
+    print(json_payload)
+    sys.exit(0)
+
 print("Month 4 closed-alpha telemetry summary")
 print(f"database: {report['database']}")
+if out_path is not None:
+    print(f"artifact: {out_path}")
 print()
 print("Tasks")
 print(f"  total: {report['tasks']['total']}")
@@ -170,8 +221,12 @@ print(f"  pending: {report['tasks']['pending']}")
 print(f"  running: {report['tasks']['running']}")
 print(f"  done: {report['tasks']['done']}")
 print(f"  failed: {report['tasks']['failed']}")
+print(f"  terminal: {report['tasks']['terminal']}")
 print(f"  session_bound: {report['tasks']['session_bound']}")
+print(f"  session_binding_rate: {report['tasks']['session_binding_rate']:.3f}")
 print(f"  completion_contracts: {report['tasks']['completion_contracts']}")
+print(f"  completion_contract_coverage: {report['tasks']['completion_contract_coverage']:.3f}")
+print(f"  completion_rate: {report['tasks']['completion_rate']:.3f}")
 print(f"  idle_timeout_recoveries: {report['tasks']['idle_timeout_recoveries']}")
 print(f"  active_but_killed_recoveries: {report['tasks']['active_but_killed_recoveries']}")
 print(f"  false_timeout_rate: {report['tasks']['false_timeout_rate']:.3f}")
@@ -180,8 +235,9 @@ print("Sessions")
 print(f"  total: {report['sessions']['total']}")
 print(f"  with_messages: {report['sessions']['with_messages']}")
 print(f"  updated_last_7d: {report['sessions']['updated_last_7d']}")
+print(f"  recent_activity_rate: {report['sessions']['recent_activity_rate']:.3f}")
 print(f"  distinct_active_days_last_7d: {report['sessions']['distinct_active_days_last_7d']}")
 print()
 print("json:")
-print(json.dumps(report, indent=2, sort_keys=True))
+print(json_payload)
 PY

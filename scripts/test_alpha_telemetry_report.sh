@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/elnath-alpha-telemetry-test.XXXXXX")"
 DB_PATH="$TMP_DIR/elnath.db"
+JSON_PATH="$TMP_DIR/report.json"
 
 cleanup() {
   rm -rf "$TMP_DIR"
@@ -75,16 +76,30 @@ conn.commit()
 conn.close()
 PY
 
-OUTPUT="$($REPO_ROOT/scripts/alpha_telemetry_report.sh --db "$DB_PATH")"
+OUTPUT="$($REPO_ROOT/scripts/alpha_telemetry_report.sh --db "$DB_PATH" --out "$JSON_PATH")"
 
 grep -F "total: 4" <<<"$OUTPUT" >/dev/null
 grep -F "done: 2" <<<"$OUTPUT" >/dev/null
 grep -F "failed: 1" <<<"$OUTPUT" >/dev/null
-grep -F "session_bound: 3" <<<"$OUTPUT" >/dev/null
-grep -F "completion_contracts: 2" <<<"$OUTPUT" >/dev/null
-grep -F "idle_timeout_recoveries: 1" <<<"$OUTPUT" >/dev/null
-grep -F "active_but_killed_recoveries: 1" <<<"$OUTPUT" >/dev/null
+grep -F "terminal: 3" <<<"$OUTPUT" >/dev/null
+grep -F "session_binding_rate: 0.750" <<<"$OUTPUT" >/dev/null
+grep -F "completion_contract_coverage: 0.667" <<<"$OUTPUT" >/dev/null
+grep -F "completion_rate: 0.667" <<<"$OUTPUT" >/dev/null
 grep -F "false_timeout_rate: 0.500" <<<"$OUTPUT" >/dev/null
 grep -F "with_messages: 2" <<<"$OUTPUT" >/dev/null
 
-echo "PASS: alpha telemetry report summarizes task and session signals"
+JSON_OUTPUT="$($REPO_ROOT/scripts/alpha_telemetry_report.sh --db "$DB_PATH" --json)"
+python3 - "$JSON_OUTPUT" "$JSON_PATH" <<'PY'
+import json
+import sys
+from pathlib import Path
+stdout_payload = json.loads(sys.argv[1])
+file_payload = json.loads(Path(sys.argv[2]).read_text())
+assert stdout_payload == file_payload
+assert stdout_payload["tasks"]["session_binding_rate"] == 0.75
+assert stdout_payload["tasks"]["completion_contract_coverage"] == 0.667
+assert stdout_payload["tasks"]["completion_rate"] == 0.667
+assert stdout_payload["sessions"]["recent_activity_rate"] == 0.667
+PY
+
+echo "PASS: alpha telemetry report summarizes and archives task/session signals"

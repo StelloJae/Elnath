@@ -38,7 +38,7 @@ make test
 If you want the full Month 4 bundle in one command:
 
 ```bash
-bash scripts/run_month4_closed_alpha_checks.sh
+bash scripts/run_month4_closed_alpha_checks.sh --report-out artifacts/month4-alpha-report.json
 ```
 
 ## First-run onboarding path
@@ -68,7 +68,7 @@ go test ./internal/config ./internal/onboarding
 ./elnath daemon start
 ./elnath daemon submit "summarize the project structure"
 ./elnath daemon status
-bash scripts/alpha_telemetry_report.sh
+bash scripts/alpha_telemetry_report.sh --out artifacts/month4-alpha-report.json
 ./elnath daemon stop
 ```
 
@@ -78,7 +78,7 @@ bash scripts/alpha_telemetry_report.sh
 - `make test`
 - `make build`
 - one `daemon status` sample showing rendered progress text
-- one `alpha_telemetry_report.sh` snapshot
+- one archived `alpha_telemetry_report.sh --out ...` JSON snapshot
 
 ## Exit criteria
 
