@@ -8,8 +8,8 @@
   "results": [
     {
       "run": 1,
-      "task_id": "GO-BUG-001",
-      "track": "bugfix",
+      "task_id": "GO-BF-001",
+      "track": "brownfield_feature",
       "language": "go",
       "success": false,
       "intervention_count": 0,
@@ -17,21 +17,35 @@
       "verification_command": "go test ./...",
       "failure_family": "no_changes",
       "recovery_attempted": true,
-      "duration_seconds": 99,
+      "duration_seconds": 131,
       "notes": "task completed without creating a working-tree diff"
     },
     {
       "run": 1,
-      "task_id": "TS-BUG-001",
-      "track": "bugfix",
+      "task_id": "TS-BF-001",
+      "track": "brownfield_feature",
       "language": "typescript",
       "success": false,
       "intervention_count": 0,
       "intervention_needed": false,
-      "verification_command": "pnpm testonly packages/next/src/lib/find-config.test.ts",
+      "verification_command": "npx pnpm build \u0026\u0026 npx pnpm -C test/cli exec vitest --run test/worker-retry-telemetry.test.ts",
       "failure_family": "no_changes",
       "recovery_attempted": true,
-      "duration_seconds": 167,
+      "duration_seconds": 112,
+      "notes": "task completed without creating a working-tree diff"
+    },
+    {
+      "run": 1,
+      "task_id": "GO-BF-002",
+      "track": "brownfield_feature",
+      "language": "go",
+      "success": false,
+      "intervention_count": 0,
+      "intervention_needed": false,
+      "verification_command": "go test ./...",
+      "failure_family": "no_changes",
+      "recovery_attempted": true,
+      "duration_seconds": 92,
       "notes": "task completed without creating a working-tree diff"
     }
   ]
