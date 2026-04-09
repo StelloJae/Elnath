@@ -139,6 +139,7 @@ func cmdDaemonStart(ctx context.Context) error {
 		tgSink := telegram.NewTelegramSink(bot, cfg.Telegram.ChatID, app.Logger)
 		router.Register(tgSink)
 		d.WithProgressObserver(tgSink)
+		shell.SkipNotifyCompletions()
 
 		go func() {
 			if err := runTelegramShell(ctx, shell, bot, cfg.Telegram.PollTimeoutSeconds, app.Logger); err != nil && ctx.Err() == nil {

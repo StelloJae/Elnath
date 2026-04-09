@@ -19,23 +19,26 @@ type Update struct {
 }
 
 type Message struct {
-	ChatID string
-	Text   string
+	ChatID    string
+	MessageID int64
+	Text      string
 }
 
 type BotClient interface {
 	SendMessage(ctx context.Context, chatID, text string) error
 	SendMessageReturningID(ctx context.Context, chatID, text string) (int64, error)
 	EditMessage(ctx context.Context, chatID string, messageID int64, text string) error
+	SetReaction(ctx context.Context, chatID string, messageID int64, emoji string) error
 	GetUpdates(ctx context.Context, offset int64, timeoutSeconds int) ([]Update, error)
 }
 
 type Shell struct {
-	queue     *daemon.Queue
-	approvals *daemon.ApprovalStore
-	bot       BotClient
-	chatID    string
-	statePath string
+	queue              *daemon.Queue
+	approvals          *daemon.ApprovalStore
+	bot                BotClient
+	chatID             string
+	statePath          string
+	skipNotifyComplete bool
 }
 
 type shellState struct {
@@ -76,14 +79,32 @@ func (s *Shell) HandleUpdate(ctx context.Context, update Update) error {
 		return nil
 	}
 
-	reply, err := s.handleCommand(ctx, strings.TrimSpace(update.Message.Text))
+	text := strings.TrimSpace(update.Message.Text)
+	fields := strings.Fields(text)
+	isCommand := len(fields) > 0 && strings.HasPrefix(fields[0], "/")
+	isTask := !isCommand || fields[0] == "/submit"
+
+	if isTask && update.Message.MessageID > 0 {
+		_ = s.bot.SetReaction(ctx, s.chatID, update.Message.MessageID, "👀")
+	}
+
+	reply, err := s.handleCommand(ctx, text)
 	if err != nil {
-		reply = "error: " + err.Error()
+		reply = "⚠️ " + err.Error()
 	}
 	return s.bot.SendMessage(ctx, s.chatID, reply)
 }
 
+// SkipNotifyCompletions disables the shell's own completion polling when
+// a TelegramSink is registered on the daemon's delivery router.
+func (s *Shell) SkipNotifyCompletions() {
+	s.skipNotifyComplete = true
+}
+
 func (s *Shell) NotifyCompletions(ctx context.Context) error {
+	if s.skipNotifyComplete {
+		return nil
+	}
 	state, err := s.loadState()
 	if err != nil {
 		return err
@@ -164,7 +185,14 @@ func (s *Shell) handleCommand(ctx context.Context, text string) (string, error) 
 	case "/submit":
 		return s.enqueueNewTask(ctx, text)
 	case "/help":
-		return "Commands: /status, /submit <message>, /approvals, /approve <id>, /deny <id>, /followup <session_id> <message>", nil
+		return "📖 <b>Commands</b>\n" +
+			"• <code>/status</code> — task status\n" +
+			"• <code>/submit &lt;msg&gt;</code> — new task\n" +
+			"• <code>/approvals</code> — pending approvals\n" +
+			"• <code>/approve &lt;id&gt;</code> — approve\n" +
+			"• <code>/deny &lt;id&gt;</code> — deny\n" +
+			"• <code>/followup &lt;sid&gt; &lt;msg&gt;</code> — follow-up\n" +
+			"• <i>or just type a message</i>", nil
 	default:
 		if strings.HasPrefix(fields[0], "/") {
 			return "Unknown command. Use /help.", nil
@@ -179,20 +207,24 @@ func (s *Shell) renderStatus(ctx context.Context) (string, error) {
 		return "", err
 	}
 	if len(tasks) == 0 {
-		return "No daemon tasks.", nil
+		return "📭 No tasks.", nil
 	}
 	sort.Slice(tasks, func(i, j int) bool { return tasks[i].ID > tasks[j].ID })
 	limit := len(tasks)
 	if limit > 5 {
 		limit = 5
 	}
-	lines := []string{"Daemon status"}
+	lines := []string{"📋 <b>Status</b>"}
 	for _, task := range tasks[:limit] {
+		icon := statusIcon(task.Status)
 		progress := daemon.RenderProgress(task.Progress)
 		if progress == "" {
 			progress = "-"
 		}
-		lines = append(lines, fmt.Sprintf("#%d %s session=%s progress=%s", task.ID, task.Status, emptyFallback(task.SessionID, "-"), progress))
+		if len(progress) > 60 {
+			progress = progress[:57] + "..."
+		}
+		lines = append(lines, fmt.Sprintf("%s <code>#%d</code> %s\n   <i>%s</i>", icon, task.ID, task.Status, escapeHTML(progress)))
 	}
 	return strings.Join(lines, "\n"), nil
 }
@@ -203,11 +235,15 @@ func (s *Shell) renderApprovals(ctx context.Context) (string, error) {
 		return "", err
 	}
 	if len(requests) == 0 {
-		return "No pending approvals.", nil
+		return "✅ No pending approvals.", nil
 	}
-	lines := []string{"Pending approvals"}
+	lines := []string{"⚠️ <b>Pending Approvals</b>"}
 	for _, req := range requests {
-		lines = append(lines, fmt.Sprintf("#%d %s %s", req.ID, req.ToolName, strings.TrimSpace(req.Input)))
+		input := strings.TrimSpace(req.Input)
+		if len(input) > 80 {
+			input = input[:77] + "..."
+		}
+		lines = append(lines, fmt.Sprintf("• <code>#%d</code> <b>%s</b>\n  <code>%s</code>", req.ID, escapeHTML(req.ToolName), escapeHTML(input)))
 	}
 	return strings.Join(lines, "\n"), nil
 }
@@ -224,9 +260,9 @@ func (s *Shell) resolveApproval(ctx context.Context, fields []string, approved b
 		return "", err
 	}
 	if approved {
-		return fmt.Sprintf("Approved request #%d.", id), nil
+		return fmt.Sprintf("✅ Approved <code>#%d</code>", id), nil
 	}
-	return fmt.Sprintf("Denied request #%d.", id), nil
+	return fmt.Sprintf("❌ Denied <code>#%d</code>", id), nil
 }
 
 func (s *Shell) enqueueNewTask(ctx context.Context, raw string) (string, error) {
@@ -245,7 +281,7 @@ func (s *Shell) enqueueNewTask(ctx context.Context, raw string) (string, error) 
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("Task #%d queued.", id), nil
+	return fmt.Sprintf("🚀 Task <code>#%d</code> queued", id), nil
 }
 
 func (s *Shell) enqueueFollowUp(ctx context.Context, raw string) (string, error) {
@@ -265,7 +301,7 @@ func (s *Shell) enqueueFollowUp(ctx context.Context, raw string) (string, error)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("Queued follow-up task #%d for session %s.", id, payload.SessionID), nil
+	return fmt.Sprintf("🔄 Follow-up <code>#%d</code> queued for session <code>%s</code>", id, payload.SessionID[:8]), nil
 }
 
 func (s *Shell) loadState() (*shellState, error) {
@@ -295,6 +331,21 @@ func (s *Shell) saveState(state *shellState) error {
 		return fmt.Errorf("telegram shell: write state: %w", err)
 	}
 	return nil
+}
+
+func statusIcon(status daemon.TaskStatus) string {
+	switch status {
+	case daemon.StatusPending:
+		return "⏳"
+	case daemon.StatusRunning:
+		return "⚡"
+	case daemon.StatusDone:
+		return "✅"
+	case daemon.StatusFailed:
+		return "❌"
+	default:
+		return "•"
+	}
 }
 
 func emptyFallback(value, fallback string) string {

@@ -35,6 +35,10 @@ func (f *fakeBotClient) EditMessage(_ context.Context, _ string, _ int64, _ stri
 	return nil
 }
 
+func (f *fakeBotClient) SetReaction(_ context.Context, _ string, _ int64, _ string) error {
+	return nil
+}
+
 func (f *fakeBotClient) GetUpdates(context.Context, int64, int) ([]Update, error) {
 	return nil, nil
 }
@@ -103,8 +107,8 @@ func TestShellHandleUpdateStatusAndFollowUp(t *testing.T) {
 	if len(bot.sent) != 1 {
 		t.Fatalf("sent messages = %d, want 1", len(bot.sent))
 	}
-	if !strings.Contains(bot.sent[0].text, "sess-status") || !strings.Contains(bot.sent[0].text, "still working") {
-		t.Fatalf("status reply = %q, want session id and progress", bot.sent[0].text)
+	if !strings.Contains(bot.sent[0].text, "still working") || !strings.Contains(bot.sent[0].text, "Status") {
+		t.Fatalf("status reply = %q, want progress and status header", bot.sent[0].text)
 	}
 
 	if err := shell.HandleUpdate(context.Background(), Update{
@@ -211,7 +215,7 @@ func TestShellSubmitCommand(t *testing.T) {
 		t.Fatalf("HandleUpdate submit: %v", err)
 	}
 
-	if len(bot.sent) != 1 || !strings.Contains(bot.sent[0].text, "Task #") {
+	if len(bot.sent) != 1 || !strings.Contains(bot.sent[0].text, "queued") {
 		t.Fatalf("submit reply = %#v, want task confirmation", bot.sent)
 	}
 
@@ -238,7 +242,7 @@ func TestShellPlainTextAutoSubmit(t *testing.T) {
 		t.Fatalf("HandleUpdate plain text: %v", err)
 	}
 
-	if len(bot.sent) != 1 || !strings.Contains(bot.sent[0].text, "Task #") {
+	if len(bot.sent) != 1 || !strings.Contains(bot.sent[0].text, "queued") {
 		t.Fatalf("plain text reply = %#v, want task confirmation", bot.sent)
 	}
 

@@ -101,6 +101,9 @@ func (w *AutopilotWorkflow) Run(ctx context.Context, input WorkflowInput) (*Work
 
 	for _, s := range autopilotStages {
 		w.logger.Info("autopilot: running stage", "stage", s.name)
+		if input.OnText != nil {
+			input.OnText(fmt.Sprintf("[autopilot] stage: %s\n", s.name))
+		}
 
 		instruction := s.instruction(input.Message)
 		stageInput := WorkflowInput{
@@ -110,6 +113,7 @@ func (w *AutopilotWorkflow) Run(ctx context.Context, input WorkflowInput) (*Work
 			Tools:    input.Tools,
 			Provider: input.Provider,
 			Config:   input.Config,
+			OnText:   input.OnText,
 		}
 
 		result, err := single.Run(ctx, stageInput)
