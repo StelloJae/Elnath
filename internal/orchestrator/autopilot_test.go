@@ -2,8 +2,11 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/stello/elnath/internal/llm"
 )
 
 func TestAutopilotWorkflow_E2E(t *testing.T) {
@@ -65,5 +68,51 @@ func TestAutopilotWorkflow_StageNames(t *testing.T) {
 		if instruction == "" {
 			t.Errorf("stage %q produced empty instruction", s.name)
 		}
+	}
+}
+
+type failOnCallProvider struct {
+	call   int
+	failOn int
+}
+
+func (p *failOnCallProvider) Name() string            { return "test" }
+func (p *failOnCallProvider) Models() []llm.ModelInfo { return nil }
+func (p *failOnCallProvider) Chat(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+	return &llm.ChatResponse{}, nil
+}
+
+func (p *failOnCallProvider) Stream(_ context.Context, _ llm.ChatRequest, cb func(llm.StreamEvent)) error {
+	p.call++
+	if p.call == p.failOn {
+		return errors.New("provider unavailable")
+	}
+	cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: "stage ok"})
+	cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{InputTokens: 10, OutputTokens: 5}})
+	return nil
+}
+
+func TestAutopilotWorkflow_StopsOnStageFailure(t *testing.T) {
+	ctx := context.Background()
+	provider := &failOnCallProvider{failOn: 2}
+
+	wf := NewAutopilotWorkflow()
+	input := testInput("Implement a safe planner recovery path", provider)
+
+	result, err := wf.Run(ctx, input)
+	if err == nil {
+		t.Fatal("expected stage failure error")
+	}
+	if result == nil {
+		t.Fatal("expected partial result on stage failure")
+	}
+	if provider.call != 2 {
+		t.Fatalf("provider calls = %d, want 2", provider.call)
+	}
+	if !strings.Contains(err.Error(), `stage "code" failed`) {
+		t.Fatalf("error %q should mention failing stage", err)
+	}
+	if !strings.Contains(result.Summary, `stage "code" failed`) {
+		t.Fatalf("summary %q should mention failing stage", result.Summary)
 	}
 }

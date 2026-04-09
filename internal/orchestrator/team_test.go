@@ -83,17 +83,20 @@ func TestParseSubtasks(t *testing.T) {
 		name    string
 		raw     string
 		want    int
+		wantID  int
 		wantErr bool
 	}{
 		{
 			name: "plain JSON",
 			raw:  `[{"id":1,"title":"A","instruction":"Do A"},{"id":2,"title":"B","instruction":"Do B"}]`,
 			want: 2,
+			wantID: 1,
 		},
 		{
 			name: "with code fence",
 			raw:  "```json\n[{\"id\":1,\"title\":\"A\",\"instruction\":\"Do A\"}]\n```",
 			want: 1,
+			wantID: 1,
 		},
 		{
 			name:    "no JSON array",
@@ -104,6 +107,16 @@ func TestParseSubtasks(t *testing.T) {
 			name: "JSON with surrounding text",
 			raw:  "Here is the plan:\n[{\"id\":1,\"title\":\"Only task\",\"instruction\":\"Do it\"}]\nDone.",
 			want: 1,
+			wantID: 1,
+		},
+		{
+			name: "multiple arrays choose last valid plan",
+			raw: "Example array:\n" +
+				`[{"id":99,"title":"Example","instruction":"Ignore this"}]` + "\n" +
+				"Actual plan:\n" +
+				`[{"id":1,"title":"Inspect","instruction":"Inspect the failure"},{"id":2,"title":"Fix","instruction":"Implement the patch"}]`,
+			want:   2,
+			wantID: 1,
 		},
 	}
 
@@ -122,7 +135,37 @@ func TestParseSubtasks(t *testing.T) {
 			if len(got) != tt.want {
 				t.Errorf("got %d subtasks, want %d", len(got), tt.want)
 			}
+			if tt.want > 0 && got[0].ID != tt.wantID {
+				t.Errorf("first subtask id = %d, want %d", got[0].ID, tt.wantID)
+			}
 		})
+	}
+}
+
+func TestTeamWorkflow_PlannerFailureFallsBackToSingle(t *testing.T) {
+	ctx := context.Background()
+
+	provider := newTestProvider(
+		"planner output with no usable JSON array",
+		"Recovered via single workflow",
+	)
+
+	wf := NewTeamWorkflow()
+	input := testInput("Ship the smallest safe fix", provider)
+
+	result, err := wf.Run(ctx, input)
+	if err != nil {
+		t.Fatalf("TeamWorkflow.Run fallback after planner failure: %v", err)
+	}
+
+	if provider.CallCount() != 2 {
+		t.Fatalf("provider calls = %d, want 2", provider.CallCount())
+	}
+	if result.Workflow != "single" {
+		t.Fatalf("workflow = %q, want %q", result.Workflow, "single")
+	}
+	if !strings.Contains(result.Summary, "Recovered via single workflow") {
+		t.Fatalf("summary %q should contain fallback answer", result.Summary)
 	}
 }
 

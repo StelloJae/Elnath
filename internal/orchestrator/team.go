@@ -53,7 +53,12 @@ func (w *TeamWorkflow) Run(ctx context.Context, input WorkflowInput) (*WorkflowR
 	}
 	subtasks, err := w.planSubtasks(ctx, input)
 	if err != nil {
-		return nil, fmt.Errorf("team workflow: plan: %w", err)
+		w.logger.Warn("team workflow: planner failed, falling back to single workflow", "error", err)
+		if input.OnText != nil {
+			input.OnText(fmt.Sprintf("[team] planner recovery failed: %v\n", err))
+			input.OnText("[team] falling back to single workflow\n")
+		}
+		return NewSingleWorkflow().Run(ctx, input)
 	}
 
 	if len(subtasks) == 0 {
@@ -151,19 +156,94 @@ func parseSubtasks(raw string) ([]subtask, error) {
 		raw = strings.TrimSpace(raw)
 	}
 
-	// Find the JSON array bounds.
-	start := strings.Index(raw, "[")
-	end := strings.LastIndex(raw, "]")
-	if start < 0 || end < start {
+	if !strings.Contains(raw, "[") {
 		return nil, fmt.Errorf("no JSON array found in planner response")
 	}
-	raw = raw[start : end+1]
 
-	var tasks []subtask
-	if err := json.Unmarshal([]byte(raw), &tasks); err != nil {
-		return nil, fmt.Errorf("parse subtasks JSON: %w", err)
+	var (
+		lastValid []subtask
+		found     bool
+	)
+	for _, candidate := range jsonArrayCandidates(raw) {
+		var tasks []subtask
+		if err := json.Unmarshal([]byte(candidate), &tasks); err != nil {
+			continue
+		}
+		if !validSubtasks(tasks) {
+			continue
+		}
+		lastValid = tasks
+		found = true
 	}
-	return tasks, nil
+	if !found {
+		return nil, fmt.Errorf("parse subtasks JSON: no valid subtask array found in planner response")
+	}
+	return lastValid, nil
+}
+
+func jsonArrayCandidates(raw string) []string {
+	var candidates []string
+	for i := 0; i < len(raw); i++ {
+		if raw[i] != '[' {
+			continue
+		}
+		candidate, ok := extractJSONArray(raw[i:])
+		if !ok {
+			continue
+		}
+		candidates = append(candidates, candidate)
+	}
+	return candidates
+}
+
+func extractJSONArray(raw string) (string, bool) {
+	if raw == "" || raw[0] != '[' {
+		return "", false
+	}
+
+	depth := 0
+	inString := false
+	escaped := false
+
+	for i := 0; i < len(raw); i++ {
+		ch := raw[i]
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			switch ch {
+			case '\\':
+				escaped = true
+			case '"':
+				inString = false
+			}
+			continue
+		}
+
+		switch ch {
+		case '"':
+			inString = true
+		case '[':
+			depth++
+		case ']':
+			depth--
+			if depth == 0 {
+				return raw[:i+1], true
+			}
+		}
+	}
+
+	return "", false
+}
+
+func validSubtasks(tasks []subtask) bool {
+	for _, task := range tasks {
+		if task.ID <= 0 || strings.TrimSpace(task.Title) == "" || strings.TrimSpace(task.Instruction) == "" {
+			return false
+		}
+	}
+	return true
 }
 
 // runSubtasks launches one goroutine per subtask and collects results.
