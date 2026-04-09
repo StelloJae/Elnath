@@ -648,6 +648,7 @@ EOF
   "command_template":"\"$CURRENT_BIN\" {{task_output}} {{task_id}} {{task_track}} {{task_language}}",
   "output_path":"`+filepath.Join(dir, "current-scorecard.json")+`",
   "context":"benchmark",
+  "runtime_policy":"sandbox=workspace-write, approvals=never",
   "repeated_runs":1,
   "intervention_notes":true,
   "required_env":["CURRENT_BIN"]
@@ -661,6 +662,13 @@ EOF
 		})
 		if !strings.Contains(stdout, "Current run complete") {
 			t.Fatalf("stdout = %q, want run-current summary", stdout)
+		}
+		data, err := os.ReadFile(filepath.Join(dir, "current-scorecard.json"))
+		if err != nil {
+			t.Fatalf("read current scorecard: %v", err)
+		}
+		if !strings.Contains(string(data), `"runtime_policy": "sandbox=workspace-write, approvals=never"`) {
+			t.Fatalf("current scorecard missing runtime_policy: %s", string(data))
 		}
 	})
 }

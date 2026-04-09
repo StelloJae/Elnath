@@ -2,11 +2,10 @@
   "version": "v1",
   "system": "elnath-current",
   "baseline": "self",
-  "corpus_path": "benchmarks/bugfix-primary.v1.json",
+  "corpus_path": "benchmarks/results/permission-rerun-001/bugfix-go-bug-001.corpus.json",
   "command_template": "\"$CURRENT_BIN\" {{task_output}} {{task_id}} {{task_track}} {{task_language}} {{task_prompt}} {{task_repo}} {{task_repo_ref}} {{task_repo_class}} {{task_benchmark_family}}",
-  "output_path": "benchmarks/results/bugfix-current-scorecard.v1.json",
+  "output_path": "benchmarks/results/permission-rerun-001/bugfix-go-bug-001.current-scorecard.json",
   "context": "benchmark",
-  "runtime_policy": "sandbox=workspace-write, approvals=bypass (benchmark wrapper default via ELNATH_BENCHMARK_PERMISSION_MODE); cli=--non-interactive",
   "repeated_runs": 1,
   "intervention_notes": true,
   "required_env": [
@@ -15,5 +14,6 @@
   "notes": [
     "Month 3 bugfix primary plan for current Elnath runs.",
     "Use the same wrapper contract as the baseline to keep comparisons fair."
-  ]
+  ],
+  "runtime_policy": "sandbox=workspace-write, approvals=bypass (benchmark wrapper default via ELNATH_BENCHMARK_PERMISSION_MODE); cli=--non-interactive"
 }
