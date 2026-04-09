@@ -100,6 +100,7 @@ func (m *Manager) NewSession() (*agent.Session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("conversation: new session: %w", err)
 	}
+	m.prepareSession(s)
 	m.logger.Info("created session", "session_id", s.ID)
 	return s, nil
 }
@@ -110,6 +111,7 @@ func (m *Manager) LoadSession(sessionID string) (*agent.Session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("conversation: load session %s: %w", sessionID, err)
 	}
+	m.prepareSession(s)
 	return s, nil
 }
 
@@ -175,6 +177,9 @@ func (m *Manager) SendMessage(ctx context.Context, sessionID, userMsg string) ([
 	// Append the new user message.
 	userMessage := llm.NewUserMessage(userMsg)
 	messages = append(messages, userMessage)
+	if err := s.AppendMessage(userMessage); err != nil {
+		return nil, intent, fmt.Errorf("conversation: persist user message: %w", err)
+	}
 
 	// Compress messages to fit context window if available.
 	if m.context != nil {
@@ -192,7 +197,7 @@ func (m *Manager) SendMessage(ctx context.Context, sessionID, userMsg string) ([
 				"session_id", sessionID,
 				"error", err,
 			)
-			messages = append(s.Messages, userMessage)
+			messages = append([]llm.Message(nil), s.Messages...)
 		}
 	}
 
@@ -213,6 +218,31 @@ func (m *Manager) SendMessage(ctx context.Context, sessionID, userMsg string) ([
 	)
 
 	return messages, intent, nil
+}
+
+func (m *Manager) prepareSession(s *agent.Session) {
+	if s == nil {
+		return
+	}
+	if m.history != nil {
+		s.WithPersister(sessionPersisterAdapter{history: m.history})
+	}
+	if m.logger != nil {
+		s.WithSessionLogger(func(msg string, args ...any) {
+			m.logger.Warn(msg, args...)
+		})
+	}
+}
+
+type sessionPersisterAdapter struct {
+	history HistoryStore
+}
+
+func (a sessionPersisterAdapter) PersistSession(sessionID string, messages []llm.Message) error {
+	if a.history == nil {
+		return nil
+	}
+	return a.history.Save(context.Background(), sessionID, messages)
 }
 
 // GetHistory returns the conversation history for a session.

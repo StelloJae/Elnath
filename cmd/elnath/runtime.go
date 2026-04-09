@@ -201,6 +201,8 @@ func (rt *executionRuntime) runTask(
 		rt.app.Logger.Warn("conversation manager fallback", "error", err)
 		prepared = append(messages, llm.NewUserMessage(userInput))
 		intent = conversation.IntentUnclear
+	} else {
+		sess.Messages = append(sess.Messages, llm.NewUserMessage(userInput))
 	}
 
 	routeCtx := buildRoutingContext(userInput)
