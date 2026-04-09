@@ -1,0 +1,18 @@
+{
+  "version": "v1",
+  "system": "elnath-current",
+  "baseline": "self",
+  "corpus_path": "benchmarks/month3-canary-corpus.v1.json",
+  "command_template": "\"$CURRENT_BIN\" {{task_output}} {{task_id}} {{task_track}} {{task_language}} {{task_prompt}} {{task_repo}} {{task_repo_ref}} {{task_repo_class}} {{task_benchmark_family}}",
+  "output_path": "benchmarks/results/month3-cycle-006/canary/current-scorecard.json",
+  "context": "benchmark",
+  "runtime_policy": "sandbox=workspace-write, approvals=bypass (benchmark wrapper default via ELNATH_BENCHMARK_PERMISSION_MODE); cli=--non-interactive",
+  "repeated_runs": 1,
+  "intervention_notes": true,
+  "required_env": [
+    "CURRENT_BIN"
+  ],
+  "notes": [
+    "Carry-forward Month 2 smoke canary for Month 3."
+  ]
+}
