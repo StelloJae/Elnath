@@ -9,3 +9,17 @@ Benchmark report written: benchmarks/results/month3-cycle-006/bugfix-report.md
 [5/9] validate canary corpus
 Corpus OK: version=v1 tasks=4
 [6/9] run canary current
+Current run complete: system=elnath-current results=4 output=benchmarks/results/month3-cycle-006/canary/current-scorecard.json
+[7/9] run canary baseline
+Baseline run complete: baseline=claude-codex-omx-omc results=4 output=benchmarks/results/month3-cycle-006/canary/baseline-scorecard.json
+[8/9] write canary report
+Benchmark report written: benchmarks/results/month3-cycle-006/canary/benchmark-report.md
+[9/9] check canary deltas
+canary success: current=0.50 baseline=0.00
+canary verification: current=0.50 baseline=0.00
+
+Bugfix report:  benchmarks/results/month3-cycle-006/bugfix-report.md
+Canary report:  benchmarks/results/month3-cycle-006/canary/benchmark-report.md
+Summary:        benchmarks/results/month3-cycle-006/summary.md
+Bugfix current: benchmarks/results/month3-cycle-006/bugfix-current-scorecard.json
+Bugfix base:    benchmarks/results/month3-cycle-006/bugfix-baseline-scorecard.json

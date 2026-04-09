@@ -35,6 +35,33 @@
       "recovery_attempted": true,
       "duration_seconds": 836,
       "notes": "verification still failing after one recovery attempt"
+    },
+    {
+      "run": 1,
+      "task_id": "GO-BF-002",
+      "track": "brownfield_feature",
+      "language": "go",
+      "success": false,
+      "intervention_count": 0,
+      "intervention_needed": false,
+      "verification_command": "go test ./...",
+      "failure_family": "verification_failed",
+      "recovery_attempted": true,
+      "duration_seconds": 1573,
+      "notes": "verification still failing after one recovery attempt"
+    },
+    {
+      "run": 1,
+      "task_id": "TS-BF-002",
+      "track": "brownfield_feature",
+      "language": "typescript",
+      "success": true,
+      "intervention_count": 0,
+      "intervention_needed": false,
+      "verification_command": "./node_modules/.bin/mocha packages/common/test/module-utils/configurable-module.builder.spec.ts --require ts-node/register --require tsconfig-paths/register --require node_modules/reflect-metadata/Reflect.js --require hooks/mocha-init-hook.ts",
+      "verification_passed": true,
+      "duration_seconds": 191,
+      "notes": "verification passed on first attempt"
     }
   ]
 }
