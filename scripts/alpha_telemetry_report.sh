@@ -13,10 +13,10 @@ Defaults:
 Summarizes Month 4 closed-alpha telemetry signals from the local Elnath SQLite state:
 - task completion counts
 - session-bound task counts
-- continuation / Telegram follow-up counts from structured daemon payloads
+- completion handoff coverage
 - completion-contract coverage
 - timeout recovery / false-timeout metrics
-- approval decision counts
+- resume follow-up summaries from task/session continuity
 - repeat-use session summary from conversation history
 
 Options:
@@ -117,8 +117,7 @@ report = {
         "session_bound": 0,
         "terminal_session_bound": 0,
         "completion_contracts": 0,
-        "continuation_requests": 0,
-        "telegram_followups": 0,
+        "completion_handoffs": 0,
         "idle_timeout_recoveries": 0,
         "active_but_killed_recoveries": 0,
         "false_timeout_rate": 0.0,
@@ -205,49 +204,6 @@ if table_exists(cur, "task_queue"):
         report["tasks"]["terminal_session_bound"],
     )
     report["tasks"]["completion_rate"] = ratio(report["tasks"]["done"], report["tasks"]["terminal"])
-
-    continuation_requests = 0
-    telegram_followups = 0
-    for task_row in cur.execute("SELECT payload FROM task_queue"):
-        raw_payload = (task_row["payload"] or "").strip()
-        if not raw_payload.startswith("{"):
-            continue
-        try:
-            payload = json.loads(raw_payload)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(payload, dict):
-            continue
-        session_id = str(payload.get("session_id", "") or "").strip()
-        surface = str(payload.get("surface", "") or "").strip().lower()
-        if session_id:
-            continuation_requests += 1
-            if surface == "telegram":
-                telegram_followups += 1
-    report["tasks"]["continuation_requests"] = continuation_requests
-    report["tasks"]["telegram_followups"] = telegram_followups
-
-if table_exists(cur, "approval_requests"):
-    row = cur.execute(
-        """
-        SELECT
-          COUNT(*) AS total,
-          SUM(CASE WHEN decision = 'pending' THEN 1 ELSE 0 END) AS pending,
-          SUM(CASE WHEN decision = 'approved' THEN 1 ELSE 0 END) AS approved,
-          SUM(CASE WHEN decision = 'denied' THEN 1 ELSE 0 END) AS denied
-        FROM approval_requests
-        """
-    ).fetchone()
-    report["approvals"].update({
-        "total": row["total"] or 0,
-        "pending": row["pending"] or 0,
-        "approved": row["approved"] or 0,
-        "denied": row["denied"] or 0,
-    })
-    report["approvals"]["resolved_rate"] = ratio(
-        report["approvals"]["approved"] + report["approvals"]["denied"],
-        report["approvals"]["total"],
-    )
 
 if table_exists(cur, "conversations"):
     conversation_cols = table_columns(cur, "conversations")

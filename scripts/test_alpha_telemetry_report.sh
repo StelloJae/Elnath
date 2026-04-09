@@ -68,10 +68,10 @@ cur.executescript(
 cur.executemany(
     "INSERT INTO task_queue (payload, session_id, status, completion, timeout_class, created_at, completed_at) VALUES (?, ?, ?, ?, ?, 0, ?)",
     [
-        ('{"prompt":"task one","session_id":"sess-1","surface":"telegram"}', "sess-1", "done", '{"task_id":1}', "idle"),
-        ('{"prompt":"task two","session_id":"sess-2","surface":"cli"}', "sess-2", "done", '{"task_id":2}', "active_but_killed"),
-        ("task three", "", "failed", "", ""),
-        ("task four", "sess-3", "running", "", ""),
+        ("task one", "sess-1", "done", '{"task_id":1}', "idle", to_ms("2026-04-08 10:00:00")),
+        ("task two", "sess-2", "done", '{"task_id":2}', "active_but_killed", to_ms("2026-04-09 10:00:00")),
+        ("task three", "", "failed", "", "", to_ms("2026-04-08 08:00:00")),
+        ("task four", "", "running", "", "", 0),
     ],
 )
 cur.executemany(

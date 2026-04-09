@@ -109,6 +109,20 @@ resume_followup_rate
 repeat_use_rate
 EOF
 
+cat >"$pass_root/scripts/alpha_telemetry_report.sh" <<'EOF'
+#!/usr/bin/env bash
+completion_handoffs
+resume_followup_rate
+repeat_use_rate
+EOF
+
+cat >"$pass_root/scripts/test_alpha_telemetry_report.sh" <<'EOF'
+#!/usr/bin/env bash
+completion_handoff_rate
+resume_followup_rate
+repeat_use_rate
+EOF
+
 "$CHECK_SCRIPT" "$pass_root" >"$TMP_DIR/pass.out" 2>&1
 grep -Fq 'PASS | confirmatory_canary' "$TMP_DIR/pass.out"
 grep -Fq 'PASS | telegram_operator_shell' "$TMP_DIR/pass.out"
