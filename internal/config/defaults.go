@@ -28,8 +28,11 @@ func DefaultConfig() *Config {
 			Mode: "default",
 		},
 		Daemon: DaemonConfig{
-			SocketPath: filepath.Join(base, "daemon.sock"),
-			MaxWorkers: 3,
+			SocketPath:        filepath.Join(base, "daemon.sock"),
+			MaxWorkers:        3,
+			MaxRecoveries:     3,
+			InactivityTimeout: 600,
+			WallClockTimeout:  1800,
 		},
 		Research: ResearchConfig{
 			MaxRounds:  5,

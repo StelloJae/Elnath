@@ -35,6 +35,7 @@ CREATE INDEX IF NOT EXISTS task_queue_session ON task_queue(session_id);
 `
 
 const defaultStaleTimeout = 5 * time.Minute
+const defaultMaxRecoveries = 3
 
 // TaskStatus represents the lifecycle state of a queued task.
 type TaskStatus string
@@ -109,7 +110,7 @@ func NewQueue(db *sql.DB) (*Queue, error) {
 		return nil, fmt.Errorf("queue: ensure schema columns: %w", err)
 	}
 
-	if _, err := q.RecoverStale(context.Background(), defaultStaleTimeout); err != nil {
+	if _, err := q.RecoverStale(context.Background(), defaultStaleTimeout, defaultMaxRecoveries); err != nil {
 		return nil, fmt.Errorf("queue: recover stale: %w", err)
 	}
 
@@ -414,8 +415,10 @@ func (c *TaskCompletion) View() map[string]interface{} {
 }
 
 // RecoverStale resets tasks that have been in 'running' state longer than
-// the given timeout back to 'pending'. Returns the number of recovered tasks.
-func (q *Queue) RecoverStale(ctx context.Context, staleTimeout time.Duration) (int, error) {
+// the given timeout back to 'pending'. Tasks that have already been recovered
+// maxRecoveries times are marked as failed instead. Returns the number of
+// recovered tasks.
+func (q *Queue) RecoverStale(ctx context.Context, staleTimeout time.Duration, maxRecoveries int) (int, error) {
 	cutoff := time.Now().Add(-staleTimeout).UnixMilli()
 	now := time.Now().UnixMilli()
 
@@ -426,7 +429,7 @@ func (q *Queue) RecoverStale(ctx context.Context, staleTimeout time.Duration) (i
 	defer tx.Rollback()
 
 	rows, err := tx.QueryContext(ctx, `
-		SELECT id, started_at, updated_at
+		SELECT id, started_at, updated_at, idle_timeout_count, active_timeout_count
 		FROM task_queue
 		WHERE status = ? AND started_at > 0 AND updated_at < ?`,
 		string(StatusRunning), cutoff,
@@ -439,7 +442,8 @@ func (q *Queue) RecoverStale(ctx context.Context, staleTimeout time.Duration) (i
 	var recovered int
 	for rows.Next() {
 		var id, startedAt, updatedAt int64
-		if err := rows.Scan(&id, &startedAt, &updatedAt); err != nil {
+		var idleCount, activeCount int
+		if err := rows.Scan(&id, &startedAt, &updatedAt, &idleCount, &activeCount); err != nil {
 			return 0, fmt.Errorf("queue: recover stale: scan: %w", err)
 		}
 
@@ -450,6 +454,20 @@ func (q *Queue) RecoverStale(ctx context.Context, staleTimeout time.Duration) (i
 		} else {
 			timeoutClass = TimeoutClassIdle
 			idleInc = 1
+		}
+
+		totalRecoveries := idleCount + activeCount + idleInc + activeInc
+		if maxRecoveries > 0 && totalRecoveries > maxRecoveries {
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE task_queue
+				SET status = ?, progress = ?, summary = ?, timeout_class = ?, idle_timeout_count = idle_timeout_count + ?, active_timeout_count = active_timeout_count + ?, updated_at = ?, completed_at = ?
+				WHERE id = ?`,
+				string(StatusFailed), "exceeded max recoveries", fmt.Sprintf("task failed after %d recovery attempts", totalRecoveries-1),
+				string(timeoutClass), idleInc, activeInc, now, now, id,
+			); err != nil {
+				return 0, fmt.Errorf("queue: recover stale: fail %d: %w", id, err)
+			}
+			continue
 		}
 
 		if _, err := tx.ExecContext(ctx, `

@@ -76,7 +76,7 @@ func TestClosedAlphaTelemetryAggregatesRequiredSignals(t *testing.T) {
 	); err != nil {
 		t.Fatalf("force stale active window: %v", err)
 	}
-	if recovered, err := q.RecoverStale(ctx, 5*time.Minute); err != nil {
+	if recovered, err := q.RecoverStale(ctx, 5*time.Minute, 0); err != nil {
 		t.Fatalf("RecoverStale: %v", err)
 	} else if recovered != 1 {
 		t.Fatalf("RecoverStale recovered = %d, want 1", recovered)

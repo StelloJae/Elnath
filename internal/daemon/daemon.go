@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -39,15 +40,18 @@ type TaskRunner func(ctx context.Context, payload string, onText func(string)) (
 
 // Daemon runs background task processing with Unix domain socket IPC.
 type Daemon struct {
-	queue          *Queue
-	listener       net.Listener
-	socketPath     string
-	maxWorkers     int
-	taskRunner     TaskRunner
-	logger         *slog.Logger
-	deliveryRouter *DeliveryRouter
-	cancel         context.CancelFunc
-	wg             sync.WaitGroup
+	queue             *Queue
+	listener          net.Listener
+	socketPath        string
+	maxWorkers        int
+	taskRunner        TaskRunner
+	logger            *slog.Logger
+	deliveryRouter    *DeliveryRouter
+	inactivityTimeout time.Duration
+	wallClockTimeout  time.Duration
+	watchdogInterval  time.Duration
+	cancel            context.CancelFunc
+	wg                sync.WaitGroup
 }
 
 // New creates a Daemon. Call Start to begin listening and processing.
@@ -71,6 +75,22 @@ func New(queue *Queue, socketPath string, maxWorkers int, runner TaskRunner, log
 // delivered after each task finishes. Must be called before Start.
 func (d *Daemon) WithDeliveryRouter(router *DeliveryRouter) {
 	d.deliveryRouter = router
+}
+
+// WithTimeouts configures per-task timeout enforcement. inactivity is the
+// maximum duration without a progress update before cancelling a task.
+// wallClock is the absolute maximum duration for any single task.
+// Zero values disable the respective timeout.
+func (d *Daemon) WithTimeouts(inactivity, wallClock time.Duration) {
+	d.inactivityTimeout = inactivity
+	d.wallClockTimeout = wallClock
+}
+
+func (d *Daemon) watchdogTick() time.Duration {
+	if d.watchdogInterval > 0 {
+		return d.watchdogInterval
+	}
+	return 10 * time.Second
 }
 
 // Start begins listening on the Unix socket and launches worker goroutines.
@@ -341,8 +361,30 @@ func (d *Daemon) runTask(ctx context.Context, task *Task) (TaskResult, error) {
 		return TaskResult{}, fmt.Errorf("daemon: task runner is nil")
 	}
 
+	taskCtx, taskCancel := context.WithCancel(ctx)
+	defer taskCancel()
+
+	if d.wallClockTimeout > 0 {
+		var wallCancel context.CancelFunc
+		taskCtx, wallCancel = context.WithTimeout(taskCtx, d.wallClockTimeout)
+		defer wallCancel()
+	}
+
+	var lastActivity atomic.Int64
+	lastActivity.Store(time.Now().UnixMilli())
+
+	if d.inactivityTimeout > 0 {
+		d.wg.Add(1)
+		go func() {
+			defer d.wg.Done()
+			d.inactivityWatchdog(taskCtx, taskCancel, &lastActivity, task.ID)
+		}()
+	}
+
 	var output strings.Builder
-	result, err := d.taskRunner(ctx, task.Payload, func(text string) {
+	result, err := d.taskRunner(taskCtx, task.Payload, func(text string) {
+		lastActivity.Store(time.Now().UnixMilli())
+
 		progress := text
 		if ev, ok := ParseProgressEvent(text); ok {
 			progress = EncodeProgressEvent(ev)
@@ -358,6 +400,9 @@ func (d *Daemon) runTask(ctx context.Context, task *Task) (TaskResult, error) {
 		}
 	})
 	if err != nil {
+		if taskCtx.Err() != nil && ctx.Err() == nil {
+			return TaskResult{}, fmt.Errorf("daemon: task timed out: %w", taskCtx.Err())
+		}
 		return TaskResult{}, fmt.Errorf("daemon: run task: %w", err)
 	}
 	if result.SessionID != "" {
@@ -373,6 +418,28 @@ func (d *Daemon) runTask(ctx context.Context, task *Task) (TaskResult, error) {
 		result.Result = result.Summary
 	}
 	return result, nil
+}
+
+func (d *Daemon) inactivityWatchdog(ctx context.Context, cancel context.CancelFunc, lastActivity *atomic.Int64, taskID int64) {
+	ticker := time.NewTicker(d.watchdogTick())
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			elapsed := time.Since(time.UnixMilli(lastActivity.Load()))
+			if elapsed >= d.inactivityTimeout {
+				d.logger.Warn("worker: task inactivity timeout",
+					"task_id", taskID,
+					"idle_seconds", int(elapsed.Seconds()),
+				)
+				cancel()
+				return
+			}
+		}
+	}
 }
 
 func summarizeProgress(text string) string {

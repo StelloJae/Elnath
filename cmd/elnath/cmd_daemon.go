@@ -117,6 +117,10 @@ func cmdDaemonStart(ctx context.Context) error {
 
 	d := daemon.New(queue, cfg.Daemon.SocketPath, cfg.Daemon.MaxWorkers, rt.newDaemonTaskRunner(), app.Logger)
 	d.WithDeliveryRouter(router)
+	d.WithTimeouts(
+		time.Duration(cfg.Daemon.InactivityTimeout)*time.Second,
+		time.Duration(cfg.Daemon.WallClockTimeout)*time.Second,
+	)
 	return d.Start(ctx)
 }
 

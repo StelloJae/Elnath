@@ -15,6 +15,7 @@ func openTestDB(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatalf("open test db: %v", err)
 	}
+	db.SetMaxOpenConns(1)
 	t.Cleanup(func() { db.Close() })
 
 	pragmas := []string{
@@ -268,7 +269,7 @@ func TestRecoverStale(t *testing.T) {
 		t.Fatalf("force stale: %v", err)
 	}
 
-	recovered, err := q.RecoverStale(ctx, 5*time.Minute)
+	recovered, err := q.RecoverStale(ctx, 5*time.Minute, 0)
 	if err != nil {
 		t.Fatalf("RecoverStale: %v", err)
 	}
@@ -286,7 +287,7 @@ func TestRecoverStale(t *testing.T) {
 
 	q.Enqueue(ctx, "fresh task")
 	fresh, _ := q.Next(ctx)
-	recovered2, err := q.RecoverStale(ctx, 5*time.Minute)
+	recovered2, err := q.RecoverStale(ctx, 5*time.Minute, 0)
 	if err != nil {
 		t.Fatalf("RecoverStale(2): %v", err)
 	}
@@ -319,7 +320,7 @@ func TestRecoverStaleKeepsRecentlyActiveRunning(t *testing.T) {
 		t.Fatalf("force activity window: %v", err)
 	}
 
-	recovered, err := q.RecoverStale(ctx, 5*time.Minute)
+	recovered, err := q.RecoverStale(ctx, 5*time.Minute, 0)
 	if err != nil {
 		t.Fatalf("RecoverStale: %v", err)
 	}
@@ -371,7 +372,7 @@ func TestRecoverStaleTimeoutMetrics(t *testing.T) {
 		t.Fatalf("force active stale window: %v", err)
 	}
 
-	recovered, err := q.RecoverStale(ctx, 5*time.Minute)
+	recovered, err := q.RecoverStale(ctx, 5*time.Minute, 0)
 	if err != nil {
 		t.Fatalf("RecoverStale: %v", err)
 	}
@@ -407,6 +408,63 @@ func TestRecoverStaleTimeoutMetrics(t *testing.T) {
 	}
 	if metrics.FalseTimeoutRate != 0.5 {
 		t.Fatalf("false timeout rate = %.2f, want 0.50", metrics.FalseTimeoutRate)
+	}
+}
+
+func TestRecoverStaleMaxRecoveries(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+	ctx := context.Background()
+
+	q.Enqueue(ctx, "doomed task")
+	task, _ := q.Next(ctx)
+
+	staleTime := time.Now().Add(-10 * time.Minute).UnixMilli()
+
+	// Simulate 2 prior recoveries.
+	_, err = db.Exec(`UPDATE task_queue SET started_at = ?, updated_at = ?, idle_timeout_count = 2 WHERE id = ?`,
+		staleTime, staleTime, task.ID)
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	// maxRecoveries=3: this is the 3rd recovery (2 prior + 1 now = 3), should still recover.
+	recovered, err := q.RecoverStale(ctx, 5*time.Minute, 3)
+	if err != nil {
+		t.Fatalf("RecoverStale: %v", err)
+	}
+	if recovered != 1 {
+		t.Fatalf("recovered = %d, want 1 (at limit, not over)", recovered)
+	}
+
+	got, _ := q.Get(ctx, task.ID)
+	if got.Status != StatusPending {
+		t.Fatalf("status = %q, want pending", got.Status)
+	}
+
+	// Re-claim and make stale again, now at 3 prior recoveries.
+	q.Next(ctx)
+	_, err = db.Exec(`UPDATE task_queue SET started_at = ?, updated_at = ? WHERE id = ?`,
+		staleTime, staleTime, task.ID)
+	if err != nil {
+		t.Fatalf("re-stale: %v", err)
+	}
+
+	// 4th recovery attempt (3 prior + 1 now = 4 > maxRecoveries=3): should fail the task.
+	recovered, err = q.RecoverStale(ctx, 5*time.Minute, 3)
+	if err != nil {
+		t.Fatalf("RecoverStale(2): %v", err)
+	}
+	if recovered != 0 {
+		t.Fatalf("recovered = %d, want 0 (should have been failed)", recovered)
+	}
+
+	got, _ = q.Get(ctx, task.ID)
+	if got.Status != StatusFailed {
+		t.Fatalf("status = %q, want failed after exceeding max recoveries", got.Status)
 	}
 }
 

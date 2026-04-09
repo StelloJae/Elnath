@@ -396,6 +396,81 @@ func TestDaemonInvalidJSON(t *testing.T) {
 	}
 }
 
+// TestDaemonInactivityTimeout verifies that a task hanging without progress
+// updates is cancelled after the inactivity timeout.
+func TestDaemonInactivityTimeout(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+
+	hangingRunner := func(ctx context.Context, _ string, _ func(string)) (TaskResult, error) {
+		<-ctx.Done()
+		return TaskResult{}, ctx.Err()
+	}
+
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	d := startDaemon(t, q, socketPath, hangingRunner, 1)
+	d.watchdogInterval = 100 * time.Millisecond
+	d.WithTimeouts(500*time.Millisecond, 0)
+
+	resp := sendIPC(t, socketPath, IPCRequest{
+		Command: "submit",
+		Payload: mustMarshalString(t, "will hang"),
+	})
+	if !resp.OK {
+		t.Fatalf("submit: %s", resp.Err)
+	}
+	taskID := extractTaskID(t, resp)
+
+	task := pollTaskStatus(t, q, taskID, StatusFailed, 15*time.Second)
+	if task.Status != StatusFailed {
+		t.Fatalf("status = %q, want failed after inactivity timeout", task.Status)
+	}
+}
+
+// TestDaemonWallClockTimeout verifies that a task exceeding the wall-clock
+// deadline is cancelled even if it reports progress.
+func TestDaemonWallClockTimeout(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+
+	activeButSlowRunner := func(ctx context.Context, _ string, onText func(string)) (TaskResult, error) {
+		for {
+			select {
+			case <-ctx.Done():
+				return TaskResult{}, ctx.Err()
+			case <-time.After(100 * time.Millisecond):
+				if onText != nil {
+					onText("still working")
+				}
+			}
+		}
+	}
+
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	d := startDaemon(t, q, socketPath, activeButSlowRunner, 1)
+	d.WithTimeouts(0, 800*time.Millisecond)
+
+	resp := sendIPC(t, socketPath, IPCRequest{
+		Command: "submit",
+		Payload: mustMarshalString(t, "will exceed wall clock"),
+	})
+	if !resp.OK {
+		t.Fatalf("submit: %s", resp.Err)
+	}
+	taskID := extractTaskID(t, resp)
+
+	task := pollTaskStatus(t, q, taskID, StatusFailed, 15*time.Second)
+	if task.Status != StatusFailed {
+		t.Fatalf("status = %q, want failed after wall-clock timeout", task.Status)
+	}
+}
+
 // --- helpers ---
 
 func mustMarshalString(t *testing.T, s string) json.RawMessage {
