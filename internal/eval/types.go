@@ -64,6 +64,7 @@ type Scorecard struct {
 	System            string      `json:"system"`
 	Baseline          string      `json:"baseline,omitempty"`
 	Context           string      `json:"context,omitempty"`
+	RuntimePolicy     string      `json:"runtime_policy"`
 	RepeatedRuns      int         `json:"repeated_runs,omitempty"`
 	InterventionNotes bool        `json:"intervention_notes,omitempty"`
 	Results           []RunResult `json:"results"`
@@ -128,6 +129,7 @@ type BaselineRunPlan struct {
 	CommandTemplate   string   `json:"command_template"`
 	OutputPath        string   `json:"output_path"`
 	Context           string   `json:"context,omitempty"`
+	RuntimePolicy     string   `json:"runtime_policy"`
 	RepeatedRuns      int      `json:"repeated_runs,omitempty"`
 	InterventionNotes bool     `json:"intervention_notes,omitempty"`
 	RequiredEnv       []string `json:"required_env,omitempty"`

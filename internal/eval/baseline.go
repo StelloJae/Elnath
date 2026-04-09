@@ -16,6 +16,7 @@ func NewBaselineRunPlan(corpusPath string) BaselineRunPlan {
 		CommandTemplate:   "\"$BASELINE_BIN\" {{task_output}} {{task_id}} {{task_track}} {{task_language}} {{task_prompt}} {{task_repo}} {{task_repo_ref}} {{task_repo_class}} {{task_benchmark_family}}",
 		OutputPath:        "benchmarks/results/baseline-scorecard.v1.json",
 		Context:           "benchmark",
+		RuntimePolicy:     "",
 		RepeatedRuns:      1,
 		InterventionNotes: false,
 		RequiredEnv:       []string{"BASELINE_BIN"},
@@ -23,6 +24,7 @@ func NewBaselineRunPlan(corpusPath string) BaselineRunPlan {
 			"Replace BASELINE_BIN with the wrapper that runs Claude Code / Codex CLI under your OMX/OMC workflow.",
 			"The wrapper command should write one RunResult JSON object to the provided {{task_output}} path.",
 			"RunResult may omit task_id/track/language; the runner will backfill from the corpus.",
+			"Set runtime_policy to the exact sandbox/approval mode used for the benchmark run before publishing results.",
 			"Do not count hidden manual rescue as a clean success.",
 		},
 	}
@@ -88,12 +90,14 @@ func NewCurrentRunPlan(corpusPath string) BaselineRunPlan {
 		CommandTemplate:   "\"$CURRENT_BIN\" {{task_output}} {{task_id}} {{task_track}} {{task_language}} {{task_prompt}} {{task_repo}} {{task_repo_ref}} {{task_repo_class}} {{task_benchmark_family}}",
 		OutputPath:        "benchmarks/results/current-scorecard.v1.json",
 		Context:           "benchmark",
+		RuntimePolicy:     "",
 		RepeatedRuns:      1,
 		InterventionNotes: true,
 		RequiredEnv:       []string{"CURRENT_BIN"},
 		Notes: []string{
 			"Replace CURRENT_BIN with the wrapper that executes Elnath on one task and writes one RunResult JSON file.",
 			"Use the same task contract as the external baseline so diffs remain fair.",
+			"Set runtime_policy to the exact sandbox/approval mode used for the benchmark run before publishing results.",
 			"Record intervention metadata honestly if human steering occurred.",
 		},
 	}

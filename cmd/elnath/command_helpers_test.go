@@ -417,7 +417,7 @@ func TestCmdEval(t *testing.T) {
 		t.Fatalf("rewrite corpus: %v", err)
 	}
 	scorecardPath = filepath.Join(dir, "scorecard.json")
-	if err := os.WriteFile(scorecardPath, []byte(`{"version":"v1","system":"elnath","baseline":"claude+omx","context":"benchmark","repeated_runs":1,"intervention_notes":true,"results":[{"task_id":"BF-001","track":"brownfield_feature","language":"go","success":true,"intervention_count":1,"intervention_needed":true,"intervention_class":"necessary","verification_passed":true,"failure_family":"repo_context_miss","recovery_attempted":true,"recovery_succeeded":true,"duration_seconds":2}]}`), 0o644); err != nil {
+	if err := os.WriteFile(scorecardPath, []byte(`{"version":"v1","system":"elnath","baseline":"claude+omx","context":"benchmark","runtime_policy":"sandbox=workspace-write, approvals=never","repeated_runs":1,"intervention_notes":true,"results":[{"task_id":"BF-001","track":"brownfield_feature","language":"go","success":true,"intervention_count":1,"intervention_needed":true,"intervention_class":"necessary","verification_passed":true,"failure_family":"repo_context_miss","recovery_attempted":true,"recovery_succeeded":true,"duration_seconds":2}]}`), 0o644); err != nil {
 		t.Fatalf("rewrite scorecard: %v", err)
 	}
 
@@ -562,7 +562,7 @@ func TestCmdEval(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read scaffold: %v", err)
 		}
-		if !strings.Contains(string(data), `"baseline": "claude-codex-omx-omc"`) {
+		if !strings.Contains(string(data), `"baseline": "claude-codex-omx-omc"`) || !strings.Contains(string(data), `"runtime_policy": ""`) {
 			t.Fatalf("unexpected scaffold content: %s", string(data))
 		}
 	})
@@ -581,7 +581,7 @@ func TestCmdEval(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read scaffold: %v", err)
 		}
-		if !strings.Contains(string(data), `"system": "elnath-current"`) {
+		if !strings.Contains(string(data), `"system": "elnath-current"`) || !strings.Contains(string(data), `"runtime_policy": ""`) {
 			t.Fatalf("unexpected current scaffold content: %s", string(data))
 		}
 	})

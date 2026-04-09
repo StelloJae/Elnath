@@ -1,6 +1,9 @@
 package eval
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // CheckAntiVanityRules applies the Month-1 anti-vanity benchmark rules.
 func CheckAntiVanityRules(corpus *Corpus, scorecard *Scorecard) []RuleViolation {
@@ -96,6 +99,13 @@ func CheckAntiVanityRules(corpus *Corpus, scorecard *Scorecard) []RuleViolation 
 			Rule:     "one_shot_launch_claim",
 			Severity: "error",
 			Message:  "launch-context scorecards require repeated_runs >= 2",
+		})
+	}
+	if scorecard.Context == "benchmark" && strings.TrimSpace(scorecard.RuntimePolicy) == "" {
+		violations = append(violations, RuleViolation{
+			Rule:     "runtime_policy_required",
+			Severity: "error",
+			Message:  "benchmark-context scorecards must record runtime_policy so sandbox/approval choices are disclosed",
 		})
 	}
 	if scorecard.RepeatedRuns < 1 {

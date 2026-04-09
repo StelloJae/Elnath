@@ -54,6 +54,11 @@ func BuildMarkdownReport(corpus *Corpus, current, baseline *Scorecard) (string, 
 	fmt.Fprintf(&b, "# Benchmark Cycle Report\n\n")
 	fmt.Fprintf(&b, "- Current: %s\n", current.System)
 	fmt.Fprintf(&b, "- Baseline: %s\n\n", baseline.System)
+	if current.Context == "benchmark" || baseline.Context == "benchmark" || current.RuntimePolicy != "" || baseline.RuntimePolicy != "" {
+		fmt.Fprintf(&b, "## Runtime Policy\n\n")
+		fmt.Fprintf(&b, "- Current: %s\n", runtimePolicyLine(current))
+		fmt.Fprintf(&b, "- Baseline: %s\n\n", runtimePolicyLine(baseline))
+	}
 	fmt.Fprintf(&b, "## Overall Delta\n\n")
 	fmt.Fprintf(&b, "- Success rate delta: %.2f\n", diff.SuccessRateDelta)
 	fmt.Fprintf(&b, "- Verification pass delta: %.2f\n", diff.VerificationPassDelta)
@@ -153,4 +158,11 @@ func interventionClassCounts(scorecard *Scorecard) map[string]int {
 		}
 	}
 	return counts
+}
+
+func runtimePolicyLine(scorecard *Scorecard) string {
+	if scorecard == nil || strings.TrimSpace(scorecard.RuntimePolicy) == "" {
+		return "_unspecified_"
+	}
+	return scorecard.RuntimePolicy
 }

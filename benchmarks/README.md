@@ -79,6 +79,8 @@ They intentionally emit placeholder `RunResult` JSON until replaced with a real 
 
 The checked-in `scripts/run_current_benchmark_wrapper.sh` clones the repo, runs Elnath on the task prompt, picks a repo-native verification command when possible, and retries once if verification fails.
 
+Benchmark fairness rule: benchmark-context plans/scorecards must record the exact runtime sandbox/approval policy in `runtime_policy`. Markdown reports surface this field verbatim and render `_unspecified_` when it is missing, so benchmark runs cannot quietly hide a permissive runtime choice.
+
 ## Month 3 bugfix cycle
 
 Month 3 keeps the Month 2 smoke set as a carry-forward canary while adding a bugfix wedge.

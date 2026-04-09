@@ -35,3 +35,39 @@ func TestCheckAntiVanityRules(t *testing.T) {
 		t.Fatalf("expected multiple violations, got %+v", violations)
 	}
 }
+
+func TestCheckAntiVanityRulesRequiresRuntimePolicyForBenchmarkContext(t *testing.T) {
+	corpus := &Corpus{
+		Version: "v1",
+		Tasks: []Task{
+			{
+				ID:                 "A",
+				Title:              "Bugfix task",
+				Track:              TrackBugfix,
+				Language:           LanguageGo,
+				RepoClass:          "cli_dev_tool",
+				BenchmarkFamily:    "brownfield_primary",
+				Prompt:             "Fix the regression",
+				Repo:               "https://github.com/example/repo",
+				AcceptanceCriteria: []string{"tests pass"},
+			},
+		},
+	}
+	scorecard := &Scorecard{
+		Version:      "v1",
+		System:       "elnath",
+		Context:      "benchmark",
+		RepeatedRuns: 1,
+		Results: []RunResult{
+			{TaskID: "A", Track: TrackBugfix, Language: LanguageGo, Success: true, DurationSeconds: 1},
+		},
+	}
+
+	violations := CheckAntiVanityRules(corpus, scorecard)
+	for _, violation := range violations {
+		if violation.Rule == "runtime_policy_required" {
+			return
+		}
+	}
+	t.Fatalf("expected runtime_policy_required violation, got %+v", violations)
+}

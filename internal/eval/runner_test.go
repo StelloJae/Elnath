@@ -42,6 +42,7 @@ EOF
 		CorpusPath:      corpusPath,
 		CommandTemplate: `"$BASELINE_BIN" {{task_output}} {{task_id}} {{task_track}} {{task_language}}`,
 		OutputPath:      scorecardPath,
+		RuntimePolicy:   "sandbox=workspace-write, approvals=never",
 		RepeatedRuns:    2,
 		RequiredEnv:     []string{"BASELINE_BIN"},
 	}
@@ -53,11 +54,14 @@ EOF
 	if scorecard.System != "baseline-runner" || scorecard.RepeatedRuns != 2 || len(scorecard.Results) != 4 {
 		t.Fatalf("unexpected scorecard: %+v", scorecard)
 	}
+	if scorecard.RuntimePolicy != "sandbox=workspace-write, approvals=never" {
+		t.Fatalf("unexpected runtime policy: %+v", scorecard)
+	}
 	data, err := os.ReadFile(scorecardPath)
 	if err != nil {
 		t.Fatalf("read output: %v", err)
 	}
-	if !strings.Contains(string(data), `"repeated_runs": 2`) {
+	if !strings.Contains(string(data), `"repeated_runs": 2`) || !strings.Contains(string(data), `"runtime_policy": "sandbox=workspace-write, approvals=never"`) {
 		t.Fatalf("unexpected scorecard file: %s", string(data))
 	}
 }

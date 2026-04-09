@@ -41,6 +41,7 @@ func RunBaselinePlan(plan *BaselineRunPlan) (*Scorecard, error) {
 		System:            plan.System,
 		Baseline:          plan.Baseline,
 		Context:           plan.Context,
+		RuntimePolicy:     plan.RuntimePolicy,
 		RepeatedRuns:      repeats,
 		InterventionNotes: plan.InterventionNotes,
 		Results:           make([]RunResult, 0, len(corpus.Tasks)*repeats),

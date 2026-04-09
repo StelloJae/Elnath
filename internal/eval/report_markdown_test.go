@@ -14,16 +14,20 @@ func TestBuildMarkdownReport(t *testing.T) {
 		},
 	}
 	current := &Scorecard{
-		Version: "v1",
-		System:  "elnath",
+		Version:       "v1",
+		System:        "elnath",
+		Context:       "benchmark",
+		RuntimePolicy: "sandbox=workspace-write, approvals=never",
 		Results: []RunResult{
 			{TaskID: "A", Track: TrackBrownfieldFeature, Language: LanguageGo, Success: true, InterventionClass: "necessary", InterventionNeeded: true, VerificationPassed: true, FailureFamily: "repo_context_miss", RecoveryAttempted: true, RecoverySucceeded: true},
 			{TaskID: "B", Track: TrackBugfix, Language: LanguageTypeScript, Success: false, VerificationPassed: false, FailureFamily: "weak_verification_path", RecoveryAttempted: true, RecoverySucceeded: false},
 		},
 	}
 	baseline := &Scorecard{
-		Version: "v1",
-		System:  "baseline",
+		Version:       "v1",
+		System:        "baseline",
+		Context:       "benchmark",
+		RuntimePolicy: "sandbox=workspace-write, approvals=on-request",
 		Results: []RunResult{
 			{TaskID: "A", Track: TrackBrownfieldFeature, Language: LanguageGo, Success: false, VerificationPassed: false, RecoveryAttempted: true, RecoverySucceeded: false},
 			{TaskID: "B", Track: TrackBugfix, Language: LanguageTypeScript, Success: false, VerificationPassed: false, RecoveryAttempted: true, RecoverySucceeded: false},
@@ -36,6 +40,8 @@ func TestBuildMarkdownReport(t *testing.T) {
 	}
 	for _, needle := range []string{
 		"# Benchmark Cycle Report",
+		"Runtime Policy",
+		"sandbox=workspace-write, approvals=never",
 		"Success rate delta",
 		"Repo Class Summary",
 		"cli_dev_tool",
