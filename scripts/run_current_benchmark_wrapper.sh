@@ -12,6 +12,8 @@ Environment:
   ELNATH_BIN       Path to the Elnath binary (default: ./elnath at repo root)
   ELNATH_CONFIG    Optional explicit config path
   ELNATH_TIMEOUT   Optional timeout seconds for each Elnath run (default: 180)
+  ELNATH_BENCHMARK_PERMISSION_MODE
+                   Benchmark-only permission mode override (default: bypass)
 
 This wrapper:
   1. shallow-clones the target repo
@@ -377,7 +379,8 @@ run_elnath() {
   (
     cd "$WORKTREE"
     export ELNATH_EVAL_AUDIT_LOG="$AUDIT_LOG"
-    local -a args=("$ELNATH_BIN" "run")
+    export ELNATH_PERMISSION_MODE="${ELNATH_BENCHMARK_PERMISSION_MODE:-bypass}"
+    local -a args=("$ELNATH_BIN" "run" "--non-interactive")
     python3 - <<'PY' "$ELNATH_TIMEOUT" "$log_path" "$prompt" "${args[@]}"
 import subprocess, sys
 timeout = int(sys.argv[1])
