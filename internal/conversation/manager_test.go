@@ -308,14 +308,37 @@ func TestManagerSendMessage_BadSessionID(t *testing.T) {
 	}
 }
 
-func TestManagerGetHistory_PrefersCanonicalSessionFileOverStore(t *testing.T) {
-	sess, dir := newTestSession(t)
-	if err := sess.AppendMessage(llm.NewUserMessage("file-backed msg")); err != nil {
-		t.Fatalf("AppendMessage: %v", err)
-	}
+func TestManagerGetHistory_FromStore(t *testing.T) {
+	dir := t.TempDir()
 	store := &mockHistoryStore{
 		sessions: map[string][]llm.Message{
-			sess.ID: {llm.NewUserMessage("stale store msg")},
+			"store-only": {llm.NewUserMessage("stored msg")},
+		},
+	}
+	store.infos = []SessionInfo{{ID: "store-only", MessageCount: 1}}
+	mgr := NewManager(nil, dir).WithHistoryStore(store)
+
+	msgs, err := mgr.GetHistory(context.Background(), "store-only")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Errorf("message count = %d, want 1", len(msgs))
+	}
+	if got := msgs[0].Text(); got != "stored msg" {
+		t.Fatalf("history text = %q, want stored msg", got)
+	}
+}
+
+func TestManagerGetHistory_PrefersSessionFileOverStore(t *testing.T) {
+	sess, dir := newTestSession(t)
+	if err := sess.AppendMessage(llm.NewUserMessage("from-file")); err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+
+	store := &mockHistoryStore{
+		sessions: map[string][]llm.Message{
+			sess.ID: {llm.NewUserMessage("from-store")},
 		},
 	}
 	mgr := NewManager(nil, dir).WithHistoryStore(store)
@@ -325,7 +348,10 @@ func TestManagerGetHistory_PrefersCanonicalSessionFileOverStore(t *testing.T) {
 		t.Fatalf("GetHistory: %v", err)
 	}
 	if len(msgs) != 1 {
-		t.Errorf("message count = %d, want 1", len(msgs))
+		t.Fatalf("message count = %d, want 1", len(msgs))
+	}
+	if got := msgs[0].Text(); got != "from-file" {
+		t.Fatalf("history text = %q, want from-file", got)
 	}
 	if got := msgs[0].Text(); got != "file-backed msg" {
 		t.Fatalf("first message = %q, want canonical JSONL message", got)
@@ -462,44 +488,54 @@ func TestManagerListSessions_NoStore(t *testing.T) {
 	}
 }
 
-func TestManagerLoadLatestSession_PrefersNewerStoreTimestamp(t *testing.T) {
+func TestManagerListSessions_PrefersFileMetadataForTranscriptBackedSessions(t *testing.T) {
 	sessA, dir := newTestSession(t)
-	sessB, err := agent.NewSession(dir)
-	if err != nil {
-		t.Fatalf("NewSession B: %v", err)
-	}
-	if err := sessA.AppendMessage(llm.NewUserMessage("older file")); err != nil {
-		t.Fatalf("AppendMessage A: %v", err)
-	}
-	if err := sessB.AppendMessage(llm.NewUserMessage("newer file")); err != nil {
-		t.Fatalf("AppendMessage B: %v", err)
+	if err := sessA.AppendMessages([]llm.Message{
+		llm.NewUserMessage("from-file-1"),
+		llm.NewAssistantMessage("from-file-2"),
+	}); err != nil {
+		t.Fatalf("AppendMessages: %v", err)
 	}
 
-	now := time.Now().UTC()
-	if err := os.Chtimes(filepath.Join(dir, "sessions", sessA.ID+".jsonl"), now.Add(-2*time.Hour), now.Add(-2*time.Hour)); err != nil {
-		t.Fatalf("Chtimes A: %v", err)
+	fileInfos, err := agent.ListSessionFiles(dir)
+	if err != nil {
+		t.Fatalf("ListSessionFiles: %v", err)
 	}
-	if err := os.Chtimes(filepath.Join(dir, "sessions", sessB.ID+".jsonl"), now.Add(-time.Hour), now.Add(-time.Hour)); err != nil {
-		t.Fatalf("Chtimes B: %v", err)
+	if len(fileInfos) != 1 {
+		t.Fatalf("file-backed session count = %d, want 1", len(fileInfos))
 	}
 
 	store := &mockHistoryStore{
 		infos: []SessionInfo{
-			{ID: sessA.ID, UpdatedAt: now.Add(time.Hour), MessageCount: 1},
+			{
+				ID:           sessA.ID,
+				CreatedAt:    fileInfos[0].CreatedAt.Add(-2 * time.Hour),
+				UpdatedAt:    fileInfos[0].UpdatedAt.Add(2 * time.Hour),
+				MessageCount: 99,
+			},
 		},
 	}
 	mgr := NewManager(nil, dir).WithHistoryStore(store)
 
-	latest, err := mgr.LoadLatestSession()
+	sessions, err := mgr.ListSessions(context.Background())
 	if err != nil {
-		t.Fatalf("LoadLatestSession: %v", err)
+		t.Fatalf("ListSessions: %v", err)
 	}
-	if latest.ID != sessA.ID {
-		t.Fatalf("latest session = %q, want %q", latest.ID, sessA.ID)
+	if len(sessions) != 1 {
+		t.Fatalf("session count = %d, want 1", len(sessions))
+	}
+	if sessions[0].MessageCount != fileInfos[0].MessageCount {
+		t.Fatalf("MessageCount = %d, want file-backed %d", sessions[0].MessageCount, fileInfos[0].MessageCount)
+	}
+	if !sessions[0].UpdatedAt.Equal(fileInfos[0].UpdatedAt) {
+		t.Fatalf("UpdatedAt = %v, want file-backed %v", sessions[0].UpdatedAt, fileInfos[0].UpdatedAt)
+	}
+	if !sessions[0].CreatedAt.Equal(fileInfos[0].CreatedAt) {
+		t.Fatalf("CreatedAt = %v, want file-backed %v", sessions[0].CreatedAt, fileInfos[0].CreatedAt)
 	}
 }
 
-func TestManagerLoadLatestSession_FallsBackToFileWhenStoreIsStale(t *testing.T) {
+func TestManagerLoadLatestSession_PrefersMostRecentTranscript(t *testing.T) {
 	sessA, dir := newTestSession(t)
 	sessB, err := agent.NewSession(dir)
 	if err != nil {
@@ -533,6 +569,35 @@ func TestManagerLoadLatestSession_FallsBackToFileWhenStoreIsStale(t *testing.T) 
 	}
 	if latest.ID != sessB.ID {
 		t.Fatalf("latest session = %q, want %q", latest.ID, sessB.ID)
+	}
+}
+
+func TestManagerLoadLatestSession_IgnoresStoreOnlyNewerCandidates(t *testing.T) {
+	sess, dir := newTestSession(t)
+	if err := sess.AppendMessage(llm.NewUserMessage("resumable transcript")); err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+
+	now := time.Now().UTC()
+	if err := os.Chtimes(filepath.Join(dir, "sessions", sess.ID+".jsonl"), now, now); err != nil {
+		t.Fatalf("Chtimes transcript: %v", err)
+	}
+
+	store := &mockHistoryStore{
+		infos: []SessionInfo{
+			{ID: "store-only-newer", UpdatedAt: now.Add(time.Hour), MessageCount: 5},
+		},
+	}
+	mgr := NewManager(nil, dir).WithHistoryStore(store)
+
+	for i := 0; i < 3; i++ {
+		latest, err := mgr.LoadLatestSession()
+		if err != nil {
+			t.Fatalf("LoadLatestSession run %d: %v", i+1, err)
+		}
+		if latest.ID != sess.ID {
+			t.Fatalf("LoadLatestSession run %d = %q, want %q", i+1, latest.ID, sess.ID)
+		}
 	}
 }
 

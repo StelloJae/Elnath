@@ -112,9 +112,13 @@ func (m *Manager) LoadSession(sessionID string) (*agent.Session, error) {
 	return s, nil
 }
 
-// LoadLatestSession finds and loads the most recently modified session file.
+// LoadLatestSession finds and loads the most recent resumable transcript.
+// JSONL files are the canonical source of truth for resume because they are the
+// append-only transcript the runtime replays; the secondary history store is
+// only used for indexing/listing and must not change which session
+// `--continue` resolves to.
 func (m *Manager) LoadLatestSession() (*agent.Session, error) {
-	sessions, err := m.ListSessions(context.Background())
+	sessions, err := agent.ListSessionFiles(m.dataDir)
 	if err != nil {
 		return nil, fmt.Errorf("conversation: list sessions: %w", err)
 	}
@@ -241,36 +245,45 @@ func (a sessionPersisterAdapter) PersistSession(sessionID string, messages []llm
 }
 
 // GetHistory returns the conversation history for a session.
-// JSONL remains the canonical transcript source; the HistoryStore is a
-// best-effort secondary index used only when the session file is unavailable.
+// It prefers the JSONL transcript because resume semantics are defined by the
+// append-only session file. The HistoryStore is a fallback index for cases
+// where the transcript is temporarily unavailable.
 func (m *Manager) GetHistory(ctx context.Context, sessionID string) ([]llm.Message, error) {
 	s, err := m.LoadSession(sessionID)
 	if err == nil {
 		return s.Messages, nil
 	}
+	fileErr := err
 
 	if m.history != nil {
-		msgs, storeErr := m.history.Load(ctx, sessionID)
-		if storeErr == nil {
-			m.logger.Warn("session file load failed, falling back to history store",
+		if sessionKnownToHistory(ctx, m.history, sessionID) {
+			msgs, err := m.history.Load(ctx, sessionID)
+			if err == nil {
+				m.logger.Warn("session transcript unavailable, falling back to history store",
+					"session_id", sessionID,
+					"error", fileErr,
+				)
+				return msgs, nil
+			}
+			m.logger.Warn("history fallback failed after transcript load failure",
 				"session_id", sessionID,
-				"error", err,
+				"transcript_error", fileErr,
+				"history_error", err,
 			)
-			return msgs, nil
+		} else {
+			m.logger.Warn("session transcript unavailable and history store has no matching session",
+				"session_id", sessionID,
+				"error", fileErr,
+			)
 		}
-		m.logger.Warn("history load fallback failed",
-			"session_id", sessionID,
-			"session_error", err,
-			"history_error", storeErr,
-		)
 	}
 
-	return nil, fmt.Errorf("conversation: get history %s: %w", sessionID, err)
+	return nil, fmt.Errorf("conversation: get history %s: %w", sessionID, fileErr)
 }
 
 // ListSessions returns metadata for all known sessions.
-// It merges file-backed JSONL metadata with any HistoryStore metadata so latest
-// session selection can tolerate one backend lagging the other.
+// JSONL metadata remains authoritative for resumable sessions; the HistoryStore
+// only supplements sessions that are not presently backed by a transcript file.
 func (m *Manager) ListSessions(ctx context.Context) ([]SessionInfo, error) {
 	fileInfos, err := agent.ListSessionFiles(m.dataDir)
 	if err != nil {
@@ -298,13 +311,13 @@ func (m *Manager) ListSessions(ctx context.Context) ([]SessionInfo, error) {
 				merged[info.ID] = info
 				continue
 			}
-			if existing.CreatedAt.IsZero() || (!info.CreatedAt.IsZero() && info.CreatedAt.Before(existing.CreatedAt)) {
+			if existing.CreatedAt.IsZero() && !info.CreatedAt.IsZero() {
 				existing.CreatedAt = info.CreatedAt
 			}
-			if info.UpdatedAt.After(existing.UpdatedAt) {
+			if existing.UpdatedAt.IsZero() && !info.UpdatedAt.IsZero() {
 				existing.UpdatedAt = info.UpdatedAt
 			}
-			if info.MessageCount > existing.MessageCount {
+			if existing.MessageCount == 0 && info.MessageCount > 0 {
 				existing.MessageCount = info.MessageCount
 			}
 			merged[info.ID] = existing
@@ -333,4 +346,17 @@ func (m *Manager) ListSessions(ctx context.Context) ([]SessionInfo, error) {
 	})
 
 	return sessions, nil
+}
+
+func sessionKnownToHistory(ctx context.Context, store HistoryStore, sessionID string) bool {
+	infos, err := store.ListSessions(ctx)
+	if err != nil {
+		return false
+	}
+	for _, info := range infos {
+		if info.ID == sessionID {
+			return true
+		}
+	}
+	return false
 }

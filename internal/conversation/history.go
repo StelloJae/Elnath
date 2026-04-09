@@ -31,6 +31,8 @@ type HistoryResult struct {
 }
 
 // DBHistoryStore implements HistoryStore using SQLite.
+// It is a secondary index over conversation transcripts rather than the
+// canonical source used for resume.
 type DBHistoryStore struct {
 	db     *sql.DB
 	hasFTS bool

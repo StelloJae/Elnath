@@ -16,7 +16,8 @@ import (
 )
 
 // SessionPersister is an optional secondary persistence backend for sessions.
-// Implementations (e.g., SQLite history store) are injected to avoid circular deps.
+// Implementations (e.g., SQLite history store) mirror the canonical JSONL
+// transcript for indexing/search and must not redefine resume semantics.
 type SessionPersister interface {
 	PersistSession(sessionID string, messages []llm.Message) error
 }
@@ -48,8 +49,8 @@ type sessionHeader struct {
 }
 
 // SessionFileInfo describes the file-backed metadata for a persisted session.
-// It is intentionally derived from the JSONL transcript plus filesystem state so
-// callers can reconcile it with any secondary history store.
+// It is intentionally derived from the canonical JSONL transcript plus
+// filesystem state so callers can reconcile it with any secondary history store.
 type SessionFileInfo struct {
 	ID           string
 	Path         string
