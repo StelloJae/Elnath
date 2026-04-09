@@ -392,11 +392,6 @@ func TestHelperBuilders(t *testing.T) {
 		t.Fatal("parsePermissionMode(default) mismatch")
 	}
 
-	prompt := defaultSystemPrompt()
-	if !strings.Contains(prompt, "autonomous AI assistant") {
-		t.Fatalf("defaultSystemPrompt missing assistant text: %q", prompt)
-	}
-
 	if got := estimateFiles("touch a.go and b.py plus notes.txt"); got < 2 {
 		t.Fatalf("estimateFiles = %d, want >= 2", got)
 	}

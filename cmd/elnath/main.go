@@ -68,6 +68,15 @@ func extractSessionFlag(args []string) string {
 	return ""
 }
 
+func extractFlagValue(args []string, flag string) string {
+	for i, arg := range args {
+		if arg == flag && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	return ""
+}
+
 func hasFlag(args []string, flag string) bool {
 	for _, arg := range args {
 		if arg == flag {

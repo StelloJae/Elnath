@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS task_queue (
 );
 CREATE INDEX IF NOT EXISTS task_queue_status ON task_queue(status);
 CREATE INDEX IF NOT EXISTS task_queue_created ON task_queue(created_at);
+CREATE INDEX IF NOT EXISTS task_queue_session ON task_queue(session_id);
 `
 
 const defaultStaleTimeout = 5 * time.Minute

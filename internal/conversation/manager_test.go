@@ -327,17 +327,8 @@ func TestManagerGetHistory_PrefersCanonicalSessionFileOverStore(t *testing.T) {
 	if len(msgs) != 1 {
 		t.Fatalf("message count = %d, want 1", len(msgs))
 	}
-	if got := msgs[0].Text(); got != "from-file" {
-		t.Fatalf("history text = %q, want from-file", got)
-	}
 	if got := msgs[0].Text(); got != "file-backed msg" {
-		t.Fatalf("first message = %q, want canonical JSONL message", got)
-	}
-	if got := msgs[0].Text(); got != "file-backed msg" {
-		t.Fatalf("first message = %q, want canonical JSONL message", got)
-	}
-	if got := msgs[0].Text(); got != "file-backed msg" {
-		t.Fatalf("first message = %q, want canonical JSONL message", got)
+		t.Fatalf("history text = %q, want file-backed msg", got)
 	}
 }
 

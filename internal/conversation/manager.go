@@ -339,15 +339,3 @@ func (m *Manager) ListSessions(ctx context.Context) ([]SessionInfo, error) {
 	return sessions, nil
 }
 
-func sessionKnownToHistory(ctx context.Context, store HistoryStore, sessionID string) bool {
-	infos, err := store.ListSessions(ctx)
-	if err != nil {
-		return false
-	}
-	for _, info := range infos {
-		if info.ID == sessionID {
-			return true
-		}
-	}
-	return false
-}

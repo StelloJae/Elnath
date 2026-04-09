@@ -39,14 +39,15 @@ type TaskRunner func(ctx context.Context, payload string, onText func(string)) (
 
 // Daemon runs background task processing with Unix domain socket IPC.
 type Daemon struct {
-	queue      *Queue
-	listener   net.Listener
-	socketPath string
-	maxWorkers int
-	taskRunner TaskRunner
-	logger     *slog.Logger
-	cancel     context.CancelFunc
-	wg         sync.WaitGroup
+	queue          *Queue
+	listener       net.Listener
+	socketPath     string
+	maxWorkers     int
+	taskRunner     TaskRunner
+	logger         *slog.Logger
+	deliveryRouter *DeliveryRouter
+	cancel         context.CancelFunc
+	wg             sync.WaitGroup
 }
 
 // New creates a Daemon. Call Start to begin listening and processing.
@@ -64,6 +65,12 @@ func New(queue *Queue, socketPath string, maxWorkers int, runner TaskRunner, log
 		taskRunner: runner,
 		logger:     logger,
 	}
+}
+
+// WithDeliveryRouter attaches a DeliveryRouter to the daemon. Completions are
+// delivered after each task finishes. Must be called before Start.
+func (d *Daemon) WithDeliveryRouter(router *DeliveryRouter) {
+	d.deliveryRouter = router
 }
 
 // Start begins listening on the Unix socket and launches worker goroutines.
@@ -296,6 +303,7 @@ func (d *Daemon) worker(ctx context.Context, id int) {
 			if markErr := d.queue.MarkFailed(ctx, task.ID, err.Error()); markErr != nil {
 				d.logger.Error("worker: mark failed", "task_id", task.ID, "error", markErr)
 			}
+			d.deliver(ctx, task.ID)
 			continue
 		}
 
@@ -306,6 +314,25 @@ func (d *Daemon) worker(ctx context.Context, id int) {
 		if markErr := d.queue.MarkDone(ctx, task.ID, result.Result, result.Summary); markErr != nil {
 			d.logger.Error("worker: mark done", "task_id", task.ID, "error", markErr)
 		}
+		d.deliver(ctx, task.ID)
+	}
+}
+
+// deliver reads the completed task from the queue and fans out to registered sinks.
+func (d *Daemon) deliver(ctx context.Context, taskID int64) {
+	if d.deliveryRouter == nil {
+		return
+	}
+	task, err := d.queue.Get(ctx, taskID)
+	if err != nil {
+		d.logger.Error("worker: deliver: get task", "task_id", taskID, "error", err)
+		return
+	}
+	if task.Completion == nil {
+		return
+	}
+	if err := d.deliveryRouter.Deliver(ctx, *task.Completion); err != nil {
+		d.logger.Error("worker: deliver: router", "task_id", taskID, "error", err)
 	}
 }
 

@@ -71,10 +71,6 @@ func (t *WebFetchTool) Execute(ctx context.Context, params json.RawMessage) (*Re
 	return &Result{Output: string(body)}, nil
 }
 
-// ---------------------------------------------------------------------------
-// WebSearchTool — stub for v0.1
-// ---------------------------------------------------------------------------
-
 // WebSearchTool searches the web via DuckDuckGo HTML.
 type WebSearchTool struct {
 	client *http.Client

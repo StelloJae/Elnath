@@ -2,7 +2,6 @@ package eval
 
 import (
 	"fmt"
-	"sort"
 )
 
 func normalizedRepeats(n int) int {
@@ -123,28 +122,4 @@ func holdoutCoverage(corpus *Corpus, scorecard *Scorecard) (expected int, covere
 		}
 	}
 	return expected, len(seen)
-}
-
-func sortedHoldoutResultIDs(corpus *Corpus, scorecard *Scorecard) []string {
-	if corpus == nil || scorecard == nil {
-		return nil
-	}
-	holdoutIDs := make(map[string]struct{})
-	for _, task := range corpus.Tasks {
-		if task.Holdout {
-			holdoutIDs[task.ID] = struct{}{}
-		}
-	}
-	var ids []string
-	seen := make(map[string]struct{})
-	for _, result := range scorecard.Results {
-		if _, ok := holdoutIDs[result.TaskID]; ok {
-			if _, dup := seen[result.TaskID]; !dup {
-				seen[result.TaskID] = struct{}{}
-				ids = append(ids, result.TaskID)
-			}
-		}
-	}
-	sort.Strings(ids)
-	return ids
 }
