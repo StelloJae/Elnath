@@ -478,6 +478,8 @@ Vitest-specific guidance:
 - \`rpc().onTaskUpdate\` for this path should keep the packed reporter payload shape (\`[task.id, result, task.meta]\`) rather than forwarding live mutable task objects.
 - For retry telemetry, prefer cloning/snapshotting the per-task \`result\` payload before sending it to RPC so later mutations do not overwrite the retry-visible \`retryCount\` / \`state: 'run'\` snapshot.
 - In the regression test, assert the reporter-visible retry packs themselves (for example via \`packs.find(([taskId]) => taskId === id)\`) and confirm the retry snapshots carry incrementing \`retryCount\` values while the retry event is still in the \`run\` state.
+- Do **not** weaken the regression to a final-state-only assertion, a completion-only assertion, or a generic “run passes” assertion; the benchmark requires proof that the retry-event snapshot itself is preserved at \`test-retried\` time.
+- A strong pattern here is: capture retry-event packs inside reporter \`onTaskUpdate(packs, taskEvents)\`, filter \`taskEvents\` for \`test-retried\`, then record the matching packed result's \`retryCount\` and \`state\` for exact equality against the expected retry sequence.
 - For this task, prefer a worker-only CLI assertion over OTEL/browser matrix coverage; use reporter-visible task updates / reported entities before inventing new OpenTelemetry fixtures.
 - Avoid \`test/cli/test/open-telemetry.test.ts\` and browser-oriented fixtures unless worker retry telemetry truly cannot be verified through reported tasks.
 - Do not replace the narrow worker-only regression with a broad browser/open-telemetry matrix test."
