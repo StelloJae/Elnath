@@ -245,40 +245,31 @@ func (a sessionPersisterAdapter) PersistSession(sessionID string, messages []llm
 }
 
 // GetHistory returns the conversation history for a session.
-// It prefers the JSONL transcript because resume semantics are defined by the
-// append-only session file. The HistoryStore is a fallback index for cases
-// where the transcript is temporarily unavailable.
+// JSONL remains the canonical transcript source; the HistoryStore is a
+// best-effort secondary index used only when the session file is unavailable.
 func (m *Manager) GetHistory(ctx context.Context, sessionID string) ([]llm.Message, error) {
 	s, err := m.LoadSession(sessionID)
 	if err == nil {
 		return s.Messages, nil
 	}
-	fileErr := err
 
 	if m.history != nil {
-		if sessionKnownToHistory(ctx, m.history, sessionID) {
-			msgs, err := m.history.Load(ctx, sessionID)
-			if err == nil {
-				m.logger.Warn("session transcript unavailable, falling back to history store",
-					"session_id", sessionID,
-					"error", fileErr,
-				)
-				return msgs, nil
-			}
-			m.logger.Warn("history fallback failed after transcript load failure",
+		msgs, storeErr := m.history.Load(ctx, sessionID)
+		if storeErr == nil {
+			m.logger.Warn("session file load failed, falling back to history store",
 				"session_id", sessionID,
-				"transcript_error", fileErr,
-				"history_error", err,
+				"error", err,
 			)
-		} else {
-			m.logger.Warn("session transcript unavailable and history store has no matching session",
-				"session_id", sessionID,
-				"error", fileErr,
-			)
+			return msgs, nil
 		}
+		m.logger.Warn("history load fallback failed",
+			"session_id", sessionID,
+			"session_error", err,
+			"history_error", storeErr,
+		)
 	}
 
-	return nil, fmt.Errorf("conversation: get history %s: %w", sessionID, fileErr)
+	return nil, fmt.Errorf("conversation: get history %s: %w", sessionID, err)
 }
 
 // ListSessions returns metadata for all known sessions.
