@@ -1,0 +1,24 @@
+{
+  "version": "v1",
+  "system": "elnath-current",
+  "baseline": "self",
+  "context": "benchmark",
+  "repeated_runs": 1,
+  "intervention_notes": true,
+  "results": [
+    {
+      "run": 1,
+      "task_id": "GO-BUG-001",
+      "track": "bugfix",
+      "language": "go",
+      "success": false,
+      "intervention_count": 0,
+      "intervention_needed": false,
+      "verification_command": "go test ./...",
+      "failure_family": "no_changes",
+      "recovery_attempted": true,
+      "duration_seconds": 99,
+      "notes": "task completed without creating a working-tree diff"
+    }
+  ]
+}
