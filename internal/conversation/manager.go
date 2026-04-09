@@ -241,24 +241,31 @@ func (a sessionPersisterAdapter) PersistSession(sessionID string, messages []llm
 }
 
 // GetHistory returns the conversation history for a session.
-// It prefers the HistoryStore if available, falling back to the JSONL session file.
+// JSONL remains the canonical transcript source; the HistoryStore is a
+// best-effort secondary index used only when the session file is unavailable.
 func (m *Manager) GetHistory(ctx context.Context, sessionID string) ([]llm.Message, error) {
+	s, err := m.LoadSession(sessionID)
+	if err == nil {
+		return s.Messages, nil
+	}
+
 	if m.history != nil {
-		msgs, err := m.history.Load(ctx, sessionID)
-		if err == nil {
+		msgs, storeErr := m.history.Load(ctx, sessionID)
+		if storeErr == nil {
+			m.logger.Warn("session file load failed, falling back to history store",
+				"session_id", sessionID,
+				"error", err,
+			)
 			return msgs, nil
 		}
-		m.logger.Warn("history load failed, falling back to session file",
+		m.logger.Warn("history load fallback failed",
 			"session_id", sessionID,
-			"error", err,
+			"session_error", err,
+			"history_error", storeErr,
 		)
 	}
 
-	s, err := m.LoadSession(sessionID)
-	if err != nil {
-		return nil, fmt.Errorf("conversation: get history %s: %w", sessionID, err)
-	}
-	return s.Messages, nil
+	return nil, fmt.Errorf("conversation: get history %s: %w", sessionID, err)
 }
 
 // ListSessions returns metadata for all known sessions.
