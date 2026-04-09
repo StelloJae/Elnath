@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -54,7 +56,7 @@ func (t *BashTool) Execute(ctx context.Context, params json.RawMessage) (*Result
 		return ErrorResult("command must not be empty"), nil
 	}
 
-	if dangerous, reason := analyzeCommand(p.Command); dangerous {
+	if dangerous, reason := AnalyzeCommandSafety(p.Command); dangerous {
 		return ErrorResult(fmt.Sprintf("command blocked: %s", reason)), nil
 	}
 
@@ -108,7 +110,7 @@ func (t *BashTool) Execute(ctx context.Context, params json.RawMessage) (*Result
 
 // analyzeCommand parses the shell command AST and checks for dangerous patterns.
 // Returns dangerous=true with a reason if a blocked pattern is found.
-func analyzeCommand(command string) (dangerous bool, reason string) {
+func AnalyzeCommandSafety(command string) (dangerous bool, reason string) {
 	f, err := syntax.NewParser().Parse(strings.NewReader(command), "cmd")
 	if err != nil {
 		// Unparseable commands are allowed — bash will report the syntax error.
@@ -124,7 +126,7 @@ func analyzeCommand(command string) (dangerous bool, reason string) {
 			return true
 		}
 
-		cmdName := firstLit(call.Args[0])
+		cmdName, args := unwrapCommand(call)
 		switch cmdName {
 		case "sudo":
 			dangerous, reason = true, "sudo invocation is not allowed"
@@ -133,17 +135,17 @@ func analyzeCommand(command string) (dangerous bool, reason string) {
 			dangerous, reason = true, "dd command is not allowed"
 			return false
 		case "rm":
-			if hasRmRfRoot(call) {
+			if hasRmRfRoot(args) {
 				dangerous, reason = true, "rm -rf on root or home is not allowed"
 				return false
 			}
 		case "chmod", "chown":
-			if hasSystemPath(call) {
+			if hasSystemPath(args) {
 				dangerous, reason = true, fmt.Sprintf("%s on system paths is not allowed", cmdName)
 				return false
 			}
 		case "git":
-			if isGitForcePushMain(call) {
+			if isGitForcePushMain(args) {
 				dangerous, reason = true, "git push --force to main/master is not allowed"
 				return false
 			}
@@ -154,55 +156,217 @@ func analyzeCommand(command string) (dangerous bool, reason string) {
 	return dangerous, reason
 }
 
-// firstLit returns the first literal value of a shell word, or empty string.
-func firstLit(word *syntax.Word) string {
+func analyzeCommand(command string) (dangerous bool, reason string) {
+	return AnalyzeCommandSafety(command)
+}
+
+// wordText returns a conservative string representation of a shell word.
+// Unknown dynamic expansions return an empty string so callers fail closed.
+func wordText(word *syntax.Word) string {
 	if len(word.Parts) == 0 {
 		return ""
 	}
-	lit, ok := word.Parts[0].(*syntax.Lit)
-	if !ok {
-		return ""
+	var b strings.Builder
+	for _, part := range word.Parts {
+		switch p := part.(type) {
+		case *syntax.Lit:
+			b.WriteString(p.Value)
+		case *syntax.SglQuoted:
+			b.WriteString(p.Value)
+		case *syntax.DblQuoted:
+			for _, inner := range p.Parts {
+				switch q := inner.(type) {
+				case *syntax.Lit:
+					b.WriteString(q.Value)
+				case *syntax.ParamExp:
+					if q.Param.Value == "" {
+						return ""
+					}
+					b.WriteString("$")
+					b.WriteString(q.Param.Value)
+				default:
+					return ""
+				}
+			}
+		case *syntax.ParamExp:
+			if p.Param.Value == "" {
+				return ""
+			}
+			b.WriteString("$")
+			b.WriteString(p.Param.Value)
+		default:
+			return ""
+		}
 	}
-	return lit.Value
+	return b.String()
 }
 
-// hasRmRfRoot detects `rm -rf /` or `rm -rf ~` patterns.
-func hasRmRfRoot(call *syntax.CallExpr) bool {
+func unwrapCommand(call *syntax.CallExpr) (string, []string) {
+	args := make([]string, 0, len(call.Args))
+	for _, arg := range call.Args {
+		args = append(args, wordText(arg))
+	}
+	return unwrapArgs(args)
+}
+
+func unwrapArgs(args []string) (string, []string) {
+	current := args
+	for len(current) > 0 {
+		switch current[0] {
+		case "command", "time", "nohup":
+			current = stripOptionalDoubleDash(current[1:])
+		case "nice":
+			current = stripOptionalDoubleDash(skipNiceArgs(current))
+		case "timeout":
+			current = stripOptionalDoubleDash(skipTimeoutArgs(current))
+		case "env":
+			current = stripEnvArgs(current)
+		default:
+			return current[0], current[1:]
+		}
+	}
+	return "", nil
+}
+
+func stripOptionalDoubleDash(args []string) []string {
+	if len(args) > 0 && args[0] == "--" {
+		return args[1:]
+	}
+	return args
+}
+
+func skipNiceArgs(args []string) []string {
+	if len(args) < 2 {
+		return nil
+	}
+	if args[1] == "-n" && len(args) >= 4 {
+		return args[3:]
+	}
+	if strings.HasPrefix(args[1], "-") {
+		if _, err := strconv.Atoi(strings.TrimPrefix(args[1], "-")); err == nil {
+			return args[2:]
+		}
+	}
+	return args[1:]
+}
+
+func skipTimeoutArgs(args []string) []string {
+	i := 1
+	for i < len(args) {
+		arg := args[i]
+		switch {
+		case arg == "--":
+			i++
+			goto duration
+		case arg == "--foreground" || arg == "--preserve-status" || arg == "--verbose" || arg == "-v":
+			i++
+		case strings.HasPrefix(arg, "--kill-after=") || strings.HasPrefix(arg, "--signal="):
+			i++
+		case arg == "--kill-after" || arg == "--signal" || arg == "-k" || arg == "-s":
+			i += 2
+		case strings.HasPrefix(arg, "-k") || strings.HasPrefix(arg, "-s"):
+			i++
+		case strings.HasPrefix(arg, "-"):
+			return args
+		default:
+			goto duration
+		}
+	}
+
+duration:
+	if i >= len(args) {
+		return nil
+	}
+	duration := args[i]
+	if _, err := time.ParseDuration(duration); err != nil {
+		if _, err := strconv.Atoi(duration); err != nil {
+			return args
+		}
+	}
+	return args[i+1:]
+}
+
+func stripEnvArgs(args []string) []string {
+	i := 1
+	for i < len(args) {
+		arg := args[i]
+		if arg == "--" {
+			i++
+			break
+		}
+		if strings.Contains(arg, "=") && !strings.HasPrefix(arg, "-") {
+			i++
+			continue
+		}
+		if arg == "-i" || arg == "--ignore-environment" {
+			i++
+			continue
+		}
+		if arg == "-u" || arg == "--unset" {
+			i += 2
+			continue
+		}
+		if strings.HasPrefix(arg, "--unset=") {
+			i++
+			continue
+		}
+		break
+	}
+	return args[i:]
+}
+
+// hasRmRfRoot detects destructive recursive removals against critical paths.
+func hasRmRfRoot(args []string) bool {
 	hasRF := false
 	hasRootPath := false
-	for _, arg := range call.Args[1:] {
-		v := firstLit(arg)
+	for _, v := range args {
 		if v == "-rf" || v == "-fr" || v == "-r" {
 			hasRF = true
 		}
-		if v == "/" || v == "~" || v == "$HOME" {
+		if isDangerousRemovalTarget(v) {
 			hasRootPath = true
 		}
 	}
 	return hasRF && hasRootPath
 }
 
+func isDangerousRemovalTarget(v string) bool {
+	if v == "/" || v == "~" || v == "$HOME" {
+		return true
+	}
+	home, err := os.UserHomeDir()
+	if err == nil && home != "" && v == home {
+		return true
+	}
+	return isSystemPath(v)
+}
+
 // hasSystemPath checks whether any argument looks like a system path.
-func hasSystemPath(call *syntax.CallExpr) bool {
+func hasSystemPath(args []string) bool {
+	for _, v := range args {
+		if isSystemPath(v) {
+			return true
+		}
+	}
+	return false
+}
+
+func isSystemPath(v string) bool {
 	systemPrefixes := []string{"/etc", "/usr", "/bin", "/sbin", "/lib", "/boot", "/sys", "/proc"}
-	for _, arg := range call.Args[1:] {
-		v := firstLit(arg)
-		for _, prefix := range systemPrefixes {
-			if strings.HasPrefix(v, prefix) {
-				return true
-			}
+	for _, prefix := range systemPrefixes {
+		if strings.HasPrefix(v, prefix) {
+			return true
 		}
 	}
 	return false
 }
 
 // isGitForcePushMain detects `git push --force [remote] main|master`.
-func isGitForcePushMain(call *syntax.CallExpr) bool {
+func isGitForcePushMain(args []string) bool {
 	hasForce := false
 	hasPush := false
 	hasMain := false
-	for _, arg := range call.Args[1:] {
-		v := firstLit(arg)
+	for _, v := range args {
 		switch v {
 		case "push":
 			hasPush = true
