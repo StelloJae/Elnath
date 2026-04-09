@@ -1,0 +1,22 @@
+{
+  "version": "v1",
+  "tasks": [
+    {
+      "id": "GO-BF-001",
+      "title": "Add structured request-id logging middleware",
+      "track": "brownfield_feature",
+      "language": "go",
+      "repo_class": "service_backend",
+      "benchmark_family": "month2_canary",
+      "prompt": "Add request-id middleware to the existing HTTP server and thread the request id into structured logs without breaking current handlers.",
+      "repo": "https://github.com/gin-gonic/gin",
+      "source_url": "https://github.com/gin-gonic/gin",
+      "acceptance_criteria": [
+        "request id is attached to incoming requests",
+        "logs include the request id",
+        "existing tests still pass"
+      ],
+      "repo_ref": "d3ffc9985281dcf4d3bef604cce4e662b1a327a6"
+    }
+  ]
+}
