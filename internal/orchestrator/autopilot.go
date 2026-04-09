@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/stello/elnath/internal/llm"
 )
@@ -140,7 +141,9 @@ func (w *AutopilotWorkflow) Run(ctx context.Context, input WorkflowInput) (*Work
 		messages = result.Messages
 	}
 
-	summary := extractSummary(messages)
+	summary, summaryUsage := synthesizeAssistantSummary(ctx, input.Provider, input.Message, messages)
+	totalUsage.InputTokens += summaryUsage.InputTokens
+	totalUsage.OutputTokens += summaryUsage.OutputTokens
 
 	return &WorkflowResult{
 		Messages: messages,
@@ -148,4 +151,51 @@ func (w *AutopilotWorkflow) Run(ctx context.Context, input WorkflowInput) (*Work
 		Usage:    totalUsage,
 		Workflow: w.Name(),
 	}, nil
+}
+
+// synthesizeAssistantSummary makes a lightweight Chat call to produce a
+// user-friendly completion message in assistant tone, replacing the verify
+// stage's review-style output.
+func synthesizeAssistantSummary(ctx context.Context, provider llm.Provider, originalTask string, messages []llm.Message) (string, llm.UsageStats) {
+	fallback := extractSummary(messages)
+
+	taskSnippet := originalTask
+	if len(taskSnippet) > 300 {
+		taskSnippet = taskSnippet[:300] + "..."
+	}
+
+	verifySnippet := fallback
+	if len(verifySnippet) > 500 {
+		verifySnippet = verifySnippet[:500] + "..."
+	}
+
+	prompt := fmt.Sprintf(`Task completed. Write a brief completion message as a personal AI assistant.
+
+Original request: %s
+
+Result: %s
+
+Rules:
+- First-person assistant tone ("완료했습니다!", "~를 만들었습니다", "~를 수정했어요")
+- Focus on concrete deliverables (files created, features added, bugs fixed)
+- No review language ("검토 결과", "확인 완료", "문제 없음", "COMPLETE")
+- 1-3 sentences, under 80 words`, taskSnippet, verifySnippet)
+
+	resp, err := provider.Chat(ctx, llm.ChatRequest{
+		Messages:  []llm.Message{llm.NewUserMessage(prompt)},
+		MaxTokens: 200,
+	})
+	if err != nil || resp.Content == "" {
+		return fallback, llm.UsageStats{}
+	}
+
+	content := strings.TrimSpace(resp.Content)
+	if content == "" {
+		return fallback, llm.UsageStats{}
+	}
+
+	return content, llm.UsageStats{
+		InputTokens:  resp.Usage.InputTokens,
+		OutputTokens: resp.Usage.OutputTokens,
+	}
 }

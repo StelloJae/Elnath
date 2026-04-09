@@ -17,6 +17,15 @@ func openApprovalTestDB(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatalf("sql.Open: %v", err)
 	}
+	db.SetMaxOpenConns(1)
+	for _, p := range []string{
+		"PRAGMA journal_mode=WAL",
+		"PRAGMA busy_timeout=30000",
+	} {
+		if _, err := db.Exec(p); err != nil {
+			t.Fatalf("exec pragma %q: %v", p, err)
+		}
+	}
 	t.Cleanup(func() { _ = db.Close() })
 	return db
 }

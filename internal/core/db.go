@@ -55,10 +55,15 @@ func openSQLite(path string) (*sql.DB, error) {
 		return nil, err
 	}
 
+	// Single connection prevents SQLITE_BUSY from pooled connections that
+	// miss pragma initialization. SQLite is single-writer regardless, so
+	// this serialization has negligible impact on a local daemon workload.
+	db.SetMaxOpenConns(1)
+
 	pragmas := []string{
 		"PRAGMA journal_mode=WAL",
 		"PRAGMA synchronous=NORMAL",
-		"PRAGMA busy_timeout=5000",
+		"PRAGMA busy_timeout=30000",
 		"PRAGMA foreign_keys=ON",
 	}
 	for _, p := range pragmas {

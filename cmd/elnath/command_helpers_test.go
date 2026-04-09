@@ -98,7 +98,7 @@ func TestRunTelegramShellRetriesTransientGetUpdatesErrors(t *testing.T) {
 	if len(sent) == 0 {
 		t.Fatalf("sent messages = 0, want at least 1")
 	}
-	if !strings.Contains(sent[0], "No daemon tasks.") {
+	if !strings.Contains(sent[0], "No tasks") {
 		t.Fatalf("first reply = %q, want status response", sent[0])
 	}
 
@@ -225,6 +225,21 @@ func (b *scriptedTelegramBot) GetUpdates(ctx context.Context, offset int64, time
 		return nil, nil
 	}
 	return fn(ctx, call, offset, timeout)
+}
+
+func (b *scriptedTelegramBot) SendMessageReturningID(_ context.Context, _ string, text string) (int64, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.sent = append(b.sent, text)
+	return int64(len(b.sent)), nil
+}
+
+func (b *scriptedTelegramBot) EditMessage(_ context.Context, _ string, _ int64, _ string) error {
+	return nil
+}
+
+func (b *scriptedTelegramBot) SetReaction(_ context.Context, _ string, _ int64, _ string) error {
+	return nil
 }
 
 func (b *scriptedTelegramBot) Sent() []string {

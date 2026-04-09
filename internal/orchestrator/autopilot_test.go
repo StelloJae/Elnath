@@ -16,7 +16,8 @@ func TestAutopilotWorkflow_E2E(t *testing.T) {
 		"Plan: 1. Create endpoint 2. Add validation 3. Write tests",     // plan
 		"func handleCreate(w http.ResponseWriter, r *http.Request) { }", // code
 		"Tests: 3/3 passed. Coverage: 85%",                              // test
-		"Verification: COMPLETE. All requirements met.",                 // verify
+		"Verification: COMPLETE. All requirements met.",                  // verify
+		"완료했습니다! 사용자 등록 엔드포인트를 만들었습니다.",                              // summary synthesis
 	)
 
 	wf := NewAutopilotWorkflow()
@@ -31,9 +32,9 @@ func TestAutopilotWorkflow_E2E(t *testing.T) {
 		t.Errorf("workflow = %q, want %q", result.Workflow, "autopilot")
 	}
 
-	// 4 stages = 4 provider calls
-	if provider.CallCount() != 4 {
-		t.Errorf("provider calls = %d, want 4", provider.CallCount())
+	// 4 stages (streamed) + 1 summary synthesis (Chat) = 5 provider calls
+	if provider.CallCount() != 5 {
+		t.Errorf("provider calls = %d, want 5", provider.CallCount())
 	}
 
 	// Messages accumulate: initial user + 4 stages * (instruction + response) = 9
@@ -41,9 +42,9 @@ func TestAutopilotWorkflow_E2E(t *testing.T) {
 		t.Errorf("messages = %d, want >= 9", len(result.Messages))
 	}
 
-	// Summary comes from last assistant message (verify stage)
-	if !strings.Contains(result.Summary, "COMPLETE") {
-		t.Errorf("summary %q should contain COMPLETE from verify stage", result.Summary)
+	// Summary is synthesized in assistant tone, not verify stage output.
+	if !strings.Contains(result.Summary, "완료") {
+		t.Errorf("summary %q should contain assistant-tone completion", result.Summary)
 	}
 
 	// Usage accumulates across all stages

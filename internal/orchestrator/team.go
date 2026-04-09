@@ -261,11 +261,18 @@ func (w *TeamWorkflow) runSubtasks(ctx context.Context, input WorkflowInput, sub
 		}
 	}
 
+	// Limit concurrent LLM calls to avoid overwhelming the provider with
+	// parallel requests that all hit rate limits simultaneously.
+	const maxConcurrent = 2
+	sem := make(chan struct{}, maxConcurrent)
+
 	var wg sync.WaitGroup
 	for _, st := range subtasks {
 		wg.Add(1)
 		go func(st subtask) {
 			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
 			res := w.runOne(ctx, safeInput, st)
 			resultCh <- res
 		}(st)

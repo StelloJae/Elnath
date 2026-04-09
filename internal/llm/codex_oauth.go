@@ -150,9 +150,9 @@ func (p *CodexOAuthProvider) streamWithRefresh(ctx context.Context, auth codexOA
 
 	var statusErr codexOAuthStatusError
 	if errors.As(err, &statusErr) && statusErr.code == http.StatusUnauthorized {
-		refreshed, refreshErr := p.refresh(auth)
+		refreshed, refreshErr := p.refresh(ctx, auth)
 		if refreshErr != nil {
-			return fmt.Errorf("codex: refresh failed: %w", refreshErr)
+			return fmt.Errorf("codex: refresh failed (re-run `codex auth` to re-authenticate): %w", refreshErr)
 		}
 		return p.streamOnce(ctx, refreshed, req, cb)
 	}
@@ -456,14 +456,18 @@ func parseCodexSSE(r io.Reader, cb func(StreamEvent)) error {
 }
 
 // refresh exchanges the refresh token for a new access token.
-func (p *CodexOAuthProvider) refresh(auth codexOAuthAuthFile) (codexOAuthAuthFile, error) {
+// Uses a 10-second timeout to avoid blocking the daemon when the auth server is unresponsive.
+func (p *CodexOAuthProvider) refresh(ctx context.Context, auth codexOAuthAuthFile) (codexOAuthAuthFile, error) {
+	refreshCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
 	payload, _ := json.Marshal(map[string]any{
 		"grant_type":    "refresh_token",
 		"client_id":     codexOAuthClientID,
 		"refresh_token": auth.Tokens.RefreshToken,
 	})
 
-	req, err := http.NewRequest(http.MethodPost, codexOAuthRefreshURL, bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(refreshCtx, http.MethodPost, codexOAuthRefreshURL, bytes.NewReader(payload))
 	if err != nil {
 		return codexOAuthAuthFile{}, err
 	}
@@ -471,7 +475,7 @@ func (p *CodexOAuthProvider) refresh(auth codexOAuthAuthFile) (codexOAuthAuthFil
 
 	res, err := p.client.Do(req)
 	if err != nil {
-		return codexOAuthAuthFile{}, err
+		return codexOAuthAuthFile{}, fmt.Errorf("codex: refresh http: %w", err)
 	}
 	defer res.Body.Close()
 
