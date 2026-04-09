@@ -233,9 +233,28 @@ func TestDaemonTaskRunnerCreatesSessionAndUsesClassifier(t *testing.T) {
 	if result.SessionID != sess.ID {
 		t.Fatalf("task result session_id = %q, want %q", result.SessionID, sess.ID)
 	}
+	if len(sess.Messages) < 2 {
+		t.Fatalf("session message count = %d, want at least 2", len(sess.Messages))
+	}
+	if got := sess.Messages[0].Text(); got != "tell me a joke" {
+		t.Fatalf("first session message = %q, want original user input", got)
+	}
 	last := sess.Messages[len(sess.Messages)-1].Text()
 	if !strings.Contains(last, "daemon answer") {
 		t.Fatalf("last session message = %q, want daemon answer", last)
+	}
+	history, err := rt.mgr.GetHistory(context.Background(), sess.ID)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(history) < 2 {
+		t.Fatalf("history message count = %d, want at least 2", len(history))
+	}
+	if got := history[0].Text(); got != "tell me a joke" {
+		t.Fatalf("first history message = %q, want original user input", got)
+	}
+	if got := history[len(history)-1].Text(); !strings.Contains(got, "daemon answer") {
+		t.Fatalf("last history message = %q, want daemon answer", got)
 	}
 	if streamed.Len() == 0 {
 		t.Fatal("expected streamed daemon output")

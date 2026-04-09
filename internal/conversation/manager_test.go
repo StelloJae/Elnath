@@ -165,6 +165,26 @@ func TestManagerSendMessage_NoOptionals(t *testing.T) {
 	}
 }
 
+func TestManagerSendMessage_PersistsUserMessageToSessionSnapshot(t *testing.T) {
+	sess, dir := newTestSession(t)
+	mgr := NewManager(nil, dir)
+
+	if _, _, err := mgr.SendMessage(context.Background(), sess.ID, "hello"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+
+	reloaded, err := mgr.LoadSession(sess.ID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if len(reloaded.Messages) != 1 {
+		t.Fatalf("reloaded message count = %d, want 1", len(reloaded.Messages))
+	}
+	if got := reloaded.Messages[0].Text(); got != "hello" {
+		t.Fatalf("reloaded first message = %q, want hello", got)
+	}
+}
+
 func TestManagerSendMessage_WithClassifier(t *testing.T) {
 	sess, dir := newTestSession(t)
 	mgr := NewManager(nil, dir).
