@@ -19,6 +19,8 @@ This guide is the lane-4 operator path for Month 4 closed-alpha rehearsals.
 
 A technical alpha user should be able to go from a clean machine to a first successful CLI task without bespoke hand-holding.
 
+This onboarding path is intentionally narrow: it proves the existing CLI and thin Telegram operator flow, not a broader Telegram product surface. Hardening work here should reduce operator friction without expanding features.
+
 ## Prerequisites
 
 - Go 1.25+

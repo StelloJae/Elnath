@@ -44,6 +44,8 @@ bash scripts/alpha_telemetry_report.sh --out artifacts/month4-alpha-report.json
 
 What to verify:
 
+- rehearsals stay inside the existing operator-only Telegram command set; do not interpret a green run as approval to widen the Telegram surface
+
 - `daemon status` renders a readable progress message, not a raw JSON envelope
 - completed tasks preserve a non-empty summary
 - tasks bind to session ids when the runtime creates one

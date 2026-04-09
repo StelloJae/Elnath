@@ -71,6 +71,8 @@ When configured, `elnath telegram shell` exposes the Month 4 operator-only Teleg
 
 Completed daemon tasks emit Telegram completion notifications once per task while the shell is running.
 
+Month 4 hardening is intentionally scope-locked: keep this surface limited to operator status, approvals, completion notifications, and session-bound follow-ups. Do not treat this shell as approval to add broader Telegram companion features.
+
 ## Closed Alpha Readiness
 
 Month 4 lane-4 operator materials now live in the repo:

@@ -20,6 +20,7 @@ These are intentional Month 4 constraints, not launch surprises.
 - CLI remains the primary operator surface.
 - Telegram must stay a thin companion shell for status, approvals, completion notifications, and resume/follow-up triggers only.
 - Broad conversational companion behavior is explicitly out of scope for closed alpha.
+- Month 4 hardening work must reduce fragility inside the current operator shell rather than adding new Telegram commands or companion behaviors.
 
 ## Telemetry limits
 
