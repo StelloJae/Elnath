@@ -21,6 +21,7 @@ var stageIcons = map[string]string{
 	"review":   "📝",
 	"verify":   "✔️",
 	"research": "🔍",
+	"summary":  "✨",
 }
 
 type TelegramSink struct {
@@ -40,7 +41,10 @@ type trackedMessage struct {
 	editPending   bool
 	stages        []string
 	currentStage  string
-	toolCalls     int
+	toolCalls       int
+	lastActivity    string
+	summaryText     string
+	summaryStreamed bool
 }
 
 func NewTelegramSink(bot BotClient, chatID string, logger *slog.Logger) *TelegramSink {
@@ -91,9 +95,10 @@ func (s *TelegramSink) NotifyCompletion(_ context.Context, c daemon.TaskCompleti
 		}
 	}
 
+	stages := filterStages(tracked)
 	stageBar := ""
-	if tracked != nil && len(tracked.stages) > 0 {
-		stageBar = renderStageBar(tracked.stages, "") + "\n\n"
+	if len(stages) > 0 {
+		stageBar = renderStageBar(stages, "") + "\n\n"
 	}
 
 	text := fmt.Sprintf("%s <b>%s</b>%s <code>#%d</code>\n\n%s%s", icon, label, elapsed, c.TaskID, stageBar, summary)
@@ -127,6 +132,36 @@ func (s *TelegramSink) OnProgress(taskID int64, progress string) {
 		s.tracking[taskID] = tracked
 	}
 
+	if summaryText, ok := parseSummaryStream(rendered); ok {
+		tracked.summaryText = summaryText
+		tracked.summaryStreamed = true
+		bar := renderStageBar(filterStages(tracked), "")
+		text := fmt.Sprintf("✅ <b>Complete</b> <code>#%d</code>\n\n%s\n\n%s%s",
+			taskID, bar, escapeHTML(summaryText), streamingCursor)
+
+		if text == tracked.lastText {
+			s.mu.Unlock()
+			return
+		}
+		tracked.lastText = text
+
+		minInterval := 300 * time.Millisecond
+		if time.Since(tracked.lastEditAt) < minInterval {
+			if !tracked.editPending {
+				tracked.editPending = true
+				delay := minInterval - time.Since(tracked.lastEditAt)
+				go s.deferredEdit(taskID, delay)
+			}
+			s.mu.Unlock()
+			return
+		}
+		tracked.lastEditAt = time.Now()
+		msgID := tracked.messageID
+		s.mu.Unlock()
+		s.sendOrEdit(taskID, msgID, text)
+		return
+	}
+
 	stage, isStage := parseStageMarker(rendered)
 	if isStage {
 		tracked.currentStage = stage
@@ -136,11 +171,19 @@ func (s *TelegramSink) OnProgress(taskID int64, progress string) {
 		tracked.toolCalls = 0
 	} else {
 		tracked.toolCalls++
+		preview := rendered
+		if len(preview) > 50 {
+			preview = preview[:50] + "…"
+		}
+		tracked.lastActivity = preview
 	}
 
-	bar := renderStageBar(tracked.stages, tracked.currentStage)
-	activity := renderActivity(tracked.toolCalls)
-	text := fmt.Sprintf("⚡ <b>Running</b> <code>#%d</code>\n\n%s\n%s", taskID, bar, activity)
+	bar := renderStageBar(filterStages(tracked), tracked.currentStage)
+	activity := ""
+	if tracked.toolCalls > 0 {
+		activity = "\n" + renderProgressBar(tracked.toolCalls)
+	}
+	text := fmt.Sprintf("⚡ <b>Running</b> <code>#%d</code>\n\n%s%s", taskID, bar, activity)
 
 	if text == tracked.lastText {
 		s.mu.Unlock()
@@ -148,7 +191,7 @@ func (s *TelegramSink) OnProgress(taskID int64, progress string) {
 	}
 	tracked.lastText = text
 
-	minInterval := time.Second
+	minInterval := 1500 * time.Millisecond
 	if time.Since(tracked.lastEditAt) < minInterval {
 		if !tracked.editPending {
 			tracked.editPending = true
@@ -214,27 +257,48 @@ func (s *TelegramSink) String() string {
 
 func renderStageBar(stages []string, current string) string {
 	var sb strings.Builder
-	for i, stage := range stages {
+	for _, stage := range stages {
 		icon, ok := stageIcons[stage]
 		if !ok {
 			icon = "▸"
 		}
-		if stage == current {
-			sb.WriteString(fmt.Sprintf("<b>%s %s</b>", icon, stage))
+		if current != "" && stage == current {
+			sb.WriteString(fmt.Sprintf("<b>%s %s …</b>\n", icon, stage))
 		} else {
-			sb.WriteString(fmt.Sprintf("<s>%s %s</s>", icon, stage))
-		}
-		if i < len(stages)-1 {
-			sb.WriteString("  →  ")
+			sb.WriteString(fmt.Sprintf("%s %s ✓\n", icon, stage))
 		}
 	}
-	return sb.String()
+	return strings.TrimRight(sb.String(), "\n")
 }
 
-func renderActivity(toolCalls int) string {
-	dots := toolCalls % 4
-	animation := strings.Repeat("●", dots+1) + strings.Repeat("○", 3-dots)
-	return fmt.Sprintf("<i>%s working%s</i>", animation, streamingCursor)
+func renderProgressBar(toolCalls int) string {
+	const segments = 8
+	filled := (toolCalls + 2) / 3
+	if filled > segments {
+		filled = segments
+	}
+	return strings.Repeat("▓", filled) + strings.Repeat("░", segments-filled)
+}
+
+func parseSummaryStream(s string) (string, bool) {
+	const prefix = "[summary] "
+	if strings.HasPrefix(s, prefix) {
+		return strings.TrimPrefix(s, prefix), true
+	}
+	return "", false
+}
+
+func filterStages(tracked *trackedMessage) []string {
+	if tracked == nil {
+		return nil
+	}
+	var out []string
+	for _, s := range tracked.stages {
+		if s != "summary" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func parseStageMarker(s string) (string, bool) {

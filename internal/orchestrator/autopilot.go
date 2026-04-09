@@ -2,9 +2,11 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/stello/elnath/internal/llm"
 )
@@ -141,7 +143,7 @@ func (w *AutopilotWorkflow) Run(ctx context.Context, input WorkflowInput) (*Work
 		messages = result.Messages
 	}
 
-	summary, summaryUsage := synthesizeAssistantSummary(ctx, input.Provider, input.Message, messages)
+	summary, summaryUsage := synthesizeAssistantSummary(ctx, input.Provider, input.Message, messages, input.OnText)
 	totalUsage.InputTokens += summaryUsage.InputTokens
 	totalUsage.OutputTokens += summaryUsage.OutputTokens
 
@@ -153,10 +155,10 @@ func (w *AutopilotWorkflow) Run(ctx context.Context, input WorkflowInput) (*Work
 	}, nil
 }
 
-// synthesizeAssistantSummary makes a lightweight Chat call to produce a
-// user-friendly completion message in assistant tone, replacing the verify
-// stage's review-style output.
-func synthesizeAssistantSummary(ctx context.Context, provider llm.Provider, originalTask string, messages []llm.Message) (string, llm.UsageStats) {
+// synthesizeAssistantSummary streams a user-friendly completion message in
+// assistant tone. Tokens are flushed through onText as [summary] events so
+// the Telegram sink can display them progressively.
+func synthesizeAssistantSummary(ctx context.Context, provider llm.Provider, originalTask string, messages []llm.Message, onText func(string)) (string, llm.UsageStats) {
 	fallback := extractSummary(messages)
 
 	taskSnippet := originalTask
@@ -181,21 +183,75 @@ Rules:
 - No review language ("검토 결과", "확인 완료", "문제 없음", "COMPLETE")
 - 1-3 sentences, under 80 words`, taskSnippet, verifySnippet)
 
-	resp, err := provider.Chat(ctx, llm.ChatRequest{
+	if onText != nil {
+		onText("[autopilot] stage: summary\n")
+	}
+
+	var sb strings.Builder
+	var usage llm.UsageStats
+	lastFlush := time.Now()
+
+	err := provider.Stream(ctx, llm.ChatRequest{
 		Messages:  []llm.Message{llm.NewUserMessage(prompt)},
 		MaxTokens: 200,
+	}, func(ev llm.StreamEvent) {
+		switch ev.Type {
+		case llm.EventTextDelta:
+			sb.WriteString(ev.Content)
+			if onText != nil && time.Since(lastFlush) >= 300*time.Millisecond {
+				onText(encodeSummaryProgress(sb.String()))
+				lastFlush = time.Now()
+			}
+		case llm.EventDone:
+			if ev.Usage != nil {
+				usage = *ev.Usage
+			}
+		}
 	})
-	if err != nil || resp.Content == "" {
+
+	if onText != nil && sb.Len() > 0 {
+		onText(encodeSummaryProgress(sb.String()))
+	}
+
+	if err != nil || sb.Len() == 0 {
 		return fallback, llm.UsageStats{}
 	}
 
-	content := strings.TrimSpace(resp.Content)
+	content := dedupSummary(strings.TrimSpace(sb.String()))
 	if content == "" {
 		return fallback, llm.UsageStats{}
 	}
 
 	return content, llm.UsageStats{
-		InputTokens:  resp.Usage.InputTokens,
-		OutputTokens: resp.Usage.OutputTokens,
+		InputTokens:  usage.InputTokens,
+		OutputTokens: usage.OutputTokens,
 	}
+}
+
+// encodeSummaryProgress wraps summary text in a JSON progress event so the
+// daemon passes it through without truncation by summarizeProgress.
+func encodeSummaryProgress(text string) string {
+	data, _ := json.Marshal(struct {
+		V    int    `json:"v"`
+		Kind string `json:"kind"`
+		Msg  string `json:"msg"`
+	}{V: 1, Kind: "text", Msg: "[summary] " + text})
+	return string(data)
+}
+
+// dedupSummary removes exact duplication where the LLM repeats the same text.
+func dedupSummary(s string) string {
+	s = strings.TrimSpace(s)
+	n := len(s)
+	if n < 20 {
+		return s
+	}
+	for i := n * 4 / 10; i <= n*6/10; i++ {
+		first := strings.TrimSpace(s[:i])
+		second := strings.TrimSpace(s[i:])
+		if first == second {
+			return first
+		}
+	}
+	return s
 }
