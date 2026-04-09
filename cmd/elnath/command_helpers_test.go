@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stello/elnath/internal/agent"
 	"github.com/stello/elnath/internal/conversation"
@@ -61,6 +63,22 @@ func writeTestConfig(t *testing.T, locale onboarding.Locale) string {
 		"wiki_dir: " + filepath.Join(dir, "wiki") + "\n" +
 		"locale: " + string(locale) + "\n" +
 		"permission:\n  mode: default\n"
+	if err := os.WriteFile(cfgPath, []byte(data), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	return cfgPath
+}
+
+func writeDaemonTestConfig(t *testing.T, locale onboarding.Locale, socketPath string) string {
+	t.Helper()
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	data := "data_dir: " + filepath.Join(dir, "data") + "\n" +
+		"wiki_dir: " + filepath.Join(dir, "wiki") + "\n" +
+		"locale: " + string(locale) + "\n" +
+		"permission:\n  mode: default\n" +
+		"daemon:\n  socket_path: " + socketPath + "\n"
 	if err := os.WriteFile(cfgPath, []byte(data), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -302,6 +320,72 @@ func TestSendIPCRequest(t *testing.T) {
 	data, ok := resp.Data.(map[string]interface{})
 	if !ok || data["echo"] != "status" {
 		t.Fatalf("unexpected response data: %#v", resp.Data)
+	}
+	<-done
+}
+
+func TestCmdDaemonStatusRendersStructuredProgressEnvelope(t *testing.T) {
+	socketPath := filepath.Join("/tmp", fmt.Sprintf("elnath-test-%d.sock", time.Now().UnixNano()))
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("listen unix: %v", err)
+	}
+	defer ln.Close()
+	t.Cleanup(func() { _ = os.Remove(socketPath) })
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		var req daemon.IPCRequest
+		dec := json.NewDecoder(conn)
+		if err := dec.Decode(&req); err != nil {
+			return
+		}
+		resp := daemon.IPCResponse{
+			OK: true,
+			Data: map[string]any{
+				"tasks": []map[string]any{{
+					"id":         1,
+					"status":     "running",
+					"payload":    "analyze project structure",
+					"session_id": "sess-1234567890abcdef",
+					"progress": daemon.EncodeProgressEvent(daemon.ProgressEvent{
+						Kind:     daemon.ProgressKindWorkflow,
+						Message:  "question → single",
+						Intent:   "question",
+						Workflow: "single",
+					}),
+					"summary": "latest summary",
+				}},
+			},
+		}
+		enc := json.NewEncoder(conn)
+		_ = enc.Encode(resp)
+	}()
+
+	cfgPath := writeDaemonTestConfig(t, onboarding.En, socketPath)
+	withArgs(t, []string{"elnath", "--config", cfgPath})
+	resetLoadLocaleCache()
+
+	stdout, stderr := captureOutput(t, func() {
+		if err := cmdDaemonStatus(context.Background()); err != nil {
+			t.Fatalf("cmdDaemonStatus: %v", err)
+		}
+	})
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+	if !strings.Contains(stdout, "question → single") {
+		t.Fatalf("stdout = %q, want rendered progress message", stdout)
+	}
+	if strings.Contains(stdout, "\"kind\"") || strings.Contains(stdout, "\"version\"") {
+		t.Fatalf("stdout = %q, want human-readable progress instead of raw JSON", stdout)
 	}
 	<-done
 }

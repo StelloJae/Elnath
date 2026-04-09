@@ -316,12 +316,18 @@ func (d *Daemon) runTask(ctx context.Context, task *Task) (TaskResult, error) {
 
 	var output strings.Builder
 	result, err := d.taskRunner(ctx, task.Payload, func(text string) {
-		output.WriteString(text)
-		progress := summarizeProgress(output.String())
-		if progress != "" {
-			if updateErr := d.queue.UpdateProgress(ctx, task.ID, progress); updateErr != nil {
-				d.logger.Debug("worker: update progress", "task_id", task.ID, "error", updateErr)
-			}
+		progress := text
+		if ev, ok := ParseProgressEvent(text); ok {
+			progress = EncodeProgressEvent(ev)
+		} else {
+			output.WriteString(text)
+			progress = EncodeProgressEvent(TextProgressEvent(text))
+		}
+		if progress == "" {
+			return
+		}
+		if updateErr := d.queue.UpdateProgress(ctx, task.ID, progress); updateErr != nil {
+			d.logger.Debug("worker: update progress", "task_id", task.ID, "error", updateErr)
 		}
 	})
 	if err != nil {

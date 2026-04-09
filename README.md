@@ -58,6 +58,8 @@ Start an interactive chat session. Type messages naturally; intent is classified
 ./elnath daemon stop
 ```
 
+The daemon persists progress as a machine-readable event envelope (`elnath.progress.v1`) and `elnath daemon status` renders the shared `message` field. That keeps progress updates concise in the CLI now while leaving the same schema reusable for future delivery bridges.
+
 ## Commands
 
 | Command | Purpose | Example |

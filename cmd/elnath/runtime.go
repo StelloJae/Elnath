@@ -22,6 +22,7 @@ import (
 )
 
 type orchestrationOutput struct {
+	OnProgress func(daemon.ProgressEvent)
 	OnWorkflow func(intent conversation.Intent, workflow string)
 	OnText     func(string)
 	OnUsage    func(string)
@@ -37,6 +38,41 @@ func cliOrchestrationOutput() orchestrationOutput {
 			fmt.Println()
 			fmt.Println(summary)
 		},
+	}
+}
+
+func (o orchestrationOutput) emitWorkflow(intent conversation.Intent, workflow string) {
+	if o.OnProgress != nil {
+		o.OnProgress(daemon.WorkflowProgressEvent(string(intent), workflow))
+	}
+	if o.OnWorkflow != nil {
+		o.OnWorkflow(intent, workflow)
+	}
+}
+
+func (o orchestrationOutput) emitText(text string) {
+	if text == "" {
+		return
+	}
+	if o.OnProgress != nil {
+		if ev := daemon.TextProgressEvent(text); ev.Message != "" {
+			o.OnProgress(ev)
+		}
+	}
+	if o.OnText != nil {
+		o.OnText(text)
+	}
+}
+
+func (o orchestrationOutput) emitUsage(summary string) {
+	if summary == "" {
+		return
+	}
+	if o.OnProgress != nil {
+		o.OnProgress(daemon.UsageProgressEvent(summary))
+	}
+	if o.OnUsage != nil {
+		o.OnUsage(summary)
 	}
 }
 
@@ -178,9 +214,7 @@ func (rt *executionRuntime) runTask(
 		"workflow", wf.Name(),
 		"session", sess.ID,
 	)
-	if output.OnWorkflow != nil {
-		output.OnWorkflow(intent, wf.Name())
-	}
+	output.emitWorkflow(intent, wf.Name())
 	rt.appendRouteAudit(routeAuditRecord{
 		Timestamp:        time.Now().UTC().Format(time.RFC3339),
 		SessionID:        sess.ID,
@@ -215,7 +249,7 @@ func (rt *executionRuntime) runTask(
 		Tools:    rt.reg,
 		Provider: rt.provider,
 		Config:   cfg,
-		OnText:   output.OnText,
+		OnText:   output.emitText,
 	}
 	if wf.Name() == "research" && rt.wikiIdx != nil && rt.wikiStore != nil {
 		input.Extra = &orchestrator.ResearchDeps{
@@ -231,8 +265,8 @@ func (rt *executionRuntime) runTask(
 		return nil, "", fmt.Errorf("workflow %s: %w", wf.Name(), err)
 	}
 
-	if usage := llm.FormatUsageSummary(rt.wfCfg.Model, result.Usage); usage != "" && output.OnUsage != nil {
-		output.OnUsage(usage)
+	if usage := llm.FormatUsageSummary(rt.wfCfg.Model, result.Usage); usage != "" {
+		output.emitUsage(usage)
 	}
 
 	if err := sess.AppendMessages(result.Messages[len(prepared):]); err != nil {
@@ -250,7 +284,14 @@ func (rt *executionRuntime) newDaemonTaskRunner() daemon.TaskRunner {
 		}
 
 		messages, summary, err := rt.runTask(ctx, sess, nil, payload, orchestrationOutput{
-			OnText: onText,
+			OnProgress: func(ev daemon.ProgressEvent) {
+				if onText == nil {
+					return
+				}
+				if raw := daemon.EncodeProgressEvent(ev); raw != "" {
+					onText(raw)
+				}
+			},
 		})
 		if err != nil {
 			return daemon.TaskResult{}, err

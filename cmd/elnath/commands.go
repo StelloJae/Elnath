@@ -477,7 +477,7 @@ func cmdDaemonStatus(ctx context.Context) error {
 		if len(payload) > 60 {
 			payload = payload[:57] + "..."
 		}
-		progress := t.Progress
+		progress := daemon.RenderProgress(t.Progress)
 		if len(progress) > 28 {
 			progress = progress[:25] + "..."
 		}

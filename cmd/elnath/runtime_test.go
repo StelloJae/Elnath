@@ -12,6 +12,7 @@ import (
 	"github.com/stello/elnath/internal/config"
 	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/core"
+	"github.com/stello/elnath/internal/daemon"
 	"github.com/stello/elnath/internal/llm"
 )
 
@@ -144,6 +145,57 @@ func TestExecutionRuntimeRunTaskInvokesWorkflowAndUsageCallbacks(t *testing.T) {
 	}
 	if len(messages) == 0 {
 		t.Fatal("expected persisted messages")
+	}
+}
+
+func TestExecutionRuntimeRunTaskEmitsStructuredProgressEvents(t *testing.T) {
+	provider := &countingProvider{streamText: "hello from runtime"}
+	rt := newTestExecutionRuntime(t, provider)
+
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	var events []daemon.ProgressEvent
+	_, _, err = rt.runTask(context.Background(), sess, nil, "what changed in Stella?", orchestrationOutput{
+		OnProgress: func(ev daemon.ProgressEvent) {
+			events = append(events, ev)
+		},
+	})
+	if err != nil {
+		t.Fatalf("runTask: %v", err)
+	}
+	if len(events) < 3 {
+		t.Fatalf("expected at least 3 progress events, got %d", len(events))
+	}
+	if events[0].Kind != daemon.ProgressKindWorkflow {
+		t.Fatalf("first event kind = %q, want %q", events[0].Kind, daemon.ProgressKindWorkflow)
+	}
+	if events[0].Intent != "question" || events[0].Workflow != "single" {
+		t.Fatalf("first event = %+v, want question/single", events[0])
+	}
+
+	var sawText, sawUsage bool
+	for _, ev := range events {
+		switch ev.Kind {
+		case daemon.ProgressKindText:
+			sawText = true
+			if !strings.Contains(ev.Message, "hello from runtime") {
+				t.Fatalf("text progress message = %q, want runtime text", ev.Message)
+			}
+		case daemon.ProgressKindUsage:
+			sawUsage = true
+			if ev.Message == "" {
+				t.Fatal("expected non-empty usage progress message")
+			}
+		}
+	}
+	if !sawText {
+		t.Fatal("expected text progress event")
+	}
+	if !sawUsage {
+		t.Fatal("expected usage progress event")
 	}
 }
 
