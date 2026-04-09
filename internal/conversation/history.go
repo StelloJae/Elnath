@@ -193,7 +193,7 @@ func (s *DBHistoryStore) ListSessions(ctx context.Context) ([]SessionInfo, error
 		FROM conversations c
 		LEFT JOIN conversation_messages m ON m.session_id = c.id
 		GROUP BY c.id
-		ORDER BY c.updated_at DESC
+		ORDER BY c.updated_at DESC, c.created_at DESC, c.id DESC
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("history: list sessions: %w", err)

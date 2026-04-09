@@ -3,7 +3,10 @@ package conversation
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stello/elnath/internal/agent"
 	"github.com/stello/elnath/internal/llm"
@@ -44,6 +47,8 @@ type mockHistoryStore struct {
 	sessions map[string][]llm.Message
 	saveErr  error
 	loadErr  error
+	infos    []SessionInfo
+	listErr  error
 }
 
 func (m *mockHistoryStore) Save(_ context.Context, sessionID string, messages []llm.Message) error {
@@ -65,6 +70,12 @@ func (m *mockHistoryStore) Load(_ context.Context, sessionID string) ([]llm.Mess
 }
 
 func (m *mockHistoryStore) ListSessions(_ context.Context) ([]SessionInfo, error) {
+	if m.listErr != nil {
+		return nil, m.listErr
+	}
+	if m.infos != nil {
+		return append([]SessionInfo(nil), m.infos...), nil
+	}
 	var result []SessionInfo
 	for id, msgs := range m.sessions {
 		result = append(result, SessionInfo{ID: id, MessageCount: len(msgs)})
@@ -355,7 +366,7 @@ func TestManagerGetHistory_BadSessionID(t *testing.T) {
 }
 
 func TestManagerListSessions_WithStore(t *testing.T) {
-	_, dir := newTestSession(t)
+	sess, dir := newTestSession(t)
 	store := &mockHistoryStore{
 		sessions: map[string][]llm.Message{
 			"s1": {llm.NewUserMessage("a")},
@@ -368,21 +379,107 @@ func TestManagerListSessions_WithStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListSessions: %v", err)
 	}
-	if len(sessions) != 2 {
-		t.Errorf("session count = %d, want 2", len(sessions))
+	if len(sessions) != 3 {
+		t.Fatalf("session count = %d, want 3", len(sessions))
+	}
+	seen := map[string]bool{}
+	for _, info := range sessions {
+		seen[info.ID] = true
+	}
+	for _, id := range []string{"s1", "s2", sess.ID} {
+		if !seen[id] {
+			t.Fatalf("session %q missing from merged list", id)
+		}
 	}
 }
 
 func TestManagerListSessions_NoStore(t *testing.T) {
-	dir := t.TempDir()
+	sess, dir := newTestSession(t)
 	mgr := NewManager(nil, dir)
 
 	sessions, err := mgr.ListSessions(context.Background())
 	if err != nil {
 		t.Fatalf("ListSessions: %v", err)
 	}
-	if sessions != nil {
-		t.Errorf("expected nil sessions without store, got %v", sessions)
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 file-backed session, got %d", len(sessions))
+	}
+	if sessions[0].ID != sess.ID {
+		t.Fatalf("session ID = %q, want %q", sessions[0].ID, sess.ID)
+	}
+}
+
+func TestManagerLoadLatestSession_PrefersNewerStoreTimestamp(t *testing.T) {
+	sessA, dir := newTestSession(t)
+	sessB, err := agent.NewSession(dir)
+	if err != nil {
+		t.Fatalf("NewSession B: %v", err)
+	}
+	if err := sessA.AppendMessage(llm.NewUserMessage("older file")); err != nil {
+		t.Fatalf("AppendMessage A: %v", err)
+	}
+	if err := sessB.AppendMessage(llm.NewUserMessage("newer file")); err != nil {
+		t.Fatalf("AppendMessage B: %v", err)
+	}
+
+	now := time.Now().UTC()
+	if err := os.Chtimes(filepath.Join(dir, "sessions", sessA.ID+".jsonl"), now.Add(-2*time.Hour), now.Add(-2*time.Hour)); err != nil {
+		t.Fatalf("Chtimes A: %v", err)
+	}
+	if err := os.Chtimes(filepath.Join(dir, "sessions", sessB.ID+".jsonl"), now.Add(-time.Hour), now.Add(-time.Hour)); err != nil {
+		t.Fatalf("Chtimes B: %v", err)
+	}
+
+	store := &mockHistoryStore{
+		infos: []SessionInfo{
+			{ID: sessA.ID, UpdatedAt: now.Add(time.Hour), MessageCount: 1},
+		},
+	}
+	mgr := NewManager(nil, dir).WithHistoryStore(store)
+
+	latest, err := mgr.LoadLatestSession()
+	if err != nil {
+		t.Fatalf("LoadLatestSession: %v", err)
+	}
+	if latest.ID != sessA.ID {
+		t.Fatalf("latest session = %q, want %q", latest.ID, sessA.ID)
+	}
+}
+
+func TestManagerLoadLatestSession_FallsBackToFileWhenStoreIsStale(t *testing.T) {
+	sessA, dir := newTestSession(t)
+	sessB, err := agent.NewSession(dir)
+	if err != nil {
+		t.Fatalf("NewSession B: %v", err)
+	}
+	if err := sessA.AppendMessage(llm.NewUserMessage("older session")); err != nil {
+		t.Fatalf("AppendMessage A: %v", err)
+	}
+	if err := sessB.AppendMessage(llm.NewUserMessage("newer session")); err != nil {
+		t.Fatalf("AppendMessage B: %v", err)
+	}
+
+	now := time.Now().UTC()
+	if err := os.Chtimes(filepath.Join(dir, "sessions", sessA.ID+".jsonl"), now.Add(-2*time.Hour), now.Add(-2*time.Hour)); err != nil {
+		t.Fatalf("Chtimes A: %v", err)
+	}
+	if err := os.Chtimes(filepath.Join(dir, "sessions", sessB.ID+".jsonl"), now, now); err != nil {
+		t.Fatalf("Chtimes B: %v", err)
+	}
+
+	store := &mockHistoryStore{
+		infos: []SessionInfo{
+			{ID: sessA.ID, UpdatedAt: now.Add(-time.Hour), MessageCount: 1},
+		},
+	}
+	mgr := NewManager(nil, dir).WithHistoryStore(store)
+
+	latest, err := mgr.LoadLatestSession()
+	if err != nil {
+		t.Fatalf("LoadLatestSession: %v", err)
+	}
+	if latest.ID != sessB.ID {
+		t.Fatalf("latest session = %q, want %q", latest.ID, sessB.ID)
 	}
 }
 

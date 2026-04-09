@@ -1,7 +1,10 @@
 package agent
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stello/elnath/internal/llm"
 )
@@ -150,5 +153,58 @@ func TestLoadSessionNotFound(t *testing.T) {
 	_, err := LoadSession(dir, "nonexistent-id")
 	if err == nil {
 		t.Error("LoadSession with nonexistent ID should return an error")
+	}
+}
+
+func TestListSessionFiles(t *testing.T) {
+	dir := t.TempDir()
+
+	first, err := NewSession(dir)
+	if err != nil {
+		t.Fatalf("NewSession first: %v", err)
+	}
+	if err := first.AppendMessage(llm.NewUserMessage("first")); err != nil {
+		t.Fatalf("AppendMessage first: %v", err)
+	}
+
+	second, err := NewSession(dir)
+	if err != nil {
+		t.Fatalf("NewSession second: %v", err)
+	}
+	if err := second.AppendMessages([]llm.Message{
+		llm.NewUserMessage("second-1"),
+		llm.NewAssistantMessage("second-2"),
+	}); err != nil {
+		t.Fatalf("AppendMessages second: %v", err)
+	}
+
+	now := time.Now().UTC()
+	firstPath := filepath.Join(dir, "sessions", first.ID+".jsonl")
+	secondPath := filepath.Join(dir, "sessions", second.ID+".jsonl")
+	if err := os.Chtimes(firstPath, now.Add(-time.Hour), now.Add(-time.Hour)); err != nil {
+		t.Fatalf("Chtimes first: %v", err)
+	}
+	if err := os.Chtimes(secondPath, now, now); err != nil {
+		t.Fatalf("Chtimes second: %v", err)
+	}
+
+	infos, err := ListSessionFiles(dir)
+	if err != nil {
+		t.Fatalf("ListSessionFiles: %v", err)
+	}
+	if len(infos) != 2 {
+		t.Fatalf("session count = %d, want 2", len(infos))
+	}
+	if infos[0].ID != second.ID {
+		t.Fatalf("latest file-backed session = %q, want %q", infos[0].ID, second.ID)
+	}
+	if infos[0].MessageCount != 2 {
+		t.Fatalf("second MessageCount = %d, want 2", infos[0].MessageCount)
+	}
+	if infos[1].ID != first.ID {
+		t.Fatalf("older file-backed session = %q, want %q", infos[1].ID, first.ID)
+	}
+	if infos[1].MessageCount != 1 {
+		t.Fatalf("first MessageCount = %d, want 1", infos[1].MessageCount)
 	}
 }

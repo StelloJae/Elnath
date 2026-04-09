@@ -3,9 +3,12 @@ package agent
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -42,6 +45,17 @@ type sessionHeader struct {
 	ID        string    `json:"id"`
 	CreatedAt time.Time `json:"created_at"`
 	Version   int       `json:"version"`
+}
+
+// SessionFileInfo describes the file-backed metadata for a persisted session.
+// It is intentionally derived from the JSONL transcript plus filesystem state so
+// callers can reconcile it with any secondary history store.
+type SessionFileInfo struct {
+	ID           string
+	Path         string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	MessageCount int
 }
 
 // NewSession creates a new session with a random ID.
@@ -184,4 +198,95 @@ func (s *Session) writeHeader() error {
 
 func sessionPath(dataDir, id string) string {
 	return filepath.Join(dataDir, "sessions", id+".jsonl")
+}
+
+// ListSessionFiles returns metadata for all JSONL-backed sessions known on disk.
+// UpdatedAt is derived from file modification time; CreatedAt is read from the
+// JSONL header when available. Files that cannot be parsed still participate via
+// their filename and modtime so callers can skip them explicitly later.
+func ListSessionFiles(dataDir string) ([]SessionFileInfo, error) {
+	sessDir := filepath.Join(dataDir, "sessions")
+	entries, err := os.ReadDir(sessDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("session: list files: %w", err)
+	}
+
+	infos := make([]SessionFileInfo, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
+			continue
+		}
+
+		path := filepath.Join(sessDir, entry.Name())
+		fileInfo, err := entry.Info()
+		if err != nil {
+			return nil, fmt.Errorf("session: stat %s: %w", entry.Name(), err)
+		}
+
+		meta, err := readSessionFileInfo(path)
+		if err != nil {
+			meta = SessionFileInfo{
+				ID:   strings.TrimSuffix(entry.Name(), ".jsonl"),
+				Path: path,
+			}
+		}
+		meta.Path = path
+		meta.UpdatedAt = fileInfo.ModTime().UTC()
+		if meta.ID == "" {
+			meta.ID = strings.TrimSuffix(entry.Name(), ".jsonl")
+		}
+		infos = append(infos, meta)
+	}
+
+	sort.SliceStable(infos, func(i, j int) bool {
+		if !infos[i].UpdatedAt.Equal(infos[j].UpdatedAt) {
+			return infos[i].UpdatedAt.After(infos[j].UpdatedAt)
+		}
+		if !infos[i].CreatedAt.Equal(infos[j].CreatedAt) {
+			return infos[i].CreatedAt.After(infos[j].CreatedAt)
+		}
+		return infos[i].ID > infos[j].ID
+	})
+
+	return infos, nil
+}
+
+func readSessionFileInfo(path string) (SessionFileInfo, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return SessionFileInfo{}, fmt.Errorf("session: open metadata: %w", err)
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	if !scanner.Scan() {
+		if err := scanner.Err(); err != nil {
+			return SessionFileInfo{}, fmt.Errorf("session: read metadata header: %w", err)
+		}
+		return SessionFileInfo{}, fmt.Errorf("session: empty file")
+	}
+
+	var hdr sessionHeader
+	if err := json.Unmarshal(scanner.Bytes(), &hdr); err != nil {
+		return SessionFileInfo{}, fmt.Errorf("session: parse metadata header: %w", err)
+	}
+
+	info := SessionFileInfo{
+		ID:        hdr.ID,
+		CreatedAt: hdr.CreatedAt.UTC(),
+	}
+	for scanner.Scan() {
+		if len(scanner.Bytes()) == 0 {
+			continue
+		}
+		info.MessageCount++
+	}
+	if err := scanner.Err(); err != nil {
+		return SessionFileInfo{}, fmt.Errorf("session: scan metadata: %w", err)
+	}
+
+	return info, nil
 }

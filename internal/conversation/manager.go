@@ -5,10 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
-	"strings"
-	"time"
+	"sort"
 
 	"github.com/stello/elnath/internal/agent"
 	"github.com/stello/elnath/internal/llm"
@@ -117,35 +114,33 @@ func (m *Manager) LoadSession(sessionID string) (*agent.Session, error) {
 
 // LoadLatestSession finds and loads the most recently modified session file.
 func (m *Manager) LoadLatestSession() (*agent.Session, error) {
-	sessDir := filepath.Join(m.dataDir, "sessions")
-	entries, err := os.ReadDir(sessDir)
+	sessions, err := m.ListSessions(context.Background())
 	if err != nil {
 		return nil, fmt.Errorf("conversation: list sessions: %w", err)
 	}
-
-	var latestName string
-	var latestTime time.Time
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
-			continue
-		}
-		info, err := e.Info()
-		if err != nil {
-			continue
-		}
-		if info.ModTime().After(latestTime) {
-			latestTime = info.ModTime()
-			latestName = e.Name()
-		}
-	}
-
-	if latestName == "" {
+	if len(sessions) == 0 {
 		return nil, fmt.Errorf("conversation: no sessions found")
 	}
 
-	id := strings.TrimSuffix(latestName, ".jsonl")
-	m.logger.Info("resuming latest session", "session_id", id)
-	return m.LoadSession(id)
+	var lastErr error
+	for _, info := range sessions {
+		s, err := m.LoadSession(info.ID)
+		if err == nil {
+			m.logger.Info("resuming latest session", "session_id", info.ID)
+			return s, nil
+		}
+		lastErr = err
+		if m.logger != nil {
+			m.logger.Warn("failed to load candidate latest session; trying next candidate",
+				"session_id", info.ID,
+				"error", err,
+			)
+		}
+	}
+	if lastErr != nil {
+		return nil, fmt.Errorf("conversation: load latest session: %w", lastErr)
+	}
+	return nil, fmt.Errorf("conversation: no loadable sessions found")
 }
 
 // SendMessage processes a user message for the given session.
@@ -267,10 +262,68 @@ func (m *Manager) GetHistory(ctx context.Context, sessionID string) ([]llm.Messa
 }
 
 // ListSessions returns metadata for all known sessions.
-// It prefers the HistoryStore if available, returning an empty list otherwise.
+// It merges file-backed JSONL metadata with any HistoryStore metadata so latest
+// session selection can tolerate one backend lagging the other.
 func (m *Manager) ListSessions(ctx context.Context) ([]SessionInfo, error) {
-	if m.history != nil {
-		return m.history.ListSessions(ctx)
+	fileInfos, err := agent.ListSessionFiles(m.dataDir)
+	if err != nil {
+		return nil, fmt.Errorf("conversation: list session files: %w", err)
 	}
-	return nil, nil
+
+	merged := make(map[string]SessionInfo, len(fileInfos))
+	for _, info := range fileInfos {
+		merged[info.ID] = SessionInfo{
+			ID:           info.ID,
+			CreatedAt:    info.CreatedAt,
+			UpdatedAt:    info.UpdatedAt,
+			MessageCount: info.MessageCount,
+		}
+	}
+
+	if m.history != nil {
+		storeInfos, err := m.history.ListSessions(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, info := range storeInfos {
+			existing, ok := merged[info.ID]
+			if !ok {
+				merged[info.ID] = info
+				continue
+			}
+			if existing.CreatedAt.IsZero() || (!info.CreatedAt.IsZero() && info.CreatedAt.Before(existing.CreatedAt)) {
+				existing.CreatedAt = info.CreatedAt
+			}
+			if info.UpdatedAt.After(existing.UpdatedAt) {
+				existing.UpdatedAt = info.UpdatedAt
+			}
+			if info.MessageCount > existing.MessageCount {
+				existing.MessageCount = info.MessageCount
+			}
+			merged[info.ID] = existing
+		}
+	}
+
+	if len(merged) == 0 {
+		return nil, nil
+	}
+
+	sessions := make([]SessionInfo, 0, len(merged))
+	for _, info := range merged {
+		sessions = append(sessions, info)
+	}
+	sort.SliceStable(sessions, func(i, j int) bool {
+		if !sessions[i].UpdatedAt.Equal(sessions[j].UpdatedAt) {
+			return sessions[i].UpdatedAt.After(sessions[j].UpdatedAt)
+		}
+		if !sessions[i].CreatedAt.Equal(sessions[j].CreatedAt) {
+			return sessions[i].CreatedAt.After(sessions[j].CreatedAt)
+		}
+		if sessions[i].MessageCount != sessions[j].MessageCount {
+			return sessions[i].MessageCount > sessions[j].MessageCount
+		}
+		return sessions[i].ID > sessions[j].ID
+	})
+
+	return sessions, nil
 }
