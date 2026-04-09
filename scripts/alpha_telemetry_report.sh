@@ -125,6 +125,8 @@ report = {
         "completion_contract_coverage": 0.0,
         "completion_handoff_rate": 0.0,
         "completion_rate": 0.0,
+        "continuation_requests": 0,
+        "telegram_followups": 0,
     },
     "approvals": {
         "total": 0,

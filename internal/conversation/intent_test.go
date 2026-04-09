@@ -286,6 +286,64 @@ func TestLLMClassifierClassify_AllIntents(t *testing.T) {
 	}
 }
 
+func TestFilterTextMessages(t *testing.T) {
+	msgs := []llm.Message{
+		llm.NewUserMessage("hello"),
+		{Role: "assistant", Content: []llm.ContentBlock{
+			llm.TextBlock{Text: "I'll run bash"},
+			llm.ToolUseBlock{ID: "t1", Name: "bash", Input: []byte(`{}`)},
+		}},
+		llm.NewToolResultMessage("t1", "ok", false),
+		llm.NewAssistantMessage("done"),
+		llm.NewUserMessage("thanks"),
+	}
+
+	got := filterTextMessages(msgs)
+	if len(got) != 3 {
+		t.Fatalf("filterTextMessages returned %d messages, want 3", len(got))
+	}
+	if got[0].Text() != "hello" {
+		t.Errorf("msg[0] = %q, want %q", got[0].Text(), "hello")
+	}
+	if got[1].Text() != "done" {
+		t.Errorf("msg[1] = %q, want %q", got[1].Text(), "done")
+	}
+	if got[2].Text() != "thanks" {
+		t.Errorf("msg[2] = %q, want %q", got[2].Text(), "thanks")
+	}
+}
+
+func TestLLMClassifierClassify_ToolMessagesFiltered(t *testing.T) {
+	var capturedReq llm.ChatRequest
+	provider := &mockProvider{
+		chatFn: func(_ context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+			capturedReq = req
+			return &llm.ChatResponse{Content: `{"intent":"simple_task","confidence":0.9}`}, nil
+		},
+	}
+
+	history := []llm.Message{
+		llm.NewUserMessage("add email validation"),
+		{Role: "assistant", Content: []llm.ContentBlock{
+			llm.TextBlock{Text: "running bash"},
+			llm.ToolUseBlock{ID: "t1", Name: "bash", Input: []byte(`{}`)},
+		}},
+		llm.NewToolResultMessage("t1", "file written", false),
+		llm.NewAssistantMessage("done"),
+	}
+
+	classifier := NewLLMClassifier()
+	_, err := classifier.Classify(context.Background(), provider, "add domain check", history)
+	if err != nil {
+		t.Fatalf("Classify: %v", err)
+	}
+
+	// Only 2 text messages from history + 1 classify request = 3.
+	if len(capturedReq.Messages) != 3 {
+		t.Errorf("captured %d messages, want 3 (tool messages should be filtered)", len(capturedReq.Messages))
+	}
+}
+
 func TestClassificationPromptBoundaryGuidance(t *testing.T) {
 	for _, needle := range []string{
 		`Prefer "wiki_query" over "question"`,

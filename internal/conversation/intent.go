@@ -48,9 +48,19 @@ Intent categories:
 Decision rules:
 - Prefer "wiki_query" over "question" when the user is asking about remembered project history, prior sessions, stored notes, or "what changed / what do we know".
 - Prefer "research" over "question" when the user wants investigation, comparison, analysis, or evidence gathering rather than a direct factual answer.
-- Prefer "project" over "complex_task" when the user is kicking off a larger initiative, release, or multi-phase build; use "complex_task" for bounded execution work inside an existing project.
+- Prefer "project" over "complex_task" when the user is kicking off a larger initiative, release, or multi-phase build. Creation verbs ("만들어", "만들어줘", "build", "create", "새로", "new", "make", "start") combined with scope nouns ("project", "프로젝트", "app", "application", "tool", "system", "service", "API", "platform", "CLI") strongly signal "project" intent.
+- Use "complex_task" for bounded execution work inside an existing project (e.g., refactoring a module, fixing a bug with multiple steps).
 - Prefer "simple_task" only for clearly bounded one-step edits or commands.
 - Prefer "question" for direct factual/conceptual questions that do not require stored-history lookup.
+
+Examples:
+- "프로젝트 만들어줘" → {"intent": "project", "confidence": 0.95}
+- "Create a new REST API" → {"intent": "project", "confidence": 0.95}
+- "Build me a CLI tool" → {"intent": "project", "confidence": 0.95}
+- "Refactor the auth module" → {"intent": "complex_task", "confidence": 0.9}
+- "Fix the bug in login" → {"intent": "simple_task", "confidence": 0.85}
+- "What is X?" → {"intent": "question", "confidence": 0.95}
+- "Search wiki for Y" → {"intent": "wiki_query", "confidence": 0.9}
 
 Be decisive. Default to "unclear" only when truly ambiguous.`
 
@@ -69,14 +79,15 @@ func NewLLMClassifier() *LLMClassifier {
 // Classify sends the message and recent history to the LLM for intent classification.
 // On any parse or provider error, it falls back to IntentUnclear.
 func (c *LLMClassifier) Classify(ctx context.Context, provider llm.Provider, message string, history []llm.Message) (Intent, error) {
-	// Build context from recent history (last 4 turns to keep prompt small).
-	recentHistory := history
-	if len(recentHistory) > 8 {
-		recentHistory = recentHistory[len(recentHistory)-8:]
+	// Filter to text-only messages — tool_use/tool_result blocks break the
+	// API when the slice boundary splits a call/result pair.
+	textOnly := filterTextMessages(history)
+	if len(textOnly) > 8 {
+		textOnly = textOnly[len(textOnly)-8:]
 	}
 
-	messages := make([]llm.Message, 0, len(recentHistory)+1)
-	messages = append(messages, recentHistory...)
+	messages := make([]llm.Message, 0, len(textOnly)+1)
+	messages = append(messages, textOnly...)
 	messages = append(messages, llm.NewUserMessage(
 		fmt.Sprintf("Classify the intent of this message: %q", message),
 	))
@@ -108,6 +119,26 @@ func (c *LLMClassifier) Classify(ctx context.Context, provider llm.Provider, mes
 	)
 
 	return result.Intent, nil
+}
+
+// filterTextMessages returns only messages whose content blocks are all text.
+// This strips tool_use/tool_result turns so the classifier never sends
+// orphaned tool results to the LLM provider.
+func filterTextMessages(msgs []llm.Message) []llm.Message {
+	out := make([]llm.Message, 0, len(msgs))
+	for _, m := range msgs {
+		textOnly := true
+		for _, b := range m.Content {
+			if _, ok := b.(llm.TextBlock); !ok {
+				textOnly = false
+				break
+			}
+		}
+		if textOnly && len(m.Content) > 0 {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // parseIntentResponse parses the LLM's JSON response into an IntentResult.
