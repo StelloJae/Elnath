@@ -60,6 +60,18 @@ Start an interactive chat session. Type messages naturally; intent is classified
 
 The daemon persists progress as a machine-readable event envelope (`elnath.progress.v1`) and `elnath daemon status` renders the shared `message` field. That keeps progress updates concise in the CLI now while leaving the same schema reusable for future delivery bridges.
 
+## Closed Alpha Readiness
+
+Month 4 lane-4 operator materials now live in the repo:
+
+- `wiki/closed-alpha-setup.md` — install-to-first-task onboarding path
+- `wiki/closed-alpha-runbook.md` — rehearsal checklist and evidence capture flow
+- `wiki/closed-alpha-known-limits.md` — explicit pre-alpha constraints
+- `scripts/run_month4_closed_alpha_checks.sh` — lint/test/build + telemetry verification bundle
+- `scripts/alpha_telemetry_report.sh` — local SQLite summary for completion/session/timeout signals
+
+Use `bash scripts/run_month4_closed_alpha_checks.sh` for the fast verification pass, then archive one `alpha_telemetry_report.sh` snapshot per rehearsal.
+
 ## Commands
 
 | Command | Purpose | Example |
