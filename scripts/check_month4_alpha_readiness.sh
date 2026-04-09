@@ -92,6 +92,20 @@ else
   record "telemetry_timeouts" "FAIL" "timeout telemetry implementation or coverage anchors missing"
 fi
 
+telemetryScript="$ROOT/scripts/alpha_telemetry_report.sh"
+telemetryTest="$ROOT/scripts/test_alpha_telemetry_report.sh"
+if [[ -f "$telemetryScript" && -f "$telemetryTest" ]] &&
+  grep -q 'completion_handoffs' "$telemetryScript" &&
+  grep -q 'resume_followup_rate' "$telemetryScript" &&
+  grep -q 'repeat_use_rate' "$telemetryScript" &&
+  grep -q 'completion_handoff_rate' "$telemetryTest" &&
+  grep -q 'resume_followup_rate' "$telemetryTest" &&
+  grep -q 'repeat_use_rate' "$telemetryTest"; then
+  record "telemetry_alpha_rollups" "PASS" "scripts/alpha_telemetry_report.sh + scripts/test_alpha_telemetry_report.sh completion/resume/retention coverage"
+else
+  record "telemetry_alpha_rollups" "FAIL" "completion/resume/retention telemetry rollups or regression anchors missing"
+fi
+
 printf '# Month 4 Closed Alpha Readiness Gates\n\n'
 printf '| Status | Gate | Evidence |\n'
 printf '| --- | --- | --- |\n'

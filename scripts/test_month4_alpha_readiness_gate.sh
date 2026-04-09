@@ -12,7 +12,8 @@ make_fixture() {
     "$root/benchmarks/results/canary-targeted-repair" \
     "$root/internal/daemon" \
     "$root/cmd/elnath" \
-    "$root/wiki"
+    "$root/wiki" \
+    "$root/scripts"
 
   cat >"$root/internal/daemon/queue.go" <<'EOGO'
 package daemon
@@ -31,10 +32,20 @@ package daemon
 func TestDaemonSubmitAndStatus() {}
 EOGO
 
-  cat >"$root/cmd/elnath/runtime_test.go" <<'EOGO'
+cat >"$root/cmd/elnath/runtime_test.go" <<'EOF'
 package main
 func TestExecutionRuntimeRunTaskEmitsStructuredProgressEvents() {}
-EOGO
+EOF
+
+  cat >"$root/scripts/alpha_telemetry_report.sh" <<'EOF'
+#!/usr/bin/env bash
+completion_contract_coverage
+EOF
+
+  cat >"$root/scripts/test_alpha_telemetry_report.sh" <<'EOF'
+#!/usr/bin/env bash
+completion_contract_coverage
+EOF
 }
 
 fail_root="$TMP_DIR/fail"
@@ -50,6 +61,7 @@ fi
 grep -Fq 'FAIL | confirmatory_canary' "$TMP_DIR/fail.out"
 grep -Fq 'FAIL | telegram_operator_shell' "$TMP_DIR/fail.out"
 grep -Fq 'FAIL | alpha_onboarding_docs' "$TMP_DIR/fail.out"
+grep -Fq 'FAIL | telemetry_alpha_rollups' "$TMP_DIR/fail.out"
 
 pass_root="$TMP_DIR/pass"
 make_fixture "$pass_root"
@@ -83,10 +95,25 @@ cat >"$pass_root/wiki/closed-alpha-known-limits.md" <<'EOF_PASS'
 Telegram must stay a thin companion shell.
 EOF_PASS
 
+cat >"$pass_root/scripts/alpha_telemetry_report.sh" <<'EOF'
+#!/usr/bin/env bash
+completion_handoffs
+resume_followup_rate
+repeat_use_rate
+EOF
+
+cat >"$pass_root/scripts/test_alpha_telemetry_report.sh" <<'EOF'
+#!/usr/bin/env bash
+completion_handoff_rate
+resume_followup_rate
+repeat_use_rate
+EOF
+
 "$CHECK_SCRIPT" "$pass_root" >"$TMP_DIR/pass.out" 2>&1
 grep -Fq 'PASS | confirmatory_canary' "$TMP_DIR/pass.out"
 grep -Fq 'PASS | telegram_operator_shell' "$TMP_DIR/pass.out"
 grep -Fq 'PASS | alpha_onboarding_docs' "$TMP_DIR/pass.out"
+grep -Fq 'PASS | telemetry_alpha_rollups' "$TMP_DIR/pass.out"
 grep -Fq 'Overall: PASS' "$TMP_DIR/pass.out"
 
 echo "PASS: month4 readiness gate rejects docs-only evidence and passes once every required artifact exists"

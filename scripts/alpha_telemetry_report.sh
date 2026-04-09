@@ -13,8 +13,10 @@ Defaults:
 Summarizes Month 4 closed-alpha telemetry signals from the local Elnath SQLite state:
 - task completion counts
 - session-bound task counts
+- completion handoff coverage
 - completion-contract coverage
 - timeout recovery / false-timeout metrics
+- resume follow-up summaries from task/session continuity
 - repeat-use session summary from conversation history
 
 Options:
@@ -108,19 +110,27 @@ report = {
         "failed": 0,
         "terminal": 0,
         "session_bound": 0,
+        "terminal_session_bound": 0,
         "completion_contracts": 0,
+        "completion_handoffs": 0,
         "idle_timeout_recoveries": 0,
         "active_but_killed_recoveries": 0,
         "false_timeout_rate": 0.0,
         "session_binding_rate": 0.0,
         "completion_contract_coverage": 0.0,
+        "completion_handoff_rate": 0.0,
         "completion_rate": 0.0,
     },
     "sessions": {
         "total": 0,
         "with_messages": 0,
+        "task_linked": 0,
+        "resume_followup_sessions": 0,
+        "resume_followup_rate": 0.0,
         "updated_last_7d": 0,
         "distinct_active_days_last_7d": 0,
+        "repeat_use_sessions": 0,
+        "repeat_use_rate": 0.0,
         "recent_activity_rate": 0.0,
     },
 }
@@ -136,7 +146,9 @@ if table_exists(cur, "task_queue"):
           SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
           SUM(CASE WHEN status IN ('done', 'failed') THEN 1 ELSE 0 END) AS terminal,
           SUM(CASE WHEN COALESCE(session_id, '') != '' THEN 1 ELSE 0 END) AS session_bound,
+          SUM(CASE WHEN status IN ('done', 'failed') AND COALESCE(session_id, '') != '' THEN 1 ELSE 0 END) AS terminal_session_bound,
           SUM(CASE WHEN COALESCE(completion, '') != '' THEN 1 ELSE 0 END) AS completion_contracts,
+          SUM(CASE WHEN status IN ('done', 'failed') AND COALESCE(session_id, '') != '' AND COALESCE(completion, '') != '' THEN 1 ELSE 0 END) AS completion_handoffs,
           SUM(CASE WHEN timeout_class = 'idle' THEN 1 ELSE 0 END) AS idle_timeout_recoveries,
           SUM(CASE WHEN timeout_class = 'active_but_killed' THEN 1 ELSE 0 END) AS active_but_killed_recoveries
         FROM task_queue
@@ -150,7 +162,9 @@ if table_exists(cur, "task_queue"):
         "failed": row["failed"] or 0,
         "terminal": row["terminal"] or 0,
         "session_bound": row["session_bound"] or 0,
+        "terminal_session_bound": row["terminal_session_bound"] or 0,
         "completion_contracts": row["completion_contracts"] or 0,
+        "completion_handoffs": row["completion_handoffs"] or 0,
         "idle_timeout_recoveries": row["idle_timeout_recoveries"] or 0,
         "active_but_killed_recoveries": row["active_but_killed_recoveries"] or 0,
     })
@@ -165,6 +179,10 @@ if table_exists(cur, "task_queue"):
         report["tasks"]["completion_contracts"],
         report["tasks"]["terminal"],
     )
+    report["tasks"]["completion_handoff_rate"] = ratio(
+        report["tasks"]["completion_handoffs"],
+        report["tasks"]["terminal_session_bound"],
+    )
     report["tasks"]["completion_rate"] = ratio(report["tasks"]["done"], report["tasks"]["terminal"])
 
 if table_exists(cur, "conversations"):
@@ -172,6 +190,7 @@ if table_exists(cur, "conversations"):
         """
         SELECT
           COUNT(*) AS total,
+          SUM(CASE WHEN date(updated_at) > date(created_at) THEN 1 ELSE 0 END) AS repeat_use_sessions,
           SUM(CASE WHEN updated_at >= datetime('now', '-7 days') THEN 1 ELSE 0 END) AS updated_last_7d,
           COUNT(DISTINCT CASE WHEN updated_at >= datetime('now', '-7 days') THEN date(updated_at) END) AS distinct_active_days_last_7d
         FROM conversations
@@ -179,9 +198,14 @@ if table_exists(cur, "conversations"):
     ).fetchone()
     report["sessions"].update({
         "total": row["total"] or 0,
+        "repeat_use_sessions": row["repeat_use_sessions"] or 0,
         "updated_last_7d": row["updated_last_7d"] or 0,
         "distinct_active_days_last_7d": row["distinct_active_days_last_7d"] or 0,
     })
+    report["sessions"]["repeat_use_rate"] = ratio(
+        report["sessions"]["repeat_use_sessions"],
+        report["sessions"]["total"],
+    )
     report["sessions"]["recent_activity_rate"] = ratio(
         report["sessions"]["updated_last_7d"],
         report["sessions"]["total"],
@@ -200,6 +224,36 @@ if table_exists(cur, "conversation_messages"):
         """
     ).fetchone()
     report["sessions"]["with_messages"] = row[0] or 0
+
+if table_exists(cur, "task_queue") and table_exists(cur, "conversations"):
+    row = cur.execute(
+        """
+        WITH terminal_task_sessions AS (
+          SELECT session_id, MAX(completed_at) AS last_completed_at
+          FROM task_queue
+          WHERE status IN ('done', 'failed') AND COALESCE(session_id, '') != ''
+          GROUP BY session_id
+        )
+        SELECT
+          COUNT(*) AS task_linked,
+          SUM(
+            CASE
+              WHEN julianday(c.updated_at) > julianday(datetime(terminal_task_sessions.last_completed_at / 1000.0, 'unixepoch'))
+              THEN 1 ELSE 0
+            END
+          ) AS resume_followup_sessions
+        FROM terminal_task_sessions
+        JOIN conversations c ON c.id = terminal_task_sessions.session_id
+        """
+    ).fetchone()
+    report["sessions"].update({
+        "task_linked": row["task_linked"] or 0,
+        "resume_followup_sessions": row["resume_followup_sessions"] or 0,
+    })
+    report["sessions"]["resume_followup_rate"] = ratio(
+        report["sessions"]["resume_followup_sessions"],
+        report["sessions"]["task_linked"],
+    )
 
 json_payload = json.dumps(report, indent=2, sort_keys=True)
 if out_path is not None:
@@ -224,8 +278,11 @@ print(f"  failed: {report['tasks']['failed']}")
 print(f"  terminal: {report['tasks']['terminal']}")
 print(f"  session_bound: {report['tasks']['session_bound']}")
 print(f"  session_binding_rate: {report['tasks']['session_binding_rate']:.3f}")
+print(f"  terminal_session_bound: {report['tasks']['terminal_session_bound']}")
 print(f"  completion_contracts: {report['tasks']['completion_contracts']}")
 print(f"  completion_contract_coverage: {report['tasks']['completion_contract_coverage']:.3f}")
+print(f"  completion_handoffs: {report['tasks']['completion_handoffs']}")
+print(f"  completion_handoff_rate: {report['tasks']['completion_handoff_rate']:.3f}")
 print(f"  completion_rate: {report['tasks']['completion_rate']:.3f}")
 print(f"  idle_timeout_recoveries: {report['tasks']['idle_timeout_recoveries']}")
 print(f"  active_but_killed_recoveries: {report['tasks']['active_but_killed_recoveries']}")
@@ -234,9 +291,14 @@ print()
 print("Sessions")
 print(f"  total: {report['sessions']['total']}")
 print(f"  with_messages: {report['sessions']['with_messages']}")
+print(f"  task_linked: {report['sessions']['task_linked']}")
+print(f"  resume_followup_sessions: {report['sessions']['resume_followup_sessions']}")
+print(f"  resume_followup_rate: {report['sessions']['resume_followup_rate']:.3f}")
 print(f"  updated_last_7d: {report['sessions']['updated_last_7d']}")
 print(f"  recent_activity_rate: {report['sessions']['recent_activity_rate']:.3f}")
 print(f"  distinct_active_days_last_7d: {report['sessions']['distinct_active_days_last_7d']}")
+print(f"  repeat_use_sessions: {report['sessions']['repeat_use_sessions']}")
+print(f"  repeat_use_rate: {report['sessions']['repeat_use_rate']:.3f}")
 print()
 print("json:")
 print(json_payload)
