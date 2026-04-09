@@ -154,6 +154,9 @@ func TestDaemonSubmitAndStatus(t *testing.T) {
 			if _, ok := tv["session_id"]; !ok {
 				t.Fatalf("expected session_id field in task view: %+v", tv)
 			}
+			if _, ok := tv["completion"]; !ok {
+				t.Fatalf("expected completion field in task view: %+v", tv)
+			}
 		}
 	}
 	if !found {
@@ -297,6 +300,41 @@ func TestDaemonWorkerCompletion(t *testing.T) {
 	task := pollTaskStatus(t, q, taskID, StatusDone, 5*time.Second)
 	if task.Result != wantResult {
 		t.Errorf("result = %q, want %q", task.Result, wantResult)
+	}
+
+	statusResp := sendIPC(t, socketPath, IPCRequest{Command: "status"})
+	if !statusResp.OK {
+		t.Fatalf("status: not OK: %s", statusResp.Err)
+	}
+	var completion map[string]interface{}
+	for _, tv := range extractTasks(t, statusResp) {
+		if int64(tv["id"].(float64)) != taskID {
+			continue
+		}
+		rawCompletion, ok := tv["completion"]
+		if !ok {
+			t.Fatalf("expected completion payload for task view: %+v", tv)
+		}
+		completion, ok = rawCompletion.(map[string]interface{})
+		if !ok {
+			t.Fatalf("completion payload type = %T, want map", rawCompletion)
+		}
+		break
+	}
+	if completion == nil {
+		t.Fatalf("task %d completion payload missing from status response", taskID)
+	}
+	if got := int64(completion["task_id"].(float64)); got != taskID {
+		t.Fatalf("completion.task_id = %d, want %d", got, taskID)
+	}
+	if got := completion["session_id"].(string); got != "sess-test" {
+		t.Fatalf("completion.session_id = %q, want %q", got, "sess-test")
+	}
+	if got := completion["status"].(string); got != string(StatusDone) {
+		t.Fatalf("completion.status = %q, want %q", got, StatusDone)
+	}
+	if got := completion["summary"].(string); got != wantResult {
+		t.Fatalf("completion.summary = %q, want %q", got, wantResult)
 	}
 }
 

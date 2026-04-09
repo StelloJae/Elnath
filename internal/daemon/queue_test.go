@@ -183,6 +183,21 @@ func TestMarkDone(t *testing.T) {
 	if got.Summary != "summary text" {
 		t.Errorf("summary = %q, want %q", got.Summary, "summary text")
 	}
+	if got.Completion == nil {
+		t.Fatal("expected completion payload to be stored")
+	}
+	if got.Completion.TaskID != task.ID {
+		t.Errorf("completion.task_id = %d, want %d", got.Completion.TaskID, task.ID)
+	}
+	if got.Completion.Status != StatusDone {
+		t.Errorf("completion.status = %q, want %q", got.Completion.Status, StatusDone)
+	}
+	if got.Completion.Summary != "summary text" {
+		t.Errorf("completion.summary = %q, want %q", got.Completion.Summary, "summary text")
+	}
+	if got.Completion.CompletedAt.IsZero() {
+		t.Error("completion.completed_at should be set")
+	}
 	if got.CompletedAt.UnixMilli() == 0 {
 		t.Error("completed_at should be set")
 	}
@@ -198,6 +213,9 @@ func TestMarkFailed(t *testing.T) {
 
 	q.Enqueue(ctx, "will fail")
 	task, _ := q.Next(ctx)
+	if err := q.BindSession(ctx, task.ID, "sess-fail"); err != nil {
+		t.Fatalf("BindSession: %v", err)
+	}
 
 	if err := q.MarkFailed(ctx, task.ID, "something broke"); err != nil {
 		t.Fatalf("MarkFailed: %v", err)
@@ -212,6 +230,21 @@ func TestMarkFailed(t *testing.T) {
 	}
 	if got.Result != "something broke" {
 		t.Errorf("result = %q, want %q", got.Result, "something broke")
+	}
+	if got.Completion == nil {
+		t.Fatal("expected completion payload to be stored")
+	}
+	if got.Completion.TaskID != task.ID {
+		t.Errorf("completion.task_id = %d, want %d", got.Completion.TaskID, task.ID)
+	}
+	if got.Completion.SessionID != "sess-fail" {
+		t.Errorf("completion.session_id = %q, want %q", got.Completion.SessionID, "sess-fail")
+	}
+	if got.Completion.Status != StatusFailed {
+		t.Errorf("completion.status = %q, want %q", got.Completion.Status, StatusFailed)
+	}
+	if got.Completion.Summary == "" {
+		t.Error("completion.summary should be UI-safe and non-empty")
 	}
 	if got.CompletedAt.UnixMilli() == 0 {
 		t.Error("completed_at should be set")
