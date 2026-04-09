@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -132,6 +133,26 @@ func TestRunTelegramShellLoadsPersistedOffset(t *testing.T) {
 	err := runTelegramShell(ctx, shell, bot, 1, nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("runTelegramShell error = %v, want context canceled", err)
+	}
+}
+
+func TestRunTelegramShellStopsOnPollingConflict(t *testing.T) {
+	bot := &scriptedTelegramBot{}
+	shell, _ := openTelegramCommandTestShell(t, bot)
+
+	bot.getFn = func(ctx context.Context, call int, offset int64, timeout int) ([]telegram.Update, error) {
+		return nil, &telegram.APIError{Method: "getUpdates", StatusCode: http.StatusConflict}
+	}
+
+	err := runTelegramShell(context.Background(), shell, bot, 1, nil)
+	if err == nil {
+		t.Fatal("runTelegramShell error = nil, want polling conflict error")
+	}
+	if !strings.Contains(err.Error(), "another Telegram poller is already using this bot token") {
+		t.Fatalf("runTelegramShell error = %q, want polling conflict guidance", err)
+	}
+	if bot.getCalls != 1 {
+		t.Fatalf("getUpdates calls = %d, want 1", bot.getCalls)
 	}
 }
 

@@ -62,9 +62,38 @@ go test ./internal/config ./internal/onboarding
 
 1. Build the binary.
 2. Start the daemon.
-3. Submit one small task.
-4. Confirm `daemon status` shows a human-readable progress line and a completion summary.
-5. Capture the telemetry snapshot.
+3. If you are exercising the thin Telegram operator shell, configure it explicitly first.
+4. Submit one small task.
+5. Confirm `daemon status` shows a human-readable progress line and a completion summary.
+6. Capture the telemetry snapshot.
+
+### Optional thin Telegram operator setup
+
+Keep Telegram thin and operator-only. Configure exactly one poller per bot token.
+
+```yaml
+telegram:
+  enabled: true
+  bot_token: "${ELNATH_TELEGRAM_BOT_TOKEN}"
+  chat_id: "${ELNATH_TELEGRAM_CHAT_ID}"
+  api_base_url: ""
+  poll_timeout_seconds: 30
+```
+
+Environment-only operators can also use:
+
+- `ELNATH_TELEGRAM_ENABLED=true`
+- `ELNATH_TELEGRAM_BOT_TOKEN=...`
+- `ELNATH_TELEGRAM_CHAT_ID=...`
+- `ELNATH_TELEGRAM_POLL_TIMEOUT_SECONDS=30`
+
+Then run:
+
+```bash
+./elnath telegram shell
+```
+
+If Telegram returns a polling-conflict error, stop the other active poller for that bot token before retrying.
 
 ```bash
 ./elnath daemon start
@@ -81,6 +110,7 @@ bash scripts/alpha_telemetry_report.sh --out artifacts/month4-alpha-report.json
 - `make build`
 - one `daemon status` sample showing rendered progress text
 - one archived `alpha_telemetry_report.sh --out ...` JSON snapshot
+- if Telegram is enabled, one note confirming whether the operator shell started cleanly or hit a polling-conflict guardrail
 
 ## Exit criteria
 

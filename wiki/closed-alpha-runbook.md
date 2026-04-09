@@ -44,8 +44,7 @@ bash scripts/alpha_telemetry_report.sh --out artifacts/month4-alpha-report.json
 
 What to verify:
 
-- rehearsals stay inside the existing operator-only Telegram command set; do not interpret a green run as approval to widen the Telegram surface
-
+- only one Telegram shell is polling for the configured bot token
 - `daemon status` renders a readable progress message, not a raw JSON envelope
 - completed tasks preserve a non-empty summary
 - tasks bind to session ids when the runtime creates one
@@ -53,6 +52,8 @@ What to verify:
 - Telegram `/followup <session_id> <message>` queues a session-bound continuation instead of starting a detached session
 - pending approval requests can be listed and resolved through `/approvals`, `/approve`, and `/deny`
 - timeout counters stay visible in the telemetry summary
+
+If `elnath telegram shell` exits with a polling-conflict error, treat that as an operator lifecycle failure to fix immediately: stop the other poller for the same bot token, then rerun the rehearsal.
 
 ## 4. Capture onboarding evidence
 
@@ -84,6 +85,7 @@ Archive one JSON report per rehearsal alongside the operator notes so the 5/5, 4
 Stay in hardening if any of the following happen:
 
 - onboarding still requires operator rescue
+- multiple Telegram pollers race on the same bot token
 - `daemon status` only shows raw progress envelopes
 - timeout recovery numbers move unexpectedly without an explained cause
 - rehearsals cannot produce both a completion summary and a telemetry snapshot

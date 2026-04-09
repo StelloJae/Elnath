@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -55,5 +56,32 @@ func TestHTTPClientSendMessageAndGetUpdates(t *testing.T) {
 	}
 	if updates[0].ID != 42 || updates[0].Message.ChatID != "12345" || updates[0].Message.Text != "/status" {
 		t.Fatalf("update = %+v", updates[0])
+	}
+}
+
+func TestHTTPClientGetUpdatesReturnsPollingConflictError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/bottoken/getUpdates" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		http.Error(w, "terminated by other getUpdates request", http.StatusConflict)
+	}))
+	defer server.Close()
+
+	client := NewHTTPClient("token", server.URL)
+	_, err := client.GetUpdates(context.Background(), 0, 15)
+	if err == nil {
+		t.Fatal("GetUpdates error = nil, want conflict error")
+	}
+
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("GetUpdates error type = %T, want *APIError", err)
+	}
+	if apiErr.Method != "getUpdates" || apiErr.StatusCode != http.StatusConflict {
+		t.Fatalf("apiErr = %+v", apiErr)
+	}
+	if !IsPollingConflict(err) {
+		t.Fatalf("IsPollingConflict(%v) = false, want true", err)
 	}
 }

@@ -3,12 +3,27 @@ package telegram
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 )
+
+type APIError struct {
+	Method     string
+	StatusCode int
+}
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("telegram %s: status %d", e.Method, e.StatusCode)
+}
+
+func IsPollingConflict(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.Method == "getUpdates" && apiErr.StatusCode == http.StatusConflict
+}
 
 type HTTPClient struct {
 	baseURL string
@@ -43,7 +58,7 @@ func (c *HTTPClient) SendMessage(ctx context.Context, chatID, text string) error
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("telegram sendMessage: status %d", resp.StatusCode)
+		return &APIError{Method: "sendMessage", StatusCode: resp.StatusCode}
 	}
 	return nil
 }
@@ -66,7 +81,7 @@ func (c *HTTPClient) GetUpdates(ctx context.Context, offset int64, timeoutSecond
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("telegram getUpdates: status %d", resp.StatusCode)
+		return nil, &APIError{Method: "getUpdates", StatusCode: resp.StatusCode}
 	}
 
 	var decoded struct {

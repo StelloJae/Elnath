@@ -20,7 +20,7 @@ These are intentional Month 4 constraints, not launch surprises.
 - CLI remains the primary operator surface.
 - Telegram must stay a thin companion shell for status, approvals, completion notifications, and resume/follow-up triggers only.
 - Broad conversational companion behavior is explicitly out of scope for closed alpha.
-- Month 4 hardening work must reduce fragility inside the current operator shell rather than adding new Telegram commands or companion behaviors.
+- Hermes-style pairing and richer Telegram adapter orchestration are intentionally deferred while Elnath remains single-chat and operator-only.
 
 ## Telemetry limits
 
@@ -33,4 +33,5 @@ These are intentional Month 4 constraints, not launch surprises.
 
 - Live daemon/task smoke tests still require a configured model provider.
 - `scripts/run_month4_closed_alpha_checks.sh` verifies build/test/lint and telemetry coverage, but it does not replace a real operator rehearsal with a configured runtime.
+- Telegram polling conflicts are now surfaced as explicit operator errors; Elnath does not try to coordinate multiple shells for the same bot token automatically.
 - The alpha gate should remain closed if rehearsals need bespoke source edits or manual DB inspection.

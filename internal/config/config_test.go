@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -223,6 +224,18 @@ func TestApplyEnvOverrides(t *testing.T) {
 			want:   "bypass",
 		},
 		{
+			name:   "ELNATH_TELEGRAM_ENABLED",
+			envKey: "ELNATH_TELEGRAM_ENABLED",
+			envVal: "true",
+			check: func(c *Config) string {
+				if c.Telegram.Enabled {
+					return "true"
+				}
+				return "false"
+			},
+			want: "true",
+		},
+		{
 			name:   "ELNATH_TELEGRAM_BOT_TOKEN",
 			envKey: "ELNATH_TELEGRAM_BOT_TOKEN",
 			envVal: "bot-token",
@@ -243,6 +256,15 @@ func TestApplyEnvOverrides(t *testing.T) {
 			check:  func(c *Config) string { return c.Telegram.APIBaseURL },
 			want:   "https://telegram.example.test",
 		},
+		{
+			name:   "ELNATH_TELEGRAM_POLL_TIMEOUT_SECONDS",
+			envKey: "ELNATH_TELEGRAM_POLL_TIMEOUT_SECONDS",
+			envVal: "45",
+			check: func(c *Config) string {
+				return strconv.Itoa(c.Telegram.PollTimeoutSeconds)
+			},
+			want: "45",
+		},
 	}
 
 	for _, tc := range tests {
@@ -254,6 +276,27 @@ func TestApplyEnvOverrides(t *testing.T) {
 				t.Errorf("expected %q, got %q", tc.want, got)
 			}
 		})
+	}
+}
+
+func TestParseEnvBool(t *testing.T) {
+	tests := []struct {
+		value string
+		want  bool
+	}{
+		{value: "true", want: true},
+		{value: "1", want: true},
+		{value: "yes", want: true},
+		{value: "on", want: true},
+		{value: "false", want: false},
+		{value: "0", want: false},
+		{value: "", want: false},
+	}
+
+	for _, tc := range tests {
+		if got := parseEnvBool(tc.value); got != tc.want {
+			t.Errorf("parseEnvBool(%q) = %v, want %v", tc.value, got, tc.want)
+		}
 	}
 }
 

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -149,6 +151,9 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("ELNATH_LOCALE"); v != "" {
 		cfg.Locale = v
 	}
+	if v, ok := os.LookupEnv("ELNATH_TELEGRAM_ENABLED"); ok {
+		cfg.Telegram.Enabled = parseEnvBool(v)
+	}
 	if v := os.Getenv("ELNATH_TELEGRAM_BOT_TOKEN"); v != "" {
 		cfg.Telegram.BotToken = v
 	}
@@ -157,6 +162,20 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("ELNATH_TELEGRAM_API_BASE_URL"); v != "" {
 		cfg.Telegram.APIBaseURL = v
+	}
+	if v := os.Getenv("ELNATH_TELEGRAM_POLL_TIMEOUT_SECONDS"); v != "" {
+		if timeout, err := strconv.Atoi(v); err == nil {
+			cfg.Telegram.PollTimeoutSeconds = timeout
+		}
+	}
+}
+
+func parseEnvBool(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
 	}
 }
 

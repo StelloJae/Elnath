@@ -552,6 +552,9 @@ func runTelegramShell(ctx context.Context, shell *telegram.Shell, bot telegram.B
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
+			if telegram.IsPollingConflict(err) {
+				return fmt.Errorf("telegram get updates: another Telegram poller is already using this bot token; stop the other poller and retry: %w", err)
+			}
 			if logger != nil {
 				logger.Error("telegram get updates", "offset", offset, "error", err)
 			}

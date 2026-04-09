@@ -70,6 +70,7 @@ When configured, `elnath telegram shell` exposes the Month 4 operator-only Teleg
 - `/followup <session_id> <message>` — queue a session-bound follow-up on the shared runtime
 
 Completed daemon tasks emit Telegram completion notifications once per task while the shell is running.
+Only one Telegram poller should run per bot token; polling conflicts now fail fast with operator guidance instead of retrying forever.
 
 Month 4 hardening is intentionally scope-locked: keep this surface limited to operator status, approvals, completion notifications, and session-bound follow-ups. Do not treat this shell as approval to add broader Telegram companion features.
 
@@ -159,7 +160,7 @@ telegram:
   bot_token: ""   # or ELNATH_TELEGRAM_BOT_TOKEN
   chat_id: ""     # or ELNATH_TELEGRAM_CHAT_ID
   api_base_url: "" # optional, defaults to https://api.telegram.org
-  poll_timeout_seconds: 30
+  poll_timeout_seconds: 30 # or ELNATH_TELEGRAM_POLL_TIMEOUT_SECONDS
 
 daemon:
   socket_path: ~/.elnath/daemon.sock
@@ -180,6 +181,10 @@ research:
 | `ELNATH_WIKI_DIR` | Wiki pages directory | `~/.elnath/wiki` |
 | `ELNATH_LOG_LEVEL` | Logging level | `info`, `debug`, `warn`, `error` |
 | `ELNATH_PERMISSION_MODE` | Permission mode | `default`, `accept_edits`, `plan`, `bypass` |
+| `ELNATH_TELEGRAM_ENABLED` | Enable Telegram operator shell config | `true` |
+| `ELNATH_TELEGRAM_BOT_TOKEN` | Telegram bot token | `123456:ABC...` |
+| `ELNATH_TELEGRAM_CHAT_ID` | Telegram operator chat ID | `123456789` |
+| `ELNATH_TELEGRAM_POLL_TIMEOUT_SECONDS` | Telegram long-poll timeout | `30` |
 | `ELNATH_OLLAMA_BASE_URL` | Ollama server URL | `http://localhost:11434` |
 | `ELNATH_OLLAMA_MODEL` | Ollama model name | `llama3.2` |
 
