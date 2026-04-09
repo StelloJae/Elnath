@@ -275,3 +275,25 @@ func TestDangerousBashDeniedWithoutPrompter(t *testing.T) {
 		t.Fatal("expected dangerous bash command to be denied without a prompter")
 	}
 }
+
+func TestDangerousBashRedirectionBypassesAllowListAndPrompts(t *testing.T) {
+	ctx := context.Background()
+	pr := &mockPrompter{answer: false}
+
+	p := NewPermission(
+		WithMode(ModeDefault),
+		WithAllowList("bash"),
+		WithPrompter(pr),
+	)
+
+	got, err := p.Check(ctx, "bash", json.RawMessage(`{"command":"echo hi > /etc/passwd"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got {
+		t.Fatal("expected dangerous bash redirection to require prompt, not allowlist auto-approval")
+	}
+	if len(pr.calls) != 1 || pr.calls[0] != "bash" {
+		t.Fatalf("prompter calls = %v, want [bash]", pr.calls)
+	}
+}

@@ -121,6 +121,13 @@ func AnalyzeCommandSafety(command string) (dangerous bool, reason string) {
 		if dangerous {
 			return false
 		}
+		if stmt, ok := node.(*syntax.Stmt); ok {
+			if hasDangerousOutputRedirect(stmt.Redirs) {
+				dangerous, reason = true, "writing to system paths via shell redirection is not allowed"
+				return false
+			}
+			return true
+		}
 		call, ok := node.(*syntax.CallExpr)
 		if !ok || len(call.Args) == 0 {
 			return true
@@ -137,6 +144,16 @@ func AnalyzeCommandSafety(command string) (dangerous bool, reason string) {
 		case "rm":
 			if hasRmRfRoot(args) {
 				dangerous, reason = true, "rm -rf on root or home is not allowed"
+				return false
+			}
+		case "cp", "mv":
+			if target := writeDestination(cmdName, args); target != "" && isSystemPath(target) {
+				dangerous, reason = true, fmt.Sprintf("%s to system paths is not allowed", cmdName)
+				return false
+			}
+		case "touch", "mkdir":
+			if hasSystemPath(writeTargets(cmdName, args)) {
+				dangerous, reason = true, fmt.Sprintf("%s on system paths is not allowed", cmdName)
 				return false
 			}
 		case "chmod", "chown":
@@ -313,6 +330,112 @@ func stripEnvArgs(args []string) []string {
 		break
 	}
 	return args[i:]
+}
+
+func positionalArgs(args []string, flagsWithValue map[string]struct{}) []string {
+	var positional []string
+	afterDoubleDash := false
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if afterDoubleDash {
+			positional = append(positional, arg)
+			continue
+		}
+		if arg == "--" {
+			afterDoubleDash = true
+			continue
+		}
+		if !strings.HasPrefix(arg, "-") || arg == "-" {
+			positional = append(positional, arg)
+			continue
+		}
+
+		name := arg
+		if eq := strings.IndexByte(arg, '='); eq >= 0 {
+			name = arg[:eq]
+		}
+		if _, ok := flagsWithValue[name]; ok && !strings.Contains(arg, "=") && i+1 < len(args) {
+			i++
+		}
+	}
+
+	return positional
+}
+
+func writeDestination(cmdName string, args []string) string {
+	switch cmdName {
+	case "cp", "mv":
+		for i := 0; i < len(args); i++ {
+			arg := args[i]
+			switch {
+			case arg == "-t" || arg == "--target-directory":
+				if i+1 < len(args) {
+					return args[i+1]
+				}
+				return ""
+			case strings.HasPrefix(arg, "--target-directory="):
+				return strings.TrimPrefix(arg, "--target-directory=")
+			}
+		}
+
+		positional := positionalArgs(args, map[string]struct{}{
+			"-t":                 {},
+			"--target-directory": {},
+			"-S":                 {},
+			"--suffix":           {},
+			"--backup":           {},
+		})
+		if len(positional) < 2 {
+			return ""
+		}
+		return positional[len(positional)-1]
+	default:
+		return ""
+	}
+}
+
+func writeTargets(cmdName string, args []string) []string {
+	switch cmdName {
+	case "touch":
+		return positionalArgs(args, map[string]struct{}{
+			"-r":          {},
+			"--reference": {},
+			"-t":          {},
+			"-d":          {},
+			"--date":      {},
+		})
+	case "mkdir":
+		return positionalArgs(args, map[string]struct{}{
+			"-m":        {},
+			"--mode":    {},
+			"-Z":        {},
+			"--context": {},
+		})
+	default:
+		return nil
+	}
+}
+
+func hasDangerousOutputRedirect(redirs []*syntax.Redirect) bool {
+	for _, redir := range redirs {
+		if redir == nil || redir.Word == nil || !isOutputRedirection(redir.Op) {
+			continue
+		}
+		if isSystemPath(wordText(redir.Word)) {
+			return true
+		}
+	}
+	return false
+}
+
+func isOutputRedirection(op syntax.RedirOperator) bool {
+	switch op {
+	case syntax.RdrOut, syntax.AppOut, syntax.RdrInOut, syntax.DplOut, syntax.RdrClob, syntax.AppClob, syntax.RdrAll, syntax.RdrAllClob, syntax.AppAll, syntax.AppAllClob:
+		return true
+	default:
+		return false
+	}
 }
 
 // hasRmRfRoot detects destructive recursive removals against critical paths.
