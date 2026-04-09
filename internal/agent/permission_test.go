@@ -144,7 +144,6 @@ func TestPermissionWithActualToolNames(t *testing.T) {
 		{"plan denies git", ModePlan, "git", false},
 		{"plan denies wiki_write", ModePlan, "wiki_write", false},
 		{"plan denies mcp tool", ModePlan, "mcp_some_tool", false},
-
 	}
 
 	for _, tc := range cases {
@@ -238,5 +237,41 @@ func TestPrompterIsCalledInDefaultMode(t *testing.T) {
 	}
 	if len(pr.calls) != 1 || pr.calls[0] != "bash" {
 		t.Errorf("prompter calls = %v, want [bash]", pr.calls)
+	}
+}
+
+func TestDangerousBashBypassesAllowListAndPrompts(t *testing.T) {
+	ctx := context.Background()
+	pr := &mockPrompter{answer: false}
+
+	p := NewPermission(
+		WithMode(ModeDefault),
+		WithAllowList("bash"),
+		WithPrompter(pr),
+	)
+
+	got, err := p.Check(ctx, "bash", json.RawMessage(`{"command":"rm -rf /"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got {
+		t.Fatal("expected dangerous bash command to require prompt, not allowlist auto-approval")
+	}
+	if len(pr.calls) != 1 || pr.calls[0] != "bash" {
+		t.Fatalf("prompter calls = %v, want [bash]", pr.calls)
+	}
+}
+
+func TestDangerousBashDeniedWithoutPrompter(t *testing.T) {
+	ctx := context.Background()
+
+	p := NewPermission(WithMode(ModeDefault))
+
+	got, err := p.Check(ctx, "bash", json.RawMessage(`{"command":"rm -rf /"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got {
+		t.Fatal("expected dangerous bash command to be denied without a prompter")
 	}
 }

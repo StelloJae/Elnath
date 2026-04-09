@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"encoding/json"
+
+	"github.com/stello/elnath/internal/tools"
 )
 
 // PermissionMode controls how the permission engine makes decisions.
@@ -80,6 +82,19 @@ func (p *Permission) Check(ctx context.Context, toolName string, input json.RawM
 		}
 	}
 
+	// Explicit bypass mode still means bypass.
+	if p.mode == ModeBypass {
+		return true, nil
+	}
+
+	// Dangerous bash commands must not be auto-approved purely by tool name.
+	if toolName == "bash" && isDangerousBashInput(input) {
+		if p.prompter == nil {
+			return false, nil
+		}
+		return p.prompter.Prompt(ctx, toolName, input)
+	}
+
 	// Step 2: allow list — always permits.
 	for _, a := range p.allowList {
 		if a == toolName {
@@ -89,8 +104,6 @@ func (p *Permission) Check(ctx context.Context, toolName string, input json.RawM
 
 	// Step 3: mode shortcuts.
 	switch p.mode {
-	case ModeBypass:
-		return true, nil
 	case ModePlan:
 		// Only read-only tools are permitted in plan mode.
 		return isReadOnly(toolName), nil
@@ -108,6 +121,25 @@ func (p *Permission) Check(ctx context.Context, toolName string, input json.RawM
 
 	// Step 6: ask the prompter.
 	return p.prompter.Prompt(ctx, toolName, input)
+}
+
+func isDangerousBashInput(input json.RawMessage) bool {
+	var payload struct {
+		Command string `json:"command"`
+		Cmd     string `json:"cmd"`
+	}
+	if err := json.Unmarshal(input, &payload); err != nil {
+		return false
+	}
+	command := payload.Command
+	if command == "" {
+		command = payload.Cmd
+	}
+	if command == "" {
+		return false
+	}
+	dangerous, _ := tools.AnalyzeCommandSafety(command)
+	return dangerous
 }
 
 // isReadOnly returns true for tools that only read state and never modify it.
