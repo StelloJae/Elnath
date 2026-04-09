@@ -99,10 +99,31 @@ func resetLoadLocaleCache() {
 
 func TestCommandRegistryContainsExpectedCommands(t *testing.T) {
 	reg := commandRegistry()
-	for _, name := range []string{"version", "help", "run", "setup", "daemon", "wiki", "search", "eval"} {
+	for _, name := range []string{"version", "help", "run", "setup", "daemon", "telegram", "wiki", "search", "eval"} {
 		if _, ok := reg[name]; !ok {
 			t.Fatalf("missing command %q", name)
 		}
+	}
+}
+
+func TestParseDaemonSubmitArgs(t *testing.T) {
+	sessionID, prompt, err := parseDaemonSubmitArgs([]string{"--session", "sess-123", "continue the review"})
+	if err != nil {
+		t.Fatalf("parseDaemonSubmitArgs: %v", err)
+	}
+	if sessionID != "sess-123" {
+		t.Fatalf("sessionID = %q, want sess-123", sessionID)
+	}
+	if prompt != "continue the review" {
+		t.Fatalf("prompt = %q, want joined prompt", prompt)
+	}
+
+	sessionID, prompt, err = parseDaemonSubmitArgs([]string{"plain", "task"})
+	if err != nil {
+		t.Fatalf("parseDaemonSubmitArgs plain: %v", err)
+	}
+	if sessionID != "" || prompt != "plain task" {
+		t.Fatalf("plain parse = (%q,%q), want empty session/plain task", sessionID, prompt)
 	}
 }
 

@@ -261,6 +261,47 @@ func TestDaemonTaskRunnerCreatesSessionAndUsesClassifier(t *testing.T) {
 	}
 }
 
+func TestDaemonTaskRunnerReusesExistingSessionWhenPayloadRequestsFollowUp(t *testing.T) {
+	provider := &countingProvider{streamText: "follow-up answer"}
+	rt := newTestExecutionRuntime(t, provider)
+
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	_, _, err = rt.runTask(context.Background(), sess, nil, "initial request", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("seed runTask: %v", err)
+	}
+
+	payload := daemon.EncodeTaskPayload(daemon.TaskPayload{
+		Prompt:    "continue this work with more detail",
+		SessionID: sess.ID,
+		Surface:   "telegram",
+	})
+	result, err := rt.newDaemonTaskRunner()(context.Background(), payload, nil)
+	if err != nil {
+		t.Fatalf("daemon task runner follow-up: %v", err)
+	}
+	if result.SessionID != sess.ID {
+		t.Fatalf("result.SessionID = %q, want %q", result.SessionID, sess.ID)
+	}
+
+	history, err := rt.mgr.GetHistory(context.Background(), sess.ID)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(history) < 4 {
+		t.Fatalf("history message count = %d, want at least 4", len(history))
+	}
+	if got := history[len(history)-2].Text(); got != "continue this work with more detail" {
+		t.Fatalf("follow-up user message = %q", got)
+	}
+	if got := history[len(history)-1].Text(); !strings.Contains(got, "follow-up answer") {
+		t.Fatalf("follow-up assistant message = %q", got)
+	}
+}
+
 func TestExecutionRuntimeWritesRouteAuditWhenEnabled(t *testing.T) {
 	provider := &countingProvider{streamText: "hello from runtime"}
 	rt := newTestExecutionRuntime(t, provider)
