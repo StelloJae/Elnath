@@ -133,7 +133,7 @@ func TestShellHandleUpdateApprovalsAndNotifyCompletions(t *testing.T) {
 	}
 
 	if err := shell.HandleUpdate(context.Background(), Update{
-		ID: 1,
+		ID:      1,
 		Message: Message{ChatID: "chat-1", Text: "/approvals"},
 	}); err != nil {
 		t.Fatalf("HandleUpdate approvals: %v", err)
@@ -143,7 +143,7 @@ func TestShellHandleUpdateApprovalsAndNotifyCompletions(t *testing.T) {
 	}
 
 	if err := shell.HandleUpdate(context.Background(), Update{
-		ID: 2,
+		ID:      2,
 		Message: Message{ChatID: "chat-1", Text: "/approve 1"},
 	}); err != nil {
 		t.Fatalf("HandleUpdate approve: %v", err)

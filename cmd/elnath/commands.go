@@ -27,6 +27,7 @@ import (
 	"github.com/stello/elnath/internal/onboarding"
 	"github.com/stello/elnath/internal/orchestrator"
 	"github.com/stello/elnath/internal/self"
+	"github.com/stello/elnath/internal/telegram"
 	"github.com/stello/elnath/internal/tools"
 	"github.com/stello/elnath/internal/wiki"
 )
@@ -35,14 +36,15 @@ type commandRunner func(ctx context.Context, args []string) error
 
 func commandRegistry() map[string]commandRunner {
 	return map[string]commandRunner{
-		"version": cmdVersion,
-		"help":    cmdHelp,
-		"run":     cmdRun,
-		"setup":   cmdSetup,
-		"daemon":  cmdDaemon,
-		"wiki":    cmdWiki,
-		"search":  cmdSearch,
-		"eval":    cmdEval,
+		"version":  cmdVersion,
+		"help":     cmdHelp,
+		"run":      cmdRun,
+		"setup":    cmdSetup,
+		"daemon":   cmdDaemon,
+		"telegram": cmdTelegram,
+		"wiki":     cmdWiki,
+		"search":   cmdSearch,
+		"eval":     cmdEval,
 	}
 }
 
@@ -353,11 +355,19 @@ func cmdDaemonStart(ctx context.Context) error {
 	}
 
 	mode := parsePermissionMode(cfg.Permission.Mode)
-	perm := agent.NewPermission(
+	permOpts := []agent.PermissionOption{
 		agent.WithMode(mode),
 		agent.WithAllowList(cfg.Permission.Allow...),
 		agent.WithDenyList(cfg.Permission.Deny...),
-	)
+	}
+	if cfg.Telegram.Enabled && cfg.Telegram.BotToken != "" && cfg.Telegram.ChatID != "" {
+		approvalStore, err := daemon.NewApprovalStore(db.Main)
+		if err != nil {
+			return fmt.Errorf("create approval store: %w", err)
+		}
+		permOpts = append(permOpts, agent.WithPrompter(daemon.NewApprovalPrompter(approvalStore, 500*time.Millisecond)))
+	}
+	perm := agent.NewPermission(permOpts...)
 
 	selfState, err := self.Load(cfg.DataDir)
 	if err != nil {
@@ -389,8 +399,12 @@ func cmdDaemonStart(ctx context.Context) error {
 }
 
 func cmdDaemonSubmit(ctx context.Context, args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("usage: elnath daemon submit <task description>")
+	sessionID, prompt, err := parseDaemonSubmitArgs(args)
+	if err != nil {
+		return err
+	}
+	if prompt == "" {
+		return fmt.Errorf("usage: elnath daemon submit [--session <session-id>] <task description>")
 	}
 	cfgPath := extractConfigFlag(os.Args)
 	if cfgPath == "" {
@@ -401,7 +415,10 @@ func cmdDaemonSubmit(ctx context.Context, args []string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	payload := strings.Join(args, " ")
+	payload := daemon.EncodeTaskPayload(daemon.TaskPayload{
+		Prompt:    prompt,
+		SessionID: sessionID,
+	})
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("marshal payload: %w", err)
@@ -429,6 +446,111 @@ func cmdDaemonSubmit(ctx context.Context, args []string) error {
 	}
 	fmt.Printf("Task submitted: %s\n", string(data))
 	return nil
+}
+
+func parseDaemonSubmitArgs(args []string) (sessionID string, prompt string, err error) {
+	var parts []string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--session" {
+			if i+1 >= len(args) {
+				return "", "", fmt.Errorf("usage: elnath daemon submit [--session <session-id>] <task description>")
+			}
+			sessionID = args[i+1]
+			i++
+			continue
+		}
+		parts = append(parts, args[i])
+	}
+	prompt = strings.TrimSpace(strings.Join(parts, " "))
+	return sessionID, prompt, nil
+}
+
+func cmdTelegram(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		fmt.Print(`Usage: elnath telegram <subcommand>
+
+Subcommands:
+  shell              Start the thin Telegram operator shell
+`)
+		return nil
+	}
+	switch args[0] {
+	case "shell":
+		return cmdTelegramShell(ctx)
+	default:
+		return fmt.Errorf("unknown telegram subcommand: %s", args[0])
+	}
+}
+
+func cmdTelegramShell(ctx context.Context) error {
+	cfgPath := extractConfigFlag(os.Args)
+	if cfgPath == "" {
+		cfgPath = config.DefaultConfigPath()
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	if !cfg.Telegram.Enabled {
+		return fmt.Errorf("telegram shell requires telegram.enabled=true")
+	}
+
+	app, err := core.New(cfg)
+	if err != nil {
+		return fmt.Errorf("init app: %w", err)
+	}
+	defer app.Close()
+
+	db, err := core.OpenDB(cfg.DataDir)
+	if err != nil {
+		return fmt.Errorf("open db: %w", err)
+	}
+	app.RegisterCloser("database", db)
+
+	queue, err := daemon.NewQueue(db.Main)
+	if err != nil {
+		return fmt.Errorf("create queue: %w", err)
+	}
+	approvals, err := daemon.NewApprovalStore(db.Main)
+	if err != nil {
+		return fmt.Errorf("create approval store: %w", err)
+	}
+	bot := telegram.NewHTTPClient(cfg.Telegram.BotToken, cfg.Telegram.APIBaseURL)
+	statePath := filepath.Join(cfg.DataDir, "telegram-shell-state.json")
+	shell, err := telegram.NewShell(queue, approvals, bot, cfg.Telegram.ChatID, statePath)
+	if err != nil {
+		return err
+	}
+	return runTelegramShell(ctx, shell, bot, cfg.Telegram.PollTimeoutSeconds, app.Logger)
+}
+
+func runTelegramShell(ctx context.Context, shell *telegram.Shell, bot telegram.BotClient, pollTimeout int, logger *slog.Logger) error {
+	if pollTimeout <= 0 {
+		pollTimeout = 30
+	}
+	var offset int64
+	for {
+		if err := shell.NotifyCompletions(ctx); err != nil {
+			return fmt.Errorf("telegram notify completions: %w", err)
+		}
+		updates, err := bot.GetUpdates(ctx, offset, pollTimeout)
+		if err != nil {
+			return fmt.Errorf("telegram get updates: %w", err)
+		}
+		for _, update := range updates {
+			if update.ID >= offset {
+				offset = update.ID + 1
+			}
+			if err := shell.HandleUpdate(ctx, update); err != nil && logger != nil {
+				logger.Error("telegram handle update", "update_id", update.ID, "error", err)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+		}
+	}
 }
 
 func cmdDaemonStatus(ctx context.Context) error {

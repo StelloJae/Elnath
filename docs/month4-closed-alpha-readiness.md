@@ -68,17 +68,22 @@ This means Month 4 does not start from zero on onboarding, but it still needs a 
 
 The following gaps are visible in the current code and should be treated as pre-alpha blockers until they are closed.
 
-### 1. No Telegram companion shell exists yet
+### 1. Thin Telegram operator shell now exists, but only as a companion surface
 
-A repo-wide search shows no Telegram adapter, delivery bridge, approval surface, or resume trigger implementation. The current continuity substrate is CLI + daemon only.
+The repository now includes a thin Telegram companion shell:
 
-**Implication:** the Month 4 Telegram scope must stay thin and build on the existing queue/session/completion substrate rather than inventing a separate path.
+- `internal/telegram/*` implements the operator-only command surface and completion notifier.
+- `cmd/elnath/commands.go` adds `elnath telegram shell`.
+- `internal/daemon/task_payload.go` lets queued work resume an existing session for Telegram follow-ups.
+- `internal/daemon/approval_store.go` persists approval requests so the operator shell can resolve them.
+
+**Implication:** the Month 4 Telegram scope stays thin and reuses the queue/session/completion substrate rather than inventing a separate orchestration path.
 
 ### 2. Progress is durable, but delivery is still local-only
 
 Today the progress envelope is stored and rendered by `elnath daemon status`, but there is no separate completion notification sink, push delivery abstraction, or external subscriber path.
 
-**Implication:** completion data is available, but notification delivery is not yet productized.
+**Implication:** completion notifications now exist for the configured Telegram operator chat, but delivery is still a thin operator bridge rather than a generalized multi-sink notification product.
 
 ### 3. Resume exists at the session level, but resume-safe task snapshots are still narrow
 
@@ -120,9 +125,9 @@ The repository now includes the explicit Month 4 operator docs the plan calls fo
 | --- | --- | --- | --- |
 | Confirmatory Month 3 checkpoint | Frozen in repo artifacts, but canary health is still only partial | `benchmarks/results/month4-closed-alpha-readiness-20260409/confirmatory-month3-checkpoint.md` | Entry checkpoint captured; do not overclaim beyond the frozen memo |
 | Shared continuity runtime substrate | Partial but real | `cmd/elnath/runtime.go`, `internal/daemon/queue.go`, `internal/daemon/progress.go` | Best current foundation |
-| Thin Telegram shell | Not started in this repo state | No Telegram code found under `cmd/` or `internal/` | Blocked on runtime-first work |
-| Onboarding/docs | Operator docs checked in | `wiki/closed-alpha-setup.md`, `wiki/closed-alpha-runbook.md`, `wiki/closed-alpha-known-limits.md` | Documentation ready; rehearsal evidence still needed |
-| Telemetry/verification | Partial, daemon-centric | timeout metrics in `internal/daemon/queue.go`; `scripts/alpha_telemetry_report.sh` | Needs explicit alpha signals beyond queue timeouts |
+| Thin Telegram shell | Partial but real | `cmd/elnath/commands.go`, `internal/telegram/*`, `internal/daemon/task_payload.go`, `internal/daemon/approval_store.go` | Operator-only shell exists; rehearsals still needed |
+| Onboarding/docs | Partial in product, weak in operator docs | `internal/onboarding/*`, `internal/config/onboarding.go` | Needs alpha-specific documentation |
+| Telemetry/verification | Partial, daemon-centric | timeout metrics in `internal/daemon/queue.go` | Needs explicit alpha signals |
 
 ## Month 4 stop/go interpretation for the current branch
 
@@ -144,7 +149,7 @@ The repository now includes the explicit Month 4 operator docs the plan calls fo
 
 ### What looks riskiest today
 
-- Cross-surface continuity is not yet exercised because the second surface does not exist.
+- Cross-surface continuity now has a thin Telegram operator bridge, but it is not yet proven by repeated rehearsals.
 - Resume trust is not yet proven by rehearsals/documented evidence.
 - Telemetry is too narrow for alpha retention claims.
 - Gate automation must not treat docs-only mentions as product implementation evidence.
@@ -183,9 +188,9 @@ Use this checklist before inviting external alpha users.
 
 ## Alpha-specific known limits (current branch)
 
-- No Telegram operator shell exists yet.
-- No approval workflow is implemented across CLI/daemon/Telegram surfaces.
-- Completion exists as stored state, not yet as a generalized notification product surface.
+- Telegram now exists only as a thin operator shell; it is not a broad chat companion.
+- Approval workflow exists only for persisted operator decisions resolved through the shared store and shell.
+- Completion now notifies the configured Telegram operator chat, but it is not yet a generalized notification product surface.
 - Resume trust is supported structurally but not yet proven at the product level.
 - Telemetry is not yet sufficient to make repeat-use or retention claims.
 

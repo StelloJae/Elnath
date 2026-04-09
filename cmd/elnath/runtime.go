@@ -280,12 +280,31 @@ func (rt *executionRuntime) runTask(
 
 func (rt *executionRuntime) newDaemonTaskRunner() daemon.TaskRunner {
 	return func(ctx context.Context, payload string, onText func(string)) (daemon.TaskResult, error) {
-		sess, err := rt.mgr.NewSession()
-		if err != nil {
-			return daemon.TaskResult{}, fmt.Errorf("create session: %w", err)
+		taskPayload := daemon.ParseTaskPayload(payload)
+		userInput := taskPayload.Prompt
+		if userInput == "" {
+			return daemon.TaskResult{}, fmt.Errorf("daemon task payload is empty")
 		}
 
-		messages, summary, err := rt.runTask(ctx, sess, nil, payload, orchestrationOutput{
+		var (
+			sess     *agent.Session
+			messages []llm.Message
+			err      error
+		)
+		if taskPayload.SessionID != "" {
+			sess, err = rt.mgr.LoadSession(taskPayload.SessionID)
+			if err != nil {
+				return daemon.TaskResult{}, fmt.Errorf("load session %s: %w", taskPayload.SessionID, err)
+			}
+			messages = sess.Messages
+		} else {
+			sess, err = rt.mgr.NewSession()
+			if err != nil {
+				return daemon.TaskResult{}, fmt.Errorf("create session: %w", err)
+			}
+		}
+
+		messages, summary, err := rt.runTask(ctx, sess, messages, userInput, orchestrationOutput{
 			OnProgress: func(ev daemon.ProgressEvent) {
 				if onText == nil {
 					return

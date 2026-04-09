@@ -60,6 +60,17 @@ Start an interactive chat session. Type messages naturally; intent is classified
 
 The daemon persists progress as a machine-readable event envelope (`elnath.progress.v1`) and `elnath daemon status` renders the shared `message` field. That keeps progress updates concise in the CLI now while leaving the same schema reusable for future delivery bridges.
 
+### Thin Telegram Operator Shell
+
+When configured, `elnath telegram shell` exposes the Month 4 operator-only Telegram surface:
+
+- `/status` — summarize the current daemon queue
+- `/approvals` — list pending approval requests
+- `/approve <id>` / `/deny <id>` — resolve a pending approval
+- `/followup <session_id> <message>` — queue a session-bound follow-up on the shared runtime
+
+Completed daemon tasks emit Telegram completion notifications once per task while the shell is running.
+
 ## Closed Alpha Readiness
 
 Month 4 lane-4 operator materials now live in the repo:
@@ -83,6 +94,7 @@ This bundle stays fail-closed on product gaps: checked-in docs and telemetry hel
 | `daemon status` | Show queued and running jobs | `elnath daemon status` |
 | `daemon stop` | Stop daemon | `elnath daemon stop` |
 | `daemon install` | Install daemon as system service | `elnath daemon install` |
+| `telegram shell` | Run the thin Telegram operator shell | `elnath telegram shell` |
 | `wiki search` | Full-text search wiki | `elnath wiki search "authentication"` |
 | `wiki lint` | Validate wiki structure | `elnath wiki lint` |
 | `wiki rebuild` | Rebuild FTS5 index | `elnath wiki rebuild` |
@@ -139,6 +151,13 @@ permission:
   mode: default
   allow: []       # tools always allowed (bypass permission check)
   deny: []        # tools always denied (overrides allow)
+
+telegram:
+  enabled: false
+  bot_token: ""   # or ELNATH_TELEGRAM_BOT_TOKEN
+  chat_id: ""     # or ELNATH_TELEGRAM_CHAT_ID
+  api_base_url: "" # optional, defaults to https://api.telegram.org
+  poll_timeout_seconds: 30
 
 daemon:
   socket_path: ~/.elnath/daemon.sock

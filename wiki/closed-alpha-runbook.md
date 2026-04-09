@@ -35,6 +35,7 @@ This gives one reproducible pass over lint, tests, build, and telemetry script c
 
 ```bash
 ./elnath daemon start
+./elnath telegram shell
 ./elnath daemon submit "analyze the repository layout"
 ./elnath daemon status
 bash scripts/alpha_telemetry_report.sh --out artifacts/month4-alpha-report.json
@@ -46,6 +47,9 @@ What to verify:
 - `daemon status` renders a readable progress message, not a raw JSON envelope
 - completed tasks preserve a non-empty summary
 - tasks bind to session ids when the runtime creates one
+- Telegram `/status` mirrors the shared daemon/session state rather than inventing its own view
+- Telegram `/followup <session_id> <message>` queues a session-bound continuation instead of starting a detached session
+- pending approval requests can be listed and resolved through `/approvals`, `/approve`, and `/deny`
 - timeout counters stay visible in the telemetry summary
 
 ## 4. Capture onboarding evidence

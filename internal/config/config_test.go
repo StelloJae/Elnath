@@ -160,11 +160,11 @@ func TestLoad_EnvOverridesApplied(t *testing.T) {
 
 func TestApplyEnvOverrides(t *testing.T) {
 	tests := []struct {
-		name    string
-		envKey  string
-		envVal  string
-		check   func(*Config) string
-		want    string
+		name   string
+		envKey string
+		envVal string
+		check  func(*Config) string
+		want   string
 	}{
 		{
 			name:   "ELNATH_DATA_DIR",
@@ -221,6 +221,27 @@ func TestApplyEnvOverrides(t *testing.T) {
 			envVal: "bypass",
 			check:  func(c *Config) string { return c.Permission.Mode },
 			want:   "bypass",
+		},
+		{
+			name:   "ELNATH_TELEGRAM_BOT_TOKEN",
+			envKey: "ELNATH_TELEGRAM_BOT_TOKEN",
+			envVal: "bot-token",
+			check:  func(c *Config) string { return c.Telegram.BotToken },
+			want:   "bot-token",
+		},
+		{
+			name:   "ELNATH_TELEGRAM_CHAT_ID",
+			envKey: "ELNATH_TELEGRAM_CHAT_ID",
+			envVal: "12345",
+			check:  func(c *Config) string { return c.Telegram.ChatID },
+			want:   "12345",
+		},
+		{
+			name:   "ELNATH_TELEGRAM_API_BASE_URL",
+			envKey: "ELNATH_TELEGRAM_API_BASE_URL",
+			envVal: "https://telegram.example.test",
+			check:  func(c *Config) string { return c.Telegram.APIBaseURL },
+			want:   "https://telegram.example.test",
 		},
 	}
 
@@ -331,6 +352,31 @@ func TestValidate(t *testing.T) {
 		{
 			name:    "permission mode bypass",
 			mutate:  func(c *Config) { c.Permission.Mode = "bypass" },
+			wantErr: "",
+		},
+		{
+			name: "telegram enabled missing bot token",
+			mutate: func(c *Config) {
+				c.Telegram.Enabled = true
+				c.Telegram.ChatID = "123"
+			},
+			wantErr: "telegram.bot_token is required",
+		},
+		{
+			name: "telegram enabled missing chat id",
+			mutate: func(c *Config) {
+				c.Telegram.Enabled = true
+				c.Telegram.BotToken = "token"
+			},
+			wantErr: "telegram.chat_id is required",
+		},
+		{
+			name: "telegram enabled valid",
+			mutate: func(c *Config) {
+				c.Telegram.Enabled = true
+				c.Telegram.BotToken = "token"
+				c.Telegram.ChatID = "123"
+			},
 			wantErr: "",
 		},
 	}

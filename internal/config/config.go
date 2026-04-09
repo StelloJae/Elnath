@@ -21,10 +21,11 @@ type Config struct {
 	MaxContextTokens  int     `yaml:"max_context_tokens"`
 	CompressThreshold float64 `yaml:"compress_threshold"`
 
-	Permission PermissionConfig `yaml:"permission"`
-	Daemon     DaemonConfig     `yaml:"daemon"`
-	Research   ResearchConfig   `yaml:"research"`
-	Projects   []ProjectRef     `yaml:"projects"`
+	Permission PermissionConfig  `yaml:"permission"`
+	Daemon     DaemonConfig      `yaml:"daemon"`
+	Telegram   TelegramConfig    `yaml:"telegram"`
+	Research   ResearchConfig    `yaml:"research"`
+	Projects   []ProjectRef      `yaml:"projects"`
 	MCPServers []MCPServerConfig `yaml:"mcp_servers"`
 	Hooks      []HookConfig      `yaml:"hooks"`
 }
@@ -39,8 +40,8 @@ type MCPServerConfig struct {
 
 // HookConfig defines a shell command hook for tool execution lifecycle events.
 type HookConfig struct {
-	Matcher    string `yaml:"matcher"`     // glob pattern for tool names (e.g., "*", "bash")
-	PreCommand string `yaml:"pre_command"` // shell command to run before tool execution
+	Matcher     string `yaml:"matcher"`      // glob pattern for tool names (e.g., "*", "bash")
+	PreCommand  string `yaml:"pre_command"`  // shell command to run before tool execution
 	PostCommand string `yaml:"post_command"` // shell command to run after tool execution
 }
 
@@ -68,6 +69,14 @@ type PermissionConfig struct {
 type DaemonConfig struct {
 	SocketPath string `yaml:"socket_path"`
 	MaxWorkers int    `yaml:"max_workers"`
+}
+
+type TelegramConfig struct {
+	Enabled            bool   `yaml:"enabled"`
+	BotToken           string `yaml:"bot_token"`
+	ChatID             string `yaml:"chat_id"`
+	APIBaseURL         string `yaml:"api_base_url"`
+	PollTimeoutSeconds int    `yaml:"poll_timeout_seconds"`
 }
 
 type OllamaConfig struct {
@@ -140,6 +149,15 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("ELNATH_LOCALE"); v != "" {
 		cfg.Locale = v
 	}
+	if v := os.Getenv("ELNATH_TELEGRAM_BOT_TOKEN"); v != "" {
+		cfg.Telegram.BotToken = v
+	}
+	if v := os.Getenv("ELNATH_TELEGRAM_CHAT_ID"); v != "" {
+		cfg.Telegram.ChatID = v
+	}
+	if v := os.Getenv("ELNATH_TELEGRAM_API_BASE_URL"); v != "" {
+		cfg.Telegram.APIBaseURL = v
+	}
 }
 
 func validate(cfg *Config) error {
@@ -176,6 +194,14 @@ func validate(cfg *Config) error {
 	for i, h := range cfg.Hooks {
 		if h.PreCommand == "" && h.PostCommand == "" {
 			return fmt.Errorf("hooks[%d]: at least one of pre_command or post_command is required", i)
+		}
+	}
+	if cfg.Telegram.Enabled {
+		if cfg.Telegram.BotToken == "" {
+			return fmt.Errorf("telegram.bot_token is required when telegram.enabled=true")
+		}
+		if cfg.Telegram.ChatID == "" {
+			return fmt.Errorf("telegram.chat_id is required when telegram.enabled=true")
 		}
 	}
 
