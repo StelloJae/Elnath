@@ -88,7 +88,7 @@ Hermes-inspired lifecycle hardening in this lane should stay narrow:
 - **adopted now:** explicit polling-conflict handling so a second poller fails fast with operator guidance instead of retrying forever
 - **deferred on purpose:** Hermes-style pairing and full token-lock orchestration, because Elnath still keeps Telegram single-chat and operator-only rather than a general multi-user adapter
 
-**Implication:** the Month 4 Telegram scope stays thin, reuses the queue/session/completion substrate, and is proven enough for a small controlled operator cohort without claiming Hermes-grade adapter maturity.
+**Implication:** the Month 4 Telegram scope stays thin, reuses the queue/session/completion substrate, and is proven enough for a small controlled operator cohort without claiming Hermes-grade adapter maturity. In practice that means keeping the operator-facing shell limited to status, approvals, completion notifications, and session-bound follow-ups rather than widening into a broader Telegram companion surface.
 
 ### 2. Progress is durable, but delivery is still deliberately thin
 
