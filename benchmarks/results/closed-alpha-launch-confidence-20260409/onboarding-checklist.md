@@ -9,8 +9,8 @@
 ## First-run checks
 - [ ] `./elnath version`
 - [ ] `./elnath daemon start`
-- [ ] `./elnath telegram shell`
-- [ ] `./elnath daemon status`
+- [x] `./elnath telegram shell`
+- [x] `./elnath daemon status`
 
 ## First operator rehearsal
 - [ ] Start a long-running task from CLI
