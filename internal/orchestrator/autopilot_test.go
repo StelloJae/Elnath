@@ -13,10 +13,10 @@ func TestAutopilotWorkflow_E2E(t *testing.T) {
 	ctx := context.Background()
 
 	provider := newTestProvider(
-		"Plan: 1. Create endpoint 2. Add validation 3. Write tests", // plan
+		"Plan: 1. Create endpoint 2. Add validation 3. Write tests",     // plan
 		"func handleCreate(w http.ResponseWriter, r *http.Request) { }", // code
 		"Tests: 3/3 passed. Coverage: 85%",                              // test
-		"Verification: COMPLETE. All requirements met.",                   // verify
+		"Verification: COMPLETE. All requirements met.",                 // verify
 	)
 
 	wf := NewAutopilotWorkflow()

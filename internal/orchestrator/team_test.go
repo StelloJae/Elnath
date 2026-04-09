@@ -87,15 +87,15 @@ func TestParseSubtasks(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name: "plain JSON",
-			raw:  `[{"id":1,"title":"A","instruction":"Do A"},{"id":2,"title":"B","instruction":"Do B"}]`,
-			want: 2,
+			name:   "plain JSON",
+			raw:    `[{"id":1,"title":"A","instruction":"Do A"},{"id":2,"title":"B","instruction":"Do B"}]`,
+			want:   2,
 			wantID: 1,
 		},
 		{
-			name: "with code fence",
-			raw:  "```json\n[{\"id\":1,\"title\":\"A\",\"instruction\":\"Do A\"}]\n```",
-			want: 1,
+			name:   "with code fence",
+			raw:    "```json\n[{\"id\":1,\"title\":\"A\",\"instruction\":\"Do A\"}]\n```",
+			want:   1,
 			wantID: 1,
 		},
 		{
@@ -104,9 +104,9 @@ func TestParseSubtasks(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "JSON with surrounding text",
-			raw:  "Here is the plan:\n[{\"id\":1,\"title\":\"Only task\",\"instruction\":\"Do it\"}]\nDone.",
-			want: 1,
+			name:   "JSON with surrounding text",
+			raw:    "Here is the plan:\n[{\"id\":1,\"title\":\"Only task\",\"instruction\":\"Do it\"}]\nDone.",
+			want:   1,
 			wantID: 1,
 		},
 		{
@@ -173,7 +173,7 @@ type promptCaptureProvider struct {
 	prompt string
 }
 
-func (p *promptCaptureProvider) Name() string { return "test" }
+func (p *promptCaptureProvider) Name() string            { return "test" }
 func (p *promptCaptureProvider) Models() []llm.ModelInfo { return nil }
 func (p *promptCaptureProvider) Chat(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
 	return nil, nil

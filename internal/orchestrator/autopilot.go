@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
 
 	"github.com/stello/elnath/internal/llm"
 )
@@ -100,8 +99,6 @@ func (w *AutopilotWorkflow) Run(ctx context.Context, input WorkflowInput) (*Work
 	// Seed the history with the original user request.
 	messages := append(input.Messages, llm.NewUserMessage(input.Message))
 
-	var stageErrors []string
-
 	for _, s := range autopilotStages {
 		w.logger.Info("autopilot: running stage", "stage", s.name)
 
@@ -117,12 +114,18 @@ func (w *AutopilotWorkflow) Run(ctx context.Context, input WorkflowInput) (*Work
 
 		result, err := single.Run(ctx, stageInput)
 		if err != nil {
-			errSummary := fmt.Sprintf("[autopilot stage %q failed: %v]", s.name, err)
 			w.logger.Warn("autopilot: stage failed", "stage", s.name, "error", err)
-			stageErrors = append(stageErrors, errSummary)
-			// Append the error as a message so later stages have context.
-			messages = append(messages, llm.NewUserMessage(errSummary))
-			continue
+			errSummary := fmt.Sprintf("Autopilot stopped at stage %q: %v", s.name, err)
+			if input.OnText != nil {
+				input.OnText(fmt.Sprintf("[autopilot] %s\n", errSummary))
+			}
+			messages = append(messages, llm.NewAssistantMessage(errSummary))
+			return &WorkflowResult{
+				Messages: messages,
+				Summary:  errSummary,
+				Usage:    totalUsage,
+				Workflow: w.Name(),
+			}, fmt.Errorf("autopilot stage %q failed: %w", s.name, err)
 		}
 
 		totalUsage.InputTokens += result.Usage.InputTokens
@@ -135,15 +138,10 @@ func (w *AutopilotWorkflow) Run(ctx context.Context, input WorkflowInput) (*Work
 
 	summary := extractSummary(messages)
 
-	var returnErr error
-	if len(stageErrors) > 0 {
-		returnErr = fmt.Errorf("autopilot completed with errors: %s", strings.Join(stageErrors, "; "))
-	}
-
 	return &WorkflowResult{
 		Messages: messages,
 		Summary:  summary,
 		Usage:    totalUsage,
 		Workflow: w.Name(),
-	}, returnErr
+	}, nil
 }
