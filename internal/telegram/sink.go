@@ -118,14 +118,14 @@ func (s *TelegramSink) sendOrEdit(taskID, msgID int64, text string) {
 	ctx := context.Background()
 	if msgID > 0 {
 		if err := s.bot.EditMessage(ctx, s.chatID, msgID, text); err != nil {
-			s.logger.Debug("telegram sink: edit message", "task_id", taskID, "error", err)
+			s.logger.Warn("telegram sink: edit message", "task_id", taskID, "error", err)
 		}
 		return
 	}
 
 	newID, err := s.bot.SendMessageReturningID(ctx, s.chatID, text)
 	if err != nil {
-		s.logger.Debug("telegram sink: send message", "task_id", taskID, "error", err)
+		s.logger.Warn("telegram sink: send message", "task_id", taskID, "error", err)
 		return
 	}
 

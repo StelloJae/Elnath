@@ -251,12 +251,22 @@ func validSubtasks(tasks []subtask) bool {
 func (w *TeamWorkflow) runSubtasks(ctx context.Context, input WorkflowInput, subtasks []subtask) ([]subtaskResult, llm.UsageStats, error) {
 	resultCh := make(chan subtaskResult, len(subtasks))
 
+	var onTextMu sync.Mutex
+	safeInput := input
+	if input.OnText != nil {
+		safeInput.OnText = func(text string) {
+			onTextMu.Lock()
+			defer onTextMu.Unlock()
+			input.OnText(text)
+		}
+	}
+
 	var wg sync.WaitGroup
 	for _, st := range subtasks {
 		wg.Add(1)
 		go func(st subtask) {
 			defer wg.Done()
-			res := w.runOne(ctx, input, st)
+			res := w.runOne(ctx, safeInput, st)
 			resultCh <- res
 		}(st)
 	}
@@ -272,12 +282,12 @@ func (w *TeamWorkflow) runSubtasks(ctx context.Context, input WorkflowInput, sub
 		if r.err != nil {
 			return nil, llm.UsageStats{}, fmt.Errorf("subtask %d %q: %w", r.subtask.ID, r.subtask.Title, r.err)
 		}
-		if input.OnText != nil {
-			input.OnText(fmt.Sprintf("[team] completed subtask %d: %s\n", r.subtask.ID, r.subtask.Title))
+		if safeInput.OnText != nil {
+			safeInput.OnText(fmt.Sprintf("[team] completed subtask %d: %s\n", r.subtask.ID, r.subtask.Title))
 			if r.stream != "" {
-				input.OnText(r.stream)
+				safeInput.OnText(r.stream)
 				if !strings.HasSuffix(r.stream, "\n") {
-					input.OnText("\n")
+					safeInput.OnText("\n")
 				}
 			}
 		}
@@ -320,6 +330,9 @@ Execution rules:
 	var stream strings.Builder
 	result, err := a.Run(ctx, messages, func(text string) {
 		stream.WriteString(text)
+		if input.OnText != nil {
+			input.OnText(text)
+		}
 	})
 	return subtaskResult{subtask: st, result: result, stream: stream.String(), err: err}
 }
