@@ -249,6 +249,24 @@ def rate(scorecard, key):
         return sum(1 for r in results if r.get('recovery_succeeded')) / len(results)
     raise ValueError(key)
 
+def failure_counts(scorecard):
+    counts = {}
+    for result in scorecard['results']:
+        family = result.get('failure_family')
+        if family:
+            counts[family] = counts.get(family, 0) + 1
+    return counts
+
+def format_failure_counts(scorecard):
+    counts = failure_counts(scorecard)
+    if not counts:
+        return 'none'
+    return ', '.join(f'{family}={counts[family]}' for family in sorted(counts))
+
+def all_failed(scorecard):
+    results = scorecard['results']
+    return bool(results) and all(not result.get('success') for result in results)
+
 bugfix_current = json.loads(Path(sys.argv[1]).read_text())
 bugfix_baseline = json.loads(Path(sys.argv[2]).read_text())
 canary_current = json.loads(Path(sys.argv[3]).read_text())
@@ -256,6 +274,35 @@ canary_baseline = json.loads(Path(sys.argv[4]).read_text())
 bugfix_report = sys.argv[5]
 canary_report = sys.argv[6]
 summary_path = Path(sys.argv[7])
+
+bugfix_current_all_failed = all_failed(bugfix_current)
+canary_current_all_failed = all_failed(canary_current)
+canary_baseline_all_failed = all_failed(canary_baseline)
+canary_non_regression = (
+    rate(canary_current, 'success') >= rate(canary_baseline, 'success') and
+    rate(canary_current, 'verification') >= rate(canary_baseline, 'verification')
+)
+
+if canary_current_all_failed and canary_baseline_all_failed:
+    canary_check = 'INCONCLUSIVE (both current and baseline failed every canary task)'
+elif canary_non_regression:
+    canary_check = 'PASS'
+else:
+    canary_check = 'FAIL'
+
+if bugfix_current_all_failed and canary_current_all_failed:
+    interpretation = (
+        'This cycle is inconclusive: current failed every bugfix and canary task, so '
+        'zero deltas do not count as preserved canary evidence or refreshed bugfix '
+        'evidence. Check the failure-family lines before using this cycle for roadmap '
+        'claims.'
+    )
+else:
+    interpretation = (
+        'This cycle preserved the canary and refreshed the bugfix-vs-baseline evidence '
+        'from one command path. Remaining work is to keep increasing repeat count and '
+        'reduce wrapper policy hotspots, not to re-plan the roadmap.'
+    )
 
 lines = [
     '# Month 3 Evidence Snapshot',
@@ -266,6 +313,8 @@ lines = [
     f'- Current vs baseline success delta: **{rate(bugfix_current, "success") - rate(bugfix_baseline, "success"):+.2f}**',
     f'- Current vs baseline verification delta: **{rate(bugfix_current, "verification") - rate(bugfix_baseline, "verification"):+.2f}**',
     f'- Current vs baseline recovery delta: **{rate(bugfix_current, "recovery") - rate(bugfix_baseline, "recovery"):+.2f}**',
+    f'- Current failure families: **{format_failure_counts(bugfix_current)}**',
+    f'- Baseline failure families: **{format_failure_counts(bugfix_baseline)}**',
     '',
     '## Carry-forward canary',
     f'Source: `{canary_report}`',
@@ -273,10 +322,12 @@ lines = [
     f'- Current vs baseline success delta: **{rate(canary_current, "success") - rate(canary_baseline, "success"):+.2f}**',
     f'- Current vs baseline verification delta: **{rate(canary_current, "verification") - rate(canary_baseline, "verification"):+.2f}**',
     f'- Current vs baseline recovery delta: **{rate(canary_current, "recovery") - rate(canary_baseline, "recovery"):+.2f}**',
-    '- Manual canary delta check: **PASS**',
+    f'- Current failure families: **{format_failure_counts(canary_current)}**',
+    f'- Baseline failure families: **{format_failure_counts(canary_baseline)}**',
+    f'- Manual canary delta check: **{canary_check}**',
     '',
     '## Interpretation',
-    'This cycle preserved the canary and refreshed the bugfix-vs-baseline evidence from one command path. Remaining work is to keep increasing repeat count and reduce wrapper policy hotspots, not to re-plan the roadmap.',
+    interpretation,
 ]
 summary_path.write_text('\n'.join(lines) + '\n')
 PY
