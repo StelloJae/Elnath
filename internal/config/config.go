@@ -74,6 +74,7 @@ type DaemonConfig struct {
 	MaxRecoveries     int    `yaml:"max_recoveries"`
 	InactivityTimeout int    `yaml:"inactivity_timeout_seconds"`
 	WallClockTimeout  int    `yaml:"wall_clock_timeout_seconds"`
+	WorkDir           string `yaml:"work_dir"`
 }
 
 type TelegramConfig struct {

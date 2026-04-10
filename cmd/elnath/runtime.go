@@ -111,6 +111,7 @@ func buildExecutionRuntime(
 	model string,
 	systemPrompt string,
 	perm *agent.Permission,
+	workDir string,
 ) (*executionRuntime, error) {
 	if err := conversation.InitSchema(db.Main); err != nil {
 		return nil, fmt.Errorf("init conversation schema: %w", err)
@@ -134,8 +135,11 @@ func buildExecutionRuntime(
 		WithHistoryStore(historyStore).
 		WithLogger(app.Logger)
 
-	cwd, _ := os.Getwd()
-	reg := buildToolRegistry(cwd)
+	effectiveWorkDir := workDir
+	if effectiveWorkDir == "" {
+		effectiveWorkDir, _ = os.Getwd()
+	}
+	reg := buildToolRegistry(effectiveWorkDir)
 	gitSync, wikiIdx := registerWikiTools(reg, cfg.WikiDir, db.Wiki)
 	reg.Register(conversation.NewConversationSearchTool(historyStore))
 
@@ -171,7 +175,7 @@ func buildExecutionRuntime(
 		wikiIdx:   wikiIdx,
 		wikiStore: wikiStore,
 		gitSync:   gitSync,
-		workDir:   cwd,
+		workDir:   effectiveWorkDir,
 	}, nil
 }
 

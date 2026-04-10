@@ -96,6 +96,17 @@ func cmdDaemonStart(ctx context.Context) error {
 		selfState = self.New(cfg.DataDir)
 	}
 	daemonPrompt := self.BuildSystemPrompt(selfState, "")
+
+	workDir := cfg.Daemon.WorkDir
+	if workDir == "" {
+		home, _ := os.UserHomeDir()
+		workDir = filepath.Join(home, ".elnath", "workspace")
+	}
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		return fmt.Errorf("create workspace dir: %w", err)
+	}
+	app.Logger.Info("daemon workspace", "dir", workDir)
+
 	rt, err := buildExecutionRuntime(
 		ctx,
 		cfg,
@@ -105,6 +116,7 @@ func cmdDaemonStart(ctx context.Context) error {
 		model,
 		daemonPrompt,
 		perm,
+		workDir,
 	)
 	if err != nil {
 		return err

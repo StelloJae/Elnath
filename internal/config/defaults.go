@@ -33,6 +33,7 @@ func DefaultConfig() *Config {
 			MaxRecoveries:     3,
 			InactivityTimeout: 600,
 			WallClockTimeout:  1800,
+			WorkDir:           filepath.Join(base, "workspace"),
 		},
 		Research: ResearchConfig{
 			MaxRounds:  5,
