@@ -126,11 +126,24 @@ func (s *Shell) HandleUpdate(ctx context.Context, update Update) error {
 	text := strings.TrimSpace(update.Message.Text)
 	fields := strings.Fields(text)
 
-	// Explicit commands always go to command handler.
-	if len(fields) > 0 && strings.HasPrefix(fields[0], "/") {
-		if fields[0] == "/submit" && update.Message.MessageID > 0 {
+	// /submit is handled here (not in handleCommand) for task tracking.
+	if len(fields) > 0 && fields[0] == "/submit" {
+		if update.Message.MessageID > 0 {
 			_ = s.bot.SetReaction(ctx, s.chatID, update.Message.MessageID, "👀")
 		}
+		prompt := strings.TrimSpace(strings.TrimPrefix(text, "/submit"))
+		taskID, err := s.enqueueTaskReturningID(ctx, prompt)
+		if err != nil {
+			return s.bot.SendMessage(ctx, s.chatID, "⚠️ "+err.Error())
+		}
+		if s.taskTracker != nil && update.Message.MessageID > 0 {
+			s.taskTracker.TrackUserMessage(taskID, update.Message.MessageID)
+		}
+		return s.bot.SendMessage(ctx, s.chatID, fmt.Sprintf("🚀 Task <code>#%d</code> queued", taskID))
+	}
+
+	// Other explicit commands go to command handler.
+	if len(fields) > 0 && strings.HasPrefix(fields[0], "/") {
 		reply, err := s.handleCommand(ctx, text)
 		if err != nil {
 			reply = "⚠️ " + err.Error()

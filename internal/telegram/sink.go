@@ -160,6 +160,8 @@ func (s *TelegramSink) NotifyCompletion(_ context.Context, c daemon.TaskCompleti
 	header := fmt.Sprintf("%s <b>%s</b>%s <code>#%d</code>", icon, label, elapsed, c.TaskID)
 	if prMsgID := task.progress.MessageID(); prMsgID > 0 {
 		_ = s.bot.EditMessage(ctx, s.chatID, prMsgID, header)
+	} else {
+		_ = s.bot.SendMessage(ctx, s.chatID, header)
 	}
 
 	if !task.stream.AlreadySent() {
