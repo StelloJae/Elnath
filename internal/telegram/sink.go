@@ -142,9 +142,9 @@ func (s *TelegramSink) NotifyCompletion(_ context.Context, c daemon.TaskCompleti
 
 	ctx := context.Background()
 	if task.userMsgID > 0 {
-		emoji := "✅"
+		emoji := "👍"
 		if c.Status == daemon.StatusFailed {
-			emoji = "❌"
+			emoji = "😢"
 		}
 		_ = s.bot.SetReaction(ctx, s.chatID, task.userMsgID, emoji)
 	}
