@@ -181,9 +181,8 @@ func (s *Shell) taskAcknowledgment(ctx context.Context, userMessage string, task
 	if s.classifyProvider == nil {
 		return fallback
 	}
-	prompt := fmt.Sprintf("User asked: %q\nTask ID: #%d", userMessage, taskID)
 	resp, err := s.classifyProvider.Chat(ctx, llm.ChatRequest{
-		Messages:    []llm.Message{llm.NewUserMessage(prompt)},
+		Messages:    []llm.Message{llm.NewUserMessage(userMessage)},
 		System:      taskAckPrompt,
 		MaxTokens:   40,
 		Temperature: 0.9,
@@ -194,14 +193,16 @@ func (s *Shell) taskAcknowledgment(ctx context.Context, userMessage string, task
 	return strings.TrimSpace(resp.Content)
 }
 
-const taskAckPrompt = `Generate a brief, warm acknowledgment (1 sentence, under 15 words) for a task you just received.
-Include the task number naturally. Match the user's language exactly.
-No markdown, no HTML tags, no quotes. Just the plain sentence.
+const taskAckPrompt = `You are a personal AI assistant. The user just gave you a task.
+Generate a brief, warm acknowledgment (1 sentence, under 12 words).
+Match the user's language. Sound like a real person, not a system.
+No task numbers, no technical jargon, no markdown, no HTML, no quotes.
 Examples:
-- 알겠어요! 작업 #5 시작할게요~
-- 네, #12번 작업으로 처리할게요!
-- Got it! Working on task #8 now.
-- Sure thing, task #3 is on it!`
+- 알겠어요! 바로 할게요~
+- 네, 잠시만 기다려주세요!
+- 확인했어요, 금방 처리할게요~
+- Got it! Give me a moment.
+- On it! One sec.`
 
 func isChatIntent(intent conversation.Intent) bool {
 	switch intent {
