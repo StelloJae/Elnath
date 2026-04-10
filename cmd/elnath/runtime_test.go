@@ -83,6 +83,7 @@ func newTestExecutionRuntime(t *testing.T, provider llm.Provider) *executionRunt
 		"system prompt",
 		perm,
 		"",
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("buildExecutionRuntime: %v", err)

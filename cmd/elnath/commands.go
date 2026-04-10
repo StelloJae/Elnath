@@ -333,15 +333,15 @@ func registerMCPTools(ctx context.Context, reg *tools.Registry, servers []config
 	}
 }
 
-func buildToolRegistry(workDir string) *tools.Registry {
+func buildToolRegistry(guard *tools.PathGuard) *tools.Registry {
 	reg := tools.NewRegistry()
-	reg.Register(tools.NewBashTool(workDir))
-	reg.Register(tools.NewReadTool(workDir))
-	reg.Register(tools.NewWriteTool(workDir))
-	reg.Register(tools.NewEditTool(workDir))
-	reg.Register(tools.NewGlobTool(workDir))
-	reg.Register(tools.NewGrepTool(workDir))
-	reg.Register(tools.NewGitTool(workDir))
+	reg.Register(tools.NewBashTool(guard))
+	reg.Register(tools.NewReadTool(guard))
+	reg.Register(tools.NewWriteTool(guard))
+	reg.Register(tools.NewEditTool(guard))
+	reg.Register(tools.NewGlobTool(guard))
+	reg.Register(tools.NewGrepTool(guard))
+	reg.Register(tools.NewGitTool(guard))
 	reg.Register(tools.NewWebFetchTool())
 	return reg
 }

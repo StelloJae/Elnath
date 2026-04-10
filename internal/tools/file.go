@@ -15,24 +15,14 @@ import (
 
 const grepMaxMatches = 100
 
-// resolvePath joins baseDir with p, preventing directory traversal outside baseDir.
-func resolvePath(baseDir, p string) (string, error) {
-	abs := filepath.Join(baseDir, p)
-	rel, err := filepath.Rel(baseDir, abs)
-	if err != nil || strings.HasPrefix(rel, "..") {
-		return "", fmt.Errorf("path %q escapes base directory", p)
-	}
-	return abs, nil
-}
-
 // ---------------------------------------------------------------------------
 // ReadTool
 // ---------------------------------------------------------------------------
 
 // ReadTool reads file contents, optionally with line offset and limit.
-type ReadTool struct{ baseDir string }
+type ReadTool struct{ guard *PathGuard }
 
-func NewReadTool(baseDir string) *ReadTool { return &ReadTool{baseDir: baseDir} }
+func NewReadTool(guard *PathGuard) *ReadTool { return &ReadTool{guard: guard} }
 
 func (t *ReadTool) Name() string { return "read_file" }
 func (t *ReadTool) Description() string {
@@ -41,7 +31,7 @@ func (t *ReadTool) Description() string {
 
 func (t *ReadTool) Schema() json.RawMessage {
 	return Object(map[string]Property{
-		"file_path": String("Relative path to the file."),
+		"file_path": String("Path to the file (absolute, relative, or ~/)."),
 		"offset":    Int("Starting line number (1-based, optional)."),
 		"limit":     Int("Maximum number of lines to return (optional)."),
 	}, []string{"file_path"})
@@ -58,7 +48,7 @@ func (t *ReadTool) Execute(_ context.Context, params json.RawMessage) (*Result, 
 	if err := json.Unmarshal(params, &p); err != nil {
 		return ErrorResult(fmt.Sprintf("invalid params: %v", err)), nil
 	}
-	abs, err := resolvePath(t.baseDir, p.FilePath)
+	abs, err := t.guard.Resolve(p.FilePath)
 	if err != nil {
 		return ErrorResult(err.Error()), nil
 	}
@@ -106,16 +96,16 @@ func (t *ReadTool) Execute(_ context.Context, params json.RawMessage) (*Result, 
 // ---------------------------------------------------------------------------
 
 // WriteTool creates or overwrites a file atomically.
-type WriteTool struct{ baseDir string }
+type WriteTool struct{ guard *PathGuard }
 
-func NewWriteTool(baseDir string) *WriteTool { return &WriteTool{baseDir: baseDir} }
+func NewWriteTool(guard *PathGuard) *WriteTool { return &WriteTool{guard: guard} }
 
 func (t *WriteTool) Name() string        { return "write_file" }
 func (t *WriteTool) Description() string { return "Create or overwrite a file with the given content." }
 
 func (t *WriteTool) Schema() json.RawMessage {
 	return Object(map[string]Property{
-		"file_path": String("Relative path to the file."),
+		"file_path": String("Path to the file (absolute, relative, or ~/)."),
 		"content":   String("Content to write."),
 	}, []string{"file_path", "content"})
 }
@@ -130,8 +120,11 @@ func (t *WriteTool) Execute(_ context.Context, params json.RawMessage) (*Result,
 	if err := json.Unmarshal(params, &p); err != nil {
 		return ErrorResult(fmt.Sprintf("invalid params: %v", err)), nil
 	}
-	abs, err := resolvePath(t.baseDir, p.FilePath)
+	abs, err := t.guard.Resolve(p.FilePath)
 	if err != nil {
+		return ErrorResult(err.Error()), nil
+	}
+	if err := t.guard.CheckWrite(abs); err != nil {
 		return ErrorResult(err.Error()), nil
 	}
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
@@ -169,16 +162,16 @@ func firstErr(a, b error) error {
 // ---------------------------------------------------------------------------
 
 // EditTool performs an exact string replacement in a file.
-type EditTool struct{ baseDir string }
+type EditTool struct{ guard *PathGuard }
 
-func NewEditTool(baseDir string) *EditTool { return &EditTool{baseDir: baseDir} }
+func NewEditTool(guard *PathGuard) *EditTool { return &EditTool{guard: guard} }
 
 func (t *EditTool) Name() string        { return "edit_file" }
 func (t *EditTool) Description() string { return "Replace an exact string in a file with new content." }
 
 func (t *EditTool) Schema() json.RawMessage {
 	return Object(map[string]Property{
-		"file_path":   String("Relative path to the file."),
+		"file_path":   String("Path to the file (absolute, relative, or ~/)."),
 		"old_string":  String("Exact string to find and replace."),
 		"new_string":  String("Replacement string."),
 		"replace_all": Bool("Replace all occurrences (default: false, requires unique match)."),
@@ -197,8 +190,11 @@ func (t *EditTool) Execute(_ context.Context, params json.RawMessage) (*Result, 
 	if err := json.Unmarshal(params, &p); err != nil {
 		return ErrorResult(fmt.Sprintf("invalid params: %v", err)), nil
 	}
-	abs, err := resolvePath(t.baseDir, p.FilePath)
+	abs, err := t.guard.Resolve(p.FilePath)
 	if err != nil {
+		return ErrorResult(err.Error()), nil
+	}
+	if err := t.guard.CheckWrite(abs); err != nil {
 		return ErrorResult(err.Error()), nil
 	}
 	data, err := os.ReadFile(abs)
@@ -235,9 +231,9 @@ func (t *EditTool) Execute(_ context.Context, params json.RawMessage) (*Result, 
 // ---------------------------------------------------------------------------
 
 // GlobTool lists files matching a glob pattern, sorted by modification time.
-type GlobTool struct{ baseDir string }
+type GlobTool struct{ guard *PathGuard }
 
-func NewGlobTool(baseDir string) *GlobTool { return &GlobTool{baseDir: baseDir} }
+func NewGlobTool(guard *PathGuard) *GlobTool { return &GlobTool{guard: guard} }
 
 func (t *GlobTool) Name() string        { return "glob" }
 func (t *GlobTool) Description() string { return "List files matching a glob pattern." }
@@ -245,7 +241,7 @@ func (t *GlobTool) Description() string { return "List files matching a glob pat
 func (t *GlobTool) Schema() json.RawMessage {
 	return Object(map[string]Property{
 		"pattern": String("Glob pattern (supports ** for recursive matching)."),
-		"path":    String("Base path to search (relative, default: working directory)."),
+		"path":    String("Base path to search (default: working directory)."),
 	}, []string{"pattern"})
 }
 
@@ -265,9 +261,9 @@ func (t *GlobTool) Execute(_ context.Context, params json.RawMessage) (*Result, 
 		return ErrorResult(fmt.Sprintf("invalid params: %v", err)), nil
 	}
 
-	searchBase := t.baseDir
+	searchBase := t.guard.WorkDir()
 	if p.Path != "" {
-		abs, err := resolvePath(t.baseDir, p.Path)
+		abs, err := t.guard.Resolve(p.Path)
 		if err != nil {
 			return ErrorResult(err.Error()), nil
 		}
@@ -276,7 +272,7 @@ func (t *GlobTool) Execute(_ context.Context, params json.RawMessage) (*Result, 
 
 	var entries []fileEntry
 	if strings.Contains(p.Pattern, "**") {
-		entries = recursiveGlob(searchBase, t.baseDir, p.Pattern)
+		entries = recursiveGlob(searchBase, t.guard.WorkDir(), p.Pattern)
 	} else {
 		absPattern := filepath.Join(searchBase, p.Pattern)
 		found, err := filepath.Glob(absPattern)
@@ -288,7 +284,7 @@ func (t *GlobTool) Execute(_ context.Context, params json.RawMessage) (*Result, 
 			if err != nil || info.IsDir() {
 				continue
 			}
-			rel, _ := filepath.Rel(t.baseDir, f)
+			rel, _ := filepath.Rel(t.guard.WorkDir(), f)
 			entries = append(entries, fileEntry{path: rel, modTime: info.ModTime().UnixNano()})
 		}
 	}
@@ -348,9 +344,9 @@ func recursiveGlob(searchBase, baseDir, pattern string) []fileEntry {
 // ---------------------------------------------------------------------------
 
 // GrepTool searches for a regex pattern across files in a directory.
-type GrepTool struct{ baseDir string }
+type GrepTool struct{ guard *PathGuard }
 
-func NewGrepTool(baseDir string) *GrepTool { return &GrepTool{baseDir: baseDir} }
+func NewGrepTool(guard *PathGuard) *GrepTool { return &GrepTool{guard: guard} }
 
 func (t *GrepTool) Name() string        { return "grep" }
 func (t *GrepTool) Description() string { return "Search for a regex pattern in files." }
@@ -358,7 +354,7 @@ func (t *GrepTool) Description() string { return "Search for a regex pattern in 
 func (t *GrepTool) Schema() json.RawMessage {
 	return Object(map[string]Property{
 		"pattern": String("Regular expression to search for."),
-		"path":    String("File or directory to search (relative). Defaults to base directory."),
+		"path":    String("Base path to search (default: working directory)."),
 		"include": String("Optional glob filter for file names (e.g. '*.go')."),
 	}, []string{"pattern"})
 }
@@ -380,9 +376,9 @@ func (t *GrepTool) Execute(_ context.Context, params json.RawMessage) (*Result, 
 		return ErrorResult(fmt.Sprintf("grep: invalid pattern: %v", err)), nil
 	}
 
-	searchRoot := t.baseDir
+	searchRoot := t.guard.WorkDir()
 	if p.Path != "" {
-		abs, err := resolvePath(t.baseDir, p.Path)
+		abs, err := t.guard.Resolve(p.Path)
 		if err != nil {
 			return ErrorResult(err.Error()), nil
 		}
@@ -410,7 +406,7 @@ func (t *GrepTool) Execute(_ context.Context, params json.RawMessage) (*Result, 
 			return nil
 		}
 
-		rel, _ := filepath.Rel(t.baseDir, path)
+		rel, _ := filepath.Rel(t.guard.WorkDir(), path)
 		lines := strings.Split(string(data), "\n")
 		for i, line := range lines {
 			if matchCount >= grepMaxMatches {

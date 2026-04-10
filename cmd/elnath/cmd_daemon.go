@@ -117,6 +117,7 @@ func cmdDaemonStart(ctx context.Context) error {
 		daemonPrompt,
 		perm,
 		workDir,
+		cfg.Daemon.ProtectedPaths,
 	)
 	if err != nil {
 		return err

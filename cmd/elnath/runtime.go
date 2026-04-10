@@ -112,6 +112,7 @@ func buildExecutionRuntime(
 	systemPrompt string,
 	perm *agent.Permission,
 	workDir string,
+	protectedPaths []string,
 ) (*executionRuntime, error) {
 	if err := conversation.InitSchema(db.Main); err != nil {
 		return nil, fmt.Errorf("init conversation schema: %w", err)
@@ -139,7 +140,8 @@ func buildExecutionRuntime(
 	if effectiveWorkDir == "" {
 		effectiveWorkDir, _ = os.Getwd()
 	}
-	reg := buildToolRegistry(effectiveWorkDir)
+	guard := tools.NewPathGuard(effectiveWorkDir, protectedPaths)
+	reg := buildToolRegistry(guard)
 	gitSync, wikiIdx := registerWikiTools(reg, cfg.WikiDir, db.Wiki)
 	reg.Register(conversation.NewConversationSearchTool(historyStore))
 

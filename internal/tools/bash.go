@@ -21,13 +21,13 @@ const (
 
 // BashTool executes shell commands with a timeout and AST-based safety analysis.
 type BashTool struct {
-	workDir        string
+	guard          *PathGuard
 	defaultTimeout time.Duration
 }
 
 // NewBashTool creates a BashTool rooted at workDir with a 120s default timeout.
-func NewBashTool(workDir string) *BashTool {
-	return &BashTool{workDir: workDir, defaultTimeout: bashDefaultTimeout}
+func NewBashTool(guard *PathGuard) *BashTool {
+	return &BashTool{guard: guard, defaultTimeout: bashDefaultTimeout}
 }
 
 func (t *BashTool) Name() string        { return "bash" }
@@ -69,9 +69,13 @@ func (t *BashTool) Execute(ctx context.Context, params json.RawMessage) (*Result
 		timeout = d
 	}
 
-	workDir := t.workDir
+	workDir := t.guard.WorkDir()
 	if p.WorkingDir != "" {
-		workDir = p.WorkingDir
+		resolved, err := t.guard.ResolveIn(t.guard.WorkDir(), p.WorkingDir)
+		if err != nil {
+			return ErrorResult(fmt.Sprintf("invalid working_dir: %v", err)), nil
+		}
+		workDir = resolved
 	}
 
 	execCtx, cancel := context.WithTimeout(ctx, timeout)

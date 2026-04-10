@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/stello/elnath/internal/agent"
+	"github.com/stello/elnath/internal/tools"
 	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/core"
 	"github.com/stello/elnath/internal/daemon"
@@ -387,7 +388,8 @@ func TestFlagHelpers(t *testing.T) {
 }
 
 func TestHelperBuilders(t *testing.T) {
-	reg := buildToolRegistry(t.TempDir())
+	guard := tools.NewPathGuard(t.TempDir(), nil)
+	reg := buildToolRegistry(guard)
 	for _, name := range []string{"bash", "read_file", "write_file", "edit_file", "glob", "grep", "git", "web_fetch"} {
 		if _, ok := reg.Get(name); !ok {
 			t.Fatalf("tool registry missing %q", name)

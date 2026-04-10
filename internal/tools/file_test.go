@@ -26,7 +26,7 @@ func TestReadTool(t *testing.T) {
 		t.Fatalf("setup: %v", err)
 	}
 
-	tool := NewReadTool(dir)
+	tool := NewReadTool(NewPathGuard(dir, nil))
 	res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{
 		"file_path": "test.txt",
 	}))
@@ -55,7 +55,7 @@ func TestReadToolTruncatesLargeOutput(t *testing.T) {
 		t.Fatalf("setup: %v", err)
 	}
 
-	tool := NewReadTool(dir)
+	tool := NewReadTool(NewPathGuard(dir, nil))
 	res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{
 		"file_path": "large.txt",
 	}))
@@ -79,7 +79,7 @@ func TestReadToolTruncatesLargeOutput(t *testing.T) {
 // TestWriteTool writes via WriteTool then reads back and checks content.
 func TestWriteTool(t *testing.T) {
 	dir := t.TempDir()
-	tool := NewWriteTool(dir)
+	tool := NewWriteTool(NewPathGuard(dir, nil))
 
 	content := "hello from write tool"
 	res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{
@@ -111,7 +111,7 @@ func TestGlobTool(t *testing.T) {
 		}
 	}
 
-	tool := NewGlobTool(dir)
+	tool := NewGlobTool(NewPathGuard(dir, nil))
 	res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{
 		"pattern": "*.txt",
 	}))
@@ -147,7 +147,7 @@ func TestGrepTool(t *testing.T) {
 		}
 	}
 
-	tool := NewGrepTool(dir)
+	tool := NewGrepTool(NewPathGuard(dir, nil))
 	res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{
 		"pattern": "quick",
 	}))
@@ -174,7 +174,7 @@ func TestGrepTool(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestReadToolAccessors(t *testing.T) {
-	tool := NewReadTool(t.TempDir())
+	tool := NewReadTool(NewPathGuard(t.TempDir(), nil))
 	if tool.Name() != "read_file" {
 		t.Errorf("Name() = %q, want %q", tool.Name(), "read_file")
 	}
@@ -187,7 +187,7 @@ func TestReadToolAccessors(t *testing.T) {
 }
 
 func TestWriteToolAccessors(t *testing.T) {
-	tool := NewWriteTool(t.TempDir())
+	tool := NewWriteTool(NewPathGuard(t.TempDir(), nil))
 	if tool.Name() != "write_file" {
 		t.Errorf("Name() = %q, want %q", tool.Name(), "write_file")
 	}
@@ -200,7 +200,7 @@ func TestWriteToolAccessors(t *testing.T) {
 }
 
 func TestGlobToolAccessors(t *testing.T) {
-	tool := NewGlobTool(t.TempDir())
+	tool := NewGlobTool(NewPathGuard(t.TempDir(), nil))
 	if tool.Name() != "glob" {
 		t.Errorf("Name() = %q, want %q", tool.Name(), "glob")
 	}
@@ -213,7 +213,7 @@ func TestGlobToolAccessors(t *testing.T) {
 }
 
 func TestGrepToolAccessors(t *testing.T) {
-	tool := NewGrepTool(t.TempDir())
+	tool := NewGrepTool(NewPathGuard(t.TempDir(), nil))
 	if tool.Name() != "grep" {
 		t.Errorf("Name() = %q, want %q", tool.Name(), "grep")
 	}
@@ -226,7 +226,7 @@ func TestGrepToolAccessors(t *testing.T) {
 }
 
 func TestEditToolAccessors(t *testing.T) {
-	tool := NewEditTool(t.TempDir())
+	tool := NewEditTool(NewPathGuard(t.TempDir(), nil))
 	if tool.Name() != "edit_file" {
 		t.Errorf("Name() = %q, want %q", tool.Name(), "edit_file")
 	}
@@ -249,7 +249,7 @@ func TestEditTool(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, "edit.txt"), []byte(content), 0o644); err != nil {
 			t.Fatalf("setup: %v", err)
 		}
-		return dir, NewEditTool(dir)
+		return dir, NewEditTool(NewPathGuard(dir, nil))
 	}
 
 	t.Run("successful single replacement", func(t *testing.T) {
@@ -335,10 +335,10 @@ func TestEditTool(t *testing.T) {
 		}
 	})
 
-	t.Run("path traversal blocked", func(t *testing.T) {
+	t.Run("nonexistent path returns error", func(t *testing.T) {
 		_, tool := setup(t, "hello\n")
 		res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{
-			"file_path":  "../escape",
+			"file_path":  "../no_such_file",
 			"old_string": "x",
 			"new_string": "y",
 		}))
@@ -346,13 +346,13 @@ func TestEditTool(t *testing.T) {
 			t.Fatalf("Execute: %v", err)
 		}
 		if !res.IsError {
-			t.Errorf("expected error for path traversal")
+			t.Errorf("expected error for nonexistent file")
 		}
 	})
 
 	t.Run("nonexistent file", func(t *testing.T) {
 		dir := t.TempDir()
-		tool := NewEditTool(dir)
+		tool := NewEditTool(NewPathGuard(dir, nil))
 		res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{
 			"file_path":  "nosuchfile.txt",
 			"old_string": "x",
@@ -378,7 +378,7 @@ func TestReadToolBinaryFile(t *testing.T) {
 		t.Fatalf("setup: %v", err)
 	}
 
-	tool := NewReadTool(dir)
+	tool := NewReadTool(NewPathGuard(dir, nil))
 	res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{
 		"file_path": "bin.bin",
 	}))
@@ -397,7 +397,7 @@ func TestReadToolOffset(t *testing.T) {
 		t.Fatalf("setup: %v", err)
 	}
 
-	tool := NewReadTool(dir)
+	tool := NewReadTool(NewPathGuard(dir, nil))
 	res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{
 		"file_path": "lines.txt",
 		"offset":    2,
@@ -417,20 +417,55 @@ func TestReadToolOffset(t *testing.T) {
 	}
 }
 
-func TestResolvePathTraversal(t *testing.T) {
-	base := t.TempDir()
-
-	_, err := resolvePath(base, "../outside")
-	if err == nil {
-		t.Error("expected error for ../outside traversal")
+func TestWriteToolProtectedPath(t *testing.T) {
+	dir := t.TempDir()
+	protectedDir := filepath.Join(dir, "protected")
+	if err := os.MkdirAll(protectedDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
 	}
 
-	abs, err := resolvePath(base, "subdir/file.txt")
+	tool := NewWriteTool(NewPathGuard(dir, []string{protectedDir}))
+
+	res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{
+		"file_path": "protected/secret.txt",
+		"content":   "should be blocked",
+	}))
 	if err != nil {
-		t.Errorf("unexpected error for safe path: %v", err)
+		t.Fatalf("Execute: %v", err)
 	}
-	if !strings.HasPrefix(abs, base) {
-		t.Errorf("resolved path %q does not start with base %q", abs, base)
+	if !res.IsError {
+		t.Errorf("expected error for write to protected path")
+	}
+	if !strings.Contains(res.Output, "write denied") {
+		t.Errorf("expected 'write denied' in output, got: %s", res.Output)
+	}
+}
+
+func TestEditToolProtectedPath(t *testing.T) {
+	dir := t.TempDir()
+	protectedDir := filepath.Join(dir, "guarded")
+	if err := os.MkdirAll(protectedDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(protectedDir, "file.txt"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	tool := NewEditTool(NewPathGuard(dir, []string{protectedDir}))
+
+	res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{
+		"file_path":  "guarded/file.txt",
+		"old_string": "hello",
+		"new_string": "bye",
+	}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !res.IsError {
+		t.Errorf("expected error for edit in protected path")
+	}
+	if !strings.Contains(res.Output, "write denied") {
+		t.Errorf("expected 'write denied' in output, got: %s", res.Output)
 	}
 }
 
@@ -440,7 +475,7 @@ func TestResolvePathTraversal(t *testing.T) {
 
 func TestWriteToolNestedDir(t *testing.T) {
 	dir := t.TempDir()
-	tool := NewWriteTool(dir)
+	tool := NewWriteTool(NewPathGuard(dir, nil))
 
 	res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{
 		"file_path": "a/b/c/nested.txt",
@@ -462,18 +497,28 @@ func TestWriteToolNestedDir(t *testing.T) {
 	}
 }
 
-func TestWriteToolPathTraversal(t *testing.T) {
-	tool := NewWriteTool(t.TempDir())
+func TestReadToolAllowsProtectedPath(t *testing.T) {
+	dir := t.TempDir()
+	protectedDir := filepath.Join(dir, "src")
+	if err := os.MkdirAll(protectedDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(protectedDir, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
 
+	tool := NewReadTool(NewPathGuard(dir, []string{protectedDir}))
 	res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{
-		"file_path": "../escape.txt",
-		"content":   "bad",
+		"file_path": "src/main.go",
 	}))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if !res.IsError {
-		t.Errorf("expected error for path traversal")
+	if res.IsError {
+		t.Errorf("read from protected path should succeed, got error: %s", res.Output)
+	}
+	if !strings.Contains(res.Output, "package main") {
+		t.Errorf("output should contain file content, got: %s", res.Output)
 	}
 }
 
@@ -501,7 +546,7 @@ func TestGlobRecursive(t *testing.T) {
 		}
 	}
 
-	tool := NewGlobTool(dir)
+	tool := NewGlobTool(NewPathGuard(dir, nil))
 	res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{
 		"pattern": "**/*.go",
 	}))
@@ -535,7 +580,7 @@ func TestGrepToolIncludeFilter(t *testing.T) {
 		t.Fatalf("setup txt: %v", err)
 	}
 
-	tool := NewGrepTool(dir)
+	tool := NewGrepTool(NewPathGuard(dir, nil))
 	res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{
 		"pattern": "package",
 		"include": "*.go",
@@ -555,7 +600,7 @@ func TestGrepToolIncludeFilter(t *testing.T) {
 }
 
 func TestGrepToolInvalidPattern(t *testing.T) {
-	tool := NewGrepTool(t.TempDir())
+	tool := NewGrepTool(NewPathGuard(t.TempDir(), nil))
 
 	res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{
 		"pattern": "[invalid",
@@ -574,7 +619,7 @@ func TestGrepToolNoMatches(t *testing.T) {
 		t.Fatalf("setup: %v", err)
 	}
 
-	tool := NewGrepTool(dir)
+	tool := NewGrepTool(NewPathGuard(dir, nil))
 	res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{
 		"pattern": "zzznomatch",
 	}))

@@ -69,12 +69,13 @@ type PermissionConfig struct {
 }
 
 type DaemonConfig struct {
-	SocketPath        string `yaml:"socket_path"`
-	MaxWorkers        int    `yaml:"max_workers"`
-	MaxRecoveries     int    `yaml:"max_recoveries"`
-	InactivityTimeout int    `yaml:"inactivity_timeout_seconds"`
-	WallClockTimeout  int    `yaml:"wall_clock_timeout_seconds"`
-	WorkDir           string `yaml:"work_dir"`
+	SocketPath        string   `yaml:"socket_path"`
+	MaxWorkers        int      `yaml:"max_workers"`
+	MaxRecoveries     int      `yaml:"max_recoveries"`
+	InactivityTimeout int      `yaml:"inactivity_timeout_seconds"`
+	WallClockTimeout  int      `yaml:"wall_clock_timeout_seconds"`
+	WorkDir           string   `yaml:"work_dir"`
+	ProtectedPaths    []string `yaml:"protected_paths"`
 }
 
 type TelegramConfig struct {

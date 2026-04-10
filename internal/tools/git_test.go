@@ -44,7 +44,7 @@ func setupGitRepo(t *testing.T) string {
 }
 
 func TestGitToolMeta(t *testing.T) {
-	tool := NewGitTool(t.TempDir())
+	tool := NewGitTool(NewPathGuard(t.TempDir(), nil))
 
 	if got := tool.Name(); got != "git" {
 		t.Errorf("Name() = %q, want %q", got, "git")
@@ -156,7 +156,7 @@ func TestGitToolExecute(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := tc.setup(t)
-			tool := NewGitTool(dir)
+			tool := NewGitTool(NewPathGuard(dir, nil))
 
 			var params []byte
 			if tc.params != nil {

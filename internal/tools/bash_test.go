@@ -22,7 +22,7 @@ func makeBashParams(t *testing.T, command string, extraFields map[string]any) js
 }
 
 func TestBashExecute(t *testing.T) {
-	tool := NewBashTool(t.TempDir())
+	tool := NewBashTool(NewPathGuard(t.TempDir(), nil))
 
 	res, err := tool.Execute(context.Background(), makeBashParams(t, "echo hello", nil))
 	if err != nil {
@@ -37,7 +37,7 @@ func TestBashExecute(t *testing.T) {
 }
 
 func TestBashTimeout(t *testing.T) {
-	tool := NewBashTool(t.TempDir())
+	tool := NewBashTool(NewPathGuard(t.TempDir(), nil))
 
 	// 1000 ms timeout, but sleep 10 s — must time out.
 	res, err := tool.Execute(context.Background(), makeBashParams(t, "sleep 10", map[string]any{
@@ -55,7 +55,7 @@ func TestBashTimeout(t *testing.T) {
 }
 
 func TestBashOutputTruncatesStdout(t *testing.T) {
-	tool := NewBashTool(t.TempDir())
+	tool := NewBashTool(NewPathGuard(t.TempDir(), nil))
 
 	res, err := tool.Execute(context.Background(), makeBashParams(t, "head -c 70000 /dev/zero | tr '\\000' 'a'", nil))
 	if err != nil {
@@ -73,7 +73,7 @@ func TestBashOutputTruncatesStdout(t *testing.T) {
 }
 
 func TestBashOutputTruncatesCombinedStreams(t *testing.T) {
-	tool := NewBashTool(t.TempDir())
+	tool := NewBashTool(NewPathGuard(t.TempDir(), nil))
 
 	res, err := tool.Execute(context.Background(), makeBashParams(t, "head -c 70000 /dev/zero | tr '\\000' 'b' 1>&2", nil))
 	if err != nil {
@@ -92,7 +92,7 @@ func TestBashOutputTruncatesCombinedStreams(t *testing.T) {
 
 func TestBashWorkingDir(t *testing.T) {
 	dir := t.TempDir()
-	tool := NewBashTool(t.TempDir()) // tool's own default workDir is irrelevant here
+	tool := NewBashTool(NewPathGuard(t.TempDir(), nil)) // tool's own default workDir is irrelevant here
 
 	// Resolve the real path because t.TempDir() may return a symlink on macOS.
 	realDir, err := os.Lstat(dir)
@@ -125,7 +125,7 @@ func TestBashWorkingDir(t *testing.T) {
 }
 
 func TestBashEmptyCommand(t *testing.T) {
-	tool := NewBashTool(t.TempDir())
+	tool := NewBashTool(NewPathGuard(t.TempDir(), nil))
 
 	res, err := tool.Execute(context.Background(), makeBashParams(t, "   ", nil))
 	if err != nil {
@@ -137,7 +137,7 @@ func TestBashEmptyCommand(t *testing.T) {
 }
 
 func TestBashInvalidParams(t *testing.T) {
-	tool := NewBashTool(t.TempDir())
+	tool := NewBashTool(NewPathGuard(t.TempDir(), nil))
 
 	res, err := tool.Execute(context.Background(), json.RawMessage(`not-valid-json`))
 	if err != nil {
@@ -149,7 +149,7 @@ func TestBashInvalidParams(t *testing.T) {
 }
 
 func TestBashAccessors(t *testing.T) {
-	tool := NewBashTool(t.TempDir())
+	tool := NewBashTool(NewPathGuard(t.TempDir(), nil))
 
 	if tool.Name() != "bash" {
 		t.Errorf("Name() = %q, want %q", tool.Name(), "bash")

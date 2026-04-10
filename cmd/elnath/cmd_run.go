@@ -112,6 +112,7 @@ func cmdRun(ctx context.Context, args []string) error {
 		self.BuildSystemPromptWithPersona(selfState, "", personaExtra),
 		perm,
 		"",
+		nil,
 	)
 	if err != nil {
 		return err

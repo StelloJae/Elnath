@@ -13,11 +13,9 @@ import (
 const gitTimeout = 30 * time.Second
 
 // GitTool dispatches git subcommands (status, diff, commit, log, branch).
-type GitTool struct {
-	baseDir string
-}
+type GitTool struct{ guard *PathGuard }
 
-func NewGitTool(baseDir string) *GitTool { return &GitTool{baseDir: baseDir} }
+func NewGitTool(guard *PathGuard) *GitTool { return &GitTool{guard: guard} }
 
 func (t *GitTool) Name() string        { return "git" }
 func (t *GitTool) Description() string { return "Run git commands in the repository." }
@@ -72,7 +70,7 @@ func (t *GitTool) run(ctx context.Context, args ...string) (*Result, error) {
 	defer cancel()
 
 	cmd := exec.CommandContext(execCtx, "git", args...)
-	cmd.Dir = t.baseDir
+	cmd.Dir = t.guard.WorkDir()
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
