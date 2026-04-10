@@ -192,10 +192,15 @@ func (s *TelegramSink) OnProgress(taskID int64, progress string) {
 
 		ctx := context.Background()
 		if summaryMsgID > 0 {
-			_ = s.bot.EditMessage(ctx, s.chatID, summaryMsgID, text)
+			if err := s.bot.EditMessage(ctx, s.chatID, summaryMsgID, text); err != nil {
+				s.logger.Warn("telegram sink: summary edit failed", "task_id", taskID, "error", err)
+			}
 		} else {
 			newID, err := s.bot.SendMessageReturningID(ctx, s.chatID, text)
-			if err == nil {
+			if err != nil {
+				s.logger.Warn("telegram sink: summary send failed", "task_id", taskID, "error", err)
+			} else {
+				s.logger.Info("telegram sink: summary message created", "task_id", taskID, "msg_id", newID)
 				s.mu.Lock()
 				if t := s.tracking[taskID]; t != nil {
 					t.summaryMessageID = newID

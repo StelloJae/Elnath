@@ -55,7 +55,9 @@ func (o orchestrationOutput) emitText(text string) {
 		return
 	}
 	if o.OnProgress != nil {
-		if ev := daemon.TextProgressEvent(text); ev.Message != "" {
+		if ev, ok := daemon.ParseProgressEvent(text); ok {
+			o.OnProgress(ev)
+		} else if ev := daemon.TextProgressEvent(text); ev.Message != "" {
 			o.OnProgress(ev)
 		}
 	}

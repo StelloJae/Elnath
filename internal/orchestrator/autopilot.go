@@ -187,13 +187,20 @@ Rules:
 		onText("[autopilot] stage: summary\n")
 	}
 
+	slog.Info("autopilot: summary synthesis starting")
 	resp, err := provider.Chat(ctx, llm.ChatRequest{
 		Messages:  []llm.Message{llm.NewUserMessage(prompt)},
 		MaxTokens: 200,
 	})
-	if err != nil || resp.Content == "" {
+	if err != nil {
+		slog.Warn("autopilot: summary Chat failed", "error", err)
 		return fallback, llm.UsageStats{}
 	}
+	if resp.Content == "" {
+		slog.Warn("autopilot: summary Chat returned empty")
+		return fallback, llm.UsageStats{}
+	}
+	slog.Info("autopilot: summary synthesized", "len", len(resp.Content))
 
 	content := dedupSummary(strings.TrimSpace(resp.Content))
 	if content == "" {
@@ -201,7 +208,9 @@ Rules:
 	}
 
 	if onText != nil {
+		slog.Info("autopilot: starting progressive reveal", "chunks", len([]rune(content))/((len([]rune(content))+9)/10))
 		revealSummaryProgressively(content, onText)
+		slog.Info("autopilot: progressive reveal done")
 	}
 
 	return content, llm.UsageStats{
