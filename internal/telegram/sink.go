@@ -201,9 +201,7 @@ func (s *TelegramSink) OnProgress(taskID int64, progress string) {
 			tracked.stages = append(tracked.stages, stage)
 		}
 		tracked.toolCalls = 0
-		if stage != "summary" {
-			go s.stageHeartbeat(taskID, tracked.heartbeatStop)
-		}
+		go s.stageHeartbeat(taskID, tracked.heartbeatStop)
 	} else {
 		tracked.toolCalls++
 		preview := rendered
@@ -213,9 +211,8 @@ func (s *TelegramSink) OnProgress(taskID int64, progress string) {
 		tracked.lastActivity = preview
 	}
 
-	stages := filterStages(tracked)
-	bar := renderStageBar(stages, tracked.currentStage, tracked.toolCalls)
-	circles := renderStageProgress(stages, tracked.currentStage)
+	bar := renderStageBar(tracked.stages, tracked.currentStage, tracked.toolCalls)
+	circles := renderStageProgress(tracked.stages, tracked.currentStage)
 	text := fmt.Sprintf("⚡ <b>Running</b> <code>#%d</code>\n\n%s\n%s", taskID, circles, bar)
 
 	if text == tracked.lastText {

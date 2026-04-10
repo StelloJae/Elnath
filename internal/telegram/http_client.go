@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -151,6 +152,9 @@ func (c *HTTPClient) GetUpdates(ctx context.Context, offset int64, timeoutSecond
 func (c *HTTPClient) doSendMessage(ctx context.Context, form url.Values) (int64, error) {
 	id, err := c.postSendMessage(ctx, form)
 	if isHTTPBadRequest(err) && form.Get("parse_mode") != "" {
+		slog.Warn("telegram: HTML parse failed, retrying as plain text",
+			"method", "sendMessage", "error", err,
+			"text_preview", truncateForLog(form.Get("text"), 120))
 		form.Del("parse_mode")
 		form.Set("text", stripHTMLTags(form.Get("text")))
 		return c.postSendMessage(ctx, form)
@@ -187,6 +191,9 @@ func (c *HTTPClient) postSendMessage(ctx context.Context, form url.Values) (int6
 func (c *HTTPClient) doEditMessage(ctx context.Context, form url.Values) error {
 	err := c.postEditMessage(ctx, form)
 	if isHTTPBadRequest(err) && form.Get("parse_mode") != "" {
+		slog.Warn("telegram: HTML parse failed, retrying as plain text",
+			"method", "editMessageText", "error", err,
+			"text_preview", truncateForLog(form.Get("text"), 120))
 		form.Del("parse_mode")
 		form.Set("text", stripHTMLTags(form.Get("text")))
 		return c.postEditMessage(ctx, form)
@@ -217,6 +224,13 @@ func isHTTPBadRequest(err error) bool {
 }
 
 var htmlTagRe = regexp.MustCompile(`</?[a-z]+>`)
+
+func truncateForLog(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}
 
 func stripHTMLTags(s string) string {
 	s = htmlTagRe.ReplaceAllString(s, "")
