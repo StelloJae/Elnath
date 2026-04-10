@@ -95,7 +95,7 @@ func TestSinkOnProgressRoutesToProgressReporter(t *testing.T) {
 	bot := newSinkBot()
 	sink := NewTelegramSink(bot, "chat-1", nil)
 
-	ev := daemon.EncodeProgressEvent(daemon.TextProgressEvent("reading config file"))
+	ev := daemon.EncodeProgressEvent(daemon.TextProgressEvent("[autopilot] stage: plan"))
 	sink.OnProgress(1, ev)
 
 	// Give the progress reporter loop time to flush.
@@ -280,8 +280,8 @@ func TestSinkNotifyCompletionEditsProgressMessage(t *testing.T) {
 	bot := newSinkBot()
 	sink := NewTelegramSink(bot, "chat-1", nil)
 
-	// Send tool progress to create a progress message.
-	ev := daemon.EncodeProgressEvent(daemon.TextProgressEvent("compiling"))
+	// Send stage progress to create a progress message.
+	ev := daemon.EncodeProgressEvent(daemon.TextProgressEvent("[autopilot] stage: code"))
 	sink.OnProgress(42, ev)
 
 	// Wait for progress reporter to flush and create the message.

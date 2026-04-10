@@ -115,8 +115,11 @@ func (s *Shell) HandleUpdate(ctx context.Context, update Update) error {
 	text := strings.TrimSpace(update.Message.Text)
 	fields := strings.Fields(text)
 
-	// Explicit commands (/status, /submit, etc.) always go to command handler.
+	// Explicit commands always go to command handler.
 	if len(fields) > 0 && strings.HasPrefix(fields[0], "/") {
+		if fields[0] == "/submit" && update.Message.MessageID > 0 {
+			_ = s.bot.SetReaction(ctx, s.chatID, update.Message.MessageID, "👀")
+		}
 		reply, err := s.handleCommand(ctx, text)
 		if err != nil {
 			reply = "⚠️ " + err.Error()

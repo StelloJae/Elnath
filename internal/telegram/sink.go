@@ -102,8 +102,10 @@ func (s *TelegramSink) OnProgress(taskID int64, progress string) {
 		return
 	}
 
-	name, preview := parseToolProgress(rendered)
-	s.OnToolProgress(taskID, name, preview)
+	// Unrecognized text (LLM response tokens, workflow routing, etc.)
+	// is intentionally dropped — only summary and stage markers are
+	// routed. Actual tool call events require structured progress
+	// events which will be added in a future iteration.
 }
 
 func (s *TelegramSink) maybeSetWorkingReaction(taskID int64) {
@@ -237,7 +239,7 @@ func condenseSummary(raw string) string {
 
 	var result []string
 	totalLen := 0
-	const maxSummaryLen = 500
+	const maxSummaryLen = 3500
 
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
