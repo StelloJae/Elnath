@@ -296,7 +296,7 @@ func (s *TelegramSink) sendOrEdit(taskID, msgID int64, text string) {
 	ctx := context.Background()
 	if msgID > 0 {
 		if err := s.bot.EditMessage(ctx, s.chatID, msgID, text); err != nil {
-			if !isMessageNotModified(err) {
+			if !isMessageNotModifiedError(err) {
 				s.logger.Warn("telegram sink: edit message", "task_id", taskID, "error", err)
 			}
 		}
@@ -444,9 +444,6 @@ func min(a, b int) int {
 	return b
 }
 
-func isMessageNotModified(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "message is not modified")
-}
 
 var htmlReplacer = strings.NewReplacer(
 	"&", "&amp;",

@@ -14,17 +14,44 @@ import (
 )
 
 type APIError struct {
-	Method     string
-	StatusCode int
+	Method      string
+	StatusCode  int
+	Description string
 }
 
 func (e *APIError) Error() string {
+	if e.Description != "" {
+		return fmt.Sprintf("telegram %s: %d %s", e.Method, e.StatusCode, e.Description)
+	}
 	return fmt.Sprintf("telegram %s: status %d", e.Method, e.StatusCode)
 }
 
 func IsPollingConflict(err error) bool {
 	var apiErr *APIError
 	return errors.As(err, &apiErr) && apiErr.Method == "getUpdates" && apiErr.StatusCode == http.StatusConflict
+}
+
+func isHTMLParseError(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.StatusCode == 400 &&
+		strings.Contains(apiErr.Description, "can't parse entities")
+}
+
+func isMessageNotModifiedError(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) &&
+		strings.Contains(apiErr.Description, "message is not modified")
+}
+
+func readAPIError(method string, resp *http.Response) *APIError {
+	apiErr := &APIError{Method: method, StatusCode: resp.StatusCode}
+	var body struct {
+		Description string `json:"description"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&body) == nil && body.Description != "" {
+		apiErr.Description = body.Description
+	}
+	return apiErr
 }
 
 type HTTPClient struct {
@@ -151,7 +178,7 @@ func (c *HTTPClient) GetUpdates(ctx context.Context, offset int64, timeoutSecond
 
 func (c *HTTPClient) doSendMessage(ctx context.Context, form url.Values) (int64, error) {
 	id, err := c.postSendMessage(ctx, form)
-	if isHTTPBadRequest(err) && form.Get("parse_mode") != "" {
+	if isHTMLParseError(err) && form.Get("parse_mode") != "" {
 		slog.Warn("telegram: HTML parse failed, retrying as plain text",
 			"method", "sendMessage", "error", err,
 			"text_preview", truncateForLog(form.Get("text"), 120))
@@ -174,7 +201,7 @@ func (c *HTTPClient) postSendMessage(ctx context.Context, form url.Values) (int6
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return 0, &APIError{Method: "sendMessage", StatusCode: resp.StatusCode}
+		return 0, readAPIError("sendMessage", resp)
 	}
 	var decoded struct {
 		OK     bool `json:"ok"`
@@ -190,7 +217,10 @@ func (c *HTTPClient) postSendMessage(ctx context.Context, form url.Values) (int6
 
 func (c *HTTPClient) doEditMessage(ctx context.Context, form url.Values) error {
 	err := c.postEditMessage(ctx, form)
-	if isHTTPBadRequest(err) && form.Get("parse_mode") != "" {
+	if isMessageNotModifiedError(err) {
+		return nil
+	}
+	if isHTMLParseError(err) && form.Get("parse_mode") != "" {
 		slog.Warn("telegram: HTML parse failed, retrying as plain text",
 			"method", "editMessageText", "error", err,
 			"text_preview", truncateForLog(form.Get("text"), 120))
@@ -213,14 +243,9 @@ func (c *HTTPClient) postEditMessage(ctx context.Context, form url.Values) error
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return &APIError{Method: "editMessageText", StatusCode: resp.StatusCode}
+		return readAPIError("editMessageText", resp)
 	}
 	return nil
-}
-
-func isHTTPBadRequest(err error) bool {
-	var apiErr *APIError
-	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusBadRequest
 }
 
 var htmlTagRe = regexp.MustCompile(`</?[a-z]+>`)
