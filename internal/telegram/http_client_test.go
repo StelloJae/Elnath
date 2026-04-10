@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -83,5 +84,87 @@ func TestHTTPClientGetUpdatesReturnsPollingConflictError(t *testing.T) {
 	}
 	if !IsPollingConflict(err) {
 		t.Fatalf("IsPollingConflict(%v) = false, want true", err)
+	}
+}
+
+func TestHTTPClientRetryOnFloodControlSend(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/bottoken/sendMessage" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		n := attempts.Add(1)
+		if n == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"ok":false,"error_code":429,"description":"Too Many Requests: retry after 1"}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":99}}`))
+	}))
+	defer server.Close()
+
+	client := NewHTTPClient("token", server.URL)
+	id, err := client.SendMessageReturningID(context.Background(), "123", "hello")
+	if err != nil {
+		t.Fatalf("SendMessageReturningID: %v", err)
+	}
+	if id != 99 {
+		t.Fatalf("message_id = %d, want 99", id)
+	}
+	if got := attempts.Load(); got != 2 {
+		t.Fatalf("attempts = %d, want 2", got)
+	}
+}
+
+func TestHTTPClientRetryOnFloodControlEdit(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/bottoken/editMessageText" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		n := attempts.Add(1)
+		if n == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"ok":false,"error_code":429,"description":"Too Many Requests: retry after 1"}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	client := NewHTTPClient("token", server.URL)
+	err := client.EditMessage(context.Background(), "123", 42, "updated")
+	if err != nil {
+		t.Fatalf("EditMessage: %v", err)
+	}
+	if got := attempts.Load(); got != 2 {
+		t.Fatalf("attempts = %d, want 2", got)
+	}
+}
+
+func TestHTTPClientFloodControlMaxRetries(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/bottoken/sendMessage" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		attempts.Add(1)
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"ok":false,"error_code":429,"description":"Too Many Requests: retry after 1"}`))
+	}))
+	defer server.Close()
+
+	client := NewHTTPClient("token", server.URL)
+	_, err := client.SendMessageReturningID(context.Background(), "123", "hello")
+	if err == nil {
+		t.Fatal("expected error after max retries, got nil")
+	}
+	if !strings.Contains(err.Error(), "429") {
+		t.Fatalf("error = %q, want 429 error", err)
+	}
+	if got := attempts.Load(); got != 3 {
+		t.Fatalf("attempts = %d, want 3", got)
 	}
 }

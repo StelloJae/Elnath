@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type APIError struct {
@@ -41,6 +42,18 @@ func isMessageNotModifiedError(err error) bool {
 	var apiErr *APIError
 	return errors.As(err, &apiErr) &&
 		strings.Contains(apiErr.Description, "message is not modified")
+}
+
+func isFloodControl(err error) (retryAfter int, ok bool) {
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != 429 {
+		return 0, false
+	}
+	var after int
+	if _, scanErr := fmt.Sscanf(apiErr.Description, "Too Many Requests: retry after %d", &after); scanErr == nil && after > 0 {
+		return after, true
+	}
+	return 1, true
 }
 
 func readAPIError(method string, resp *http.Response) *APIError {
@@ -177,16 +190,31 @@ func (c *HTTPClient) GetUpdates(ctx context.Context, offset int64, timeoutSecond
 }
 
 func (c *HTTPClient) doSendMessage(ctx context.Context, form url.Values) (int64, error) {
-	id, err := c.postSendMessage(ctx, form)
-	if isHTMLParseError(err) && form.Get("parse_mode") != "" {
-		slog.Warn("telegram: HTML parse failed, retrying as plain text",
-			"method", "sendMessage", "error", err,
-			"text_preview", truncateForLog(form.Get("text"), 120))
-		form.Del("parse_mode")
-		form.Set("text", stripHTMLTags(form.Get("text")))
-		return c.postSendMessage(ctx, form)
+	for attempt := 0; attempt < 3; attempt++ {
+		id, err := c.postSendMessage(ctx, form)
+		if err != nil {
+			if retryAfter, ok := isFloodControl(err); ok && attempt < 2 {
+				slog.Warn("telegram: flood control on send, retrying",
+					"attempt", attempt+1, "retry_after", retryAfter)
+				select {
+				case <-ctx.Done():
+					return 0, ctx.Err()
+				case <-time.After(time.Duration(retryAfter) * time.Second):
+				}
+				continue
+			}
+			if isHTMLParseError(err) && form.Get("parse_mode") != "" {
+				slog.Warn("telegram: HTML parse failed, retrying as plain text",
+					"method", "sendMessage", "error", err,
+					"text_preview", truncateForLog(form.Get("text"), 120))
+				form.Del("parse_mode")
+				form.Set("text", stripHTMLTags(form.Get("text")))
+				return c.postSendMessage(ctx, form)
+			}
+		}
+		return id, err
 	}
-	return id, err
+	return 0, fmt.Errorf("telegram sendMessage: max retries exceeded")
 }
 
 func (c *HTTPClient) postSendMessage(ctx context.Context, form url.Values) (int64, error) {
@@ -216,19 +244,35 @@ func (c *HTTPClient) postSendMessage(ctx context.Context, form url.Values) (int6
 }
 
 func (c *HTTPClient) doEditMessage(ctx context.Context, form url.Values) error {
-	err := c.postEditMessage(ctx, form)
-	if isMessageNotModifiedError(err) {
-		return nil
+	for attempt := 0; attempt < 3; attempt++ {
+		err := c.postEditMessage(ctx, form)
+		if err == nil {
+			return nil
+		}
+		if isMessageNotModifiedError(err) {
+			return nil
+		}
+		if retryAfter, ok := isFloodControl(err); ok && attempt < 2 {
+			slog.Warn("telegram: flood control on edit, retrying",
+				"attempt", attempt+1, "retry_after", retryAfter)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Duration(retryAfter) * time.Second):
+			}
+			continue
+		}
+		if isHTMLParseError(err) && form.Get("parse_mode") != "" {
+			slog.Warn("telegram: HTML parse failed, retrying as plain text",
+				"method", "editMessageText", "error", err,
+				"text_preview", truncateForLog(form.Get("text"), 120))
+			form.Del("parse_mode")
+			form.Set("text", stripHTMLTags(form.Get("text")))
+			return c.postEditMessage(ctx, form)
+		}
+		return err
 	}
-	if isHTMLParseError(err) && form.Get("parse_mode") != "" {
-		slog.Warn("telegram: HTML parse failed, retrying as plain text",
-			"method", "editMessageText", "error", err,
-			"text_preview", truncateForLog(form.Get("text"), 120))
-		form.Del("parse_mode")
-		form.Set("text", stripHTMLTags(form.Get("text")))
-		return c.postEditMessage(ctx, form)
-	}
-	return err
+	return fmt.Errorf("telegram editMessageText: max retries exceeded")
 }
 
 func (c *HTTPClient) postEditMessage(ctx context.Context, form url.Values) error {
