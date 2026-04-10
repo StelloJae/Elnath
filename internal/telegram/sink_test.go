@@ -183,8 +183,8 @@ func TestSinkNotifyCompletionSetsReaction(t *testing.T) {
 		status    daemon.TaskStatus
 		wantEmoji string
 	}{
-		{"success", daemon.StatusDone, "✅"},
-		{"failure", daemon.StatusFailed, "❌"},
+		{"success", daemon.StatusDone, "👍"},
+		{"failure", daemon.StatusFailed, "😢"},
 	}
 
 	for _, tt := range tests {

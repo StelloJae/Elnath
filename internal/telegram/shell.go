@@ -139,7 +139,7 @@ func (s *Shell) HandleUpdate(ctx context.Context, update Update) error {
 		if s.taskTracker != nil && update.Message.MessageID > 0 {
 			s.taskTracker.TrackUserMessage(taskID, update.Message.MessageID)
 		}
-		return s.bot.SendMessage(ctx, s.chatID, fmt.Sprintf("🚀 Task <code>#%d</code> queued", taskID))
+		return s.bot.SendMessage(ctx, s.chatID, s.taskAcknowledgment(ctx, prompt, taskID))
 	}
 
 	// Other explicit commands go to command handler.
@@ -173,8 +173,35 @@ func (s *Shell) HandleUpdate(ctx context.Context, update Update) error {
 	if s.taskTracker != nil && update.Message.MessageID > 0 {
 		s.taskTracker.TrackUserMessage(taskID, update.Message.MessageID)
 	}
-	return s.bot.SendMessage(ctx, s.chatID, fmt.Sprintf("🚀 Task <code>#%d</code> queued", taskID))
+	return s.bot.SendMessage(ctx, s.chatID, s.taskAcknowledgment(ctx, text, taskID))
 }
+
+func (s *Shell) taskAcknowledgment(ctx context.Context, userMessage string, taskID int64) string {
+	fallback := fmt.Sprintf("🚀 Task <code>#%d</code> queued", taskID)
+	if s.classifyProvider == nil {
+		return fallback
+	}
+	prompt := fmt.Sprintf("User asked: %q\nTask ID: #%d", userMessage, taskID)
+	resp, err := s.classifyProvider.Chat(ctx, llm.ChatRequest{
+		Messages:    []llm.Message{llm.NewUserMessage(prompt)},
+		System:      taskAckPrompt,
+		MaxTokens:   40,
+		Temperature: 0.9,
+	})
+	if err != nil || strings.TrimSpace(resp.Content) == "" {
+		return fallback
+	}
+	return strings.TrimSpace(resp.Content)
+}
+
+const taskAckPrompt = `Generate a brief, warm acknowledgment (1 sentence, under 15 words) for a task you just received.
+Include the task number naturally. Match the user's language exactly.
+No markdown, no HTML tags, no quotes. Just the plain sentence.
+Examples:
+- 알겠어요! 작업 #5 시작할게요~
+- 네, #12번 작업으로 처리할게요!
+- Got it! Working on task #8 now.
+- Sure thing, task #3 is on it!`
 
 func isChatIntent(intent conversation.Intent) bool {
 	switch intent {
