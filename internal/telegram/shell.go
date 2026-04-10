@@ -56,6 +56,16 @@ func WithClassifier(classifier IntentClassifier, provider llm.Provider) ShellOpt
 	}
 }
 
+// TaskTracker receives task-to-message associations for reaction tracking.
+type TaskTracker interface {
+	TrackUserMessage(taskID, userMsgID int64)
+}
+
+// WithTaskTracker registers a sink that tracks user message IDs for reactions.
+func WithTaskTracker(tracker TaskTracker) ShellOption {
+	return func(s *Shell) { s.taskTracker = tracker }
+}
+
 type Shell struct {
 	queue              *daemon.Queue
 	approvals          *daemon.ApprovalStore
@@ -67,6 +77,7 @@ type Shell struct {
 	chatResponder      *ChatResponder
 	classifier         IntentClassifier
 	classifyProvider   llm.Provider
+	taskTracker        TaskTracker
 }
 
 type shellState struct {
@@ -142,11 +153,14 @@ func (s *Shell) HandleUpdate(ctx context.Context, update Update) error {
 	if update.Message.MessageID > 0 {
 		_ = s.bot.SetReaction(ctx, s.chatID, update.Message.MessageID, "👀")
 	}
-	reply, err := s.enqueueNewTask(ctx, text)
+	taskID, err := s.enqueueTaskReturningID(ctx, text)
 	if err != nil {
-		reply = "⚠️ " + err.Error()
+		return s.bot.SendMessage(ctx, s.chatID, "⚠️ "+err.Error())
 	}
-	return s.bot.SendMessage(ctx, s.chatID, reply)
+	if s.taskTracker != nil && update.Message.MessageID > 0 {
+		s.taskTracker.TrackUserMessage(taskID, update.Message.MessageID)
+	}
+	return s.bot.SendMessage(ctx, s.chatID, fmt.Sprintf("🚀 Task <code>#%d</code> queued", taskID))
 }
 
 func isChatIntent(intent conversation.Intent) bool {
@@ -328,19 +342,24 @@ func (s *Shell) resolveApproval(ctx context.Context, fields []string, approved b
 	return fmt.Sprintf("❌ Denied <code>#%d</code>", id), nil
 }
 
-func (s *Shell) enqueueNewTask(ctx context.Context, raw string) (string, error) {
-	prompt := strings.TrimSpace(raw)
-	if strings.HasPrefix(prompt, "/submit") {
-		prompt = strings.TrimSpace(strings.TrimPrefix(prompt, "/submit"))
-	}
+func (s *Shell) enqueueTaskReturningID(ctx context.Context, prompt string) (int64, error) {
+	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
-		return "", fmt.Errorf("usage: /submit <message> or just type your message")
+		return 0, fmt.Errorf("usage: /submit <message> or just type your message")
 	}
 	payload := daemon.TaskPayload{
 		Prompt:  prompt,
 		Surface: "telegram",
 	}
-	id, err := s.queue.Enqueue(ctx, daemon.EncodeTaskPayload(payload))
+	return s.queue.Enqueue(ctx, daemon.EncodeTaskPayload(payload))
+}
+
+func (s *Shell) enqueueNewTask(ctx context.Context, raw string) (string, error) {
+	prompt := raw
+	if strings.HasPrefix(prompt, "/submit") {
+		prompt = strings.TrimSpace(strings.TrimPrefix(prompt, "/submit"))
+	}
+	id, err := s.enqueueTaskReturningID(ctx, prompt)
 	if err != nil {
 		return "", err
 	}

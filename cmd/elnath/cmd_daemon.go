@@ -144,17 +144,17 @@ func cmdDaemonStart(ctx context.Context) error {
 		}
 		bot := telegram.NewHTTPClient(cfg.Telegram.BotToken, cfg.Telegram.APIBaseURL)
 		statePath := filepath.Join(cfg.DataDir, "telegram-shell-state.json")
+		tgSink := telegram.NewTelegramSink(bot, cfg.Telegram.ChatID, app.Logger)
 		chatResponder := telegram.NewChatResponder(provider, bot, cfg.Telegram.ChatID, app.Logger)
 		classifier := conversation.NewLLMClassifier()
 		shell, shellErr := telegram.NewShell(queue, approvalStore, bot, cfg.Telegram.ChatID, statePath,
 			telegram.WithChatResponder(chatResponder),
 			telegram.WithClassifier(classifier, provider),
+			telegram.WithTaskTracker(tgSink),
 		)
 		if shellErr != nil {
 			return fmt.Errorf("create telegram shell: %w", shellErr)
 		}
-
-		tgSink := telegram.NewTelegramSink(bot, cfg.Telegram.ChatID, app.Logger)
 		router.Register(tgSink)
 		d.WithProgressObserver(tgSink)
 		shell.SkipNotifyCompletions()

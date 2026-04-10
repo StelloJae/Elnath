@@ -85,6 +85,11 @@ func (s *TelegramSink) OnProgress(taskID int64, progress string) {
 		return
 	}
 
+	// Ensure task exists on first progress so NotifyCompletion can find it.
+	s.mu.Lock()
+	s.ensureTask(taskID)
+	s.mu.Unlock()
+
 	s.maybeSetWorkingReaction(taskID)
 
 	if text, ok := parseSummaryStream(rendered); ok {
