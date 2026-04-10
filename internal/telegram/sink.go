@@ -11,37 +11,12 @@ import (
 	"github.com/stello/elnath/internal/daemon"
 )
 
-const streamingCursor = " ▍"
 const maxMessageLen = 4000
 
-var stageIcons = map[string]string{
-	"plan":     "📋",
-	"code":     "💻",
-	"test":     "🧪",
-	"review":   "📝",
-	"verify":   "✔️",
-	"research": "🔍",
-	"summary":  "✨",
-}
-
-var stageActiveNames = map[string]string{
-	"plan":     "Planning",
-	"code":     "Coding",
-	"test":     "Testing",
-	"review":   "Reviewing",
-	"verify":   "Verifying",
-	"research": "Researching",
-	"summary":  "Summarizing",
-}
-
-var stageCompletedNames = map[string]string{
-	"plan":     "Plan",
-	"code":     "Code",
-	"test":     "Test",
-	"review":   "Review",
-	"verify":   "Verify",
-	"research": "Research",
-	"summary":  "Summary",
+type activeTask struct {
+	userMsgID int64
+	progress  *ProgressReporter
+	stream    *StreamConsumer
 }
 
 type TelegramSink struct {
@@ -49,26 +24,8 @@ type TelegramSink struct {
 	chatID string
 	logger *slog.Logger
 
-	mu       sync.Mutex
-	tracking map[int64]*trackedMessage
-}
-
-type trackedMessage struct {
-	messageID     int64
-	userMessageID int64
-	lastText      string
-	lastEditAt    time.Time
-	editPending   bool
-	stages        []string
-	currentStage  string
-	toolCalls       int
-	lastActivity    string
-	summaryText       string
-	summaryStreamed   bool
-	summaryMessageID  int64
-	summaryLastText   string
-	summaryLastEditAt time.Time
-	heartbeatStop     chan struct{}
+	mu     sync.Mutex
+	active map[int64]*activeTask
 }
 
 func NewTelegramSink(bot BotClient, chatID string, logger *slog.Logger) *TelegramSink {
@@ -76,32 +33,97 @@ func NewTelegramSink(bot BotClient, chatID string, logger *slog.Logger) *Telegra
 		logger = slog.Default()
 	}
 	return &TelegramSink{
-		bot:      bot,
-		chatID:   chatID,
-		logger:   logger,
-		tracking: make(map[int64]*trackedMessage),
+		bot:    bot,
+		chatID: chatID,
+		logger: logger,
+		active: make(map[int64]*activeTask),
 	}
 }
 
-func (s *TelegramSink) TrackUserMessage(taskID int64, userMessageID int64) {
+func (s *TelegramSink) TrackUserMessage(taskID, userMsgID int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	tracked := s.tracking[taskID]
-	if tracked == nil {
-		tracked = &trackedMessage{}
-		s.tracking[taskID] = tracked
+	task := s.ensureTask(taskID)
+	task.userMsgID = userMsgID
+}
+
+func (s *TelegramSink) OnToolProgress(taskID int64, toolName, preview string) {
+	s.mu.Lock()
+	task := s.ensureTask(taskID)
+	pr := task.progress
+	s.mu.Unlock()
+
+	pr.ReportTool(toolName, preview)
+}
+
+func (s *TelegramSink) OnStreamDelta(taskID int64, text string) {
+	s.mu.Lock()
+	task := s.ensureTask(taskID)
+	sc := task.stream
+	s.mu.Unlock()
+
+	sc.Send(text)
+}
+
+func (s *TelegramSink) OnStreamDone(taskID int64) {
+	s.mu.Lock()
+	task := s.active[taskID]
+	s.mu.Unlock()
+
+	if task != nil && task.stream != nil {
+		task.stream.Finish()
+		task.stream.Wait()
 	}
-	tracked.userMessageID = userMessageID
+}
+
+// OnProgress implements daemon.ProgressObserver. Parses the legacy progress
+// format and routes to either ProgressReporter or StreamConsumer.
+func (s *TelegramSink) OnProgress(taskID int64, progress string) {
+	rendered := daemon.RenderProgress(progress)
+	if rendered == "" {
+		return
+	}
+
+	if text, ok := parseSummaryStream(rendered); ok {
+		s.OnStreamDelta(taskID, text)
+		return
+	}
+
+	if stage, ok := parseStageMarker(rendered); ok {
+		s.mu.Lock()
+		task := s.ensureTask(taskID)
+		pr := task.progress
+		s.mu.Unlock()
+
+		pr.ReportStage(stage)
+		return
+	}
+
+	name, preview := parseToolProgress(rendered)
+	s.OnToolProgress(taskID, name, preview)
 }
 
 func (s *TelegramSink) NotifyCompletion(_ context.Context, c daemon.TaskCompletion) error {
 	s.mu.Lock()
-	tracked := s.tracking[c.TaskID]
-	delete(s.tracking, c.TaskID)
-	if tracked != nil && tracked.heartbeatStop != nil {
-		close(tracked.heartbeatStop)
-	}
+	task := s.active[c.TaskID]
+	delete(s.active, c.TaskID)
 	s.mu.Unlock()
+
+	if task == nil {
+		return nil
+	}
+
+	task.progress.Finish()
+	task.progress.Wait()
+
+	ctx := context.Background()
+	if task.userMsgID > 0 {
+		emoji := "✅"
+		if c.Status == daemon.StatusFailed {
+			emoji = "❌"
+		}
+		_ = s.bot.SetReaction(ctx, s.chatID, task.userMsgID, emoji)
+	}
 
 	icon := "✅"
 	label := "Complete"
@@ -110,348 +132,47 @@ func (s *TelegramSink) NotifyCompletion(_ context.Context, c daemon.TaskCompleti
 		label = "Failed"
 	}
 
-	summary := condenseSummary(emptyFallback(c.Summary, "-"))
-
-	elapsed := ""
-	if !c.StartedAt.IsZero() && !c.CompletedAt.IsZero() {
-		d := c.CompletedAt.Sub(c.StartedAt)
-		if d >= time.Minute {
-			elapsed = fmt.Sprintf(" (%dm%ds)", int(d.Minutes()), int(d.Seconds())%60)
-		} else {
-			elapsed = fmt.Sprintf(" (%ds)", int(d.Seconds()))
-		}
+	elapsed := formatElapsed(c.StartedAt, c.CompletedAt)
+	header := fmt.Sprintf("%s <b>%s</b>%s <code>#%d</code>", icon, label, elapsed, c.TaskID)
+	if prMsgID := task.progress.MessageID(); prMsgID > 0 {
+		_ = s.bot.EditMessage(ctx, s.chatID, prMsgID, header)
 	}
 
-	var completionStages []string
-	if tracked != nil {
-		completionStages = tracked.stages
-	}
-	stageBar := ""
-	if len(completionStages) > 0 {
-		stageBar = renderStageBar(completionStages, "", 0) + "\n\n"
-	}
-
-	ctx := context.Background()
-
-	if tracked != nil && tracked.userMessageID > 0 {
-		emoji := "✅"
-		if c.Status == daemon.StatusFailed {
-			emoji = "❌"
-		}
-		_ = s.bot.SetReaction(ctx, s.chatID, tracked.userMessageID, emoji)
-	}
-
-	// Finalize progress message (stages + timing, no summary text).
-	header := fmt.Sprintf("%s <b>%s</b>%s <code>#%d</code>\n\n%s", icon, label, elapsed, c.TaskID, strings.TrimRight(stageBar, "\n"))
-	if tracked != nil && tracked.messageID > 0 {
-		_ = s.bot.EditMessage(ctx, s.chatID, tracked.messageID, header)
-	} else {
-		_ = s.bot.SendMessage(ctx, s.chatID, header)
-	}
-
-	// Type out summary — edit existing "Summarizing..." message if available.
-	var existingMsgID int64
-	if tracked != nil {
-		existingMsgID = tracked.summaryMessageID
-	}
-	return s.typeSummary(ctx, summary, existingMsgID)
-}
-
-func (s *TelegramSink) OnProgress(taskID int64, progress string) {
-	rendered := daemon.RenderProgress(progress)
-	if rendered == "" {
-		return
-	}
-
-	s.mu.Lock()
-	tracked := s.tracking[taskID]
-	if tracked == nil {
-		tracked = &trackedMessage{}
-		s.tracking[taskID] = tracked
-	}
-
-	if summaryText, ok := parseSummaryStream(rendered); ok {
-		if !tracked.summaryStreamed && tracked.heartbeatStop != nil {
-			close(tracked.heartbeatStop)
-			tracked.heartbeatStop = nil
-		}
-		tracked.summaryText = summaryText
-		tracked.summaryStreamed = true
-
-		text := escapeHTML(summaryText) + streamingCursor
-		if text == tracked.summaryLastText {
-			s.mu.Unlock()
-			return
-		}
-		tracked.summaryLastText = text
-
-		minInterval := 200 * time.Millisecond
-		if time.Since(tracked.summaryLastEditAt) < minInterval {
-			s.mu.Unlock()
-			return
-		}
-		tracked.summaryLastEditAt = time.Now()
-		summaryMsgID := tracked.summaryMessageID
-		s.mu.Unlock()
-
-		ctx := context.Background()
-		if summaryMsgID > 0 {
-			if err := s.bot.EditMessage(ctx, s.chatID, summaryMsgID, text); err != nil {
-				s.logger.Warn("telegram sink: summary edit failed", "task_id", taskID, "error", err)
-			}
-		} else {
-			newID, err := s.bot.SendMessageReturningID(ctx, s.chatID, text)
-			if err != nil {
-				s.logger.Warn("telegram sink: summary send failed", "task_id", taskID, "error", err)
-			} else {
-				s.logger.Info("telegram sink: summary message created", "task_id", taskID, "msg_id", newID)
-				s.mu.Lock()
-				if t := s.tracking[taskID]; t != nil {
-					t.summaryMessageID = newID
-				}
-				s.mu.Unlock()
-			}
-		}
-		return
-	}
-
-	stage, isStage := parseStageMarker(rendered)
-	if isStage {
-		if tracked.heartbeatStop != nil {
-			close(tracked.heartbeatStop)
-			tracked.heartbeatStop = nil
-		}
-		tracked.currentStage = stage
-		if !containsString(tracked.stages, stage) {
-			tracked.stages = append(tracked.stages, stage)
-		}
-		tracked.toolCalls = 0
-		if stage == "summary" {
-			s.mu.Unlock()
-			ctx := context.Background()
-			newID, _ := s.bot.SendMessageReturningID(ctx, s.chatID, "✨ <i>Summarizing</i> ...")
-			s.mu.Lock()
-			if t := s.tracking[taskID]; t != nil {
-				t.summaryMessageID = newID
-			}
-			s.mu.Unlock()
-			return
-		} else {
-			tracked.heartbeatStop = make(chan struct{})
-			go s.stageHeartbeat(taskID, tracked.heartbeatStop)
+	if !task.stream.AlreadySent() {
+		summary := condenseSummary(emptyFallback(c.Summary, "-"))
+		if summary != "" {
+			_ = s.bot.SendMessage(ctx, s.chatID, summary)
 		}
 	} else {
-		tracked.toolCalls++
-		preview := rendered
-		if len(preview) > 50 {
-			preview = preview[:50] + "…"
-		}
-		tracked.lastActivity = preview
+		task.stream.Finish()
+		task.stream.Wait()
 	}
 
-	bar := renderStageBar(tracked.stages, tracked.currentStage, tracked.toolCalls)
-	circles := renderStageProgress(tracked.stages, tracked.currentStage)
-	text := fmt.Sprintf("⚡ <b>Running</b> <code>#%d</code>\n\n%s\n%s", taskID, circles, bar)
-
-	if text == tracked.lastText {
-		s.mu.Unlock()
-		return
-	}
-	tracked.lastText = text
-
-	minInterval := 1500 * time.Millisecond
-	if isStage {
-		minInterval = 0
-	}
-	if minInterval > 0 && time.Since(tracked.lastEditAt) < minInterval {
-		if !tracked.editPending {
-			tracked.editPending = true
-			delay := minInterval - time.Since(tracked.lastEditAt)
-			go s.deferredEdit(taskID, delay)
-		}
-		s.mu.Unlock()
-		return
-	}
-
-	tracked.lastEditAt = time.Now()
-	msgID := tracked.messageID
-	s.mu.Unlock()
-
-	s.sendOrEdit(taskID, msgID, text)
-}
-
-func (s *TelegramSink) typeSummary(ctx context.Context, summary string, existingMsgID int64) error {
-	runes := []rune(summary)
-	n := len(runes)
-	if n == 0 {
-		return nil
-	}
-
-	const chunks = 8
-	chunkSize := (n + chunks - 1) / chunks
-	if chunkSize < 3 {
-		chunkSize = 3
-	}
-
-	firstEnd := chunkSize
-	if firstEnd > n {
-		firstEnd = n
-	}
-
-	msgID := existingMsgID
-	if msgID > 0 {
-		// Edit existing "Summarizing..." message with first chunk.
-		_ = s.bot.EditMessage(ctx, s.chatID, msgID, escapeHTML(string(runes[:firstEnd]))+streamingCursor)
-	} else {
-		// Send first chunk as a new message.
-		var err error
-		msgID, err = s.bot.SendMessageReturningID(ctx, s.chatID, escapeHTML(string(runes[:firstEnd]))+streamingCursor)
-		if err != nil {
-			return s.bot.SendMessage(ctx, s.chatID, summary)
-		}
-	}
-
-	// Progressive edits for remaining chunks.
-	for i := firstEnd + chunkSize; i < n; i += chunkSize {
-		time.Sleep(150 * time.Millisecond)
-		_ = s.bot.EditMessage(ctx, s.chatID, msgID, escapeHTML(string(runes[:i]))+streamingCursor)
-	}
-
-	// Final edit: full text, no cursor.
-	time.Sleep(150 * time.Millisecond)
-	return s.bot.EditMessage(ctx, s.chatID, msgID, summary)
-}
-
-func (s *TelegramSink) stageHeartbeatSlow(taskID int64, stop chan struct{}) {
-	s.stageHeartbeatInterval(taskID, stop, 2500*time.Millisecond)
-}
-
-func (s *TelegramSink) stageHeartbeat(taskID int64, stop chan struct{}) {
-	s.stageHeartbeatInterval(taskID, stop, 800*time.Millisecond)
-}
-
-func (s *TelegramSink) stageHeartbeatInterval(taskID int64, stop chan struct{}, interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-stop:
-			return
-		case <-ticker.C:
-			s.mu.Lock()
-			tracked := s.tracking[taskID]
-			if tracked == nil || tracked.summaryStreamed {
-				s.mu.Unlock()
-				return
-			}
-			tracked.toolCalls++
-			stages := filterStages(tracked)
-			bar := renderStageBar(stages, tracked.currentStage, tracked.toolCalls)
-			circles := renderStageProgress(stages, tracked.currentStage)
-			text := fmt.Sprintf("⚡ <b>Running</b> <code>#%d</code>\n\n%s\n%s", taskID, circles, bar)
-
-			if text == tracked.lastText {
-				s.mu.Unlock()
-				continue
-			}
-			tracked.lastText = text
-			tracked.lastEditAt = time.Now()
-			msgID := tracked.messageID
-			stage := tracked.currentStage
-			s.mu.Unlock()
-
-			s.logger.Info("heartbeat tick", "task_id", taskID, "stage", stage, "msg_id", msgID)
-			s.sendOrEdit(taskID, msgID, text)
-		}
-	}
-}
-
-func (s *TelegramSink) deferredEdit(taskID int64, delay time.Duration) {
-	time.Sleep(delay)
-
-	s.mu.Lock()
-	tracked := s.tracking[taskID]
-	if tracked == nil {
-		s.mu.Unlock()
-		return
-	}
-	tracked.editPending = false
-	tracked.lastEditAt = time.Now()
-	text := tracked.lastText
-	msgID := tracked.messageID
-	s.mu.Unlock()
-
-	s.sendOrEdit(taskID, msgID, text)
-}
-
-func (s *TelegramSink) sendOrEdit(taskID, msgID int64, text string) {
-	ctx := context.Background()
-	if msgID > 0 {
-		if err := s.bot.EditMessage(ctx, s.chatID, msgID, text); err != nil {
-			if !isMessageNotModifiedError(err) {
-				s.logger.Warn("telegram sink: edit message", "task_id", taskID, "error", err)
-			}
-		}
-		return
-	}
-
-	newID, err := s.bot.SendMessageReturningID(ctx, s.chatID, text)
-	if err != nil {
-		s.logger.Warn("telegram sink: send message", "task_id", taskID, "error", err)
-		return
-	}
-
-	s.mu.Lock()
-	if tracked := s.tracking[taskID]; tracked != nil {
-		tracked.messageID = newID
-	}
-	s.mu.Unlock()
+	return nil
 }
 
 func (s *TelegramSink) String() string {
 	return "TelegramSink"
 }
 
-func renderStageBar(stages []string, current string, toolCalls int) string {
-	var sb strings.Builder
-	for _, stage := range stages {
-		icon := stageIcons[stage]
-		if icon == "" {
-			icon = "▸"
-		}
-		if current != "" && stage == current {
-			name := stageActiveNames[stage]
-			if name == "" {
-				name = stage
-			}
-			dots := strings.Repeat(".", (toolCalls%3)+1)
-			sb.WriteString(fmt.Sprintf("<b>%s %s %s</b>\n", icon, name, dots))
-		} else {
-			name := stageCompletedNames[stage]
-			if name == "" {
-				name = stage
-			}
-			sb.WriteString(fmt.Sprintf("%s %s ✓\n", icon, name))
-		}
+// ensureTask must be called with s.mu held.
+func (s *TelegramSink) ensureTask(taskID int64) *activeTask {
+	task := s.active[taskID]
+	if task != nil {
+		return task
 	}
-	return strings.TrimRight(sb.String(), "\n")
+
+	task = &activeTask{
+		progress: NewProgressReporter(s.bot, s.chatID, s.logger),
+		stream:   NewStreamConsumer(s.bot, s.chatID, s.logger),
+	}
+	task.progress.Run()
+	task.stream.Run()
+	s.active[taskID] = task
+	return task
 }
 
-func renderStageProgress(stages []string, current string) string {
-	completed := 0
-	total := 0
-	for _, s := range stages {
-		total++
-		if s != current || current == "" {
-			completed++
-		}
-	}
-	if total == 0 {
-		return ""
-	}
-	return strings.Repeat("●", completed) + strings.Repeat("○", total-completed)
-}
+// --- Utilities ---
 
 func parseSummaryStream(s string) (string, bool) {
 	const prefix = "[summary] "
@@ -459,19 +180,6 @@ func parseSummaryStream(s string) (string, bool) {
 		return strings.TrimPrefix(s, prefix), true
 	}
 	return "", false
-}
-
-func filterStages(tracked *trackedMessage) []string {
-	if tracked == nil {
-		return nil
-	}
-	var out []string
-	for _, s := range tracked.stages {
-		if s != "summary" {
-			out = append(out, s)
-		}
-	}
-	return out
 }
 
 func parseStageMarker(s string) (string, bool) {
@@ -487,13 +195,23 @@ func parseStageMarker(s string) (string, bool) {
 	return "", false
 }
 
-func containsString(ss []string, s string) bool {
-	for _, v := range ss {
-		if v == s {
-			return true
-		}
+func parseToolProgress(s string) (name, preview string) {
+	s = strings.TrimSpace(s)
+	if len(s) > 50 {
+		s = s[:50]
 	}
-	return false
+	return "tool", s
+}
+
+func formatElapsed(start, end time.Time) string {
+	if start.IsZero() || end.IsZero() {
+		return ""
+	}
+	d := end.Sub(start)
+	if d >= time.Minute {
+		return fmt.Sprintf(" (%dm%ds)", int(d.Minutes()), int(d.Seconds())%60)
+	}
+	return fmt.Sprintf(" (%ds)", int(d.Seconds()))
 }
 
 func condenseSummary(raw string) string {
@@ -533,7 +251,6 @@ func min(a, b int) int {
 	}
 	return b
 }
-
 
 var htmlReplacer = strings.NewReplacer(
 	"&", "&amp;",
