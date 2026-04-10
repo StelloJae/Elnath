@@ -149,8 +149,12 @@ func (s *TelegramSink) NotifyCompletion(_ context.Context, c daemon.TaskCompleti
 		_ = s.bot.SendMessage(ctx, s.chatID, header)
 	}
 
-	// Type out summary as a separate message below.
-	return s.typeSummary(ctx, summary)
+	// Type out summary — edit existing "Summarizing..." message if available.
+	var existingMsgID int64
+	if tracked != nil {
+		existingMsgID = tracked.summaryMessageID
+	}
+	return s.typeSummary(ctx, summary, existingMsgID)
 }
 
 func (s *TelegramSink) OnProgress(taskID int64, progress string) {
@@ -215,14 +219,25 @@ func (s *TelegramSink) OnProgress(taskID int64, progress string) {
 	if isStage {
 		if tracked.heartbeatStop != nil {
 			close(tracked.heartbeatStop)
+			tracked.heartbeatStop = nil
 		}
-		tracked.heartbeatStop = make(chan struct{})
 		tracked.currentStage = stage
 		if !containsString(tracked.stages, stage) {
 			tracked.stages = append(tracked.stages, stage)
 		}
 		tracked.toolCalls = 0
-		go s.stageHeartbeat(taskID, tracked.heartbeatStop)
+		if stage == "summary" {
+			s.mu.Unlock()
+			ctx := context.Background()
+			newID, _ := s.bot.SendMessageReturningID(ctx, s.chatID, "✨ <i>Summarizing</i> ...")
+			s.mu.Lock()
+			if t := s.tracking[taskID]; t != nil {
+				t.summaryMessageID = newID
+			}
+		} else {
+			tracked.heartbeatStop = make(chan struct{})
+			go s.stageHeartbeat(taskID, tracked.heartbeatStop)
+		}
 	} else {
 		tracked.toolCalls++
 		preview := rendered
@@ -243,7 +258,10 @@ func (s *TelegramSink) OnProgress(taskID int64, progress string) {
 	tracked.lastText = text
 
 	minInterval := 1500 * time.Millisecond
-	if time.Since(tracked.lastEditAt) < minInterval {
+	if isStage {
+		minInterval = 0
+	}
+	if minInterval > 0 && time.Since(tracked.lastEditAt) < minInterval {
 		if !tracked.editPending {
 			tracked.editPending = true
 			delay := minInterval - time.Since(tracked.lastEditAt)
@@ -260,7 +278,7 @@ func (s *TelegramSink) OnProgress(taskID int64, progress string) {
 	s.sendOrEdit(taskID, msgID, text)
 }
 
-func (s *TelegramSink) typeSummary(ctx context.Context, summary string) error {
+func (s *TelegramSink) typeSummary(ctx context.Context, summary string, existingMsgID int64) error {
 	runes := []rune(summary)
 	n := len(runes)
 	if n == 0 {
@@ -273,15 +291,22 @@ func (s *TelegramSink) typeSummary(ctx context.Context, summary string) error {
 		chunkSize = 3
 	}
 
-	// Send first chunk as a new message.
 	firstEnd := chunkSize
 	if firstEnd > n {
 		firstEnd = n
 	}
-	msgID, err := s.bot.SendMessageReturningID(ctx, s.chatID, escapeHTML(string(runes[:firstEnd]))+streamingCursor)
-	if err != nil {
-		// Fallback: send the whole summary at once.
-		return s.bot.SendMessage(ctx, s.chatID, summary)
+
+	msgID := existingMsgID
+	if msgID > 0 {
+		// Edit existing "Summarizing..." message with first chunk.
+		_ = s.bot.EditMessage(ctx, s.chatID, msgID, escapeHTML(string(runes[:firstEnd]))+streamingCursor)
+	} else {
+		// Send first chunk as a new message.
+		var err error
+		msgID, err = s.bot.SendMessageReturningID(ctx, s.chatID, escapeHTML(string(runes[:firstEnd]))+streamingCursor)
+		if err != nil {
+			return s.bot.SendMessage(ctx, s.chatID, summary)
+		}
 	}
 
 	// Progressive edits for remaining chunks.
@@ -295,8 +320,16 @@ func (s *TelegramSink) typeSummary(ctx context.Context, summary string) error {
 	return s.bot.EditMessage(ctx, s.chatID, msgID, summary)
 }
 
+func (s *TelegramSink) stageHeartbeatSlow(taskID int64, stop chan struct{}) {
+	s.stageHeartbeatInterval(taskID, stop, 2500*time.Millisecond)
+}
+
 func (s *TelegramSink) stageHeartbeat(taskID int64, stop chan struct{}) {
-	ticker := time.NewTicker(800 * time.Millisecond)
+	s.stageHeartbeatInterval(taskID, stop, 800*time.Millisecond)
+}
+
+func (s *TelegramSink) stageHeartbeatInterval(taskID int64, stop chan struct{}, interval time.Duration) {
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
@@ -323,8 +356,10 @@ func (s *TelegramSink) stageHeartbeat(taskID int64, stop chan struct{}) {
 			tracked.lastText = text
 			tracked.lastEditAt = time.Now()
 			msgID := tracked.messageID
+			stage := tracked.currentStage
 			s.mu.Unlock()
 
+			s.logger.Info("heartbeat tick", "task_id", taskID, "stage", stage, "msg_id", msgID)
 			s.sendOrEdit(taskID, msgID, text)
 		}
 	}

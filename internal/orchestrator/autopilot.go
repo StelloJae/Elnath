@@ -184,7 +184,6 @@ Rules:
 	if onText != nil {
 		onText("[autopilot] stage: summary\n")
 	}
-
 	slog.Info("autopilot: summary synthesis starting")
 	resp, err := provider.Chat(ctx, llm.ChatRequest{
 		Messages:  []llm.Message{llm.NewUserMessage(prompt)},
