@@ -408,9 +408,11 @@ func (d *Daemon) runTask(ctx context.Context, task *Task) (TaskResult, error) {
 		if progress == "" {
 			return
 		}
-		if updateErr := d.queue.UpdateProgress(ctx, task.ID, progress); updateErr != nil {
-			d.logger.Debug("worker: update progress", "task_id", task.ID, "error", updateErr)
-		}
+		go func(id int64, p string) {
+			if updateErr := d.queue.UpdateProgress(ctx, id, p); updateErr != nil {
+				d.logger.Debug("worker: update progress", "task_id", id, "error", updateErr)
+			}
+		}(task.ID, progress)
 		if d.progressObserver != nil {
 			d.progressObserver.OnProgress(task.ID, progress)
 		}

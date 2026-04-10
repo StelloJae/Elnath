@@ -24,6 +24,26 @@ var stageIcons = map[string]string{
 	"summary":  "✨",
 }
 
+var stageActiveNames = map[string]string{
+	"plan":     "Planning",
+	"code":     "Coding",
+	"test":     "Testing",
+	"review":   "Reviewing",
+	"verify":   "Verifying",
+	"research": "Researching",
+	"summary":  "Summarizing",
+}
+
+var stageCompletedNames = map[string]string{
+	"plan":     "Plan",
+	"code":     "Code",
+	"test":     "Test",
+	"review":   "Review",
+	"verify":   "Verify",
+	"research": "Research",
+	"summary":  "Summary",
+}
+
 type TelegramSink struct {
 	bot    BotClient
 	chatID string
@@ -45,6 +65,7 @@ type trackedMessage struct {
 	lastActivity    string
 	summaryText     string
 	summaryStreamed bool
+	heartbeatStop   chan struct{}
 }
 
 func NewTelegramSink(bot BotClient, chatID string, logger *slog.Logger) *TelegramSink {
@@ -74,6 +95,9 @@ func (s *TelegramSink) NotifyCompletion(_ context.Context, c daemon.TaskCompleti
 	s.mu.Lock()
 	tracked := s.tracking[c.TaskID]
 	delete(s.tracking, c.TaskID)
+	if tracked != nil && tracked.heartbeatStop != nil {
+		close(tracked.heartbeatStop)
+	}
 	s.mu.Unlock()
 
 	icon := "✅"
@@ -98,7 +122,7 @@ func (s *TelegramSink) NotifyCompletion(_ context.Context, c daemon.TaskCompleti
 	stages := filterStages(tracked)
 	stageBar := ""
 	if len(stages) > 0 {
-		stageBar = renderStageBar(stages, "") + "\n\n"
+		stageBar = renderStageBar(stages, "", 0) + "\n\n"
 	}
 
 	text := fmt.Sprintf("%s <b>%s</b>%s <code>#%d</code>\n\n%s%s", icon, label, elapsed, c.TaskID, stageBar, summary)
@@ -133,9 +157,13 @@ func (s *TelegramSink) OnProgress(taskID int64, progress string) {
 	}
 
 	if summaryText, ok := parseSummaryStream(rendered); ok {
+		if !tracked.summaryStreamed && tracked.heartbeatStop != nil {
+			close(tracked.heartbeatStop)
+			tracked.heartbeatStop = nil
+		}
 		tracked.summaryText = summaryText
 		tracked.summaryStreamed = true
-		bar := renderStageBar(filterStages(tracked), "")
+		bar := renderStageBar(filterStages(tracked), "", 0)
 		text := fmt.Sprintf("✅ <b>Complete</b> <code>#%d</code>\n\n%s\n\n%s%s",
 			taskID, bar, escapeHTML(summaryText), streamingCursor)
 
@@ -164,11 +192,18 @@ func (s *TelegramSink) OnProgress(taskID int64, progress string) {
 
 	stage, isStage := parseStageMarker(rendered)
 	if isStage {
+		if tracked.heartbeatStop != nil {
+			close(tracked.heartbeatStop)
+		}
+		tracked.heartbeatStop = make(chan struct{})
 		tracked.currentStage = stage
 		if !containsString(tracked.stages, stage) {
 			tracked.stages = append(tracked.stages, stage)
 		}
 		tracked.toolCalls = 0
+		if stage != "summary" {
+			go s.stageHeartbeat(taskID, tracked.heartbeatStop)
+		}
 	} else {
 		tracked.toolCalls++
 		preview := rendered
@@ -178,12 +213,10 @@ func (s *TelegramSink) OnProgress(taskID int64, progress string) {
 		tracked.lastActivity = preview
 	}
 
-	bar := renderStageBar(filterStages(tracked), tracked.currentStage)
-	activity := ""
-	if tracked.toolCalls > 0 {
-		activity = "\n" + renderProgressBar(tracked.toolCalls)
-	}
-	text := fmt.Sprintf("⚡ <b>Running</b> <code>#%d</code>\n\n%s%s", taskID, bar, activity)
+	stages := filterStages(tracked)
+	bar := renderStageBar(stages, tracked.currentStage, tracked.toolCalls)
+	circles := renderStageProgress(stages, tracked.currentStage)
+	text := fmt.Sprintf("⚡ <b>Running</b> <code>#%d</code>\n\n%s\n%s", taskID, circles, bar)
 
 	if text == tracked.lastText {
 		s.mu.Unlock()
@@ -207,6 +240,41 @@ func (s *TelegramSink) OnProgress(taskID int64, progress string) {
 	s.mu.Unlock()
 
 	s.sendOrEdit(taskID, msgID, text)
+}
+
+func (s *TelegramSink) stageHeartbeat(taskID int64, stop chan struct{}) {
+	ticker := time.NewTicker(800 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			s.mu.Lock()
+			tracked := s.tracking[taskID]
+			if tracked == nil || tracked.summaryStreamed {
+				s.mu.Unlock()
+				return
+			}
+			tracked.toolCalls++
+			stages := filterStages(tracked)
+			bar := renderStageBar(stages, tracked.currentStage, tracked.toolCalls)
+			circles := renderStageProgress(stages, tracked.currentStage)
+			text := fmt.Sprintf("⚡ <b>Running</b> <code>#%d</code>\n\n%s\n%s", taskID, circles, bar)
+
+			if text == tracked.lastText {
+				s.mu.Unlock()
+				continue
+			}
+			tracked.lastText = text
+			tracked.lastEditAt = time.Now()
+			msgID := tracked.messageID
+			s.mu.Unlock()
+
+			s.sendOrEdit(taskID, msgID, text)
+		}
+	}
 }
 
 func (s *TelegramSink) deferredEdit(taskID int64, delay time.Duration) {
@@ -255,29 +323,47 @@ func (s *TelegramSink) String() string {
 	return "TelegramSink"
 }
 
-func renderStageBar(stages []string, current string) string {
+func renderStageBar(stages []string, current string, toolCalls int) string {
 	var sb strings.Builder
 	for _, stage := range stages {
-		icon, ok := stageIcons[stage]
-		if !ok {
+		icon := stageIcons[stage]
+		if icon == "" {
 			icon = "▸"
 		}
 		if current != "" && stage == current {
-			sb.WriteString(fmt.Sprintf("<b>%s %s …</b>\n", icon, stage))
+			name := stageActiveNames[stage]
+			if name == "" {
+				name = stage
+			}
+			dots := strings.Repeat(".", (toolCalls%3)+1)
+			sb.WriteString(fmt.Sprintf("<b>%s %s %s</b>\n", icon, name, dots))
 		} else {
-			sb.WriteString(fmt.Sprintf("%s %s ✓\n", icon, stage))
+			name := stageCompletedNames[stage]
+			if name == "" {
+				name = stage
+			}
+			sb.WriteString(fmt.Sprintf("%s %s ✓\n", icon, name))
 		}
 	}
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-func renderProgressBar(toolCalls int) string {
-	const segments = 8
-	filled := (toolCalls + 2) / 3
-	if filled > segments {
-		filled = segments
+func renderStageProgress(stages []string, current string) string {
+	completed := 0
+	total := 0
+	for _, s := range stages {
+		if s == "summary" {
+			continue
+		}
+		total++
+		if s != current || current == "" {
+			completed++
+		}
 	}
-	return strings.Repeat("▓", filled) + strings.Repeat("░", segments-filled)
+	if total == 0 {
+		return ""
+	}
+	return strings.Repeat("●", completed) + strings.Repeat("○", total-completed)
 }
 
 func parseSummaryStream(s string) (string, bool) {

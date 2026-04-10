@@ -198,7 +198,7 @@ Rules:
 		switch ev.Type {
 		case llm.EventTextDelta:
 			sb.WriteString(ev.Content)
-			if onText != nil && time.Since(lastFlush) >= 300*time.Millisecond {
+			if onText != nil && time.Since(lastFlush) >= 100*time.Millisecond {
 				onText(encodeSummaryProgress(sb.String()))
 				lastFlush = time.Now()
 			}
@@ -211,6 +211,7 @@ Rules:
 
 	if onText != nil && sb.Len() > 0 {
 		onText(encodeSummaryProgress(sb.String()))
+		time.Sleep(500 * time.Millisecond)
 	}
 
 	if err != nil || sb.Len() == 0 {
