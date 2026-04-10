@@ -132,6 +132,7 @@ func (s *Shell) HandleUpdate(ctx context.Context, update Update) error {
 			_ = s.bot.SetReaction(ctx, s.chatID, update.Message.MessageID, "👀")
 		}
 		prompt := strings.TrimSpace(strings.TrimPrefix(text, "/submit"))
+		_ = s.bot.SendMessage(ctx, s.chatID, s.taskAcknowledgment(ctx, prompt))
 		taskID, err := s.enqueueTaskReturningID(ctx, prompt)
 		if err != nil {
 			return s.bot.SendMessage(ctx, s.chatID, "⚠️ "+err.Error())
@@ -139,7 +140,7 @@ func (s *Shell) HandleUpdate(ctx context.Context, update Update) error {
 		if s.taskTracker != nil && update.Message.MessageID > 0 {
 			s.taskTracker.TrackUserMessage(taskID, update.Message.MessageID)
 		}
-		return s.bot.SendMessage(ctx, s.chatID, s.taskAcknowledgment(ctx, prompt, taskID))
+		return nil
 	}
 
 	// Other explicit commands go to command handler.
@@ -166,6 +167,7 @@ func (s *Shell) HandleUpdate(ctx context.Context, update Update) error {
 	if update.Message.MessageID > 0 {
 		_ = s.bot.SetReaction(ctx, s.chatID, update.Message.MessageID, "👀")
 	}
+	_ = s.bot.SendMessage(ctx, s.chatID, s.taskAcknowledgment(ctx, text))
 	taskID, err := s.enqueueTaskReturningID(ctx, text)
 	if err != nil {
 		return s.bot.SendMessage(ctx, s.chatID, "⚠️ "+err.Error())
@@ -173,13 +175,12 @@ func (s *Shell) HandleUpdate(ctx context.Context, update Update) error {
 	if s.taskTracker != nil && update.Message.MessageID > 0 {
 		s.taskTracker.TrackUserMessage(taskID, update.Message.MessageID)
 	}
-	return s.bot.SendMessage(ctx, s.chatID, s.taskAcknowledgment(ctx, text, taskID))
+	return nil
 }
 
-func (s *Shell) taskAcknowledgment(ctx context.Context, userMessage string, taskID int64) string {
-	fallback := fmt.Sprintf("🚀 Task <code>#%d</code> queued", taskID)
+func (s *Shell) taskAcknowledgment(ctx context.Context, userMessage string) string {
 	if s.classifyProvider == nil {
-		return fallback
+		return "👀"
 	}
 	resp, err := s.classifyProvider.Chat(ctx, llm.ChatRequest{
 		Messages:    []llm.Message{llm.NewUserMessage(userMessage)},
@@ -188,7 +189,7 @@ func (s *Shell) taskAcknowledgment(ctx context.Context, userMessage string, task
 		Temperature: 0.9,
 	})
 	if err != nil || strings.TrimSpace(resp.Content) == "" {
-		return fallback
+		return "👀"
 	}
 	return strings.TrimSpace(resp.Content)
 }
@@ -196,13 +197,7 @@ func (s *Shell) taskAcknowledgment(ctx context.Context, userMessage string, task
 const taskAckPrompt = `You are a personal AI assistant. The user just gave you a task.
 Generate a brief, warm acknowledgment (1 sentence, under 12 words).
 Match the user's language. Sound like a real person, not a system.
-No task numbers, no technical jargon, no markdown, no HTML, no quotes.
-Examples:
-- 알겠어요! 바로 할게요~
-- 네, 잠시만 기다려주세요!
-- 확인했어요, 금방 처리할게요~
-- Got it! Give me a moment.
-- On it! One sec.`
+No task numbers, no technical jargon, no markdown, no HTML, no quotes.`
 
 func isChatIntent(intent conversation.Intent) bool {
 	switch intent {
