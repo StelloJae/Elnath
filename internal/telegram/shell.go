@@ -130,7 +130,7 @@ func (s *Shell) HandleUpdate(ctx context.Context, update Update) error {
 		if err != nil {
 			s.logger.Warn("intent classification failed, falling back to queue", "error", err)
 		} else if isChatIntent(intent) {
-			_ = s.bot.SetReaction(ctx, s.chatID, update.Message.MessageID, "💬")
+			_ = s.bot.SetReaction(ctx, s.chatID, update.Message.MessageID, "👀")
 			return s.chatResponder.Respond(ctx, text, update.Message.MessageID)
 		}
 	}

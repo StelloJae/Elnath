@@ -14,9 +14,10 @@ import (
 const maxMessageLen = 4000
 
 type activeTask struct {
-	userMsgID int64
-	progress  *ProgressReporter
-	stream    *StreamConsumer
+	userMsgID    int64
+	progress     *ProgressReporter
+	stream       *StreamConsumer
+	reactionSent bool
 }
 
 type TelegramSink struct {
@@ -84,6 +85,8 @@ func (s *TelegramSink) OnProgress(taskID int64, progress string) {
 		return
 	}
 
+	s.maybeSetWorkingReaction(taskID)
+
 	if text, ok := parseSummaryStream(rendered); ok {
 		s.OnStreamDelta(taskID, text)
 		return
@@ -101,6 +104,20 @@ func (s *TelegramSink) OnProgress(taskID int64, progress string) {
 
 	name, preview := parseToolProgress(rendered)
 	s.OnToolProgress(taskID, name, preview)
+}
+
+func (s *TelegramSink) maybeSetWorkingReaction(taskID int64) {
+	s.mu.Lock()
+	task := s.active[taskID]
+	if task == nil || task.reactionSent || task.userMsgID == 0 {
+		s.mu.Unlock()
+		return
+	}
+	task.reactionSent = true
+	userMsgID := task.userMsgID
+	s.mu.Unlock()
+
+	_ = s.bot.SetReaction(context.Background(), s.chatID, userMsgID, "✍")
 }
 
 func (s *TelegramSink) NotifyCompletion(_ context.Context, c daemon.TaskCompletion) error {

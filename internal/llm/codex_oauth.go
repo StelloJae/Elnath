@@ -295,6 +295,7 @@ func parseCodexSSE(r io.Reader, cb func(StreamEvent)) error {
 		input strings.Builder
 	}
 	pendingTools := map[string]*toolState{}
+	gotTextDelta := false
 	var usage UsageStats
 
 	for scanner.Scan() {
@@ -349,12 +350,13 @@ func parseCodexSSE(r io.Reader, cb func(StreamEvent)) error {
 		switch event.Type {
 		case "response.output_text.delta":
 			if event.Delta != "" {
+				gotTextDelta = true
 				cb(StreamEvent{Type: EventTextDelta, Content: event.Delta})
 			}
 
 		case "response.output_text.done":
-			// Fallback: some responses send only the final text here with no prior deltas.
-			if event.Text != "" {
+			// Fallback: emit full text only when no prior deltas were received.
+			if event.Text != "" && !gotTextDelta {
 				cb(StreamEvent{Type: EventTextDelta, Content: event.Text})
 			}
 
