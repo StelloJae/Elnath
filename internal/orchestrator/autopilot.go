@@ -185,29 +185,39 @@ Rules:
 		onText("[autopilot] stage: summary\n")
 	}
 	slog.Info("autopilot: summary synthesis starting")
-	resp, err := provider.Chat(ctx, llm.ChatRequest{
+	var result strings.Builder
+	var usage llm.UsageStats
+	err := provider.Stream(ctx, llm.ChatRequest{
 		Messages:  []llm.Message{llm.NewUserMessage(prompt)},
 		MaxTokens: 200,
+	}, func(ev llm.StreamEvent) {
+		switch ev.Type {
+		case llm.EventTextDelta:
+			result.WriteString(ev.Content)
+			if onText != nil {
+				onText("[summary] " + ev.Content)
+			}
+		case llm.EventDone:
+			if ev.Usage != nil {
+				usage = llm.UsageStats{
+					InputTokens:  ev.Usage.InputTokens,
+					OutputTokens: ev.Usage.OutputTokens,
+				}
+			}
+		}
 	})
 	if err != nil {
-		slog.Warn("autopilot: summary Chat failed", "error", err)
+		slog.Warn("autopilot: summary stream failed", "error", err)
 		return fallback, llm.UsageStats{}
 	}
-	if resp.Content == "" {
-		slog.Warn("autopilot: summary Chat returned empty")
-		return fallback, llm.UsageStats{}
-	}
-	slog.Info("autopilot: summary synthesized", "len", len(resp.Content))
 
-	content := dedupSummary(strings.TrimSpace(resp.Content))
+	content := dedupSummary(strings.TrimSpace(result.String()))
 	if content == "" {
 		return fallback, llm.UsageStats{}
 	}
+	slog.Info("autopilot: summary synthesized", "len", len(content))
 
-	return content, llm.UsageStats{
-		InputTokens:  resp.Usage.InputTokens,
-		OutputTokens: resp.Usage.OutputTokens,
-	}
+	return content, usage
 }
 
 // dedupSummary removes exact duplication where the LLM repeats the same text.
