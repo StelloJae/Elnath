@@ -4,13 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 
+	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/daemon"
+	"github.com/stello/elnath/internal/llm"
 )
 
 type Update struct {
@@ -32,6 +35,27 @@ type BotClient interface {
 	GetUpdates(ctx context.Context, offset int64, timeoutSeconds int) ([]Update, error)
 }
 
+// IntentClassifier classifies user messages into intent categories.
+type IntentClassifier interface {
+	Classify(ctx context.Context, provider llm.Provider, message string, history []llm.Message) (conversation.Intent, error)
+}
+
+// ShellOption configures optional Shell capabilities.
+type ShellOption func(*Shell)
+
+// WithChatResponder enables direct chat response for non-task intents.
+func WithChatResponder(responder *ChatResponder) ShellOption {
+	return func(s *Shell) { s.chatResponder = responder }
+}
+
+// WithClassifier enables intent classification before dispatch.
+func WithClassifier(classifier IntentClassifier, provider llm.Provider) ShellOption {
+	return func(s *Shell) {
+		s.classifier = classifier
+		s.classifyProvider = provider
+	}
+}
+
 type Shell struct {
 	queue              *daemon.Queue
 	approvals          *daemon.ApprovalStore
@@ -39,6 +63,10 @@ type Shell struct {
 	chatID             string
 	statePath          string
 	skipNotifyComplete bool
+	logger             *slog.Logger
+	chatResponder      *ChatResponder
+	classifier         IntentClassifier
+	classifyProvider   llm.Provider
 }
 
 type shellState struct {
@@ -46,7 +74,7 @@ type shellState struct {
 	NextUpdateOffset      int64   `json:"next_update_offset,omitempty"`
 }
 
-func NewShell(queue *daemon.Queue, approvals *daemon.ApprovalStore, bot BotClient, chatID, statePath string) (*Shell, error) {
+func NewShell(queue *daemon.Queue, approvals *daemon.ApprovalStore, bot BotClient, chatID, statePath string, opts ...ShellOption) (*Shell, error) {
 	if queue == nil {
 		return nil, fmt.Errorf("telegram shell: queue is required")
 	}
@@ -62,13 +90,18 @@ func NewShell(queue *daemon.Queue, approvals *daemon.ApprovalStore, bot BotClien
 	if strings.TrimSpace(statePath) == "" {
 		return nil, fmt.Errorf("telegram shell: state path is required")
 	}
-	return &Shell{
+	s := &Shell{
 		queue:     queue,
 		approvals: approvals,
 		bot:       bot,
 		chatID:    strings.TrimSpace(chatID),
 		statePath: statePath,
-	}, nil
+		logger:    slog.Default(),
+	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s, nil
 }
 
 func (s *Shell) HandleUpdate(ctx context.Context, update Update) error {
@@ -81,18 +114,45 @@ func (s *Shell) HandleUpdate(ctx context.Context, update Update) error {
 
 	text := strings.TrimSpace(update.Message.Text)
 	fields := strings.Fields(text)
-	isCommand := len(fields) > 0 && strings.HasPrefix(fields[0], "/")
-	isTask := !isCommand || fields[0] == "/submit"
 
-	if isTask && update.Message.MessageID > 0 {
-		_ = s.bot.SetReaction(ctx, s.chatID, update.Message.MessageID, "👀")
+	// Explicit commands (/status, /submit, etc.) always go to command handler.
+	if len(fields) > 0 && strings.HasPrefix(fields[0], "/") {
+		reply, err := s.handleCommand(ctx, text)
+		if err != nil {
+			reply = "⚠️ " + err.Error()
+		}
+		return s.bot.SendMessage(ctx, s.chatID, reply)
 	}
 
-	reply, err := s.handleCommand(ctx, text)
+	// Non-command messages: classify intent if classifier is available.
+	if s.classifier != nil && s.chatResponder != nil {
+		intent, err := s.classifier.Classify(ctx, s.classifyProvider, text, nil)
+		if err != nil {
+			s.logger.Warn("intent classification failed, falling back to queue", "error", err)
+		} else if isChatIntent(intent) {
+			_ = s.bot.SetReaction(ctx, s.chatID, update.Message.MessageID, "💬")
+			return s.chatResponder.Respond(ctx, text, update.Message.MessageID)
+		}
+	}
+
+	// Task intent — enqueue.
+	if update.Message.MessageID > 0 {
+		_ = s.bot.SetReaction(ctx, s.chatID, update.Message.MessageID, "👀")
+	}
+	reply, err := s.enqueueNewTask(ctx, text)
 	if err != nil {
 		reply = "⚠️ " + err.Error()
 	}
 	return s.bot.SendMessage(ctx, s.chatID, reply)
+}
+
+func isChatIntent(intent conversation.Intent) bool {
+	switch intent {
+	case conversation.IntentChat, conversation.IntentQuestion, conversation.IntentWikiQuery:
+		return true
+	default:
+		return false
+	}
 }
 
 // SkipNotifyCompletions disables the shell's own completion polling when

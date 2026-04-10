@@ -3,13 +3,16 @@ package telegram
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	_ "modernc.org/sqlite"
 
+	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/daemon"
+	"github.com/stello/elnath/internal/llm"
 )
 
 type fakeBotClient struct {
@@ -268,5 +271,136 @@ func TestShellUnknownCommandStillErrors(t *testing.T) {
 
 	if len(bot.sent) != 1 || !strings.Contains(bot.sent[0].text, "Unknown command") {
 		t.Fatalf("reply = %#v, want unknown command error", bot.sent)
+	}
+}
+
+// --- Intent classification mocks and tests ---
+
+type mockClassifier struct {
+	intent conversation.Intent
+	err    error
+}
+
+func (m *mockClassifier) Classify(_ context.Context, _ llm.Provider, _ string, _ []llm.Message) (conversation.Intent, error) {
+	return m.intent, m.err
+}
+
+type shellMockProvider struct{}
+
+func (m *shellMockProvider) Chat(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+	return &llm.ChatResponse{}, nil
+}
+
+func (m *shellMockProvider) Stream(_ context.Context, _ llm.ChatRequest, cb func(llm.StreamEvent)) error {
+	cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: "hi"})
+	cb(llm.StreamEvent{Type: llm.EventDone})
+	return nil
+}
+
+func (m *shellMockProvider) Name() string            { return "mock" }
+func (m *shellMockProvider) Models() []llm.ModelInfo  { return nil }
+
+func newTestShellWithClassifier(t *testing.T, intent conversation.Intent, classifyErr error) (*Shell, *daemon.Queue, *fakeBotClient) {
+	t.Helper()
+	db := openTelegramTestDB(t)
+	queue, err := daemon.NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+	approvals, err := daemon.NewApprovalStore(db)
+	if err != nil {
+		t.Fatalf("NewApprovalStore: %v", err)
+	}
+	bot := &fakeBotClient{}
+	provider := &shellMockProvider{}
+	responder := NewChatResponder(provider, bot, "chat-1", nil)
+	classifier := &mockClassifier{intent: intent, err: classifyErr}
+
+	shell, err := NewShell(queue, approvals, bot, "chat-1",
+		filepath.Join(t.TempDir(), "telegram-state.json"),
+		WithChatResponder(responder),
+		WithClassifier(classifier, provider),
+	)
+	if err != nil {
+		t.Fatalf("NewShell: %v", err)
+	}
+	return shell, queue, bot
+}
+
+func TestShellChatBypassesQueue(t *testing.T) {
+	shell, queue, bot := newTestShellWithClassifier(t, conversation.IntentChat, nil)
+
+	err := shell.HandleUpdate(context.Background(), Update{
+		ID:      1,
+		Message: Message{ChatID: "chat-1", MessageID: 10, Text: "How are you?"},
+	})
+	if err != nil {
+		t.Fatalf("HandleUpdate: %v", err)
+	}
+
+	tasks, err := queue.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(tasks) != 0 {
+		t.Fatalf("expected 0 tasks in queue, got %d", len(tasks))
+	}
+
+	if len(bot.sent) == 0 {
+		t.Fatal("expected at least one message sent via bot")
+	}
+	// The chat responder streams "hi" — verify no "queued" reply.
+	for _, msg := range bot.sent {
+		if strings.Contains(msg.text, "queued") {
+			t.Fatalf("chat message should not produce a queued reply, got %q", msg.text)
+		}
+	}
+}
+
+func TestShellTaskGoesToQueue(t *testing.T) {
+	shell, queue, bot := newTestShellWithClassifier(t, conversation.IntentComplexTask, nil)
+
+	err := shell.HandleUpdate(context.Background(), Update{
+		ID:      1,
+		Message: Message{ChatID: "chat-1", MessageID: 11, Text: "Refactor the auth module"},
+	})
+	if err != nil {
+		t.Fatalf("HandleUpdate: %v", err)
+	}
+
+	tasks, err := queue.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 task in queue, got %d", len(tasks))
+	}
+
+	if len(bot.sent) != 1 || !strings.Contains(bot.sent[0].text, "queued") {
+		t.Fatalf("expected queued reply, got %#v", bot.sent)
+	}
+}
+
+func TestShellClassifyErrorFallsBackToQueue(t *testing.T) {
+	shell, queue, bot := newTestShellWithClassifier(t, conversation.IntentChat, fmt.Errorf("classifier down"))
+
+	err := shell.HandleUpdate(context.Background(), Update{
+		ID:      1,
+		Message: Message{ChatID: "chat-1", MessageID: 12, Text: "Hello there"},
+	})
+	if err != nil {
+		t.Fatalf("HandleUpdate: %v", err)
+	}
+
+	tasks, err := queue.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 task in queue (fallback), got %d", len(tasks))
+	}
+
+	if len(bot.sent) != 1 || !strings.Contains(bot.sent[0].text, "queued") {
+		t.Fatalf("expected queued reply on classify error, got %#v", bot.sent)
 	}
 }
