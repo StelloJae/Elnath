@@ -234,6 +234,8 @@ func (s *TelegramSink) OnProgress(taskID int64, progress string) {
 			if t := s.tracking[taskID]; t != nil {
 				t.summaryMessageID = newID
 			}
+			s.mu.Unlock()
+			return
 		} else {
 			tracked.heartbeatStop = make(chan struct{})
 			go s.stageHeartbeat(taskID, tracked.heartbeatStop)
