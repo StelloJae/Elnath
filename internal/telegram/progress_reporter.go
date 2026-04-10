@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const progressEditInterval = 1500 * time.Millisecond
+const progressEditInterval = 500 * time.Millisecond
 
 var toolEmojis = map[string]string{
 	"bash":       "🔧",
