@@ -122,10 +122,13 @@ func (s *TelegramSink) NotifyCompletion(_ context.Context, c daemon.TaskCompleti
 		}
 	}
 
-	stages := filterStages(tracked)
+	var completionStages []string
+	if tracked != nil {
+		completionStages = tracked.stages
+	}
 	stageBar := ""
-	if len(stages) > 0 {
-		stageBar = renderStageBar(stages, "", 0) + "\n\n"
+	if len(completionStages) > 0 {
+		stageBar = renderStageBar(completionStages, "", 0) + "\n\n"
 	}
 
 	ctx := context.Background()
@@ -402,9 +405,6 @@ func renderStageProgress(stages []string, current string) string {
 	completed := 0
 	total := 0
 	for _, s := range stages {
-		if s == "summary" {
-			continue
-		}
 		total++
 		if s != current || current == "" {
 			completed++
