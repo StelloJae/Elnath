@@ -138,19 +138,16 @@ func (s *TelegramSink) NotifyCompletion(_ context.Context, c daemon.TaskCompleti
 		_ = s.bot.SetReaction(ctx, s.chatID, tracked.userMessageID, emoji)
 	}
 
-	if tracked != nil && tracked.summaryStreamed && tracked.summaryMessageID > 0 {
-		progressText := fmt.Sprintf("%s <b>%s</b>%s <code>#%d</code>\n\n%s", icon, label, elapsed, c.TaskID, strings.TrimRight(stageBar, "\n"))
-		if tracked.messageID > 0 {
-			_ = s.bot.EditMessage(ctx, s.chatID, tracked.messageID, progressText)
-		}
-		return s.bot.EditMessage(ctx, s.chatID, tracked.summaryMessageID, summary)
+	// Finalize progress message (stages + timing, no summary text).
+	header := fmt.Sprintf("%s <b>%s</b>%s <code>#%d</code>\n\n%s", icon, label, elapsed, c.TaskID, strings.TrimRight(stageBar, "\n"))
+	if tracked != nil && tracked.messageID > 0 {
+		_ = s.bot.EditMessage(ctx, s.chatID, tracked.messageID, header)
+	} else {
+		_ = s.bot.SendMessage(ctx, s.chatID, header)
 	}
 
-	text := fmt.Sprintf("%s <b>%s</b>%s <code>#%d</code>\n\n%s%s", icon, label, elapsed, c.TaskID, stageBar, summary)
-	if tracked != nil && tracked.messageID > 0 {
-		return s.bot.EditMessage(ctx, s.chatID, tracked.messageID, text)
-	}
-	return s.bot.SendMessage(ctx, s.chatID, text)
+	// Type out summary as a separate message below.
+	return s.typeSummary(ctx, summary)
 }
 
 func (s *TelegramSink) OnProgress(taskID int64, progress string) {
@@ -258,6 +255,41 @@ func (s *TelegramSink) OnProgress(taskID int64, progress string) {
 	s.mu.Unlock()
 
 	s.sendOrEdit(taskID, msgID, text)
+}
+
+func (s *TelegramSink) typeSummary(ctx context.Context, summary string) error {
+	runes := []rune(summary)
+	n := len(runes)
+	if n == 0 {
+		return nil
+	}
+
+	const chunks = 8
+	chunkSize := (n + chunks - 1) / chunks
+	if chunkSize < 3 {
+		chunkSize = 3
+	}
+
+	// Send first chunk as a new message.
+	firstEnd := chunkSize
+	if firstEnd > n {
+		firstEnd = n
+	}
+	msgID, err := s.bot.SendMessageReturningID(ctx, s.chatID, escapeHTML(string(runes[:firstEnd]))+streamingCursor)
+	if err != nil {
+		// Fallback: send the whole summary at once.
+		return s.bot.SendMessage(ctx, s.chatID, summary)
+	}
+
+	// Progressive edits for remaining chunks.
+	for i := firstEnd + chunkSize; i < n; i += chunkSize {
+		time.Sleep(150 * time.Millisecond)
+		_ = s.bot.EditMessage(ctx, s.chatID, msgID, escapeHTML(string(runes[:i]))+streamingCursor)
+	}
+
+	// Final edit: full text, no cursor.
+	time.Sleep(150 * time.Millisecond)
+	return s.bot.EditMessage(ctx, s.chatID, msgID, summary)
 }
 
 func (s *TelegramSink) stageHeartbeat(taskID int64, stop chan struct{}) {
