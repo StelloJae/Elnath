@@ -63,9 +63,12 @@ type trackedMessage struct {
 	currentStage  string
 	toolCalls       int
 	lastActivity    string
-	summaryText     string
-	summaryStreamed bool
-	heartbeatStop   chan struct{}
+	summaryText       string
+	summaryStreamed   bool
+	summaryMessageID  int64
+	summaryLastText   string
+	summaryLastEditAt time.Time
+	heartbeatStop     chan struct{}
 }
 
 func NewTelegramSink(bot BotClient, chatID string, logger *slog.Logger) *TelegramSink {
@@ -125,8 +128,6 @@ func (s *TelegramSink) NotifyCompletion(_ context.Context, c daemon.TaskCompleti
 		stageBar = renderStageBar(stages, "", 0) + "\n\n"
 	}
 
-	text := fmt.Sprintf("%s <b>%s</b>%s <code>#%d</code>\n\n%s%s", icon, label, elapsed, c.TaskID, stageBar, summary)
-
 	ctx := context.Background()
 
 	if tracked != nil && tracked.userMessageID > 0 {
@@ -137,6 +138,15 @@ func (s *TelegramSink) NotifyCompletion(_ context.Context, c daemon.TaskCompleti
 		_ = s.bot.SetReaction(ctx, s.chatID, tracked.userMessageID, emoji)
 	}
 
+	if tracked != nil && tracked.summaryStreamed && tracked.summaryMessageID > 0 {
+		progressText := fmt.Sprintf("%s <b>%s</b>%s <code>#%d</code>\n\n%s", icon, label, elapsed, c.TaskID, strings.TrimRight(stageBar, "\n"))
+		if tracked.messageID > 0 {
+			_ = s.bot.EditMessage(ctx, s.chatID, tracked.messageID, progressText)
+		}
+		return s.bot.EditMessage(ctx, s.chatID, tracked.summaryMessageID, summary)
+	}
+
+	text := fmt.Sprintf("%s <b>%s</b>%s <code>#%d</code>\n\n%s%s", icon, label, elapsed, c.TaskID, stageBar, summary)
 	if tracked != nil && tracked.messageID > 0 {
 		return s.bot.EditMessage(ctx, s.chatID, tracked.messageID, text)
 	}
@@ -163,30 +173,36 @@ func (s *TelegramSink) OnProgress(taskID int64, progress string) {
 		}
 		tracked.summaryText = summaryText
 		tracked.summaryStreamed = true
-		bar := renderStageBar(filterStages(tracked), "", 0)
-		text := fmt.Sprintf("✅ <b>Complete</b> <code>#%d</code>\n\n%s\n\n%s%s",
-			taskID, bar, escapeHTML(summaryText), streamingCursor)
 
-		if text == tracked.lastText {
+		text := escapeHTML(summaryText) + streamingCursor
+		if text == tracked.summaryLastText {
 			s.mu.Unlock()
 			return
 		}
-		tracked.lastText = text
+		tracked.summaryLastText = text
 
-		minInterval := 300 * time.Millisecond
-		if time.Since(tracked.lastEditAt) < minInterval {
-			if !tracked.editPending {
-				tracked.editPending = true
-				delay := minInterval - time.Since(tracked.lastEditAt)
-				go s.deferredEdit(taskID, delay)
-			}
+		minInterval := 200 * time.Millisecond
+		if time.Since(tracked.summaryLastEditAt) < minInterval {
 			s.mu.Unlock()
 			return
 		}
-		tracked.lastEditAt = time.Now()
-		msgID := tracked.messageID
+		tracked.summaryLastEditAt = time.Now()
+		summaryMsgID := tracked.summaryMessageID
 		s.mu.Unlock()
-		s.sendOrEdit(taskID, msgID, text)
+
+		ctx := context.Background()
+		if summaryMsgID > 0 {
+			_ = s.bot.EditMessage(ctx, s.chatID, summaryMsgID, text)
+		} else {
+			newID, err := s.bot.SendMessageReturningID(ctx, s.chatID, text)
+			if err == nil {
+				s.mu.Lock()
+				if t := s.tracking[taskID]; t != nil {
+					t.summaryMessageID = newID
+				}
+				s.mu.Unlock()
+			}
+		}
 		return
 	}
 

@@ -47,8 +47,8 @@ func TestAutopilotWorkflow_E2E(t *testing.T) {
 		t.Errorf("summary %q should contain assistant-tone completion", result.Summary)
 	}
 
-	// Usage accumulates across all stages + summary synthesis
-	wantTokens := 5 * 10 // 5 calls × 10 input tokens each
+	// Usage accumulates across 4 streamed stages + 1 Chat summary (no stream usage)
+	wantTokens := 4 * 10 // 4 Stream calls × 10 input tokens each
 	if result.Usage.InputTokens != wantTokens {
 		t.Errorf("input tokens = %d, want %d", result.Usage.InputTokens, wantTokens)
 	}

@@ -187,46 +187,50 @@ Rules:
 		onText("[autopilot] stage: summary\n")
 	}
 
-	var sb strings.Builder
-	var usage llm.UsageStats
-	lastFlush := time.Now()
-
-	err := provider.Stream(ctx, llm.ChatRequest{
+	resp, err := provider.Chat(ctx, llm.ChatRequest{
 		Messages:  []llm.Message{llm.NewUserMessage(prompt)},
 		MaxTokens: 200,
-	}, func(ev llm.StreamEvent) {
-		switch ev.Type {
-		case llm.EventTextDelta:
-			sb.WriteString(ev.Content)
-			if onText != nil && time.Since(lastFlush) >= 100*time.Millisecond {
-				onText(encodeSummaryProgress(sb.String()))
-				lastFlush = time.Now()
-			}
-		case llm.EventDone:
-			if ev.Usage != nil {
-				usage = *ev.Usage
-			}
-		}
 	})
-
-	if onText != nil && sb.Len() > 0 {
-		onText(encodeSummaryProgress(sb.String()))
-		time.Sleep(500 * time.Millisecond)
-	}
-
-	if err != nil || sb.Len() == 0 {
+	if err != nil || resp.Content == "" {
 		return fallback, llm.UsageStats{}
 	}
 
-	content := dedupSummary(strings.TrimSpace(sb.String()))
+	content := dedupSummary(strings.TrimSpace(resp.Content))
 	if content == "" {
 		return fallback, llm.UsageStats{}
 	}
 
-	return content, llm.UsageStats{
-		InputTokens:  usage.InputTokens,
-		OutputTokens: usage.OutputTokens,
+	if onText != nil {
+		revealSummaryProgressively(content, onText)
 	}
+
+	return content, llm.UsageStats{
+		InputTokens:  resp.Usage.InputTokens,
+		OutputTokens: resp.Usage.OutputTokens,
+	}
+}
+
+// revealSummaryProgressively sends the summary text in progressive chunks
+// through onText, creating a typing effect in the Telegram message.
+func revealSummaryProgressively(text string, onText func(string)) {
+	runes := []rune(text)
+	n := len(runes)
+	if n == 0 {
+		return
+	}
+
+	const targetChunks = 10
+	chunkSize := (n + targetChunks - 1) / targetChunks
+	if chunkSize < 3 {
+		chunkSize = 3
+	}
+
+	for i := chunkSize; i < n; i += chunkSize {
+		onText(encodeSummaryProgress(string(runes[:i])))
+		time.Sleep(150 * time.Millisecond)
+	}
+	onText(encodeSummaryProgress(text))
+	time.Sleep(300 * time.Millisecond)
 }
 
 // encodeSummaryProgress wraps summary text in a JSON progress event so the
