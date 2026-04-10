@@ -13,6 +13,7 @@ import (
 
 	"github.com/stello/elnath/internal/agent"
 	"github.com/stello/elnath/internal/config"
+	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/core"
 	"github.com/stello/elnath/internal/daemon"
 	"github.com/stello/elnath/internal/self"
@@ -131,7 +132,12 @@ func cmdDaemonStart(ctx context.Context) error {
 		}
 		bot := telegram.NewHTTPClient(cfg.Telegram.BotToken, cfg.Telegram.APIBaseURL)
 		statePath := filepath.Join(cfg.DataDir, "telegram-shell-state.json")
-		shell, shellErr := telegram.NewShell(queue, approvalStore, bot, cfg.Telegram.ChatID, statePath)
+		chatResponder := telegram.NewChatResponder(provider, bot, cfg.Telegram.ChatID, app.Logger)
+		classifier := conversation.NewLLMClassifier()
+		shell, shellErr := telegram.NewShell(queue, approvalStore, bot, cfg.Telegram.ChatID, statePath,
+			telegram.WithChatResponder(chatResponder),
+			telegram.WithClassifier(classifier, provider),
+		)
 		if shellErr != nil {
 			return fmt.Errorf("create telegram shell: %w", shellErr)
 		}
