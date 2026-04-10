@@ -2,12 +2,15 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/stello/elnath/internal/core"
+	"github.com/stello/elnath/internal/daemon"
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/tools"
 )
@@ -128,7 +131,7 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, onText func(str
 		}
 
 		// Execute each tool call and collect results.
-		messages, err = a.executeTools(ctx, messages, toolCalls)
+		messages, err = a.executeTools(ctx, messages, toolCalls, onText)
 		if err != nil {
 			return nil, err
 		}
@@ -311,7 +314,7 @@ type toolExecResult struct {
 // Phase 1: sequential permission check + pre-hooks (safe for interactive prompts)
 // Phase 2: parallel execution of approved tools via goroutines
 // Results are collected in order and appended to messages.
-func (a *Agent) executeTools(ctx context.Context, messages []llm.Message, calls []llm.ToolUseBlock) ([]llm.Message, error) {
+func (a *Agent) executeTools(ctx context.Context, messages []llm.Message, calls []llm.ToolUseBlock, onText func(string)) ([]llm.Message, error) {
 	// Phase 1: sequential permission + pre-hook check.
 	type approved struct {
 		call  llm.ToolUseBlock
@@ -322,6 +325,12 @@ func (a *Agent) executeTools(ctx context.Context, messages []llm.Message, calls 
 
 	for i, call := range calls {
 		a.logger.Debug("checking tool", "name", call.Name, "id", call.ID)
+
+		if onText != nil {
+			preview := extractToolPreview(call.Name, string(call.Input))
+			ev := daemon.ToolProgressEvent(call.Name, preview)
+			onText(daemon.EncodeProgressEvent(ev))
+		}
 
 		allowed, err := a.permission.Check(ctx, call.Name, call.Input)
 		if err != nil {
@@ -434,4 +443,45 @@ func isRetryable(err error) bool {
 		}
 	}
 	return false
+}
+
+func extractToolPreview(toolName, input string) string {
+	input = strings.TrimSpace(input)
+	if input == "" || input == "{}" {
+		return ""
+	}
+	var fields map[string]interface{}
+	if err := json.Unmarshal([]byte(input), &fields); err != nil {
+		return ""
+	}
+	var preview string
+	switch toolName {
+	case "bash":
+		if v, ok := fields["command"].(string); ok {
+			preview = v
+		}
+	case "file_read", "file_write", "file_edit":
+		if v, ok := fields["path"].(string); ok {
+			preview = v
+		}
+	case "web_search":
+		if v, ok := fields["query"].(string); ok {
+			preview = v
+		}
+	case "git":
+		if v, ok := fields["args"].(string); ok {
+			preview = v
+		}
+	default:
+		for _, key := range []string{"path", "command", "query", "name", "url"} {
+			if v, ok := fields[key].(string); ok && v != "" {
+				preview = v
+				break
+			}
+		}
+	}
+	if len([]rune(preview)) > 40 {
+		preview = string([]rune(preview)[:37]) + "..."
+	}
+	return preview
 }

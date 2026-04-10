@@ -80,8 +80,8 @@ func (s *TelegramSink) OnStreamDone(taskID int64) {
 // OnProgress implements daemon.ProgressObserver. Parses the legacy progress
 // format and routes to either ProgressReporter or StreamConsumer.
 func (s *TelegramSink) OnProgress(taskID int64, progress string) {
-	rendered := daemon.RenderProgress(progress)
-	if rendered == "" {
+	ev, ok := daemon.ParseProgressEvent(progress)
+	if !ok {
 		return
 	}
 
@@ -92,6 +92,13 @@ func (s *TelegramSink) OnProgress(taskID int64, progress string) {
 
 	s.maybeSetWorkingReaction(taskID)
 
+	// Structured tool events → ProgressReporter.
+	if ev.Kind == daemon.ProgressKindTool && ev.ToolName != "" {
+		s.OnToolProgress(taskID, ev.ToolName, ev.Preview)
+		return
+	}
+
+	rendered := ev.Message
 	if text, ok := parseSummaryStream(rendered); ok {
 		s.OnStreamDelta(taskID, text)
 		return
@@ -106,11 +113,6 @@ func (s *TelegramSink) OnProgress(taskID int64, progress string) {
 		pr.ReportStage(stage)
 		return
 	}
-
-	// Unrecognized text (LLM response tokens, workflow routing, etc.)
-	// is intentionally dropped — only summary and stage markers are
-	// routed. Actual tool call events require structured progress
-	// events which will be added in a future iteration.
 }
 
 func (s *TelegramSink) maybeSetWorkingReaction(taskID int64) {

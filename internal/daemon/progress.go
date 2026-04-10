@@ -12,6 +12,7 @@ const (
 	ProgressKindWorkflow = "workflow"
 	ProgressKindText     = "text"
 	ProgressKindUsage    = "usage"
+	ProgressKindTool     = "tool"
 )
 
 // ProgressEvent is the shared, UI-safe progress envelope consumed by daemon
@@ -22,6 +23,8 @@ type ProgressEvent struct {
 	Message  string `json:"message"`
 	Intent   string `json:"intent,omitempty"`
 	Workflow string `json:"workflow,omitempty"`
+	ToolName string `json:"tool_name,omitempty"`
+	Preview  string `json:"preview,omitempty"`
 }
 
 func WorkflowProgressEvent(intent, workflow string) ProgressEvent {
@@ -40,6 +43,20 @@ func TextProgressEvent(text string) ProgressEvent {
 		Version: progressSchemaVersion,
 		Kind:    ProgressKindText,
 		Message: summarizeProgress(text),
+	}
+}
+
+func ToolProgressEvent(toolName, preview string) ProgressEvent {
+	msg := toolName
+	if preview != "" {
+		msg = fmt.Sprintf("%s: %s", toolName, preview)
+	}
+	return ProgressEvent{
+		Version:  progressSchemaVersion,
+		Kind:     ProgressKindTool,
+		Message:  msg,
+		ToolName: strings.TrimSpace(toolName),
+		Preview:  strings.TrimSpace(preview),
 	}
 }
 
