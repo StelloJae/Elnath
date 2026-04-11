@@ -34,6 +34,18 @@ func (t *WebFetchTool) Schema() json.RawMessage {
 	}, []string{"url"})
 }
 
+func (t *WebFetchTool) IsConcurrencySafe(json.RawMessage) bool { return true }
+
+func (t *WebFetchTool) Reversible() bool { return true }
+
+func (t *WebFetchTool) Scope(params json.RawMessage) ToolScope {
+	var p webFetchParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return ConservativeScope()
+	}
+	return ToolScope{Network: true}
+}
+
 type webFetchParams struct {
 	URL string `json:"url"`
 }
@@ -89,6 +101,18 @@ func (t *WebSearchTool) Schema() json.RawMessage {
 	return Object(map[string]Property{
 		"query": String("Search query."),
 	}, []string{"query"})
+}
+
+func (t *WebSearchTool) IsConcurrencySafe(json.RawMessage) bool { return true }
+
+func (t *WebSearchTool) Reversible() bool { return true }
+
+func (t *WebSearchTool) Scope(params json.RawMessage) ToolScope {
+	var p webSearchParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return ConservativeScope()
+	}
+	return ToolScope{Network: true}
 }
 
 type webSearchParams struct {

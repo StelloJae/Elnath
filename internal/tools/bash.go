@@ -41,6 +41,22 @@ func (t *BashTool) Schema() json.RawMessage {
 	}, []string{"command"})
 }
 
+func (t *BashTool) IsConcurrencySafe(json.RawMessage) bool { return false }
+
+func (t *BashTool) Reversible() bool { return false }
+
+func (t *BashTool) Scope(params json.RawMessage) ToolScope {
+	var p bashParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return ConservativeScope()
+	}
+	return ToolScope{
+		Network:    true,
+		Persistent: true,
+		WritePaths: []string{t.guard.WorkDir()},
+	}
+}
+
 type bashParams struct {
 	Command    string `json:"command"`
 	TimeoutMs  int    `json:"timeout_ms"`

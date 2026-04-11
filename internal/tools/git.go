@@ -28,10 +28,40 @@ func (t *GitTool) Schema() json.RawMessage {
 	}, []string{"subcommand"})
 }
 
+func (t *GitTool) IsConcurrencySafe(params json.RawMessage) bool {
+	var p gitParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return false
+	}
+	return isReadOnlyGitSubcommand(p.Subcommand)
+}
+
+func (t *GitTool) Reversible() bool { return false }
+
+func (t *GitTool) Scope(params json.RawMessage) ToolScope {
+	var p gitParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return ConservativeScope()
+	}
+	if isReadOnlyGitSubcommand(p.Subcommand) {
+		return ToolScope{ReadPaths: []string{t.guard.WorkDir()}}
+	}
+	return ToolScope{WritePaths: []string{t.guard.WorkDir()}, Persistent: true}
+}
+
 type gitParams struct {
 	Subcommand string   `json:"subcommand"`
 	Args       []string `json:"args"`
 	Message    string   `json:"message"`
+}
+
+func isReadOnlyGitSubcommand(subcommand string) bool {
+	switch subcommand {
+	case "status", "diff", "log":
+		return true
+	default:
+		return false
+	}
 }
 
 func (t *GitTool) Execute(ctx context.Context, params json.RawMessage) (*Result, error) {

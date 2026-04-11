@@ -177,3 +177,67 @@ func TestExpandHome(t *testing.T) {
 		}
 	}
 }
+
+func TestPathGuardCheckScope(t *testing.T) {
+	workDir := t.TempDir()
+	protected := filepath.Join(workDir, "protected")
+	guard := NewPathGuard(workDir, []string{protected})
+	firstDenied := filepath.Join(protected, "one", "file.go")
+
+	tests := []struct {
+		name      string
+		scope     ToolScope
+		wantError bool
+		wantText  string
+	}{
+		{
+			name:      "write path under protected directory is denied",
+			scope:     ToolScope{WritePaths: []string{filepath.Join(protected, "file.go")}},
+			wantError: true,
+			wantText:  "write denied",
+		},
+		{
+			name:      "allowed write path passes",
+			scope:     ToolScope{WritePaths: []string{filepath.Join(workDir, "allowed", "file.go")}},
+			wantError: false,
+		},
+		{
+			name:      "read paths are ignored",
+			scope:     ToolScope{ReadPaths: []string{filepath.Join(protected, "read-only.txt")}},
+			wantError: false,
+		},
+		{
+			name: "first denied write path is returned",
+			scope: ToolScope{WritePaths: []string{
+				filepath.Join(workDir, "allowed", "file.go"),
+				firstDenied,
+				filepath.Join(protected, "two", "file.go"),
+			}},
+			wantError: true,
+			wantText:  firstDenied,
+		},
+		{
+			name:      "empty scope passes",
+			scope:     ToolScope{},
+			wantError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := guard.CheckScope(tt.scope)
+			if tt.wantError {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				if !strings.Contains(err.Error(), tt.wantText) {
+					t.Fatalf("error %q does not contain %q", err.Error(), tt.wantText)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("CheckScope() unexpected error: %v", err)
+			}
+		})
+	}
+}

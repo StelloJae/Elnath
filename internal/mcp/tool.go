@@ -31,6 +31,14 @@ func (t *mcpTool) Schema() json.RawMessage {
 	return t.info.InputSchema
 }
 
+func (t *mcpTool) IsConcurrencySafe(json.RawMessage) bool { return false }
+
+func (t *mcpTool) Reversible() bool { return false }
+
+func (t *mcpTool) Scope(json.RawMessage) tools.ToolScope {
+	return tools.ConservativeScope()
+}
+
 func (t *mcpTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
 	text, isError, err := t.client.CallTool(ctx, t.info.Name, params)
 	if err != nil {

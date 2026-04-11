@@ -32,6 +32,21 @@ func (t *ConversationSearchTool) Schema() json.RawMessage {
 	}, []string{"query"})
 }
 
+func (t *ConversationSearchTool) IsConcurrencySafe(json.RawMessage) bool { return true }
+
+func (t *ConversationSearchTool) Reversible() bool { return true }
+
+func (t *ConversationSearchTool) Scope(params json.RawMessage) tools.ToolScope {
+	var input struct {
+		Query string `json:"query"`
+		Limit int    `json:"limit"`
+	}
+	if err := json.Unmarshal(params, &input); err != nil {
+		return tools.ConservativeScope()
+	}
+	return tools.ToolScope{}
+}
+
 func (t *ConversationSearchTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
 	var input struct {
 		Query string `json:"query"`

@@ -37,6 +37,18 @@ func (t *ReadTool) Schema() json.RawMessage {
 	}, []string{"file_path"})
 }
 
+func (t *ReadTool) IsConcurrencySafe(json.RawMessage) bool { return true }
+
+func (t *ReadTool) Reversible() bool { return true }
+
+func (t *ReadTool) Scope(params json.RawMessage) ToolScope {
+	var p readParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return ConservativeScope()
+	}
+	return resolvedReadScope(t.guard, p.FilePath)
+}
+
 type readParams struct {
 	FilePath string `json:"file_path"`
 	Offset   int    `json:"offset"`
@@ -110,6 +122,18 @@ func (t *WriteTool) Schema() json.RawMessage {
 	}, []string{"file_path", "content"})
 }
 
+func (t *WriteTool) IsConcurrencySafe(json.RawMessage) bool { return false }
+
+func (t *WriteTool) Reversible() bool { return false }
+
+func (t *WriteTool) Scope(params json.RawMessage) ToolScope {
+	var p writeParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return ConservativeScope()
+	}
+	return resolvedWriteScope(t.guard, p.FilePath)
+}
+
 type writeParams struct {
 	FilePath string `json:"file_path"`
 	Content  string `json:"content"`
@@ -120,11 +144,11 @@ func (t *WriteTool) Execute(_ context.Context, params json.RawMessage) (*Result,
 	if err := json.Unmarshal(params, &p); err != nil {
 		return ErrorResult(fmt.Sprintf("invalid params: %v", err)), nil
 	}
-	abs, err := t.guard.Resolve(p.FilePath)
-	if err != nil {
+	if err := t.guard.CheckScope(t.Scope(params)); err != nil {
 		return ErrorResult(err.Error()), nil
 	}
-	if err := t.guard.CheckWrite(abs); err != nil {
+	abs, err := t.guard.Resolve(p.FilePath)
+	if err != nil {
 		return ErrorResult(err.Error()), nil
 	}
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
@@ -178,6 +202,18 @@ func (t *EditTool) Schema() json.RawMessage {
 	}, []string{"file_path", "old_string", "new_string"})
 }
 
+func (t *EditTool) IsConcurrencySafe(json.RawMessage) bool { return false }
+
+func (t *EditTool) Reversible() bool { return false }
+
+func (t *EditTool) Scope(params json.RawMessage) ToolScope {
+	var p editParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return ConservativeScope()
+	}
+	return resolvedWriteScope(t.guard, p.FilePath)
+}
+
 type editParams struct {
 	FilePath   string `json:"file_path"`
 	OldString  string `json:"old_string"`
@@ -190,11 +226,11 @@ func (t *EditTool) Execute(_ context.Context, params json.RawMessage) (*Result, 
 	if err := json.Unmarshal(params, &p); err != nil {
 		return ErrorResult(fmt.Sprintf("invalid params: %v", err)), nil
 	}
-	abs, err := t.guard.Resolve(p.FilePath)
-	if err != nil {
+	if err := t.guard.CheckScope(t.Scope(params)); err != nil {
 		return ErrorResult(err.Error()), nil
 	}
-	if err := t.guard.CheckWrite(abs); err != nil {
+	abs, err := t.guard.Resolve(p.FilePath)
+	if err != nil {
 		return ErrorResult(err.Error()), nil
 	}
 	data, err := os.ReadFile(abs)
@@ -243,6 +279,18 @@ func (t *GlobTool) Schema() json.RawMessage {
 		"pattern": String("Glob pattern (supports ** for recursive matching)."),
 		"path":    String("Base path to search (default: working directory)."),
 	}, []string{"pattern"})
+}
+
+func (t *GlobTool) IsConcurrencySafe(json.RawMessage) bool { return true }
+
+func (t *GlobTool) Reversible() bool { return true }
+
+func (t *GlobTool) Scope(params json.RawMessage) ToolScope {
+	var p globParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return ConservativeScope()
+	}
+	return resolvedBaseReadScope(t.guard, p.Path)
 }
 
 type globParams struct {
@@ -359,10 +407,45 @@ func (t *GrepTool) Schema() json.RawMessage {
 	}, []string{"pattern"})
 }
 
+func (t *GrepTool) IsConcurrencySafe(json.RawMessage) bool { return true }
+
+func (t *GrepTool) Reversible() bool { return true }
+
+func (t *GrepTool) Scope(params json.RawMessage) ToolScope {
+	var p grepParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return ConservativeScope()
+	}
+	return resolvedBaseReadScope(t.guard, p.Path)
+}
+
 type grepParams struct {
 	Pattern string `json:"pattern"`
 	Path    string `json:"path"`
 	Include string `json:"include"`
+}
+
+func resolvedReadScope(guard *PathGuard, rawPath string) ToolScope {
+	abs, err := guard.Resolve(rawPath)
+	if err != nil {
+		return ConservativeScope()
+	}
+	return ToolScope{ReadPaths: []string{abs}}
+}
+
+func resolvedWriteScope(guard *PathGuard, rawPath string) ToolScope {
+	abs, err := guard.Resolve(rawPath)
+	if err != nil {
+		return ConservativeScope()
+	}
+	return ToolScope{WritePaths: []string{abs}, Persistent: true}
+}
+
+func resolvedBaseReadScope(guard *PathGuard, rawPath string) ToolScope {
+	if rawPath == "" {
+		return ToolScope{ReadPaths: []string{guard.WorkDir()}}
+	}
+	return resolvedReadScope(guard, rawPath)
 }
 
 func (t *GrepTool) Execute(_ context.Context, params json.RawMessage) (*Result, error) {

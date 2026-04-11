@@ -13,9 +13,12 @@ type mockTool struct {
 	result *Result
 }
 
-func (m *mockTool) Name() string             { return m.name }
-func (m *mockTool) Description() string      { return "mock tool: " + m.name }
-func (m *mockTool) Schema() json.RawMessage  { return json.RawMessage(`{"type":"object"}`) }
+func (m *mockTool) Name() string                           { return m.name }
+func (m *mockTool) Description() string                    { return "mock tool: " + m.name }
+func (m *mockTool) Schema() json.RawMessage                { return json.RawMessage(`{"type":"object"}`) }
+func (m *mockTool) IsConcurrencySafe(json.RawMessage) bool { return false }
+func (m *mockTool) Reversible() bool                       { return false }
+func (m *mockTool) Scope(json.RawMessage) ToolScope        { return ConservativeScope() }
 func (m *mockTool) Execute(_ context.Context, _ json.RawMessage) (*Result, error) {
 	return m.result, nil
 }
@@ -83,9 +86,15 @@ func TestToolDefs(t *testing.T) {
 	}
 
 	// Build a name→def map for order-independent assertion.
-	byName := make(map[string]struct{ desc string; schema string })
+	byName := make(map[string]struct {
+		desc   string
+		schema string
+	})
 	for _, d := range defs {
-		byName[d.Name] = struct{ desc string; schema string }{d.Description, string(d.InputSchema)}
+		byName[d.Name] = struct {
+			desc   string
+			schema string
+		}{d.Description, string(d.InputSchema)}
 	}
 
 	for _, name := range []string{"alpha", "beta"} {

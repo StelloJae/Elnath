@@ -33,7 +33,7 @@ func (m *mockProvider) Stream(ctx context.Context, req llm.ChatRequest, cb func(
 	return nil
 }
 
-func (m *mockProvider) Name() string      { return "mock" }
+func (m *mockProvider) Name() string            { return "mock" }
 func (m *mockProvider) Models() []llm.ModelInfo { return nil }
 
 // mockTool implements tools.Tool for testing.
@@ -44,9 +44,12 @@ type mockTool struct {
 	executeFn   func(ctx context.Context, params json.RawMessage) (*tools.Result, error)
 }
 
-func (t *mockTool) Name() string                   { return t.name }
-func (t *mockTool) Description() string            { return t.description }
-func (t *mockTool) Schema() json.RawMessage        { return t.schema }
+func (t *mockTool) Name() string                           { return t.name }
+func (t *mockTool) Description() string                    { return t.description }
+func (t *mockTool) Schema() json.RawMessage                { return t.schema }
+func (t *mockTool) IsConcurrencySafe(json.RawMessage) bool { return false }
+func (t *mockTool) Reversible() bool                       { return false }
+func (t *mockTool) Scope(json.RawMessage) tools.ToolScope  { return tools.ConservativeScope() }
 func (t *mockTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
 	if t.executeFn != nil {
 		return t.executeFn(ctx, params)

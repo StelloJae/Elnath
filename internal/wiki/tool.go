@@ -53,6 +53,23 @@ func (t *WikiSearchTool) Schema() json.RawMessage {
 }`)
 }
 
+func (t *WikiSearchTool) IsConcurrencySafe(json.RawMessage) bool { return true }
+
+func (t *WikiSearchTool) Reversible() bool { return true }
+
+func (t *WikiSearchTool) Scope(params json.RawMessage) tools.ToolScope {
+	var input struct {
+		Query string   `json:"query"`
+		Tags  []string `json:"tags"`
+		Type  PageType `json:"type"`
+		Limit int      `json:"limit"`
+	}
+	if err := json.Unmarshal(params, &input); err != nil {
+		return tools.ConservativeScope()
+	}
+	return tools.ToolScope{}
+}
+
 func (t *WikiSearchTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
 	var input struct {
 		Query string   `json:"query"`
@@ -120,6 +137,20 @@ func (t *WikiReadTool) Schema() json.RawMessage {
   },
   "required": ["path"]
 }`)
+}
+
+func (t *WikiReadTool) IsConcurrencySafe(json.RawMessage) bool { return true }
+
+func (t *WikiReadTool) Reversible() bool { return true }
+
+func (t *WikiReadTool) Scope(params json.RawMessage) tools.ToolScope {
+	var input struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(params, &input); err != nil {
+		return tools.ConservativeScope()
+	}
+	return tools.ToolScope{}
 }
 
 func (t *WikiReadTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
@@ -203,6 +234,26 @@ func (t *WikiWriteTool) Schema() json.RawMessage {
   },
   "required": ["path", "title", "content"]
 }`)
+}
+
+func (t *WikiWriteTool) IsConcurrencySafe(json.RawMessage) bool { return false }
+
+func (t *WikiWriteTool) Reversible() bool { return false }
+
+func (t *WikiWriteTool) Scope(params json.RawMessage) tools.ToolScope {
+	var input struct {
+		Path       string   `json:"path"`
+		Title      string   `json:"title"`
+		Type       PageType `json:"type"`
+		Content    string   `json:"content"`
+		Tags       []string `json:"tags"`
+		Confidence string   `json:"confidence"`
+		TTL        string   `json:"ttl"`
+	}
+	if err := json.Unmarshal(params, &input); err != nil {
+		return tools.ConservativeScope()
+	}
+	return tools.ToolScope{Persistent: true}
 }
 
 func (t *WikiWriteTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {

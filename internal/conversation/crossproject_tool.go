@@ -35,6 +35,21 @@ func (t *CrossProjectConversationSearchTool) Schema() json.RawMessage {
 	}, []string{"query"})
 }
 
+func (t *CrossProjectConversationSearchTool) IsConcurrencySafe(json.RawMessage) bool { return true }
+
+func (t *CrossProjectConversationSearchTool) Reversible() bool { return true }
+
+func (t *CrossProjectConversationSearchTool) Scope(params json.RawMessage) tools.ToolScope {
+	var input struct {
+		Query string `json:"query"`
+		Limit int    `json:"limit"`
+	}
+	if err := json.Unmarshal(params, &input); err != nil {
+		return tools.ConservativeScope()
+	}
+	return tools.ToolScope{}
+}
+
 func (t *CrossProjectConversationSearchTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
 	var input struct {
 		Query string `json:"query"`

@@ -67,6 +67,17 @@ func (g *PathGuard) CheckWrite(absPath string) error {
 	return nil
 }
 
+// CheckScope validates that every write path in scope is allowed under the
+// guard's protected-path rules. Read paths are not checked.
+func (g *PathGuard) CheckScope(scope ToolScope) error {
+	for _, p := range scope.WritePaths {
+		if err := g.CheckWrite(p); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func expandHome(home, p string) string {
 	if p == "~" {
 		return home

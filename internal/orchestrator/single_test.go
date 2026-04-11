@@ -44,7 +44,7 @@ func (p *toolCallProvider) Chat(_ context.Context, _ llm.ChatRequest) (*llm.Chat
 	return &llm.ChatResponse{}, nil
 }
 
-func (p *toolCallProvider) Name() string           { return "test" }
+func (p *toolCallProvider) Name() string            { return "test" }
 func (p *toolCallProvider) Models() []llm.ModelInfo { return nil }
 
 func TestSingleWorkflow_PermissionPropagated(t *testing.T) {
@@ -115,9 +115,12 @@ type testTool struct {
 	executeFn func(context.Context, json.RawMessage) (*tools.Result, error)
 }
 
-func (t *testTool) Name() string            { return t.name }
-func (t *testTool) Description() string     { return "test tool" }
-func (t *testTool) Schema() json.RawMessage { return json.RawMessage(`{"type":"object"}`) }
+func (t *testTool) Name() string                           { return t.name }
+func (t *testTool) Description() string                    { return "test tool" }
+func (t *testTool) Schema() json.RawMessage                { return json.RawMessage(`{"type":"object"}`) }
+func (t *testTool) IsConcurrencySafe(json.RawMessage) bool { return false }
+func (t *testTool) Reversible() bool                       { return false }
+func (t *testTool) Scope(json.RawMessage) tools.ToolScope  { return tools.ConservativeScope() }
 func (t *testTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
 	if t.executeFn != nil {
 		return t.executeFn(ctx, params)
