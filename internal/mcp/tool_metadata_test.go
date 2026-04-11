@@ -32,6 +32,13 @@ func TestMCPToolMetadata(t *testing.T) {
 			wantReverse: false,
 			wantScope:   toolspkg.ConservativeScope(),
 		},
+		{
+			name:        "malformed json stays conservative",
+			params:      json.RawMessage("{not valid"),
+			wantSafe:    false,
+			wantReverse: false,
+			wantScope:   toolspkg.ConservativeScope(),
+		},
 	}
 
 	for _, tc := range cases {
