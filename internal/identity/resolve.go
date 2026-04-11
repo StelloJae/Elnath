@@ -34,8 +34,7 @@ func ResolveCLIPrincipal(cfg *config.Config, flagValue, cwd string) Principal {
 	})
 }
 
-func ResolveTelegramPrincipal(fromID int64, chatID, cwd string) Principal {
-	_ = chatID
+func ResolveTelegramPrincipal(fromID int64, cwd string) Principal {
 	userID := fromTelegram(fromID)
 	if userID == "" {
 		userID = LegacyPrincipal().UserID

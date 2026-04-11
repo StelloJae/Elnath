@@ -118,6 +118,8 @@ func NewShell(queue *daemon.Queue, approvals *daemon.ApprovalStore, bot BotClien
 	}
 	if cwd, err := os.Getwd(); err == nil {
 		s.workDir = cwd
+	} else {
+		s.logger.Debug("telegram shell: os.Getwd failed, workDir empty until WithWorkDir override", "error", err)
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -437,7 +439,7 @@ func (s *Shell) enqueueFollowUp(ctx context.Context, raw string, principal ident
 
 func (s *Shell) principalForMessage(message Message) identity.Principal {
 	fromID, _ := strconv.ParseInt(strings.TrimSpace(message.UserID), 10, 64)
-	return identity.ResolveTelegramPrincipal(fromID, message.ChatID, s.workDir)
+	return identity.ResolveTelegramPrincipal(fromID, s.workDir)
 }
 
 func (s *Shell) loadState() (*shellState, error) {

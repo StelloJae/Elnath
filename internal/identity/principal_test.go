@@ -83,7 +83,7 @@ func TestResolveProjectIDUsesGitRemoteHash(t *testing.T) {
 
 func TestResolveTelegramPrincipalUsesTelegramUserID(t *testing.T) {
 	dir := t.TempDir()
-	got := ResolveTelegramPrincipal(42, "chat-99", dir)
+	got := ResolveTelegramPrincipal(42, dir)
 
 	if got.UserID != "42" {
 		t.Fatalf("UserID = %q, want 42", got.UserID)
