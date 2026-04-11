@@ -41,6 +41,8 @@ func (t *ReadTool) IsConcurrencySafe(json.RawMessage) bool { return true }
 
 func (t *ReadTool) Reversible() bool { return true }
 
+func (t *ReadTool) ShouldCancelSiblingsOnError() bool { return false }
+
 func (t *ReadTool) Scope(params json.RawMessage) ToolScope {
 	var p readParams
 	if err := json.Unmarshal(params, &p); err != nil {
@@ -126,6 +128,8 @@ func (t *WriteTool) IsConcurrencySafe(json.RawMessage) bool { return false }
 
 func (t *WriteTool) Reversible() bool { return false }
 
+func (t *WriteTool) ShouldCancelSiblingsOnError() bool { return false }
+
 func (t *WriteTool) Scope(params json.RawMessage) ToolScope {
 	var p writeParams
 	if err := json.Unmarshal(params, &p); err != nil {
@@ -206,6 +210,8 @@ func (t *EditTool) IsConcurrencySafe(json.RawMessage) bool { return false }
 
 func (t *EditTool) Reversible() bool { return false }
 
+func (t *EditTool) ShouldCancelSiblingsOnError() bool { return false }
+
 func (t *EditTool) Scope(params json.RawMessage) ToolScope {
 	var p editParams
 	if err := json.Unmarshal(params, &p); err != nil {
@@ -284,6 +290,8 @@ func (t *GlobTool) Schema() json.RawMessage {
 func (t *GlobTool) IsConcurrencySafe(json.RawMessage) bool { return true }
 
 func (t *GlobTool) Reversible() bool { return true }
+
+func (t *GlobTool) ShouldCancelSiblingsOnError() bool { return false }
 
 func (t *GlobTool) Scope(params json.RawMessage) ToolScope {
 	var p globParams
@@ -410,6 +418,8 @@ func (t *GrepTool) Schema() json.RawMessage {
 func (t *GrepTool) IsConcurrencySafe(json.RawMessage) bool { return true }
 
 func (t *GrepTool) Reversible() bool { return true }
+
+func (t *GrepTool) ShouldCancelSiblingsOnError() bool { return false }
 
 func (t *GrepTool) Scope(params json.RawMessage) ToolScope {
 	var p grepParams

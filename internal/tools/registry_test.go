@@ -19,6 +19,7 @@ func (m *mockTool) Schema() json.RawMessage                { return json.RawMess
 func (m *mockTool) IsConcurrencySafe(json.RawMessage) bool { return false }
 func (m *mockTool) Reversible() bool                       { return false }
 func (m *mockTool) Scope(json.RawMessage) ToolScope        { return ConservativeScope() }
+func (m *mockTool) ShouldCancelSiblingsOnError() bool      { return false }
 func (m *mockTool) Execute(_ context.Context, _ json.RawMessage) (*Result, error) {
 	return m.result, nil
 }

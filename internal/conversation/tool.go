@@ -36,6 +36,8 @@ func (t *ConversationSearchTool) IsConcurrencySafe(json.RawMessage) bool { retur
 
 func (t *ConversationSearchTool) Reversible() bool { return true }
 
+func (t *ConversationSearchTool) ShouldCancelSiblingsOnError() bool { return false }
+
 func (t *ConversationSearchTool) Scope(params json.RawMessage) tools.ToolScope {
 	var input struct {
 		Query string `json:"query"`

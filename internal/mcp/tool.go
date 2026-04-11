@@ -35,6 +35,8 @@ func (t *mcpTool) IsConcurrencySafe(json.RawMessage) bool { return false }
 
 func (t *mcpTool) Reversible() bool { return false }
 
+func (t *mcpTool) ShouldCancelSiblingsOnError() bool { return false }
+
 func (t *mcpTool) Scope(json.RawMessage) tools.ToolScope {
 	return tools.ConservativeScope()
 }

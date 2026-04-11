@@ -45,6 +45,8 @@ func (t *BashTool) IsConcurrencySafe(json.RawMessage) bool { return false }
 
 func (t *BashTool) Reversible() bool { return false }
 
+func (t *BashTool) ShouldCancelSiblingsOnError() bool { return true }
+
 func (t *BashTool) Scope(params json.RawMessage) ToolScope {
 	var p bashParams
 	if err := json.Unmarshal(params, &p); err != nil {

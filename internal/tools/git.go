@@ -38,6 +38,8 @@ func (t *GitTool) IsConcurrencySafe(params json.RawMessage) bool {
 
 func (t *GitTool) Reversible() bool { return false }
 
+func (t *GitTool) ShouldCancelSiblingsOnError() bool { return false }
+
 func (t *GitTool) Scope(params json.RawMessage) ToolScope {
 	var p gitParams
 	if err := json.Unmarshal(params, &p); err != nil {

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/stello/elnath/internal/core"
@@ -177,24 +176,24 @@ func (a *Agent) streamWithRetry(ctx context.Context, req llm.Request, onText fun
 			delay *= 2
 		}
 
-			msg, usage, err := a.stream(ctx, reqForAttempt, onText)
-			if err == nil {
-				if isEmptyAssistantMessage(msg) {
-					fallbackMsg, fallbackUsage, fbErr := a.chatFallback(ctx, reqForAttempt, onText)
-					if fbErr == nil && !isEmptyAssistantMessage(fallbackMsg) {
-						return fallbackMsg, fallbackUsage, nil
-					}
-					if fbErr == nil {
-						fbErr = fmt.Errorf("empty assistant response")
-					}
-					currentReq.Messages = append(reqForAttempt.Messages, llm.NewUserMessage(
-						"The previous attempt returned an empty response. You must either provide a concrete answer or call tools. Do not return empty content.",
-					))
-					lastErr = fbErr
-					continue
+		msg, usage, err := a.stream(ctx, reqForAttempt, onText)
+		if err == nil {
+			if isEmptyAssistantMessage(msg) {
+				fallbackMsg, fallbackUsage, fbErr := a.chatFallback(ctx, reqForAttempt, onText)
+				if fbErr == nil && !isEmptyAssistantMessage(fallbackMsg) {
+					return fallbackMsg, fallbackUsage, nil
 				}
-				return msg, usage, nil
+				if fbErr == nil {
+					fbErr = fmt.Errorf("empty assistant response")
+				}
+				currentReq.Messages = append(reqForAttempt.Messages, llm.NewUserMessage(
+					"The previous attempt returned an empty response. You must either provide a concrete answer or call tools. Do not return empty content.",
+				))
+				lastErr = fbErr
+				continue
 			}
+			return msg, usage, nil
+		}
 
 		if isRetryable(err) {
 			lastErr = err
@@ -310,22 +309,23 @@ type toolExecResult struct {
 	isError bool
 }
 
-// executeTools runs tool calls with a 2-phase pattern:
-// Phase 1: sequential permission check + pre-hooks (safe for interactive prompts)
-// Phase 2: parallel execution of approved tools via goroutines
-// Results are collected in order and appended to messages.
 func (a *Agent) executeTools(ctx context.Context, messages []llm.Message, calls []llm.ToolUseBlock, onText func(string)) ([]llm.Message, error) {
-	// Phase 1: sequential permission + pre-hook check.
-	type approved struct {
-		call  llm.ToolUseBlock
-		index int
+	results, approved, err := a.collectApprovedToolCalls(ctx, calls, onText)
+	if err != nil {
+		return nil, err
 	}
+	if err := a.executeApprovedToolCalls(ctx, approved, results); err != nil {
+		return nil, err
+	}
+	return a.appendToolResults(messages, results), nil
+}
+
+func (a *Agent) collectApprovedToolCalls(ctx context.Context, calls []llm.ToolUseBlock, onText func(string)) ([]toolExecResult, []approvedToolCall, error) {
 	results := make([]toolExecResult, len(calls))
-	var toExecute []approved
+	approved := make([]approvedToolCall, 0, len(calls))
 
 	for i, call := range calls {
 		a.logger.Debug("checking tool", "name", call.Name, "id", call.ID)
-
 		if onText != nil {
 			preview := extractToolPreview(call.Name, string(call.Input))
 			ev := daemon.ToolProgressEvent(call.Name, preview)
@@ -334,7 +334,7 @@ func (a *Agent) executeTools(ctx context.Context, messages []llm.Message, calls 
 
 		allowed, err := a.permission.Check(ctx, call.Name, call.Input)
 		if err != nil {
-			return nil, fmt.Errorf("permission check: %w", err)
+			return nil, nil, fmt.Errorf("permission check: %w", err)
 		}
 		if !allowed {
 			results[i] = toolExecResult{id: call.ID, output: fmt.Sprintf("permission denied for tool %q", call.Name), isError: true}
@@ -344,7 +344,7 @@ func (a *Agent) executeTools(ctx context.Context, messages []llm.Message, calls 
 		if a.hooks != nil {
 			hookResult, hookErr := a.hooks.RunPreToolUse(ctx, call.Name, call.Input)
 			if hookErr != nil {
-				return nil, fmt.Errorf("pre-tool hook: %w", hookErr)
+				return nil, nil, fmt.Errorf("pre-tool hook: %w", hookErr)
 			}
 			if hookResult.Action == HookDeny {
 				results[i] = toolExecResult{id: call.ID, output: fmt.Sprintf("hook denied tool %q: %s", call.Name, hookResult.Message), isError: true}
@@ -352,65 +352,21 @@ func (a *Agent) executeTools(ctx context.Context, messages []llm.Message, calls 
 			}
 		}
 
-		toExecute = append(toExecute, approved{call: call, index: i})
+		approved = append(approved, approvedToolCall{call: call, index: i})
 	}
 
-	// Phase 2: parallel execution of approved tools.
-	if len(toExecute) > 1 {
-		var wg sync.WaitGroup
-		errs := make([]error, len(toExecute))
+	return results, approved, nil
+}
 
-		for j, ap := range toExecute {
-			wg.Add(1)
-			go func(j int, ap approved) {
-				defer wg.Done()
-				result, err := a.tools.Execute(ctx, ap.call.Name, ap.call.Input)
-				if err != nil {
-					errs[j] = fmt.Errorf("%w: %s: %w", core.ErrToolExecution, ap.call.Name, err)
-					return
-				}
-				results[ap.index] = toolExecResult{id: ap.call.ID, output: result.Output, isError: result.IsError}
-
-				// Post-tool-use hooks (sequential per tool, safe in goroutine).
-				if a.hooks != nil {
-					if hookErr := a.hooks.RunPostToolUse(ctx, ap.call.Name, ap.call.Input, result); hookErr != nil {
-						a.logger.Warn("post-tool hook error", "tool", ap.call.Name, "error", hookErr)
-					}
-				}
-			}(j, ap)
-		}
-		wg.Wait()
-
-		// Check for fatal errors.
-		for _, err := range errs {
-			if err != nil {
-				return nil, err
-			}
-		}
-	} else if len(toExecute) == 1 {
-		// Single tool: execute directly without goroutine overhead.
-		ap := toExecute[0]
-		result, err := a.tools.Execute(ctx, ap.call.Name, ap.call.Input)
-		if err != nil {
-			return nil, fmt.Errorf("%w: %s: %w", core.ErrToolExecution, ap.call.Name, err)
-		}
-		results[ap.index] = toolExecResult{id: ap.call.ID, output: result.Output, isError: result.IsError}
-
-		if a.hooks != nil {
-			if hookErr := a.hooks.RunPostToolUse(ctx, ap.call.Name, ap.call.Input, result); hookErr != nil {
-				a.logger.Warn("post-tool hook error", "tool", ap.call.Name, "error", hookErr)
-			}
-		}
-	}
-
-	// Append results in original order.
+func (a *Agent) appendToolResults(messages []llm.Message, results []toolExecResult) []llm.Message {
 	for _, r := range results {
-		if r.id != "" {
-			a.logger.Debug("tool result", "id", r.id, "is_error", r.isError)
-			messages = llm.AppendToolResult(messages, r.id, r.output, r.isError)
+		if r.id == "" {
+			continue
 		}
+		a.logger.Debug("tool result", "id", r.id, "is_error", r.isError)
+		messages = llm.AppendToolResult(messages, r.id, r.output, r.isError)
 	}
-	return messages, nil
+	return messages
 }
 
 // buildToolDefs converts the tools.Registry into []llm.ToolDef.

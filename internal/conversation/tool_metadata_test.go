@@ -14,6 +14,7 @@ func TestConversationToolMetadata(t *testing.T) {
 		tool        tools.Tool
 		params      json.RawMessage
 		wantSafe    bool
+		wantCancel  bool
 		wantReverse bool
 		wantScope   tools.ToolScope
 	}{
@@ -22,6 +23,7 @@ func TestConversationToolMetadata(t *testing.T) {
 			tool:        NewConversationSearchTool(nil),
 			params:      rawJSON(`{"query":"elnath"}`),
 			wantSafe:    true,
+			wantCancel:  false,
 			wantReverse: true,
 			wantScope:   tools.ToolScope{},
 		},
@@ -30,6 +32,7 @@ func TestConversationToolMetadata(t *testing.T) {
 			tool:        NewConversationSearchTool(nil),
 			params:      nil,
 			wantSafe:    true,
+			wantCancel:  false,
 			wantReverse: true,
 			wantScope:   tools.ConservativeScope(),
 		},
@@ -38,6 +41,7 @@ func TestConversationToolMetadata(t *testing.T) {
 			tool:        NewConversationSearchTool(nil),
 			params:      json.RawMessage("{not valid"),
 			wantSafe:    true,
+			wantCancel:  false,
 			wantReverse: true,
 			wantScope:   tools.ConservativeScope(),
 		},
@@ -46,6 +50,7 @@ func TestConversationToolMetadata(t *testing.T) {
 			tool:        NewCrossProjectConversationSearchTool(nil),
 			params:      rawJSON(`{"query":"elnath"}`),
 			wantSafe:    true,
+			wantCancel:  false,
 			wantReverse: true,
 			wantScope:   tools.ToolScope{},
 		},
@@ -54,6 +59,7 @@ func TestConversationToolMetadata(t *testing.T) {
 			tool:        NewCrossProjectConversationSearchTool(nil),
 			params:      nil,
 			wantSafe:    true,
+			wantCancel:  false,
 			wantReverse: true,
 			wantScope:   tools.ConservativeScope(),
 		},
@@ -62,6 +68,7 @@ func TestConversationToolMetadata(t *testing.T) {
 			tool:        NewCrossProjectConversationSearchTool(nil),
 			params:      json.RawMessage("{not valid"),
 			wantSafe:    true,
+			wantCancel:  false,
 			wantReverse: true,
 			wantScope:   tools.ConservativeScope(),
 		},
@@ -71,6 +78,9 @@ func TestConversationToolMetadata(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := tc.tool.IsConcurrencySafe(tc.params); got != tc.wantSafe {
 				t.Errorf("IsConcurrencySafe() = %v, want %v", got, tc.wantSafe)
+			}
+			if got := tc.tool.ShouldCancelSiblingsOnError(); got != tc.wantCancel {
+				t.Errorf("ShouldCancelSiblingsOnError() = %v, want %v", got, tc.wantCancel)
 			}
 			if got := tc.tool.Reversible(); got != tc.wantReverse {
 				t.Errorf("Reversible() = %v, want %v", got, tc.wantReverse)

@@ -121,6 +121,7 @@ func (t *testTool) Schema() json.RawMessage                { return json.RawMess
 func (t *testTool) IsConcurrencySafe(json.RawMessage) bool { return false }
 func (t *testTool) Reversible() bool                       { return false }
 func (t *testTool) Scope(json.RawMessage) tools.ToolScope  { return tools.ConservativeScope() }
+func (t *testTool) ShouldCancelSiblingsOnError() bool      { return false }
 func (t *testTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
 	if t.executeFn != nil {
 		return t.executeFn(ctx, params)

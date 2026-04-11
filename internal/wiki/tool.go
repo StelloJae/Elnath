@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -56,6 +57,8 @@ func (t *WikiSearchTool) Schema() json.RawMessage {
 func (t *WikiSearchTool) IsConcurrencySafe(json.RawMessage) bool { return true }
 
 func (t *WikiSearchTool) Reversible() bool { return true }
+
+func (t *WikiSearchTool) ShouldCancelSiblingsOnError() bool { return false }
 
 func (t *WikiSearchTool) Scope(params json.RawMessage) tools.ToolScope {
 	var input struct {
@@ -143,6 +146,8 @@ func (t *WikiReadTool) IsConcurrencySafe(json.RawMessage) bool { return true }
 
 func (t *WikiReadTool) Reversible() bool { return true }
 
+func (t *WikiReadTool) ShouldCancelSiblingsOnError() bool { return false }
+
 func (t *WikiReadTool) Scope(params json.RawMessage) tools.ToolScope {
 	var input struct {
 		Path string `json:"path"`
@@ -150,7 +155,14 @@ func (t *WikiReadTool) Scope(params json.RawMessage) tools.ToolScope {
 	if err := json.Unmarshal(params, &input); err != nil {
 		return tools.ConservativeScope()
 	}
-	return tools.ToolScope{}
+	if t.store == nil || input.Path == "" {
+		return tools.ConservativeScope()
+	}
+	absPath, err := t.store.absPath(input.Path)
+	if err != nil || absPath == "" {
+		return tools.ConservativeScope()
+	}
+	return tools.ToolScope{ReadPaths: []string{filepath.Clean(absPath)}}
 }
 
 func (t *WikiReadTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
@@ -240,6 +252,8 @@ func (t *WikiWriteTool) IsConcurrencySafe(json.RawMessage) bool { return false }
 
 func (t *WikiWriteTool) Reversible() bool { return false }
 
+func (t *WikiWriteTool) ShouldCancelSiblingsOnError() bool { return false }
+
 func (t *WikiWriteTool) Scope(params json.RawMessage) tools.ToolScope {
 	var input struct {
 		Path       string   `json:"path"`
@@ -253,7 +267,14 @@ func (t *WikiWriteTool) Scope(params json.RawMessage) tools.ToolScope {
 	if err := json.Unmarshal(params, &input); err != nil {
 		return tools.ConservativeScope()
 	}
-	return tools.ToolScope{Persistent: true}
+	if t.store == nil || input.Path == "" {
+		return tools.ConservativeScope()
+	}
+	absPath, err := t.store.absPath(input.Path)
+	if err != nil || absPath == "" {
+		return tools.ConservativeScope()
+	}
+	return tools.ToolScope{WritePaths: []string{filepath.Clean(absPath)}, Persistent: true}
 }
 
 func (t *WikiWriteTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {

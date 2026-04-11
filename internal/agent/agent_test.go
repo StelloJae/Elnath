@@ -50,6 +50,7 @@ func (t *mockTool) Schema() json.RawMessage                { return t.schema }
 func (t *mockTool) IsConcurrencySafe(json.RawMessage) bool { return false }
 func (t *mockTool) Reversible() bool                       { return false }
 func (t *mockTool) Scope(json.RawMessage) tools.ToolScope  { return tools.ConservativeScope() }
+func (t *mockTool) ShouldCancelSiblingsOnError() bool      { return false }
 func (t *mockTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
 	if t.executeFn != nil {
 		return t.executeFn(ctx, params)

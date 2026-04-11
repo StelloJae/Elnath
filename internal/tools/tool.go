@@ -34,6 +34,10 @@ type Tool interface {
 	// Params may be nil or malformed; implementations MUST return
 	// ConservativeScope() in that case so callers fail closed.
 	Scope(params json.RawMessage) ToolScope
+
+	// ShouldCancelSiblingsOnError reports whether an execution error from this
+	// tool should cancel other goroutines sharing the same batch.
+	ShouldCancelSiblingsOnError() bool
 }
 
 // Result holds the output of a tool execution.

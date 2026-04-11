@@ -38,6 +38,8 @@ func (t *WebFetchTool) IsConcurrencySafe(json.RawMessage) bool { return true }
 
 func (t *WebFetchTool) Reversible() bool { return true }
 
+func (t *WebFetchTool) ShouldCancelSiblingsOnError() bool { return false }
+
 func (t *WebFetchTool) Scope(params json.RawMessage) ToolScope {
 	var p webFetchParams
 	if err := json.Unmarshal(params, &p); err != nil {
@@ -106,6 +108,8 @@ func (t *WebSearchTool) Schema() json.RawMessage {
 func (t *WebSearchTool) IsConcurrencySafe(json.RawMessage) bool { return true }
 
 func (t *WebSearchTool) Reversible() bool { return true }
+
+func (t *WebSearchTool) ShouldCancelSiblingsOnError() bool { return false }
 
 func (t *WebSearchTool) Scope(params json.RawMessage) ToolScope {
 	var p webSearchParams

@@ -2,6 +2,7 @@ package wiki
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -9,11 +10,18 @@ import (
 )
 
 func TestWikiToolMetadata(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	pagePath := filepath.Join(store.WikiDir(), "concepts", "foo.md")
+
 	cases := []struct {
 		name        string
 		tool        tools.Tool
 		params      json.RawMessage
 		wantSafe    bool
+		wantCancel  bool
 		wantReverse bool
 		wantScope   tools.ToolScope
 	}{
@@ -22,6 +30,7 @@ func TestWikiToolMetadata(t *testing.T) {
 			tool:        NewWikiSearchTool(nil),
 			params:      rawJSON(`{"query":"elnath"}`),
 			wantSafe:    true,
+			wantCancel:  false,
 			wantReverse: true,
 			wantScope:   tools.ToolScope{},
 		},
@@ -30,6 +39,7 @@ func TestWikiToolMetadata(t *testing.T) {
 			tool:        NewWikiSearchTool(nil),
 			params:      nil,
 			wantSafe:    true,
+			wantCancel:  false,
 			wantReverse: true,
 			wantScope:   tools.ConservativeScope(),
 		},
@@ -38,22 +48,25 @@ func TestWikiToolMetadata(t *testing.T) {
 			tool:        NewWikiSearchTool(nil),
 			params:      json.RawMessage("{not valid"),
 			wantSafe:    true,
+			wantCancel:  false,
 			wantReverse: true,
 			wantScope:   tools.ConservativeScope(),
 		},
 		{
 			name:        "wiki_read happy",
-			tool:        NewWikiReadTool(nil),
+			tool:        NewWikiReadTool(store),
 			params:      rawJSON(`{"path":"concepts/foo.md"}`),
 			wantSafe:    true,
+			wantCancel:  false,
 			wantReverse: true,
-			wantScope:   tools.ToolScope{},
+			wantScope:   tools.ToolScope{ReadPaths: []string{pagePath}},
 		},
 		{
 			name:        "wiki_read nil params falls back",
 			tool:        NewWikiReadTool(nil),
 			params:      nil,
 			wantSafe:    true,
+			wantCancel:  false,
 			wantReverse: true,
 			wantScope:   tools.ConservativeScope(),
 		},
@@ -62,30 +75,34 @@ func TestWikiToolMetadata(t *testing.T) {
 			tool:        NewWikiReadTool(nil),
 			params:      json.RawMessage("{not valid"),
 			wantSafe:    true,
+			wantCancel:  false,
 			wantReverse: true,
 			wantScope:   tools.ConservativeScope(),
 		},
 		{
 			name:        "wiki_write happy",
-			tool:        NewWikiWriteTool(nil),
+			tool:        NewWikiWriteTool(store),
 			params:      rawJSON(`{"path":"concepts/foo.md","title":"Foo","content":"bar","type":"concept"}`),
 			wantSafe:    false,
+			wantCancel:  false,
 			wantReverse: false,
-			wantScope:   tools.ToolScope{Persistent: true},
+			wantScope:   tools.ToolScope{WritePaths: []string{pagePath}, Persistent: true},
 		},
 		{
 			name:        "wiki_write nil params falls back",
-			tool:        NewWikiWriteTool(nil),
+			tool:        NewWikiWriteTool(store),
 			params:      nil,
 			wantSafe:    false,
+			wantCancel:  false,
 			wantReverse: false,
 			wantScope:   tools.ConservativeScope(),
 		},
 		{
 			name:        "wiki_write malformed json falls back",
-			tool:        NewWikiWriteTool(nil),
+			tool:        NewWikiWriteTool(store),
 			params:      json.RawMessage("{not valid"),
 			wantSafe:    false,
+			wantCancel:  false,
 			wantReverse: false,
 			wantScope:   tools.ConservativeScope(),
 		},
@@ -94,6 +111,7 @@ func TestWikiToolMetadata(t *testing.T) {
 			tool:        NewCrossProjectSearchTool(nil),
 			params:      rawJSON(`{"query":"elnath"}`),
 			wantSafe:    true,
+			wantCancel:  false,
 			wantReverse: true,
 			wantScope:   tools.ToolScope{},
 		},
@@ -102,6 +120,7 @@ func TestWikiToolMetadata(t *testing.T) {
 			tool:        NewCrossProjectSearchTool(nil),
 			params:      nil,
 			wantSafe:    true,
+			wantCancel:  false,
 			wantReverse: true,
 			wantScope:   tools.ConservativeScope(),
 		},
@@ -110,6 +129,7 @@ func TestWikiToolMetadata(t *testing.T) {
 			tool:        NewCrossProjectSearchTool(nil),
 			params:      json.RawMessage("{not valid"),
 			wantSafe:    true,
+			wantCancel:  false,
 			wantReverse: true,
 			wantScope:   tools.ConservativeScope(),
 		},
@@ -119,6 +139,9 @@ func TestWikiToolMetadata(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := tc.tool.IsConcurrencySafe(tc.params); got != tc.wantSafe {
 				t.Errorf("IsConcurrencySafe() = %v, want %v", got, tc.wantSafe)
+			}
+			if got := tc.tool.ShouldCancelSiblingsOnError(); got != tc.wantCancel {
+				t.Errorf("ShouldCancelSiblingsOnError() = %v, want %v", got, tc.wantCancel)
 			}
 			if got := tc.tool.Reversible(); got != tc.wantReverse {
 				t.Errorf("Reversible() = %v, want %v", got, tc.wantReverse)
