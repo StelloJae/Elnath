@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/stello/elnath/internal/identity"
 	"github.com/stello/elnath/internal/llm"
 )
 
@@ -104,7 +105,7 @@ func (p *chatMockProvider) Chat(_ context.Context, _ llm.ChatRequest) (*llm.Chat
 	return &llm.ChatResponse{Content: p.response}, nil
 }
 
-func (p *chatMockProvider) Name() string        { return "mock" }
+func (p *chatMockProvider) Name() string            { return "mock" }
 func (p *chatMockProvider) Models() []llm.ModelInfo { return nil }
 
 func TestChatResponderStreamsResponse(t *testing.T) {
@@ -112,7 +113,7 @@ func TestChatResponderStreamsResponse(t *testing.T) {
 	provider := &chatMockProvider{response: "Hello!"}
 	cr := NewChatResponder(provider, bot, "chat-42", nil)
 
-	err := cr.Respond(context.Background(), "Hi there", 1)
+	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "Hi there", 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -134,7 +135,7 @@ func TestChatResponderHandlesStreamError(t *testing.T) {
 	provider := &chatMockProvider{streamErr: fmt.Errorf("provider unavailable")}
 	cr := NewChatResponder(provider, bot, "chat-42", nil)
 
-	err := cr.Respond(context.Background(), "Hi", 1)
+	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "Hi", 1)
 	if err == nil {
 		t.Fatal("expected error from Respond")
 	}
@@ -160,7 +161,7 @@ func TestChatResponderEmptyResponse(t *testing.T) {
 	provider := &chatMockProvider{response: ""}
 	cr := NewChatResponder(provider, bot, "chat-42", nil)
 
-	err := cr.Respond(context.Background(), "Hi", 1)
+	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "Hi", 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

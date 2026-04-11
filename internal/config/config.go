@@ -24,6 +24,7 @@ type Config struct {
 	CompressThreshold float64 `yaml:"compress_threshold"`
 
 	Permission PermissionConfig  `yaml:"permission"`
+	Principal  PrincipalConfig   `yaml:"principal"`
 	Daemon     DaemonConfig      `yaml:"daemon"`
 	Telegram   TelegramConfig    `yaml:"telegram"`
 	Research   ResearchConfig    `yaml:"research"`
@@ -66,6 +67,10 @@ type PermissionConfig struct {
 	Mode  string   `yaml:"mode"` // default, accept_edits, plan, bypass
 	Allow []string `yaml:"allow"`
 	Deny  []string `yaml:"deny"`
+}
+
+type PrincipalConfig struct {
+	UserID string `yaml:"user_id"`
 }
 
 type DaemonConfig struct {

@@ -16,6 +16,7 @@ import (
 	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/core"
 	"github.com/stello/elnath/internal/daemon"
+	"github.com/stello/elnath/internal/identity"
 	"github.com/stello/elnath/internal/self"
 	"github.com/stello/elnath/internal/telegram"
 )
@@ -105,6 +106,8 @@ func cmdDaemonStart(ctx context.Context) error {
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
 		return fmt.Errorf("create workspace dir: %w", err)
 	}
+	fallbackPrincipal := identity.ResolveCLIPrincipal(cfg, extractFlagValue(os.Args, "--principal"), workDir)
+	fallbackPrincipal.ProjectID = identity.ResolveProjectID(workDir, extractFlagValue(os.Args, "--project-id"))
 	app.Logger.Info("daemon workspace", "dir", workDir)
 
 	rt, err := buildExecutionRuntime(
@@ -118,6 +121,7 @@ func cmdDaemonStart(ctx context.Context) error {
 		perm,
 		workDir,
 		cfg.Daemon.ProtectedPaths,
+		fallbackPrincipal,
 	)
 	if err != nil {
 		return err
@@ -133,6 +137,7 @@ func cmdDaemonStart(ctx context.Context) error {
 
 	d := daemon.New(queue, cfg.Daemon.SocketPath, cfg.Daemon.MaxWorkers, rt.newDaemonTaskRunner(), app.Logger)
 	d.WithDeliveryRouter(router)
+	d.WithFallbackPrincipal(fallbackPrincipal)
 	d.WithTimeouts(
 		time.Duration(cfg.Daemon.InactivityTimeout)*time.Second,
 		time.Duration(cfg.Daemon.WallClockTimeout)*time.Second,
@@ -152,6 +157,7 @@ func cmdDaemonStart(ctx context.Context) error {
 			telegram.WithChatResponder(chatResponder),
 			telegram.WithClassifier(classifier, provider),
 			telegram.WithTaskTracker(tgSink),
+			telegram.WithWorkDir(workDir),
 		)
 		if shellErr != nil {
 			return fmt.Errorf("create telegram shell: %w", shellErr)
@@ -187,10 +193,18 @@ func cmdDaemonSubmit(ctx context.Context, args []string) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("get cwd: %w", err)
+	}
+	principal := identity.ResolveCLIPrincipal(cfg, extractFlagValue(os.Args, "--principal"), cwd)
+	principal.ProjectID = identity.ResolveProjectID(cwd, extractFlagValue(os.Args, "--project-id"))
 
 	payload := daemon.EncodeTaskPayload(daemon.TaskPayload{
 		Prompt:    prompt,
 		SessionID: sessionID,
+		Surface:   principal.Surface,
+		Principal: principal,
 	})
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
@@ -230,6 +244,12 @@ func parseDaemonSubmitArgs(args []string) (sessionID string, prompt string, err 
 			}
 			sessionID = args[i+1]
 			i++
+			continue
+		}
+		if args[i] == "--config" || args[i] == "--principal" || args[i] == "--project-id" {
+			if i+1 < len(args) {
+				i++
+			}
 			continue
 		}
 		parts = append(parts, args[i])

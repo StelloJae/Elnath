@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/stello/elnath/internal/identity"
 	"github.com/stello/elnath/internal/llm"
 )
 
@@ -27,6 +28,7 @@ type SessionPersister interface {
 type Session struct {
 	ID        string
 	path      string
+	Principal identity.Principal
 	Messages  []llm.Message
 	persister SessionPersister // optional secondary persistence
 	logger    func(msg string, args ...any)
@@ -43,9 +45,10 @@ func (s *Session) WithSessionLogger(fn func(msg string, args ...any)) {
 }
 
 type sessionHeader struct {
-	ID        string    `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	Version   int       `json:"version"`
+	ID        string              `json:"id"`
+	CreatedAt time.Time           `json:"created_at"`
+	Version   int                 `json:"version"`
+	Principal *identity.Principal `json:"principal,omitempty"`
 }
 
 // SessionFileInfo describes the file-backed metadata for a persisted session.
@@ -61,13 +64,17 @@ type SessionFileInfo struct {
 
 // NewSession creates a new session with a random ID.
 // The session is not persisted until Save or AppendMessage is called.
-func NewSession(dataDir string) (*Session, error) {
+func NewSession(dataDir string, principals ...identity.Principal) (*Session, error) {
 	id := uuid.New().String()
 	path := sessionPath(dataDir, id)
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return nil, fmt.Errorf("session: create dir: %w", err)
 	}
-	s := &Session{ID: id, path: path}
+	principal := identity.LegacyPrincipal()
+	if len(principals) > 0 && !principals[0].IsZero() {
+		principal = principals[0]
+	}
+	s := &Session{ID: id, path: path, Principal: principal}
 	if err := s.writeHeader(); err != nil {
 		return nil, err
 	}
@@ -95,6 +102,11 @@ func LoadSession(dataDir, id string) (*Session, error) {
 		return nil, fmt.Errorf("session: parse header: %w", err)
 	}
 	s.ID = hdr.ID
+	if hdr.Principal == nil || hdr.Principal.IsZero() {
+		s.Principal = identity.LegacyPrincipal()
+	} else {
+		s.Principal = *hdr.Principal
+	}
 
 	// Remaining lines: messages.
 	for scanner.Scan() {
@@ -162,7 +174,7 @@ func (s *Session) AppendMessages(msgs []llm.Message) error {
 // Fork creates a new session that starts with a copy of the current messages.
 // The forked session has its own ID and file; the original is unchanged.
 func (s *Session) Fork(dataDir string) (*Session, error) {
-	child, err := NewSession(dataDir)
+	child, err := NewSession(dataDir, s.Principal)
 	if err != nil {
 		return nil, fmt.Errorf("session: fork: %w", err)
 	}
@@ -174,10 +186,12 @@ func (s *Session) Fork(dataDir string) (*Session, error) {
 
 // writeHeader writes the JSONL header line to a new file.
 func (s *Session) writeHeader() error {
+	principal := s.Principal
 	hdr := sessionHeader{
 		ID:        s.ID,
 		CreatedAt: time.Now().UTC(),
 		Version:   1,
+		Principal: &principal,
 	}
 	data, err := json.Marshal(hdr)
 	if err != nil {

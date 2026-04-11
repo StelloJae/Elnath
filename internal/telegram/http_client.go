@@ -168,6 +168,9 @@ func (c *HTTPClient) GetUpdates(ctx context.Context, offset int64, timeoutSecond
 				Chat struct {
 					ID int64 `json:"id"`
 				} `json:"chat"`
+				From struct {
+					ID int64 `json:"id"`
+				} `json:"from"`
 				MessageID int64 `json:"message_id"`
 			} `json:"message"`
 		} `json:"result"`
@@ -181,6 +184,7 @@ func (c *HTTPClient) GetUpdates(ctx context.Context, offset int64, timeoutSecond
 			ID: item.UpdateID,
 			Message: Message{
 				ChatID:    strconv.FormatInt(item.Message.Chat.ID, 10),
+				UserID:    strconv.FormatInt(item.Message.From.ID, 10),
 				MessageID: item.Message.MessageID,
 				Text:      item.Message.Text,
 			},

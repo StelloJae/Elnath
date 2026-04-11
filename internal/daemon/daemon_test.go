@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stello/elnath/internal/identity"
 	_ "modernc.org/sqlite"
 )
 
@@ -27,6 +28,23 @@ func (r mockTaskRunner) run(_ context.Context, _ string, onText func(string)) (T
 		onText(r.text)
 	}
 	return TaskResult{Result: r.text, Summary: r.text, SessionID: "sess-test"}, nil
+}
+
+func TestResolveTaskLogPrincipalFallsBackToDaemonPrincipal(t *testing.T) {
+	fallback := identity.Principal{UserID: "stello", ProjectID: "elnath", Surface: "cli"}
+	got := resolveTaskLogPrincipal(TaskPayload{Prompt: "legacy plain text"}, fallback)
+	if got != fallback {
+		t.Fatalf("resolveTaskLogPrincipal = %+v, want %+v", got, fallback)
+	}
+}
+
+func TestResolveTaskLogPrincipalPrefersPayloadPrincipal(t *testing.T) {
+	payloadPrincipal := identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}
+	fallback := identity.Principal{UserID: "stello", ProjectID: "elnath", Surface: "cli"}
+	got := resolveTaskLogPrincipal(TaskPayload{Principal: payloadPrincipal}, fallback)
+	if got != payloadPrincipal {
+		t.Fatalf("resolveTaskLogPrincipal = %+v, want %+v", got, payloadPrincipal)
+	}
 }
 
 // sendIPC connects to the Unix socket, writes a JSON-line request, and reads

@@ -13,6 +13,7 @@ import (
 	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/core"
 	"github.com/stello/elnath/internal/daemon"
+	"github.com/stello/elnath/internal/identity"
 	"github.com/stello/elnath/internal/llm"
 )
 
@@ -84,6 +85,7 @@ func newTestExecutionRuntime(t *testing.T, provider llm.Provider) *executionRunt
 		perm,
 		"",
 		nil,
+		identity.LegacyPrincipal(),
 	)
 	if err != nil {
 		t.Fatalf("buildExecutionRuntime: %v", err)
@@ -301,6 +303,30 @@ func TestDaemonTaskRunnerReusesExistingSessionWhenPayloadRequestsFollowUp(t *tes
 	}
 	if got := history[len(history)-1].Text(); !strings.Contains(got, "follow-up answer") {
 		t.Fatalf("follow-up assistant message = %q", got)
+	}
+}
+
+func TestDaemonTaskRunnerCreatesSessionWithPayloadPrincipal(t *testing.T) {
+	provider := &countingProvider{streamText: "daemon answer"}
+	rt := newTestExecutionRuntime(t, provider)
+	principal := identity.Principal{UserID: "telegram-user", ProjectID: "elnath", Surface: "telegram"}
+
+	payload := daemon.EncodeTaskPayload(daemon.TaskPayload{
+		Prompt:    "tell me a joke",
+		Surface:   "telegram",
+		Principal: principal,
+	})
+	result, err := rt.newDaemonTaskRunner()(context.Background(), payload, nil)
+	if err != nil {
+		t.Fatalf("daemon task runner: %v", err)
+	}
+
+	sess, err := rt.mgr.LoadSession(result.SessionID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if sess.Principal != principal {
+		t.Fatalf("session principal = %+v, want %+v", sess.Principal, principal)
 	}
 }
 

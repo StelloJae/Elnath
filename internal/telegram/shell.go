@@ -13,6 +13,7 @@ import (
 
 	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/daemon"
+	"github.com/stello/elnath/internal/identity"
 	"github.com/stello/elnath/internal/llm"
 )
 
@@ -23,6 +24,7 @@ type Update struct {
 
 type Message struct {
 	ChatID    string
+	UserID    string
 	MessageID int64
 	Text      string
 }
@@ -66,6 +68,10 @@ func WithTaskTracker(tracker TaskTracker) ShellOption {
 	return func(s *Shell) { s.taskTracker = tracker }
 }
 
+func WithWorkDir(workDir string) ShellOption {
+	return func(s *Shell) { s.workDir = strings.TrimSpace(workDir) }
+}
+
 type Shell struct {
 	queue              *daemon.Queue
 	approvals          *daemon.ApprovalStore
@@ -78,6 +84,7 @@ type Shell struct {
 	classifier         IntentClassifier
 	classifyProvider   llm.Provider
 	taskTracker        TaskTracker
+	workDir            string
 }
 
 type shellState struct {
@@ -109,6 +116,9 @@ func NewShell(queue *daemon.Queue, approvals *daemon.ApprovalStore, bot BotClien
 		statePath: statePath,
 		logger:    slog.Default(),
 	}
+	if cwd, err := os.Getwd(); err == nil {
+		s.workDir = cwd
+	}
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -125,6 +135,7 @@ func (s *Shell) HandleUpdate(ctx context.Context, update Update) error {
 
 	text := strings.TrimSpace(update.Message.Text)
 	fields := strings.Fields(text)
+	principal := s.principalForMessage(update.Message)
 
 	// /submit is handled here (not in handleCommand) for task tracking.
 	if len(fields) > 0 && fields[0] == "/submit" {
@@ -133,7 +144,7 @@ func (s *Shell) HandleUpdate(ctx context.Context, update Update) error {
 		}
 		prompt := strings.TrimSpace(strings.TrimPrefix(text, "/submit"))
 		_ = s.bot.SendMessage(ctx, s.chatID, s.taskAcknowledgment(ctx, prompt))
-		taskID, err := s.enqueueTaskReturningID(ctx, prompt)
+		taskID, err := s.enqueueTaskReturningID(ctx, prompt, principal)
 		if err != nil {
 			return s.bot.SendMessage(ctx, s.chatID, "⚠️ "+err.Error())
 		}
@@ -145,7 +156,7 @@ func (s *Shell) HandleUpdate(ctx context.Context, update Update) error {
 
 	// Other explicit commands go to command handler.
 	if len(fields) > 0 && strings.HasPrefix(fields[0], "/") {
-		reply, err := s.handleCommand(ctx, text)
+		reply, err := s.handleCommand(ctx, text, principal)
 		if err != nil {
 			reply = "⚠️ " + err.Error()
 		}
@@ -159,7 +170,7 @@ func (s *Shell) HandleUpdate(ctx context.Context, update Update) error {
 			s.logger.Warn("intent classification failed, falling back to queue", "error", err)
 		} else if isChatIntent(intent) {
 			_ = s.bot.SetReaction(ctx, s.chatID, update.Message.MessageID, "👀")
-			return s.chatResponder.Respond(ctx, text, update.Message.MessageID)
+			return s.chatResponder.Respond(ctx, principal, text, update.Message.MessageID)
 		}
 	}
 
@@ -168,7 +179,7 @@ func (s *Shell) HandleUpdate(ctx context.Context, update Update) error {
 		_ = s.bot.SetReaction(ctx, s.chatID, update.Message.MessageID, "👀")
 	}
 	_ = s.bot.SendMessage(ctx, s.chatID, s.taskAcknowledgment(ctx, text))
-	taskID, err := s.enqueueTaskReturningID(ctx, text)
+	taskID, err := s.enqueueTaskReturningID(ctx, text, principal)
 	if err != nil {
 		return s.bot.SendMessage(ctx, s.chatID, "⚠️ "+err.Error())
 	}
@@ -278,7 +289,7 @@ func (s *Shell) RememberOffset(nextOffset int64) error {
 	return s.saveState(state)
 }
 
-func (s *Shell) handleCommand(ctx context.Context, text string) (string, error) {
+func (s *Shell) handleCommand(ctx context.Context, text string, principal identity.Principal) (string, error) {
 	fields := strings.Fields(text)
 	if len(fields) == 0 {
 		return "empty command", nil
@@ -294,9 +305,9 @@ func (s *Shell) handleCommand(ctx context.Context, text string) (string, error) 
 	case "/deny":
 		return s.resolveApproval(ctx, fields, false)
 	case "/followup", "/resume":
-		return s.enqueueFollowUp(ctx, text)
+		return s.enqueueFollowUp(ctx, text, principal)
 	case "/submit":
-		return s.enqueueNewTask(ctx, text)
+		return s.enqueueNewTask(ctx, text, principal)
 	case "/help":
 		return "📖 <b>Commands</b>\n" +
 			"• <code>/status</code> — task status\n" +
@@ -310,7 +321,7 @@ func (s *Shell) handleCommand(ctx context.Context, text string) (string, error) 
 		if strings.HasPrefix(fields[0], "/") {
 			return "Unknown command. Use /help.", nil
 		}
-		return s.enqueueNewTask(ctx, text)
+		return s.enqueueNewTask(ctx, text, principal)
 	}
 }
 
@@ -378,31 +389,32 @@ func (s *Shell) resolveApproval(ctx context.Context, fields []string, approved b
 	return fmt.Sprintf("❌ Denied <code>#%d</code>", id), nil
 }
 
-func (s *Shell) enqueueTaskReturningID(ctx context.Context, prompt string) (int64, error) {
+func (s *Shell) enqueueTaskReturningID(ctx context.Context, prompt string, principal identity.Principal) (int64, error) {
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
 		return 0, fmt.Errorf("usage: /submit <message> or just type your message")
 	}
 	payload := daemon.TaskPayload{
-		Prompt:  prompt,
-		Surface: "telegram",
+		Prompt:    prompt,
+		Surface:   "telegram",
+		Principal: principal,
 	}
 	return s.queue.Enqueue(ctx, daemon.EncodeTaskPayload(payload))
 }
 
-func (s *Shell) enqueueNewTask(ctx context.Context, raw string) (string, error) {
+func (s *Shell) enqueueNewTask(ctx context.Context, raw string, principal identity.Principal) (string, error) {
 	prompt := raw
 	if strings.HasPrefix(prompt, "/submit") {
 		prompt = strings.TrimSpace(strings.TrimPrefix(prompt, "/submit"))
 	}
-	id, err := s.enqueueTaskReturningID(ctx, prompt)
+	id, err := s.enqueueTaskReturningID(ctx, prompt, principal)
 	if err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("🚀 Task <code>#%d</code> queued", id), nil
 }
 
-func (s *Shell) enqueueFollowUp(ctx context.Context, raw string) (string, error) {
+func (s *Shell) enqueueFollowUp(ctx context.Context, raw string, principal identity.Principal) (string, error) {
 	parts := strings.SplitN(raw, " ", 3)
 	if len(parts) < 3 {
 		return "", fmt.Errorf("usage: /followup <session_id> <message>")
@@ -411,6 +423,7 @@ func (s *Shell) enqueueFollowUp(ctx context.Context, raw string) (string, error)
 		Prompt:    strings.TrimSpace(parts[2]),
 		SessionID: strings.TrimSpace(parts[1]),
 		Surface:   "telegram",
+		Principal: principal,
 	}
 	if payload.Prompt == "" || payload.SessionID == "" {
 		return "", fmt.Errorf("usage: /followup <session_id> <message>")
@@ -420,6 +433,11 @@ func (s *Shell) enqueueFollowUp(ctx context.Context, raw string) (string, error)
 		return "", err
 	}
 	return fmt.Sprintf("🔄 Follow-up <code>#%d</code> queued for session <code>%s</code>", id, payload.SessionID[:8]), nil
+}
+
+func (s *Shell) principalForMessage(message Message) identity.Principal {
+	fromID, _ := strconv.ParseInt(strings.TrimSpace(message.UserID), 10, 64)
+	return identity.ResolveTelegramPrincipal(fromID, message.ChatID, s.workDir)
 }
 
 func (s *Shell) loadState() (*shellState, error) {

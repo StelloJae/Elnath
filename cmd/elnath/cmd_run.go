@@ -12,6 +12,7 @@ import (
 	"github.com/stello/elnath/internal/agent"
 	"github.com/stello/elnath/internal/config"
 	"github.com/stello/elnath/internal/core"
+	"github.com/stello/elnath/internal/identity"
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/onboarding"
 	"github.com/stello/elnath/internal/self"
@@ -53,6 +54,12 @@ func cmdRun(ctx context.Context, args []string) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("get cwd: %w", err)
+	}
+	principal := identity.ResolveCLIPrincipal(cfg, extractFlagValue(os.Args, "--principal"), cwd)
+	principal.ProjectID = identity.ResolveProjectID(cwd, extractFlagValue(os.Args, "--project-id"))
 
 	app, err := core.New(cfg)
 	if err != nil {
@@ -113,6 +120,7 @@ func cmdRun(ctx context.Context, args []string) error {
 		perm,
 		"",
 		nil,
+		principal,
 	)
 	if err != nil {
 		return err
@@ -149,7 +157,7 @@ func cmdRun(ctx context.Context, args []string) error {
 		messages = sess.Messages
 		app.Logger.Info("resumed latest session", "id", sess.ID, "messages", len(messages))
 	} else {
-		sess, err = rt.mgr.NewSession()
+		sess, err = rt.mgr.NewSessionWithPrincipal(principal)
 		if err != nil {
 			return fmt.Errorf("create session: %w", err)
 		}
@@ -157,8 +165,8 @@ func cmdRun(ctx context.Context, args []string) error {
 	}
 
 	// Parse optional initial prompt from args.
-	if len(args) > 0 {
-		prompt := strings.Join(args, " ")
+	if promptArgs := runPromptArgs(args); len(promptArgs) > 0 {
+		prompt := strings.Join(promptArgs, " ")
 		messages, _, err = rt.runTask(ctx, sess, messages, prompt, cliOrchestrationOutput())
 		if err != nil {
 			return err
@@ -195,4 +203,20 @@ func cmdRun(ctx context.Context, args []string) error {
 	rt.maybeAutoDocumentSession(ctx, sess.ID, messages)
 
 	return nil
+}
+
+func runPromptArgs(args []string) []string {
+	var promptArgs []string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--config", "--persona", "--session", "--continue-task", "--principal", "--project-id":
+			if i+1 < len(args) {
+				i++
+			}
+		case "--continue", "--non-interactive":
+		default:
+			promptArgs = append(promptArgs, args[i])
+		}
+	}
+	return promptArgs
 }

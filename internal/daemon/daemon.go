@@ -12,6 +12,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/stello/elnath/internal/identity"
 )
 
 // IPCRequest is a JSON-line command sent over the Unix socket.
@@ -50,6 +52,7 @@ type Daemon struct {
 	socketPath        string
 	maxWorkers        int
 	taskRunner        TaskRunner
+	fallbackPrincipal identity.Principal
 	logger            *slog.Logger
 	deliveryRouter    *DeliveryRouter
 	inactivityTimeout time.Duration
@@ -97,6 +100,10 @@ func (d *Daemon) WithTimeouts(inactivity, wallClock time.Duration) {
 // via message editing.
 func (d *Daemon) WithProgressObserver(obs ProgressObserver) {
 	d.progressObserver = obs
+}
+
+func (d *Daemon) WithFallbackPrincipal(principal identity.Principal) {
+	d.fallbackPrincipal = principal
 }
 
 func (d *Daemon) watchdogTick() time.Duration {
@@ -319,11 +326,15 @@ func (d *Daemon) worker(ctx context.Context, id int) {
 			sleepCtx(ctx, time.Second)
 			continue
 		}
+		principal := resolveTaskLogPrincipal(ParseTaskPayload(task.Payload), d.fallbackPrincipal)
 
 		d.logger.Info("worker: processing task",
 			"worker_id", id,
 			"task_id", task.ID,
 			"payload", task.Payload,
+			"principal_user_id", principal.UserID,
+			"principal_project_id", principal.ProjectID,
+			"principal_surface", principal.Surface,
 		)
 
 		result, err := d.runTask(ctx, task)
@@ -331,6 +342,9 @@ func (d *Daemon) worker(ctx context.Context, id int) {
 			d.logger.Error("worker: task failed",
 				"worker_id", id,
 				"task_id", task.ID,
+				"principal_user_id", principal.UserID,
+				"principal_project_id", principal.ProjectID,
+				"principal_surface", principal.Surface,
 				"error", err,
 			)
 			if markErr := d.queue.MarkFailed(ctx, task.ID, err.Error()); markErr != nil {
@@ -343,6 +357,9 @@ func (d *Daemon) worker(ctx context.Context, id int) {
 		d.logger.Info("worker: task completed",
 			"worker_id", id,
 			"task_id", task.ID,
+			"principal_user_id", principal.UserID,
+			"principal_project_id", principal.ProjectID,
+			"principal_surface", principal.Surface,
 		)
 		if markErr := d.queue.MarkDone(ctx, task.ID, result.Result, result.Summary); markErr != nil {
 			d.logger.Error("worker: mark done", "task_id", task.ID, "error", markErr)
@@ -488,4 +505,25 @@ func sleepCtx(ctx context.Context, d time.Duration) {
 
 func isClosedErr(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "use of closed network connection")
+}
+
+func resolveTaskLogPrincipal(payload TaskPayload, fallback identity.Principal) identity.Principal {
+	principal := payload.Principal
+	if principal.IsZero() && !fallback.IsZero() {
+		principal = fallback
+	}
+	return principalForTaskLog(principal)
+}
+
+func principalForTaskLog(principal identity.Principal) identity.Principal {
+	if strings.TrimSpace(principal.UserID) == "" {
+		principal.UserID = identity.LegacyPrincipal().UserID
+	}
+	if strings.TrimSpace(principal.ProjectID) == "" {
+		principal.ProjectID = identity.LegacyPrincipal().ProjectID
+	}
+	if strings.TrimSpace(principal.Surface) == "" {
+		principal.Surface = identity.LegacyPrincipal().Surface
+	}
+	return principal
 }

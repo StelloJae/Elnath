@@ -15,6 +15,7 @@ import (
 	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/core"
 	"github.com/stello/elnath/internal/daemon"
+	"github.com/stello/elnath/internal/identity"
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/orchestrator"
 	"github.com/stello/elnath/internal/tools"
@@ -89,6 +90,7 @@ type executionRuntime struct {
 	wikiStore *wiki.Store
 	gitSync   *wiki.GitSync
 	workDir   string
+	principal identity.Principal
 }
 
 type routeAuditRecord struct {
@@ -113,6 +115,7 @@ func buildExecutionRuntime(
 	perm *agent.Permission,
 	workDir string,
 	protectedPaths []string,
+	defaultPrincipal identity.Principal,
 ) (*executionRuntime, error) {
 	if err := conversation.InitSchema(db.Main); err != nil {
 		return nil, fmt.Errorf("init conversation schema: %w", err)
@@ -178,6 +181,7 @@ func buildExecutionRuntime(
 		wikiStore: wikiStore,
 		gitSync:   gitSync,
 		workDir:   effectiveWorkDir,
+		principal: defaultPrincipal,
 	}, nil
 }
 
@@ -306,7 +310,14 @@ func (rt *executionRuntime) newDaemonTaskRunner() daemon.TaskRunner {
 			}
 			messages = sess.Messages
 		} else {
-			sess, err = rt.mgr.NewSession()
+			principal := taskPayload.Principal
+			if principal.IsZero() {
+				principal = rt.principal
+			}
+			if principal.IsZero() {
+				principal = identity.LegacyPrincipal()
+			}
+			sess, err = rt.mgr.NewSessionWithPrincipal(principal)
 			if err != nil {
 				return daemon.TaskResult{}, fmt.Errorf("create session: %w", err)
 			}

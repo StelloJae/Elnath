@@ -16,12 +16,12 @@ import (
 	"time"
 
 	"github.com/stello/elnath/internal/agent"
-	"github.com/stello/elnath/internal/tools"
 	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/core"
 	"github.com/stello/elnath/internal/daemon"
 	"github.com/stello/elnath/internal/onboarding"
 	"github.com/stello/elnath/internal/telegram"
+	"github.com/stello/elnath/internal/tools"
 )
 
 func captureOutput(t *testing.T, fn func()) (string, string) {
@@ -302,6 +302,22 @@ func TestParseDaemonSubmitArgs(t *testing.T) {
 	}
 	if sessionID != "" || prompt != "plain task" {
 		t.Fatalf("plain parse = (%q,%q), want empty session/plain task", sessionID, prompt)
+	}
+
+	sessionID, prompt, err = parseDaemonSubmitArgs([]string{"--principal", "stello", "--project-id", "elnath", "ship", "it"})
+	if err != nil {
+		t.Fatalf("parseDaemonSubmitArgs principal flags: %v", err)
+	}
+	if sessionID != "" || prompt != "ship it" {
+		t.Fatalf("principal flag parse = (%q,%q), want empty session/ship it", sessionID, prompt)
+	}
+
+	sessionID, prompt, err = parseDaemonSubmitArgs([]string{"--config", "cfg.yaml", "--principal", "stello", "ship", "it"})
+	if err != nil {
+		t.Fatalf("parseDaemonSubmitArgs config flag: %v", err)
+	}
+	if sessionID != "" || prompt != "ship it" {
+		t.Fatalf("config flag parse = (%q,%q), want empty session/ship it", sessionID, prompt)
 	}
 }
 

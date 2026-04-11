@@ -126,6 +126,10 @@ func WriteFromResult(cfgPath string, result *OnboardingResult) error {
 	if locale == "" {
 		locale = "en"
 	}
+	existingPrincipalUserID := ""
+	if existing, err := Load(cfgPath); err == nil {
+		existingPrincipalUserID = strings.TrimSpace(existing.Principal.UserID)
+	}
 
 	cfg := fmt.Sprintf(`# Elnath configuration
 data_dir: %q
@@ -137,6 +141,9 @@ anthropic:
 permission:
   mode: %q
 `, result.DataDir, result.WikiDir, locale, result.APIKey, permMode)
+	if existingPrincipalUserID != "" {
+		cfg += fmt.Sprintf("principal:\n  user_id: %q\n", existingPrincipalUserID)
+	}
 
 	if len(result.MCPServers) > 0 {
 		cfg += "mcp_servers:\n"

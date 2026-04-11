@@ -1,13 +1,21 @@
 package agent
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/stello/elnath/internal/identity"
 	"github.com/stello/elnath/internal/llm"
 )
+
+type legacySessionHeader struct {
+	ID        string    `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	Version   int       `json:"version"`
+}
 
 func TestSessionNewAndAppend(t *testing.T) {
 	dir := t.TempDir()
@@ -206,5 +214,62 @@ func TestListSessionFiles(t *testing.T) {
 	}
 	if infos[1].MessageCount != 1 {
 		t.Fatalf("first MessageCount = %d, want 1", infos[1].MessageCount)
+	}
+}
+
+func TestSessionNewPersistsPrincipal(t *testing.T) {
+	dir := t.TempDir()
+	want := identity.Principal{UserID: "stello", ProjectID: "elnath", Surface: "cli"}
+
+	s, err := NewSession(dir, want)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if s.Principal != want {
+		t.Fatalf("session principal = %+v, want %+v", s.Principal, want)
+	}
+
+	loaded, err := LoadSession(dir, s.ID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if loaded.Principal != want {
+		t.Fatalf("loaded principal = %+v, want %+v", loaded.Principal, want)
+	}
+}
+
+func TestLoadSessionLegacyHeaderGetsDefaultPrincipal(t *testing.T) {
+	dir := t.TempDir()
+	sessionsDir := filepath.Join(dir, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	hdr, err := json.Marshal(legacySessionHeader{
+		ID:        "legacy-sess",
+		CreatedAt: time.Now().UTC(),
+		Version:   1,
+	})
+	if err != nil {
+		t.Fatalf("marshal header: %v", err)
+	}
+	msg, err := json.Marshal(llm.NewUserMessage("hello from legacy"))
+	if err != nil {
+		t.Fatalf("marshal message: %v", err)
+	}
+	path := filepath.Join(sessionsDir, "legacy-sess.jsonl")
+	data := append(hdr, '\n')
+	data = append(data, msg...)
+	data = append(data, '\n')
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	loaded, err := LoadSession(dir, "legacy-sess")
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if loaded.Principal != identity.LegacyPrincipal() {
+		t.Fatalf("loaded legacy principal = %+v, want %+v", loaded.Principal, identity.LegacyPrincipal())
 	}
 }

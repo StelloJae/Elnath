@@ -83,6 +83,28 @@ func TestLoad_ValidYAML(t *testing.T) {
 	}
 }
 
+func TestLoad_PrincipalConfig(t *testing.T) {
+	dir := t.TempDir()
+	wikiDir := filepath.Join(dir, "wiki")
+	if err := os.MkdirAll(wikiDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	yaml := "data_dir: " + dir + "\nwiki_dir: " + wikiDir + "\nprincipal:\n  user_id: stello\n"
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.Principal.UserID != "stello" {
+		t.Fatalf("Principal.UserID = %q, want stello", cfg.Principal.UserID)
+	}
+}
+
 func TestLoad_InvalidYAML(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.yaml")
@@ -533,5 +555,36 @@ func TestWriteFromResult_DefaultPermission(t *testing.T) {
 	}
 	if cfg.Permission.Mode != "default" {
 		t.Errorf("expected default permission, got %q", cfg.Permission.Mode)
+	}
+}
+
+func TestWriteFromResult_PreservesExistingPrincipal(t *testing.T) {
+	dir := t.TempDir()
+	wikiDir := filepath.Join(dir, "wiki-existing")
+	if err := os.MkdirAll(wikiDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(dir, "config.yaml")
+	existing := "data_dir: " + filepath.Join(dir, "data-existing") + "\nwiki_dir: " + wikiDir + "\nprincipal:\n  user_id: stello\n"
+	if err := os.WriteFile(cfgPath, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	result := &OnboardingResult{
+		APIKey:         "sk-test",
+		DataDir:        filepath.Join(dir, "data"),
+		WikiDir:        filepath.Join(dir, "wiki"),
+		PermissionMode: "default",
+	}
+	if err := WriteFromResult(cfgPath, result); err != nil {
+		t.Fatalf("WriteFromResult: %v", err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Principal.UserID != "stello" {
+		t.Fatalf("Principal.UserID = %q, want stello", cfg.Principal.UserID)
 	}
 }

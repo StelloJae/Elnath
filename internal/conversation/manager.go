@@ -8,6 +8,7 @@ import (
 	"sort"
 
 	"github.com/stello/elnath/internal/agent"
+	"github.com/stello/elnath/internal/identity"
 	"github.com/stello/elnath/internal/llm"
 )
 
@@ -93,12 +94,21 @@ func (m *Manager) WithLogger(l *slog.Logger) *Manager {
 
 // NewSession creates a new conversation session persisted as a JSONL file.
 func (m *Manager) NewSession() (*agent.Session, error) {
-	s, err := agent.NewSession(m.dataDir)
+	return m.NewSessionWithPrincipal(identity.LegacyPrincipal())
+}
+
+func (m *Manager) NewSessionWithPrincipal(principal identity.Principal) (*agent.Session, error) {
+	s, err := agent.NewSession(m.dataDir, principal)
 	if err != nil {
 		return nil, fmt.Errorf("conversation: new session: %w", err)
 	}
 	m.prepareSession(s)
-	m.logger.Info("created session", "session_id", s.ID)
+	m.logger.Info("created session",
+		"session_id", s.ID,
+		"principal_user_id", s.Principal.UserID,
+		"principal_project_id", s.Principal.ProjectID,
+		"principal_surface", s.Principal.Surface,
+	)
 	return s, nil
 }
 
@@ -338,4 +348,3 @@ func (m *Manager) ListSessions(ctx context.Context) ([]SessionInfo, error) {
 
 	return sessions, nil
 }
-

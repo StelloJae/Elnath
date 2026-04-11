@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/stello/elnath/internal/identity"
 	"github.com/stello/elnath/internal/llm"
 )
 
@@ -32,8 +33,14 @@ func NewChatResponder(provider llm.Provider, bot BotClient, chatID string, logge
 	}
 }
 
-func (c *ChatResponder) Respond(ctx context.Context, userMessage string, replyToMsgID int64) error {
-	sc := NewStreamConsumer(c.bot, c.chatID, c.logger)
+func (c *ChatResponder) Respond(ctx context.Context, principal identity.Principal, userMessage string, replyToMsgID int64) error {
+	_ = replyToMsgID
+	logger := c.logger.With(
+		"principal_user_id", principal.UserID,
+		"principal_project_id", principal.ProjectID,
+		"principal_surface", principal.Surface,
+	)
+	sc := NewStreamConsumer(c.bot, c.chatID, logger)
 	sc.Run()
 
 	req := llm.ChatRequest{
@@ -54,7 +61,7 @@ func (c *ChatResponder) Respond(ctx context.Context, userMessage string, replyTo
 	if err != nil {
 		sc.Finish()
 		sc.Wait()
-		c.logger.Warn("chat responder: stream failed", "error", err)
+		logger.Warn("chat responder: stream failed", "error", err)
 		sendErr := c.bot.SendMessage(ctx, c.chatID, fmt.Sprintf("⚠️ Error: %s", err.Error()))
 		if sendErr != nil {
 			return fmt.Errorf("chat responder: send error message: %w", sendErr)

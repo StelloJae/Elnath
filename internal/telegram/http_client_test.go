@@ -31,7 +31,7 @@ func TestHTTPClientSendMessageAndGetUpdates(t *testing.T) {
 			_, _ = w.Write([]byte(`{
 				"ok": true,
 				"result": [
-					{"update_id": 42, "message": {"text": "/status", "chat": {"id": 12345}}}
+					{"update_id": 42, "message": {"text": "/status", "chat": {"id": 12345}, "from": {"id": 777}}}
 				]
 			}`))
 		default:
@@ -55,7 +55,7 @@ func TestHTTPClientSendMessageAndGetUpdates(t *testing.T) {
 	if len(updates) != 1 {
 		t.Fatalf("updates = %d, want 1", len(updates))
 	}
-	if updates[0].ID != 42 || updates[0].Message.ChatID != "12345" || updates[0].Message.Text != "/status" {
+	if updates[0].ID != 42 || updates[0].Message.ChatID != "12345" || updates[0].Message.UserID != "777" || updates[0].Message.Text != "/status" {
 		t.Fatalf("update = %+v", updates[0])
 	}
 }

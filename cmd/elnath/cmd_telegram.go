@@ -66,7 +66,11 @@ func cmdTelegramShell(ctx context.Context) error {
 	}
 	bot := telegram.NewHTTPClient(cfg.Telegram.BotToken, cfg.Telegram.APIBaseURL)
 	statePath := filepath.Join(cfg.DataDir, "telegram-shell-state.json")
-	shell, err := telegram.NewShell(queue, approvals, bot, cfg.Telegram.ChatID, statePath)
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("get cwd: %w", err)
+	}
+	shell, err := telegram.NewShell(queue, approvals, bot, cfg.Telegram.ChatID, statePath, telegram.WithWorkDir(cwd))
 	if err != nil {
 		return err
 	}

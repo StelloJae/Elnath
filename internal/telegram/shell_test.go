@@ -118,6 +118,7 @@ func TestShellHandleUpdateStatusAndFollowUp(t *testing.T) {
 		ID: 2,
 		Message: Message{
 			ChatID: "chat-1",
+			UserID: "77",
 			Text:   "/followup sess-status continue with the same session",
 		},
 	}); err != nil {
@@ -135,6 +136,9 @@ func TestShellHandleUpdateStatusAndFollowUp(t *testing.T) {
 	if got.SessionID != "sess-status" {
 		t.Fatalf("follow-up SessionID = %q, want sess-status", got.SessionID)
 	}
+	if got.Principal.UserID != "77" || got.Principal.Surface != "telegram" {
+		t.Fatalf("follow-up principal = %+v, want telegram principal for user 77", got.Principal)
+	}
 	if !strings.Contains(got.Prompt, "continue with the same session") {
 		t.Fatalf("follow-up Prompt = %q", got.Prompt)
 	}
@@ -149,7 +153,7 @@ func TestShellHandleUpdateApprovalsAndNotifyCompletions(t *testing.T) {
 	}
 
 	if err := shell.HandleUpdate(context.Background(), Update{
-		ID: 1,
+		ID:      1,
 		Message: Message{ChatID: "chat-1", Text: "/approvals"},
 	}); err != nil {
 		t.Fatalf("HandleUpdate approvals: %v", err)
@@ -159,7 +163,7 @@ func TestShellHandleUpdateApprovalsAndNotifyCompletions(t *testing.T) {
 	}
 
 	if err := shell.HandleUpdate(context.Background(), Update{
-		ID: 2,
+		ID:      2,
 		Message: Message{ChatID: "chat-1", Text: "/approve 1"},
 	}); err != nil {
 		t.Fatalf("HandleUpdate approve: %v", err)
@@ -213,7 +217,7 @@ func TestShellSubmitCommand(t *testing.T) {
 
 	if err := shell.HandleUpdate(context.Background(), Update{
 		ID:      1,
-		Message: Message{ChatID: "chat-1", Text: "/submit Write a haiku about Go"},
+		Message: Message{ChatID: "chat-1", UserID: "88", Text: "/submit Write a haiku about Go"},
 	}); err != nil {
 		t.Fatalf("HandleUpdate submit: %v", err)
 	}
@@ -233,6 +237,9 @@ func TestShellSubmitCommand(t *testing.T) {
 	if payload.Surface != "telegram" {
 		t.Fatalf("surface = %q, want telegram", payload.Surface)
 	}
+	if payload.Principal.UserID != "88" || payload.Principal.Surface != "telegram" {
+		t.Fatalf("principal = %+v, want telegram principal for user 88", payload.Principal)
+	}
 }
 
 func TestShellPlainTextAutoSubmit(t *testing.T) {
@@ -240,7 +247,7 @@ func TestShellPlainTextAutoSubmit(t *testing.T) {
 
 	if err := shell.HandleUpdate(context.Background(), Update{
 		ID:      1,
-		Message: Message{ChatID: "chat-1", Text: "Refactor the auth module"},
+		Message: Message{ChatID: "chat-1", UserID: "99", Text: "Refactor the auth module"},
 	}); err != nil {
 		t.Fatalf("HandleUpdate plain text: %v", err)
 	}
@@ -256,6 +263,9 @@ func TestShellPlainTextAutoSubmit(t *testing.T) {
 	payload := daemon.ParseTaskPayload(tasks[0].Payload)
 	if payload.Prompt != "Refactor the auth module" {
 		t.Fatalf("prompt = %q, want 'Refactor the auth module'", payload.Prompt)
+	}
+	if payload.Principal.UserID != "99" || payload.Principal.Surface != "telegram" {
+		t.Fatalf("principal = %+v, want telegram principal for user 99", payload.Principal)
 	}
 }
 
@@ -298,7 +308,7 @@ func (m *shellMockProvider) Stream(_ context.Context, _ llm.ChatRequest, cb func
 }
 
 func (m *shellMockProvider) Name() string            { return "mock" }
-func (m *shellMockProvider) Models() []llm.ModelInfo  { return nil }
+func (m *shellMockProvider) Models() []llm.ModelInfo { return nil }
 
 func newTestShellWithClassifier(t *testing.T, intent conversation.Intent, classifyErr error) (*Shell, *daemon.Queue, *fakeBotClient) {
 	t.Helper()
@@ -332,7 +342,7 @@ func TestShellChatBypassesQueue(t *testing.T) {
 
 	err := shell.HandleUpdate(context.Background(), Update{
 		ID:      1,
-		Message: Message{ChatID: "chat-1", MessageID: 10, Text: "How are you?"},
+		Message: Message{ChatID: "chat-1", UserID: "51", MessageID: 10, Text: "How are you?"},
 	})
 	if err != nil {
 		t.Fatalf("HandleUpdate: %v", err)
@@ -362,7 +372,7 @@ func TestShellTaskGoesToQueue(t *testing.T) {
 
 	err := shell.HandleUpdate(context.Background(), Update{
 		ID:      1,
-		Message: Message{ChatID: "chat-1", MessageID: 11, Text: "Refactor the auth module"},
+		Message: Message{ChatID: "chat-1", UserID: "52", MessageID: 11, Text: "Refactor the auth module"},
 	})
 	if err != nil {
 		t.Fatalf("HandleUpdate: %v", err)
@@ -375,6 +385,10 @@ func TestShellTaskGoesToQueue(t *testing.T) {
 	if len(tasks) != 1 {
 		t.Fatalf("expected 1 task in queue, got %d", len(tasks))
 	}
+	payload := daemon.ParseTaskPayload(tasks[0].Payload)
+	if payload.Principal.UserID != "52" || payload.Principal.Surface != "telegram" {
+		t.Fatalf("principal = %+v, want telegram principal for user 52", payload.Principal)
+	}
 
 	if len(bot.sent) == 0 {
 		t.Fatal("expected ack message for task")
@@ -386,7 +400,7 @@ func TestShellClassifyErrorFallsBackToQueue(t *testing.T) {
 
 	err := shell.HandleUpdate(context.Background(), Update{
 		ID:      1,
-		Message: Message{ChatID: "chat-1", MessageID: 12, Text: "Hello there"},
+		Message: Message{ChatID: "chat-1", UserID: "53", MessageID: 12, Text: "Hello there"},
 	})
 	if err != nil {
 		t.Fatalf("HandleUpdate: %v", err)
@@ -398,6 +412,10 @@ func TestShellClassifyErrorFallsBackToQueue(t *testing.T) {
 	}
 	if len(tasks) != 1 {
 		t.Fatalf("expected 1 task in queue (fallback), got %d", len(tasks))
+	}
+	payload := daemon.ParseTaskPayload(tasks[0].Payload)
+	if payload.Principal.UserID != "53" || payload.Principal.Surface != "telegram" {
+		t.Fatalf("principal = %+v, want telegram principal for user 53", payload.Principal)
 	}
 
 	if len(bot.sent) == 0 {
