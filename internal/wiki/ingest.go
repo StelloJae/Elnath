@@ -21,9 +21,30 @@ type Ingester struct {
 	provider llm.Provider // optional; nil means no LLM-assisted extraction
 }
 
+// IngestEvent is a conversation transcript snapshot ready for wiki ingest.
+type IngestEvent struct {
+	SessionID string
+	Messages  []llm.Message
+	Reason    string // Free-form trigger label such as "task_completed".
+}
+
 // NewIngester creates an Ingester. provider may be nil for plain ingest without summarisation.
 func NewIngester(store *Store, provider llm.Provider) *Ingester {
 	return &Ingester{store: store, provider: provider}
+}
+
+// IngestEvent ingests a pre-snapshotted conversation transcript.
+func (ing *Ingester) IngestEvent(ctx context.Context, event IngestEvent) error {
+	if ing == nil || ing.store == nil {
+		return nil
+	}
+	if strings.TrimSpace(event.SessionID) == "" {
+		return nil
+	}
+	if len(event.Messages) == 0 {
+		return nil
+	}
+	return ing.IngestConversation(ctx, event.SessionID, event.Messages)
 }
 
 // gitCommit holds the parsed output of a single git log entry.

@@ -23,7 +23,7 @@ func (m *mockLLMProvider) Stream(_ context.Context, _ llm.ChatRequest, _ func(ll
 	return nil
 }
 
-func (m *mockLLMProvider) Name() string           { return "mock" }
+func (m *mockLLMProvider) Name() string            { return "mock" }
 func (m *mockLLMProvider) Models() []llm.ModelInfo { return nil }
 
 // gitInDir runs a git command inside dir and fails the test on error.

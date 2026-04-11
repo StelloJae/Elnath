@@ -19,6 +19,7 @@ import (
 	"github.com/stello/elnath/internal/identity"
 	"github.com/stello/elnath/internal/self"
 	"github.com/stello/elnath/internal/telegram"
+	"github.com/stello/elnath/internal/wiki"
 )
 
 func cmdDaemon(ctx context.Context, args []string) error {
@@ -137,6 +138,9 @@ func cmdDaemonStart(ctx context.Context) error {
 		return fmt.Errorf("create delivery router: %w", err)
 	}
 	router.Register(daemon.NewLogSink(app.Logger))
+	if rt.wikiStore != nil {
+		router.Register(conversation.NewSpine(cfg.DataDir, wiki.NewIngester(rt.wikiStore, provider), app.Logger))
+	}
 
 	d := daemon.New(queue, cfg.Daemon.SocketPath, cfg.Daemon.MaxWorkers, rt.newDaemonTaskRunner(), app.Logger)
 	d.WithDeliveryRouter(router)

@@ -31,7 +31,7 @@ type SessionPersister interface {
 type Session struct {
 	ID            string
 	path          string
-	Principal     identity.Principal
+	Principal     identity.Principal // immutable after construction.
 	Messages      []llm.Message
 	appliedHashes map[string]struct{}
 	mu            sync.Mutex
@@ -207,10 +207,7 @@ func (s *Session) AppendMessages(msgs []llm.Message) error {
 	}
 	// Secondary persistence: best-effort, never blocks primary JSONL.
 	if s.persister != nil {
-		s.mu.Lock()
-		snapshot := make([]llm.Message, len(s.Messages))
-		copy(snapshot, s.Messages)
-		s.mu.Unlock()
+		snapshot := s.SnapshotMessages()
 		if err := s.persister.PersistSession(s.ID, snapshot); err != nil {
 			if s.logger != nil {
 				s.logger("secondary persist failed", "session_id", s.ID, "error", err)
@@ -218,6 +215,15 @@ func (s *Session) AppendMessages(msgs []llm.Message) error {
 		}
 	}
 	return nil
+}
+
+// SnapshotMessages returns a stable copy of the current in-memory transcript.
+func (s *Session) SnapshotMessages() []llm.Message {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	snapshot := make([]llm.Message, len(s.Messages))
+	copy(snapshot, s.Messages)
+	return snapshot
 }
 
 // Fork creates a new session that starts with a copy of the current messages.
