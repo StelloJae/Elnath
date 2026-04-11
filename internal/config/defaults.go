@@ -5,6 +5,15 @@ import (
 	"path/filepath"
 )
 
+func defaultPersonaConfig() PersonaConfig {
+	return PersonaConfig{
+		Name:             "Elnath",
+		Tone:             "warm, concise, professional",
+		Languages:        []string{"ko", "en"},
+		ForbiddenPhrases: []string{},
+	}
+}
+
 func DefaultConfig() *Config {
 	home, _ := os.UserHomeDir()
 	base := filepath.Join(home, ".elnath")
@@ -27,6 +36,7 @@ func DefaultConfig() *Config {
 		Permission: PermissionConfig{
 			Mode: "default",
 		},
+		Persona: defaultPersonaConfig(),
 		Daemon: DaemonConfig{
 			SocketPath:        filepath.Join(base, "daemon.sock"),
 			MaxWorkers:        3,
