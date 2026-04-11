@@ -188,7 +188,7 @@ func TestEnqueueDedupReturnsExistingID(t *testing.T) {
 	}
 }
 
-func TestEnqueueDedupExpiresAfterWindow(t *testing.T) {
+func TestEnqueueDedupBlocksWhileRunningAcrossWindow(t *testing.T) {
 	db := openTestDB(t)
 	q, err := NewQueue(db)
 	if err != nil {
@@ -205,7 +205,18 @@ func TestEnqueueDedupExpiresAfterWindow(t *testing.T) {
 		t.Fatal("first enqueue should insert a new row")
 	}
 
-	expiredAt := time.Now().Add(-idempotencyWindow - time.Second).UnixMilli()
+	task, err := q.Next(ctx)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if task == nil || task.ID != firstID {
+		t.Fatalf("Next() = %+v, want task id %d", task, firstID)
+	}
+	if task.Status != StatusRunning {
+		t.Fatalf("task status = %q, want %q", task.Status, StatusRunning)
+	}
+
+	expiredAt := time.Now().Add(-2 * idempotencyWindow).UnixMilli()
 	if _, err := db.Exec(`UPDATE task_queue SET created_at = ? WHERE id = ?`, expiredAt, firstID); err != nil {
 		t.Fatalf("expire first row: %v", err)
 	}
@@ -214,11 +225,30 @@ func TestEnqueueDedupExpiresAfterWindow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Enqueue(second): %v", err)
 	}
-	if existed {
-		t.Fatal("expired idempotency window should allow a new row")
+	if !existed {
+		t.Fatalf("second enqueue on running+expired should dedup, got existed=false id=%d", secondID)
 	}
-	if secondID == firstID {
-		t.Fatalf("second enqueue id = %d, want new id", secondID)
+	if secondID != firstID {
+		t.Fatalf("second enqueue id = %d, want %d", secondID, firstID)
+	}
+
+	got, err := q.Get(ctx, firstID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.IdempotencyKey != idemKey {
+		t.Fatalf("running task idempotency key = %q, want %q", got.IdempotencyKey, idemKey)
+	}
+	if got.Status != StatusRunning {
+		t.Fatalf("running task status = %q, want %q", got.Status, StatusRunning)
+	}
+
+	var rowCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM task_queue WHERE idempotency_key = ?`, idemKey).Scan(&rowCount); err != nil {
+		t.Fatalf("count task_queue by key: %v", err)
+	}
+	if rowCount != 1 {
+		t.Fatalf("task_queue row count for key = %d, want 1", rowCount)
 	}
 }
 
@@ -298,7 +328,7 @@ func TestEnqueueDedupAcrossPendingAndRunning(t *testing.T) {
 	}
 }
 
-func TestEnqueueDedupAfterDoneAllowsNew(t *testing.T) {
+func TestEnqueueDedupAllowsReEnqueueAfterDone(t *testing.T) {
 	db := openTestDB(t)
 	q, err := NewQueue(db)
 	if err != nil {
@@ -318,6 +348,9 @@ func TestEnqueueDedupAfterDoneAllowsNew(t *testing.T) {
 	task, err := q.Next(ctx)
 	if err != nil {
 		t.Fatalf("Next: %v", err)
+	}
+	if task == nil || task.ID != firstID {
+		t.Fatalf("Next() = %+v, want task id %d", task, firstID)
 	}
 	if err := q.MarkDone(ctx, task.ID, "ok", "done"); err != nil {
 		t.Fatalf("MarkDone: %v", err)

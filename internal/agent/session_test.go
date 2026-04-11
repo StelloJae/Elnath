@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -158,6 +159,68 @@ func TestLoadSessionPopulatesAppliedHashes(t *testing.T) {
 	}
 	if got := sessionMessageLineCount(t, filepath.Join(dir, "sessions", loaded.ID+".jsonl")); got != 3 {
 		t.Fatalf("session file messages = %d, want 3", got)
+	}
+}
+
+func TestAppendMessageDoesNotDedupeAssistantMessages(t *testing.T) {
+	dir := t.TempDir()
+
+	s, err := NewSession(dir)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	msg := llm.NewAssistantMessage("identical response")
+
+	if err := s.AppendMessage(msg); err != nil {
+		t.Fatalf("AppendMessage(first): %v", err)
+	}
+	if err := s.AppendMessage(msg); err != nil {
+		t.Fatalf("AppendMessage(second): %v", err)
+	}
+
+	if len(s.Messages) != 2 {
+		t.Fatalf("assistant messages = %d, want 2", len(s.Messages))
+	}
+	if got := sessionMessageLineCount(t, filepath.Join(dir, "sessions", s.ID+".jsonl")); got != 2 {
+		t.Fatalf("assistant message lines = %d, want 2", got)
+	}
+
+	reloaded, err := LoadSession(dir, s.ID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if len(reloaded.Messages) != 2 {
+		t.Fatalf("reloaded assistant messages = %d, want 2", len(reloaded.Messages))
+	}
+}
+
+func TestAppendMessageConcurrentSafe(t *testing.T) {
+	dir := t.TempDir()
+
+	s, err := NewSession(dir)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	msg := llm.NewUserMessage("same prompt")
+
+	const goroutines = 50
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for range goroutines {
+		go func() {
+			defer wg.Done()
+			if err := s.AppendMessage(msg); err != nil {
+				t.Errorf("AppendMessage: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if len(s.Messages) != 1 {
+		t.Fatalf("concurrent messages = %d, want 1", len(s.Messages))
+	}
+	if got := sessionMessageLineCount(t, filepath.Join(dir, "sessions", s.ID+".jsonl")); got != 1 {
+		t.Fatalf("concurrent message lines = %d, want 1", got)
 	}
 }
 

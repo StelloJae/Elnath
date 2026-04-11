@@ -50,6 +50,15 @@ func (r *DeliveryRouter) Register(sink CompletionSink) {
 // Deliver calls all registered sinks. Individual sink failures are logged but
 // do not prevent other sinks from running. A non-nil error is returned only
 // when every sink fails; partial failures are silently absorbed.
+//
+// Dedup ordering and crash window: the dedup row is claimed with INSERT OR
+// IGNORE before NotifyCompletion runs, and rolled back with DELETE if the sink
+// returns an error so retryable failures can be replayed. A daemon crash after
+// the claim INSERT commits but before successful sink delivery can still leave a
+// zombie claim row behind, which will suppress future delivery attempts for the
+// same (task_id, sink_name). SF2 review-fixes explicitly leaves nightly cleanup
+// of task_completion_deliveries out of scope; a future cleanup task should age
+// out stale claims using delivered_at once it can verify sink-side delivery.
 func (r *DeliveryRouter) Deliver(ctx context.Context, completion TaskCompletion) error {
 	if len(r.sinks) == 0 {
 		return nil

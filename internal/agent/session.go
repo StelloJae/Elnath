@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -33,6 +34,7 @@ type Session struct {
 	Principal     identity.Principal
 	Messages      []llm.Message
 	appliedHashes map[string]struct{}
+	mu            sync.Mutex
 	persister     SessionPersister // optional secondary persistence
 	logger        func(msg string, args ...any)
 }
@@ -138,6 +140,9 @@ func LoadSession(dataDir, id string) (*Session, error) {
 // updates the in-memory slice. JSONL lines are small enough that O_APPEND is
 // atomic on POSIX filesystems for reasonable message sizes.
 func (s *Session) AppendMessage(msg llm.Message) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	hash := ""
 	if shouldDedupMessage(msg) {
 		hash = messageHash(msg)
@@ -181,6 +186,13 @@ func messageHash(msg llm.Message) string {
 	return hex.EncodeToString(sum[:])[:16]
 }
 
+// shouldDedupMessage limits AppendMessage's content-hash dedup to user-role
+// messages. Spec SF2 FD4 Out clause: assistant and tool_result messages have
+// naturally fresh hashes on every retry (streaming deltas, tool call IDs,
+// provider timestamps), so hashing them would either (a) never fire or
+// (b) collapse legitimate repeated assistant turns if a provider emits
+// byte-identical payloads. The user-role narrowing keeps dedup focused on the
+// same user prompt being resubmitted.
 func shouldDedupMessage(msg llm.Message) bool {
 	return msg.Role == llm.RoleUser
 }
@@ -195,7 +207,11 @@ func (s *Session) AppendMessages(msgs []llm.Message) error {
 	}
 	// Secondary persistence: best-effort, never blocks primary JSONL.
 	if s.persister != nil {
-		if err := s.persister.PersistSession(s.ID, s.Messages); err != nil {
+		s.mu.Lock()
+		snapshot := make([]llm.Message, len(s.Messages))
+		copy(snapshot, s.Messages)
+		s.mu.Unlock()
+		if err := s.persister.PersistSession(s.ID, snapshot); err != nil {
 			if s.logger != nil {
 				s.logger("secondary persist failed", "session_id", s.ID, "error", err)
 			}
@@ -207,11 +223,17 @@ func (s *Session) AppendMessages(msgs []llm.Message) error {
 // Fork creates a new session that starts with a copy of the current messages.
 // The forked session has its own ID and file; the original is unchanged.
 func (s *Session) Fork(dataDir string) (*Session, error) {
-	child, err := NewSession(dataDir, s.Principal)
+	s.mu.Lock()
+	snapshot := make([]llm.Message, len(s.Messages))
+	copy(snapshot, s.Messages)
+	principal := s.Principal
+	s.mu.Unlock()
+
+	child, err := NewSession(dataDir, principal)
 	if err != nil {
 		return nil, fmt.Errorf("session: fork: %w", err)
 	}
-	if err := child.AppendMessages(s.Messages); err != nil {
+	if err := child.AppendMessages(snapshot); err != nil {
 		return nil, fmt.Errorf("session: fork copy: %w", err)
 	}
 	return child, nil

@@ -37,6 +37,12 @@ CREATE INDEX IF NOT EXISTS task_queue_session ON task_queue(session_id);
 
 const defaultStaleTimeout = 5 * time.Minute
 const defaultMaxRecoveries = 3
+
+// idempotencyWindow controls Enqueue's cheap initial lookup only. The
+// authoritative dedup gate is task_queue_idem_active, the partial unique index
+// that blocks duplicate inserts while a task is pending or running. The window
+// exists to avoid extra work for fast repeat submissions; stale active rows are
+// cleaned up by RecoverStale instead of mutating live idempotency keys.
 const idempotencyWindow = 30 * time.Second
 
 // TaskStatus represents the lifecycle state of a queued task.
@@ -136,15 +142,12 @@ func (q *Queue) Enqueue(ctx context.Context, payload string, idemKey string) (in
 		if existingID != 0 {
 			return existingID, true, nil
 		}
-		if err := q.releaseExpiredDedupClaims(ctx, idemKey, cutoff); err != nil {
-			return 0, false, fmt.Errorf("queue: enqueue release expired dedup claim: %w", err)
-		}
 	}
 
 	res, err := q.insertTask(ctx, payload, idemKey, now)
 	if err != nil {
 		if idemKey != "" && isUniqueViolation(err) {
-			existingID, lookupErr := q.lookupActiveTaskID(ctx, idemKey, now-idempotencyWindow.Milliseconds())
+			existingID, lookupErr := q.lookupActiveTaskIDAny(ctx, idemKey)
 			if lookupErr != nil {
 				return 0, false, fmt.Errorf("queue: enqueue unique lookup: %w", lookupErr)
 			}
@@ -595,6 +598,25 @@ func (q *Queue) lookupActiveTaskID(ctx context.Context, idemKey string, cutoff i
 	return existingID, nil
 }
 
+func (q *Queue) lookupActiveTaskIDAny(ctx context.Context, idemKey string) (int64, error) {
+	var existingID int64
+	err := q.db.QueryRowContext(ctx, `
+		SELECT id FROM task_queue
+		WHERE idempotency_key = ?
+		  AND status IN ('pending','running')
+		ORDER BY created_at DESC
+		LIMIT 1`,
+		idemKey,
+	).Scan(&existingID)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return existingID, nil
+}
+
 func (q *Queue) insertTask(ctx context.Context, payload, idemKey string, now int64) (sql.Result, error) {
 	var (
 		res sql.Result
@@ -616,34 +638,6 @@ func (q *Queue) insertTask(ctx context.Context, payload, idemKey string, now int
 		}
 	}
 	return res, err
-}
-
-func (q *Queue) releaseExpiredDedupClaims(ctx context.Context, idemKey string, cutoff int64) error {
-	// A retry after the 30s window should enqueue fresh work even if an older row
-	// is still active, so its dedup claim has to age out of the unique index.
-	var count int
-	if err := q.db.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM task_queue
-		WHERE idempotency_key = ?
-		  AND status IN ('pending','running')
-		  AND created_at < ?`,
-		idemKey, cutoff,
-	).Scan(&count); err != nil {
-		return err
-	}
-	if count == 0 {
-		return nil
-	}
-
-	_, err := q.db.ExecContext(ctx, `
-		UPDATE task_queue
-		SET idempotency_key = ''
-		WHERE idempotency_key = ?
-		  AND status IN ('pending','running')
-		  AND created_at < ?`,
-		idemKey, cutoff,
-	)
-	return err
 }
 
 func isUniqueViolation(err error) bool {
