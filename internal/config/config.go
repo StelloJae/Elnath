@@ -26,7 +26,6 @@ type Config struct {
 	Permission PermissionConfig  `yaml:"permission"`
 	Daemon     DaemonConfig      `yaml:"daemon"`
 	Telegram   TelegramConfig    `yaml:"telegram"`
-	Persona    PersonaConfig     `yaml:"persona"`
 	Research   ResearchConfig    `yaml:"research"`
 	Projects   []ProjectRef      `yaml:"projects"`
 	MCPServers []MCPServerConfig `yaml:"mcp_servers"`
@@ -96,14 +95,6 @@ type OllamaConfig struct {
 type ResearchConfig struct {
 	MaxRounds  int     `yaml:"max_rounds"`
 	CostCapUSD float64 `yaml:"cost_cap_usd"`
-}
-
-type PersonaConfig struct {
-	Name               string   `yaml:"name"`
-	Tone               string   `yaml:"tone"`
-	Languages          []string `yaml:"languages"`
-	ForbiddenPhrases   []string `yaml:"forbidden_phrases"`
-	CustomInstructions string   `yaml:"custom_instructions"`
 }
 
 func Load(path string) (*Config, error) {
@@ -193,44 +184,7 @@ func parseEnvBool(v string) bool {
 	}
 }
 
-func normalizeStringSlice(values []string) []string {
-	if len(values) == 0 {
-		return nil
-	}
-
-	normalized := make([]string, 0, len(values))
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value != "" {
-			normalized = append(normalized, value)
-		}
-	}
-	if len(normalized) == 0 {
-		return nil
-	}
-	return normalized
-}
-
 func validate(cfg *Config) error {
-	defaultPersona := defaultPersonaConfig()
-	cfg.Persona.Name = strings.TrimSpace(cfg.Persona.Name)
-	if cfg.Persona.Name == "" {
-		cfg.Persona.Name = defaultPersona.Name
-	}
-	cfg.Persona.Tone = strings.TrimSpace(cfg.Persona.Tone)
-	if cfg.Persona.Tone == "" {
-		cfg.Persona.Tone = defaultPersona.Tone
-	}
-	cfg.Persona.Languages = normalizeStringSlice(cfg.Persona.Languages)
-	if len(cfg.Persona.Languages) == 0 {
-		cfg.Persona.Languages = append([]string(nil), defaultPersona.Languages...)
-	}
-	cfg.Persona.ForbiddenPhrases = normalizeStringSlice(cfg.Persona.ForbiddenPhrases)
-	if len(cfg.Persona.ForbiddenPhrases) == 0 {
-		cfg.Persona.ForbiddenPhrases = []string{}
-	}
-	cfg.Persona.CustomInstructions = strings.TrimSpace(cfg.Persona.CustomInstructions)
-
 	if cfg.DataDir == "" {
 		return fmt.Errorf("data_dir is required")
 	}

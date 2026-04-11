@@ -39,18 +39,6 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Research.MaxRounds <= 0 {
 		t.Error("Research.MaxRounds should be positive")
 	}
-	if cfg.Persona.Name != "Elnath" {
-		t.Errorf("expected Persona.Name %q, got %q", "Elnath", cfg.Persona.Name)
-	}
-	if cfg.Persona.Tone != "warm, concise, professional" {
-		t.Errorf("expected Persona.Tone %q, got %q", "warm, concise, professional", cfg.Persona.Tone)
-	}
-	if got, want := cfg.Persona.Languages, []string{"ko", "en"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
-		t.Errorf("expected Persona.Languages %v, got %v", want, got)
-	}
-	if len(cfg.Persona.ForbiddenPhrases) != 0 {
-		t.Errorf("expected empty Persona.ForbiddenPhrases, got %v", cfg.Persona.ForbiddenPhrases)
-	}
 }
 
 // --- DefaultConfigPath ---
@@ -92,53 +80,6 @@ func TestLoad_ValidYAML(t *testing.T) {
 	}
 	if cfg.LogLevel != "debug" {
 		t.Errorf("expected LogLevel %q, got %q", "debug", cfg.LogLevel)
-	}
-}
-
-func TestLoad_PersonaConfig(t *testing.T) {
-	dir := t.TempDir()
-	wikiDir := filepath.Join(dir, "wiki")
-	if err := os.MkdirAll(wikiDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	yaml := strings.Join([]string{
-		"data_dir: " + dir,
-		"wiki_dir: " + wikiDir,
-		"persona:",
-		"  name: Aurora",
-		"  tone: precise and calm",
-		"  languages:",
-		"    - ko",
-		"    - ja",
-		"  forbidden_phrases:",
-		"    - as an ai language model",
-		"    - i cannot help with that",
-		"  custom_instructions: Keep answers grounded in repo evidence.",
-	}, "\n") + "\n"
-	cfgPath := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(cfgPath, []byte(yaml), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := Load(cfgPath)
-	if err != nil {
-		t.Fatalf("Load failed: %v", err)
-	}
-	if cfg.Persona.Name != "Aurora" {
-		t.Errorf("expected Persona.Name %q, got %q", "Aurora", cfg.Persona.Name)
-	}
-	if cfg.Persona.Tone != "precise and calm" {
-		t.Errorf("expected Persona.Tone %q, got %q", "precise and calm", cfg.Persona.Tone)
-	}
-	if got, want := cfg.Persona.Languages, []string{"ko", "ja"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
-		t.Errorf("expected Persona.Languages %v, got %v", want, got)
-	}
-	if got, want := cfg.Persona.ForbiddenPhrases, []string{"as an ai language model", "i cannot help with that"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
-		t.Errorf("expected Persona.ForbiddenPhrases %v, got %v", want, got)
-	}
-	if cfg.Persona.CustomInstructions != "Keep answers grounded in repo evidence." {
-		t.Errorf("expected Persona.CustomInstructions to round-trip, got %q", cfg.Persona.CustomInstructions)
 	}
 }
 
@@ -481,13 +422,6 @@ func TestValidate(t *testing.T) {
 			},
 			wantErr: "",
 		},
-		{
-			name: "persona defaults applied during validate",
-			mutate: func(c *Config) {
-				c.Persona = PersonaConfig{}
-			},
-			wantErr: "",
-		},
 	}
 
 	for _, tc := range tests {
@@ -504,20 +438,6 @@ func TestValidate(t *testing.T) {
 			if tc.wantErr == "" {
 				if err != nil {
 					t.Errorf("expected no error, got %v", err)
-				}
-				if tc.name == "persona defaults applied during validate" {
-					if cfg.Persona.Name != "Elnath" {
-						t.Errorf("expected Persona.Name default %q, got %q", "Elnath", cfg.Persona.Name)
-					}
-					if cfg.Persona.Tone != "warm, concise, professional" {
-						t.Errorf("expected Persona.Tone default %q, got %q", "warm, concise, professional", cfg.Persona.Tone)
-					}
-					if got, want := cfg.Persona.Languages, []string{"ko", "en"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
-						t.Errorf("expected Persona.Languages %v, got %v", want, got)
-					}
-					if len(cfg.Persona.ForbiddenPhrases) != 0 {
-						t.Errorf("expected empty Persona.ForbiddenPhrases, got %v", cfg.Persona.ForbiddenPhrases)
-					}
 				}
 			} else {
 				if err == nil {
