@@ -24,6 +24,29 @@ type sentMessage struct {
 	text   string
 }
 
+type trackedUserMessage struct {
+	taskID    int64
+	messageID int64
+}
+
+type trackedBinding struct {
+	taskID int64
+	userID string
+}
+
+type fakeBindingTracker struct {
+	userMessages []trackedUserMessage
+	bindings     []trackedBinding
+}
+
+func (f *fakeBindingTracker) TrackUserMessage(taskID, userMsgID int64) {
+	f.userMessages = append(f.userMessages, trackedUserMessage{taskID: taskID, messageID: userMsgID})
+}
+
+func (f *fakeBindingTracker) TrackChatBinding(taskID int64, userID string) {
+	f.bindings = append(f.bindings, trackedBinding{taskID: taskID, userID: userID})
+}
+
 func (f *fakeBotClient) SendMessage(_ context.Context, chatID, text string) error {
 	f.sent = append(f.sent, sentMessage{chatID: chatID, text: text})
 	return nil
@@ -59,6 +82,11 @@ func openTelegramTestDB(t *testing.T) *sql.DB {
 
 func newTestShell(t *testing.T) (*Shell, *daemon.Queue, *daemon.ApprovalStore, *fakeBotClient) {
 	t.Helper()
+	return newTestShellWithOptions(t)
+}
+
+func newTestShellWithOptions(t *testing.T, opts ...ShellOption) (*Shell, *daemon.Queue, *daemon.ApprovalStore, *fakeBotClient) {
+	t.Helper()
 	db := openTelegramTestDB(t)
 	queue, err := daemon.NewQueue(db)
 	if err != nil {
@@ -69,11 +97,21 @@ func newTestShell(t *testing.T) (*Shell, *daemon.Queue, *daemon.ApprovalStore, *
 		t.Fatalf("NewApprovalStore: %v", err)
 	}
 	bot := &fakeBotClient{}
-	shell, err := NewShell(queue, approvals, bot, "chat-1", filepath.Join(t.TempDir(), "telegram-state.json"))
+	shell, err := NewShell(queue, approvals, bot, "chat-1", filepath.Join(t.TempDir(), "telegram-state.json"), opts...)
 	if err != nil {
 		t.Fatalf("NewShell: %v", err)
 	}
 	return shell, queue, approvals, bot
+}
+
+func newShellBinder(t *testing.T) (*ChatSessionBinder, *stubSessionValidator) {
+	t.Helper()
+	validator := &stubSessionValidator{}
+	binder, err := NewChatSessionBinder(filepath.Join(t.TempDir(), "telegram-chat-bindings.json"), validator)
+	if err != nil {
+		t.Fatalf("NewChatSessionBinder: %v", err)
+	}
+	return binder, validator
 }
 
 func TestShellHandleUpdateStatusAndFollowUp(t *testing.T) {
@@ -297,6 +335,259 @@ func TestShellDeduplicatesSameUserPrompt(t *testing.T) {
 	}
 	if !strings.Contains(bot.sent[1].text, "이미 처리 중입니다 (#") {
 		t.Fatalf("second reply = %q, want dedup message", bot.sent[1].text)
+	}
+}
+
+func TestShellEnqueueWithBindingInjectsSessionID(t *testing.T) {
+	binder, validator := newShellBinder(t)
+	validator.set("sess-bound", true)
+	if err := binder.Remember("chat-1", "77", "sess-bound"); err != nil {
+		t.Fatalf("Remember: %v", err)
+	}
+	shell, queue, _, _ := newTestShellWithOptions(t, WithChatSessionBinder(binder))
+	principal := shell.principalForMessage(Message{UserID: "77"})
+
+	taskID, existed, err := shell.enqueueTaskReturningID(context.Background(), "continue this", principal)
+	if err != nil {
+		t.Fatalf("enqueueTaskReturningID: %v", err)
+	}
+	if existed {
+		t.Fatal("first enqueue should not deduplicate")
+	}
+
+	task, err := queue.Get(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	payload := daemon.ParseTaskPayload(task.Payload)
+	if payload.SessionID != "sess-bound" {
+		t.Fatalf("payload.SessionID = %q, want sess-bound", payload.SessionID)
+	}
+}
+
+func TestShellEnqueueNoBinderLeavesSessionEmpty(t *testing.T) {
+	shell, queue, _, _ := newTestShell(t)
+	principal := shell.principalForMessage(Message{UserID: "77"})
+
+	taskID, existed, err := shell.enqueueTaskReturningID(context.Background(), "continue this", principal)
+	if err != nil {
+		t.Fatalf("enqueueTaskReturningID: %v", err)
+	}
+	if existed {
+		t.Fatal("first enqueue should not deduplicate")
+	}
+
+	task, err := queue.Get(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	payload := daemon.ParseTaskPayload(task.Payload)
+	if payload.SessionID != "" {
+		t.Fatalf("payload.SessionID = %q, want empty", payload.SessionID)
+	}
+}
+
+func TestShellEnqueueBindingMissLeavesSessionEmpty(t *testing.T) {
+	binder, _ := newShellBinder(t)
+	shell, queue, _, _ := newTestShellWithOptions(t, WithChatSessionBinder(binder))
+	principal := shell.principalForMessage(Message{UserID: "77"})
+
+	taskID, existed, err := shell.enqueueTaskReturningID(context.Background(), "continue this", principal)
+	if err != nil {
+		t.Fatalf("enqueueTaskReturningID: %v", err)
+	}
+	if existed {
+		t.Fatal("first enqueue should not deduplicate")
+	}
+
+	task, err := queue.Get(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	payload := daemon.ParseTaskPayload(task.Payload)
+	if payload.SessionID != "" {
+		t.Fatalf("payload.SessionID = %q, want empty", payload.SessionID)
+	}
+}
+
+func TestShellEnqueueIdempotencyKeyIgnoresBoundSession(t *testing.T) {
+	binder, validator := newShellBinder(t)
+	validator.set("sess-1", true)
+	validator.set("sess-2", true)
+	if err := binder.Remember("chat-1", "77", "sess-1"); err != nil {
+		t.Fatalf("Remember(first): %v", err)
+	}
+	shell, queue, _, _ := newTestShellWithOptions(t, WithChatSessionBinder(binder))
+	principal := shell.principalForMessage(Message{UserID: "77"})
+
+	firstTaskID, existed, err := shell.enqueueTaskReturningID(context.Background(), "same prompt", principal)
+	if err != nil {
+		t.Fatalf("first enqueueTaskReturningID: %v", err)
+	}
+	if existed {
+		t.Fatal("first enqueue should not deduplicate")
+	}
+	if err := binder.Remember("chat-1", "77", "sess-2"); err != nil {
+		t.Fatalf("Remember(second): %v", err)
+	}
+
+	secondTaskID, existed, err := shell.enqueueTaskReturningID(context.Background(), "same prompt", principal)
+	if err != nil {
+		t.Fatalf("second enqueueTaskReturningID: %v", err)
+	}
+	if !existed {
+		t.Fatal("second enqueue should deduplicate even with different bound session")
+	}
+	if secondTaskID != firstTaskID {
+		t.Fatalf("dedup task ID = %d, want %d", secondTaskID, firstTaskID)
+	}
+
+	tasks, err := queue.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("queue tasks = %d, want 1", len(tasks))
+	}
+	if tasks[0].IdempotencyKey == "" {
+		t.Fatal("queue task should persist an idempotency key")
+	}
+}
+
+func TestShellTrackChatBindingCalledAfterEnqueue(t *testing.T) {
+	tracker := &fakeBindingTracker{}
+	shell, _, _, _ := newTestShellWithOptions(t, WithTaskTracker(tracker))
+
+	err := shell.HandleUpdate(context.Background(), Update{
+		ID: 1,
+		Message: Message{
+			ChatID:    "chat-1",
+			UserID:    "88",
+			MessageID: 101,
+			Text:      "Queue this task",
+		},
+	})
+	if err != nil {
+		t.Fatalf("HandleUpdate: %v", err)
+	}
+	if len(tracker.bindings) != 1 {
+		t.Fatalf("TrackChatBinding calls = %d, want 1", len(tracker.bindings))
+	}
+	if tracker.bindings[0].userID != "88" {
+		t.Fatalf("tracked userID = %q, want 88", tracker.bindings[0].userID)
+	}
+	if len(tracker.userMessages) != 1 {
+		t.Fatalf("TrackUserMessage calls = %d, want 1", len(tracker.userMessages))
+	}
+}
+
+func TestShellNotifyCompletionsUpdatesBinder(t *testing.T) {
+	binder, validator := newShellBinder(t)
+	validator.set("sess-complete", true)
+	shell, queue, _, bot := newTestShellWithOptions(t, WithChatSessionBinder(binder))
+	principal := shell.principalForMessage(Message{UserID: "77"})
+	payload := daemon.EncodeTaskPayload(daemon.TaskPayload{
+		Prompt:    "follow this up",
+		Surface:   "telegram",
+		Principal: principal,
+	})
+
+	taskID, _, err := queue.Enqueue(context.Background(), payload, "")
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	task, err := queue.Next(context.Background())
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if task == nil || task.ID != taskID {
+		t.Fatalf("Next task = %+v, want %d", task, taskID)
+	}
+	if err := queue.BindSession(context.Background(), taskID, "sess-complete"); err != nil {
+		t.Fatalf("BindSession: %v", err)
+	}
+	if err := queue.MarkDone(context.Background(), taskID, "ok", "done"); err != nil {
+		t.Fatalf("MarkDone: %v", err)
+	}
+
+	if err := shell.NotifyCompletions(context.Background()); err != nil {
+		t.Fatalf("NotifyCompletions: %v", err)
+	}
+	if _, ok := binder.Lookup("chat-1", "77"); !ok {
+		t.Fatal("expected binder to remember completed telegram session")
+	}
+	if len(bot.sent) != 1 {
+		t.Fatalf("sent messages = %d, want 1 completion notification", len(bot.sent))
+	}
+}
+
+func TestShellNotifyCompletionsSkipsNonTelegramSurface(t *testing.T) {
+	binder, _ := newShellBinder(t)
+	shell, queue, _, _ := newTestShellWithOptions(t, WithChatSessionBinder(binder))
+	principal := shell.principalForMessage(Message{UserID: "77"})
+	payload := daemon.EncodeTaskPayload(daemon.TaskPayload{
+		Prompt:    "follow this up",
+		Surface:   "cli",
+		Principal: principal,
+	})
+
+	taskID, _, err := queue.Enqueue(context.Background(), payload, "")
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	task, err := queue.Next(context.Background())
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if task == nil || task.ID != taskID {
+		t.Fatalf("Next task = %+v, want %d", task, taskID)
+	}
+	if err := queue.BindSession(context.Background(), taskID, "sess-complete"); err != nil {
+		t.Fatalf("BindSession: %v", err)
+	}
+	if err := queue.MarkDone(context.Background(), taskID, "ok", "done"); err != nil {
+		t.Fatalf("MarkDone: %v", err)
+	}
+
+	if err := shell.NotifyCompletions(context.Background()); err != nil {
+		t.Fatalf("NotifyCompletions: %v", err)
+	}
+	if got, ok := binder.Lookup("chat-1", "77"); ok || got != "" {
+		t.Fatalf("binder.Lookup() = (%q, %v), want miss for non-telegram surface", got, ok)
+	}
+}
+
+func TestShellNotifyCompletionsSkipsEmptyTelegramUserID(t *testing.T) {
+	binder, _ := newShellBinder(t)
+	shell, queue, _, _ := newTestShellWithOptions(t, WithChatSessionBinder(binder))
+	payload := daemon.EncodeTaskPayload(daemon.TaskPayload{
+		Prompt:  "follow this up",
+		Surface: "telegram",
+	})
+
+	taskID, _, err := queue.Enqueue(context.Background(), payload, "")
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	task, err := queue.Next(context.Background())
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if task == nil || task.ID != taskID {
+		t.Fatalf("Next task = %+v, want %d", task, taskID)
+	}
+	if err := queue.BindSession(context.Background(), taskID, "sess-complete"); err != nil {
+		t.Fatalf("BindSession: %v", err)
+	}
+	if err := queue.MarkDone(context.Background(), taskID, "ok", "done"); err != nil {
+		t.Fatalf("MarkDone: %v", err)
+	}
+
+	if err := shell.NotifyCompletions(context.Background()); err != nil {
+		t.Fatalf("NotifyCompletions: %v", err)
+	}
+	if len(binder.bindings) != 0 {
+		t.Fatalf("binder bindings = %+v, want empty when userID is missing", binder.bindings)
 	}
 }
 

@@ -157,11 +157,17 @@ func cmdDaemonStart(ctx context.Context) error {
 		}
 		bot := telegram.NewHTTPClient(cfg.Telegram.BotToken, cfg.Telegram.APIBaseURL)
 		statePath := filepath.Join(cfg.DataDir, "telegram-shell-state.json")
-		tgSink := telegram.NewTelegramSink(bot, cfg.Telegram.ChatID, app.Logger)
+		binderPath := filepath.Join(cfg.DataDir, "telegram-chat-bindings.json")
+		binder, binderErr := telegram.NewChatSessionBinder(binderPath, telegram.FileSessionValidator{DataDir: cfg.DataDir})
+		if binderErr != nil {
+			return fmt.Errorf("telegram: init binder: %w", binderErr)
+		}
+		tgSink := telegram.NewTelegramSink(bot, cfg.Telegram.ChatID, app.Logger, telegram.WithSinkBinder(binder))
 		chatResponder := telegram.NewChatResponder(provider, bot, cfg.Telegram.ChatID, app.Logger)
 		classifier := conversation.NewLLMClassifier()
 		shell, shellErr := telegram.NewShell(queue, approvalStore, bot, cfg.Telegram.ChatID, statePath,
 			telegram.WithChatResponder(chatResponder),
+			telegram.WithChatSessionBinder(binder),
 			telegram.WithClassifier(classifier, provider),
 			telegram.WithTaskTracker(tgSink),
 			telegram.WithWorkDir(workDir),

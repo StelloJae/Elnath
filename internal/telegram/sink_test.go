@@ -249,6 +249,125 @@ func TestSinkNotifyCompletionSendsSummaryWhenNotStreamed(t *testing.T) {
 	}
 }
 
+func TestSinkTrackChatBindingStoresUserID(t *testing.T) {
+	bot := newSinkBot()
+	sink := NewTelegramSink(bot, "chat-1", nil)
+
+	sink.TrackChatBinding(42, "user-1")
+
+	sink.mu.Lock()
+	task := sink.active[42]
+	sink.mu.Unlock()
+	if task == nil {
+		t.Fatal("expected active task after TrackChatBinding")
+	}
+	if task.userID != "user-1" {
+		t.Fatalf("task.userID = %q, want user-1", task.userID)
+	}
+
+	task.progress.Finish()
+	task.progress.Wait()
+	task.stream.Finish()
+	task.stream.Wait()
+}
+
+func TestSinkNotifyCompletionRemembersBinding(t *testing.T) {
+	binder, validator := newShellBinder(t)
+	validator.set("sess-1", true)
+	bot := newSinkBot()
+	sink := NewTelegramSink(bot, "chat-1", nil, WithSinkBinder(binder))
+
+	sink.TrackUserMessage(42, 100)
+	sink.TrackChatBinding(42, "user-1")
+
+	err := sink.NotifyCompletion(context.Background(), daemon.TaskCompletion{
+		TaskID:      42,
+		SessionID:   "sess-1",
+		Status:      daemon.StatusDone,
+		Summary:     "ok",
+		StartedAt:   time.Unix(10, 0),
+		CompletedAt: time.Unix(20, 0),
+	})
+	if err != nil {
+		t.Fatalf("NotifyCompletion: %v", err)
+	}
+	got, ok := binder.Lookup("chat-1", "user-1")
+	if !ok || got != "sess-1" {
+		t.Fatalf("binder.Lookup() = (%q, %v), want (sess-1, true)", got, ok)
+	}
+}
+
+func TestSinkNotifyCompletionFailedStatusDoesNotRemember(t *testing.T) {
+	binder, _ := newShellBinder(t)
+	bot := newSinkBot()
+	sink := NewTelegramSink(bot, "chat-1", nil, WithSinkBinder(binder))
+
+	sink.TrackUserMessage(42, 100)
+	sink.TrackChatBinding(42, "user-1")
+
+	err := sink.NotifyCompletion(context.Background(), daemon.TaskCompletion{
+		TaskID:      42,
+		SessionID:   "sess-1",
+		Status:      daemon.StatusFailed,
+		Summary:     "failed",
+		StartedAt:   time.Unix(10, 0),
+		CompletedAt: time.Unix(20, 0),
+	})
+	if err != nil {
+		t.Fatalf("NotifyCompletion: %v", err)
+	}
+	if got, ok := binder.Lookup("chat-1", "user-1"); ok || got != "" {
+		t.Fatalf("binder.Lookup() = (%q, %v), want miss after failed completion", got, ok)
+	}
+}
+
+func TestSinkNotifyCompletionNoBinderIsNoOp(t *testing.T) {
+	bot := newSinkBot()
+	sink := NewTelegramSink(bot, "chat-1", nil)
+
+	sink.TrackUserMessage(42, 100)
+	sink.TrackChatBinding(42, "user-1")
+
+	err := sink.NotifyCompletion(context.Background(), daemon.TaskCompletion{
+		TaskID:      42,
+		SessionID:   "sess-1",
+		Status:      daemon.StatusDone,
+		Summary:     "ok",
+		StartedAt:   time.Unix(10, 0),
+		CompletedAt: time.Unix(20, 0),
+	})
+	if err != nil {
+		t.Fatalf("NotifyCompletion: %v", err)
+	}
+	reactions := bot.getReactions()
+	if len(reactions) != 1 {
+		t.Fatalf("reactions = %d, want 1", len(reactions))
+	}
+}
+
+func TestSinkNotifyCompletionMissingUserIDIsNoOp(t *testing.T) {
+	binder, _ := newShellBinder(t)
+	bot := newSinkBot()
+	sink := NewTelegramSink(bot, "chat-1", nil, WithSinkBinder(binder))
+
+	sink.TrackUserMessage(42, 100)
+
+	err := sink.NotifyCompletion(context.Background(), daemon.TaskCompletion{
+		TaskID:      42,
+		SessionID:   "sess-1",
+		Status:      daemon.StatusDone,
+		Summary:     "ok",
+		StartedAt:   time.Unix(10, 0),
+		CompletedAt: time.Unix(20, 0),
+	})
+	if err != nil {
+		t.Fatalf("NotifyCompletion: %v", err)
+	}
+	if got, ok := binder.Lookup("chat-1", "user-1"); ok || got != "" {
+		t.Fatalf("binder.Lookup() = (%q, %v), want miss when userID is unknown", got, ok)
+	}
+}
+
 func TestSinkEnsureTaskCreatesOnce(t *testing.T) {
 	bot := newSinkBot()
 	sink := NewTelegramSink(bot, "chat-1", nil)

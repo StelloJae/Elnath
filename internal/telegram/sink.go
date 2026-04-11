@@ -15,30 +15,42 @@ const maxMessageLen = 4000
 
 type activeTask struct {
 	userMsgID    int64
+	userID       string
 	progress     *ProgressReporter
 	stream       *StreamConsumer
 	reactionSent bool
 }
 
+type SinkOption func(*TelegramSink)
+
 type TelegramSink struct {
 	bot    BotClient
 	chatID string
 	logger *slog.Logger
+	binder *ChatSessionBinder
 
 	mu     sync.Mutex
 	active map[int64]*activeTask
 }
 
-func NewTelegramSink(bot BotClient, chatID string, logger *slog.Logger) *TelegramSink {
+func WithSinkBinder(binder *ChatSessionBinder) SinkOption {
+	return func(s *TelegramSink) { s.binder = binder }
+}
+
+func NewTelegramSink(bot BotClient, chatID string, logger *slog.Logger, opts ...SinkOption) *TelegramSink {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &TelegramSink{
+	sink := &TelegramSink{
 		bot:    bot,
 		chatID: chatID,
 		logger: logger,
 		active: make(map[int64]*activeTask),
 	}
+	for _, opt := range opts {
+		opt(sink)
+	}
+	return sink
 }
 
 func (s *TelegramSink) TrackUserMessage(taskID, userMsgID int64) {
@@ -46,6 +58,13 @@ func (s *TelegramSink) TrackUserMessage(taskID, userMsgID int64) {
 	defer s.mu.Unlock()
 	task := s.ensureTask(taskID)
 	task.userMsgID = userMsgID
+}
+
+func (s *TelegramSink) TrackChatBinding(taskID int64, userID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	task := s.ensureTask(taskID)
+	task.userID = userID
 }
 
 func (s *TelegramSink) OnToolProgress(taskID int64, toolName, preview string) {
@@ -137,6 +156,11 @@ func (s *TelegramSink) NotifyCompletion(_ context.Context, c daemon.TaskCompleti
 
 	if task == nil {
 		return nil
+	}
+	if s.binder != nil && c.Status == daemon.StatusDone && task.userID != "" && c.SessionID != "" {
+		if err := s.binder.Remember(s.chatID, task.userID, c.SessionID); err != nil {
+			s.logger.Warn("telegram sink: binding remember failed", "task_id", c.TaskID, "error", err)
+		}
 	}
 
 	task.progress.Finish()

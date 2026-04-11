@@ -66,11 +66,19 @@ func cmdTelegramShell(ctx context.Context) error {
 	}
 	bot := telegram.NewHTTPClient(cfg.Telegram.BotToken, cfg.Telegram.APIBaseURL)
 	statePath := filepath.Join(cfg.DataDir, "telegram-shell-state.json")
+	binderPath := filepath.Join(cfg.DataDir, "telegram-chat-bindings.json")
+	binder, err := telegram.NewChatSessionBinder(binderPath, telegram.FileSessionValidator{DataDir: cfg.DataDir})
+	if err != nil {
+		return fmt.Errorf("telegram: init binder: %w", err)
+	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("get cwd: %w", err)
 	}
-	shell, err := telegram.NewShell(queue, approvals, bot, cfg.Telegram.ChatID, statePath, telegram.WithWorkDir(cwd))
+	shell, err := telegram.NewShell(queue, approvals, bot, cfg.Telegram.ChatID, statePath,
+		telegram.WithWorkDir(cwd),
+		telegram.WithChatSessionBinder(binder),
+	)
 	if err != nil {
 		return err
 	}

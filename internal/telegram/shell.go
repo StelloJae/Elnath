@@ -63,6 +63,10 @@ type TaskTracker interface {
 	TrackUserMessage(taskID, userMsgID int64)
 }
 
+type ChatBindingTracker interface {
+	TrackChatBinding(taskID int64, userID string)
+}
+
 // WithTaskTracker registers a sink that tracks user message IDs for reactions.
 func WithTaskTracker(tracker TaskTracker) ShellOption {
 	return func(s *Shell) { s.taskTracker = tracker }
@@ -70,6 +74,10 @@ func WithTaskTracker(tracker TaskTracker) ShellOption {
 
 func WithWorkDir(workDir string) ShellOption {
 	return func(s *Shell) { s.workDir = strings.TrimSpace(workDir) }
+}
+
+func WithChatSessionBinder(binder *ChatSessionBinder) ShellOption {
+	return func(s *Shell) { s.binder = binder }
 }
 
 type Shell struct {
@@ -85,6 +93,7 @@ type Shell struct {
 	classifyProvider   llm.Provider
 	taskTracker        TaskTracker
 	workDir            string
+	binder             *ChatSessionBinder
 }
 
 type shellState struct {
@@ -153,15 +162,13 @@ func (s *Shell) HandleUpdate(ctx context.Context, update Update) error {
 			return s.bot.SendMessage(ctx, s.chatID, dedupMessage(taskID))
 		}
 		_ = s.bot.SendMessage(ctx, s.chatID, s.taskAcknowledgment(ctx, prompt))
-		if s.taskTracker != nil && update.Message.MessageID > 0 {
-			s.taskTracker.TrackUserMessage(taskID, update.Message.MessageID)
-		}
+		s.trackEnqueuedTask(taskID, update.Message.MessageID, principal.UserID)
 		return nil
 	}
 
 	// Other explicit commands go to command handler.
 	if len(fields) > 0 && strings.HasPrefix(fields[0], "/") {
-		reply, err := s.handleCommand(ctx, text, principal)
+		reply, err := s.handleCommand(ctx, text, principal, update.Message.MessageID)
 		if err != nil {
 			reply = "⚠️ " + err.Error()
 		}
@@ -191,9 +198,7 @@ func (s *Shell) HandleUpdate(ctx context.Context, update Update) error {
 		return s.bot.SendMessage(ctx, s.chatID, dedupMessage(taskID))
 	}
 	_ = s.bot.SendMessage(ctx, s.chatID, s.taskAcknowledgment(ctx, text))
-	if s.taskTracker != nil && update.Message.MessageID > 0 {
-		s.taskTracker.TrackUserMessage(taskID, update.Message.MessageID)
-	}
+	s.trackEnqueuedTask(taskID, update.Message.MessageID, principal.UserID)
 	return nil
 }
 
@@ -268,6 +273,14 @@ func (s *Shell) NotifyCompletions(ctx context.Context) error {
 		if err := s.bot.SendMessage(ctx, s.chatID, text); err != nil {
 			return err
 		}
+		if s.binder != nil && task.Completion.SessionID != "" {
+			payload := daemon.ParseTaskPayload(task.Payload)
+			if payload.Surface == "telegram" && payload.Principal.UserID != "" {
+				if err := s.binder.Remember(s.chatID, payload.Principal.UserID, task.Completion.SessionID); err != nil {
+					s.logger.Warn("telegram: binding remember failed (poll)", "task_id", task.ID, "error", err)
+				}
+			}
+		}
 		notified[task.ID] = struct{}{}
 		state.NotifiedCompletionIDs = append(state.NotifiedCompletionIDs, task.ID)
 	}
@@ -297,7 +310,7 @@ func (s *Shell) RememberOffset(nextOffset int64) error {
 	return s.saveState(state)
 }
 
-func (s *Shell) handleCommand(ctx context.Context, text string, principal identity.Principal) (string, error) {
+func (s *Shell) handleCommand(ctx context.Context, text string, principal identity.Principal, userMsgID int64) (string, error) {
 	fields := strings.Fields(text)
 	if len(fields) == 0 {
 		return "empty command", nil
@@ -313,7 +326,7 @@ func (s *Shell) handleCommand(ctx context.Context, text string, principal identi
 	case "/deny":
 		return s.resolveApproval(ctx, fields, false)
 	case "/followup", "/resume":
-		return s.enqueueFollowUp(ctx, text, principal)
+		return s.enqueueFollowUp(ctx, text, principal, userMsgID)
 	case "/submit":
 		return s.enqueueNewTask(ctx, text, principal)
 	case "/help":
@@ -407,6 +420,11 @@ func (s *Shell) enqueueTaskReturningID(ctx context.Context, prompt string, princ
 		Surface:   "telegram",
 		Principal: principal,
 	}
+	if s.binder != nil {
+		if sessionID, ok := s.binder.Lookup(s.chatID, principal.UserID); ok {
+			payload.SessionID = sessionID
+		}
+	}
 	encoded := daemon.EncodeTaskPayload(payload)
 	parsed := daemon.ParseTaskPayload(encoded)
 	idemKey := identity.KeyFor(payload.Principal, parsed.Prompt)
@@ -435,7 +453,7 @@ func (s *Shell) enqueueNewTask(ctx context.Context, raw string, principal identi
 	return fmt.Sprintf("🚀 Task <code>#%d</code> queued", id), nil
 }
 
-func (s *Shell) enqueueFollowUp(ctx context.Context, raw string, principal identity.Principal) (string, error) {
+func (s *Shell) enqueueFollowUp(ctx context.Context, raw string, principal identity.Principal, userMsgID int64) (string, error) {
 	parts := strings.SplitN(raw, " ", 3)
 	if len(parts) < 3 {
 		return "", fmt.Errorf("usage: /followup <session_id> <message>")
@@ -459,7 +477,20 @@ func (s *Shell) enqueueFollowUp(ctx context.Context, raw string, principal ident
 	if existed {
 		return dedupMessage(id), nil
 	}
+	s.trackEnqueuedTask(id, userMsgID, principal.UserID)
 	return fmt.Sprintf("🔄 Follow-up <code>#%d</code> queued for session <code>%s</code>", id, payload.SessionID[:8]), nil
+}
+
+func (s *Shell) trackEnqueuedTask(taskID, userMsgID int64, userID string) {
+	if s.taskTracker == nil {
+		return
+	}
+	if userMsgID > 0 {
+		s.taskTracker.TrackUserMessage(taskID, userMsgID)
+	}
+	if tracker, ok := s.taskTracker.(ChatBindingTracker); ok {
+		tracker.TrackChatBinding(taskID, userID)
+	}
 }
 
 func dedupMessage(taskID int64) string {
