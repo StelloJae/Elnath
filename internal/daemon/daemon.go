@@ -226,15 +226,25 @@ func (d *Daemon) handleSubmit(ctx context.Context, conn net.Conn, req IPCRequest
 		return
 	}
 
-	id, err := d.queue.Enqueue(ctx, payload)
+	parsed := ParseTaskPayload(payload)
+	principal := parsed.Principal
+	if principal.IsZero() {
+		principal = d.fallbackPrincipal
+	}
+	idemKey := identity.KeyFor(principal, parsed.Prompt)
+
+	id, existed, err := d.queue.Enqueue(ctx, payload, idemKey)
 	if err != nil {
 		d.writeResponse(conn, IPCResponse{Err: fmt.Sprintf("enqueue: %v", err)})
 		return
 	}
 
 	d.writeResponse(conn, IPCResponse{
-		OK:   true,
-		Data: map[string]int64{"task_id": id},
+		OK: true,
+		Data: map[string]any{
+			"task_id": id,
+			"existed": existed,
+		},
 	})
 }
 

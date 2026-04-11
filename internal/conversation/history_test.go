@@ -3,6 +3,7 @@ package conversation
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -84,7 +85,48 @@ func TestHistoryStoreSaveAndLoad(t *testing.T) {
 	}
 }
 
-func TestHistoryStoreSaveReplace(t *testing.T) {
+func TestSaveUpsertsMessages(t *testing.T) {
+	db := openTestDB(t)
+	if err := InitSchema(db); err != nil {
+		t.Fatalf("InitSchema: %v", err)
+	}
+	store := NewHistoryStore(db)
+	ctx := context.Background()
+
+	messages := []llm.Message{
+		llm.NewUserMessage("message 1"),
+		llm.NewAssistantMessage("reply 1"),
+	}
+	if err := store.Save(ctx, "s1", messages); err != nil {
+		t.Fatalf("Save(first): %v", err)
+	}
+	if err := store.Save(ctx, "s1", messages); err != nil {
+		t.Fatalf("Save(second): %v", err)
+	}
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM conversation_messages WHERE session_id = ?`, "s1").Scan(&count); err != nil {
+		t.Fatalf("count conversation_messages: %v", err)
+	}
+	if count != len(messages) {
+		t.Fatalf("row count = %d, want %d", count, len(messages))
+	}
+
+	got, err := store.Load(ctx, "s1")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(got) != len(messages) {
+		t.Fatalf("Load returned %d messages, want %d", len(got), len(messages))
+	}
+	for i, m := range messages {
+		if got[i].Text() != m.Text() {
+			t.Errorf("message[%d] text = %q, want %q", i, got[i].Text(), m.Text())
+		}
+	}
+}
+
+func TestSaveAppendsNewMessages(t *testing.T) {
 	db := openTestDB(t)
 	if err := InitSchema(db); err != nil {
 		t.Fatalf("InitSchema: %v", err)
@@ -93,34 +135,83 @@ func TestHistoryStoreSaveReplace(t *testing.T) {
 	ctx := context.Background()
 
 	first := []llm.Message{
-		llm.NewUserMessage("old message 1"),
-		llm.NewAssistantMessage("old reply 1"),
+		llm.NewUserMessage("message 1"),
+		llm.NewAssistantMessage("reply 1"),
 	}
 	if err := store.Save(ctx, "s1", first); err != nil {
-		t.Fatalf("Save (first): %v", err)
+		t.Fatalf("Save(first): %v", err)
 	}
 
 	second := []llm.Message{
-		llm.NewUserMessage("new message 1"),
-		llm.NewAssistantMessage("new reply 1"),
-		llm.NewUserMessage("new message 2"),
+		llm.NewUserMessage("message 1"),
+		llm.NewAssistantMessage("reply 1"),
+		llm.NewUserMessage("message 2"),
 	}
 	if err := store.Save(ctx, "s1", second); err != nil {
-		t.Fatalf("Save (second): %v", err)
+		t.Fatalf("Save(second): %v", err)
+	}
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM conversation_messages WHERE session_id = ?`, "s1").Scan(&count); err != nil {
+		t.Fatalf("count conversation_messages: %v", err)
+	}
+	if count != 3 {
+		t.Fatalf("row count = %d, want 3", count)
 	}
 
 	got, err := store.Load(ctx, "s1")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-
 	if len(got) != len(second) {
-		t.Fatalf("Load returned %d messages, want %d (old messages not replaced)", len(got), len(second))
+		t.Fatalf("Load returned %d messages, want %d", len(got), len(second))
 	}
 	for i, m := range second {
 		if got[i].Text() != m.Text() {
 			t.Errorf("message[%d] text = %q, want %q", i, got[i].Text(), m.Text())
 		}
+	}
+}
+
+func TestBackfillContentHash(t *testing.T) {
+	db := openTestDB(t)
+	if _, err := db.Exec(`CREATE TABLE conversations (
+		id TEXT PRIMARY KEY,
+		created_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+		updated_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+	)`); err != nil {
+		t.Fatalf("create conversations: %v", err)
+	}
+	if _, err := db.Exec(`CREATE TABLE conversation_messages (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		session_id TEXT NOT NULL REFERENCES conversations(id),
+		role TEXT NOT NULL,
+		content TEXT NOT NULL,
+		created_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+	)`); err != nil {
+		t.Fatalf("create legacy conversation_messages: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO conversations(id) VALUES (?)`, "legacy-session"); err != nil {
+		t.Fatalf("insert conversation: %v", err)
+	}
+	data, err := json.Marshal(llm.NewUserMessage("hello from legacy"))
+	if err != nil {
+		t.Fatalf("marshal message: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO conversation_messages(session_id, role, content) VALUES (?, ?, ?)`, "legacy-session", "user", string(data)); err != nil {
+		t.Fatalf("insert legacy message: %v", err)
+	}
+
+	if err := InitSchema(db); err != nil {
+		t.Fatalf("InitSchema migrate: %v", err)
+	}
+
+	var hash string
+	if err := db.QueryRow(`SELECT content_hash FROM conversation_messages WHERE session_id = ?`, "legacy-session").Scan(&hash); err != nil {
+		t.Fatalf("select content_hash: %v", err)
+	}
+	if hash == "" {
+		t.Fatal("content_hash should be backfilled")
 	}
 }
 

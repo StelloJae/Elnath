@@ -132,7 +132,10 @@ func cmdDaemonStart(ctx context.Context) error {
 		return fmt.Errorf("create queue: %w", err)
 	}
 
-	router := daemon.NewDeliveryRouter(app.Logger)
+	router, err := daemon.NewDeliveryRouter(db.Main, app.Logger)
+	if err != nil {
+		return fmt.Errorf("create delivery router: %w", err)
+	}
 	router.Register(daemon.NewLogSink(app.Logger))
 
 	d := daemon.New(queue, cfg.Daemon.SocketPath, cfg.Daemon.MaxWorkers, rt.newDaemonTaskRunner(), app.Logger)
@@ -224,12 +227,17 @@ func cmdDaemonSubmit(ctx context.Context, args []string) error {
 	}
 
 	data, _ := json.Marshal(resp.Data)
-	var result map[string]interface{}
-	if json.Unmarshal(data, &result) == nil {
-		if id, ok := result["task_id"]; ok {
-			fmt.Printf("Task submitted: ID %v\n", id)
+	var result struct {
+		TaskID  float64 `json:"task_id"`
+		Existed bool    `json:"existed"`
+	}
+	if json.Unmarshal(data, &result) == nil && result.TaskID > 0 {
+		if result.Existed {
+			fmt.Printf("Task #%d already running (deduplicated)\n", int64(result.TaskID))
 			return nil
 		}
+		fmt.Printf("Task #%d enqueued\n", int64(result.TaskID))
+		return nil
 	}
 	fmt.Printf("Task submitted: %s\n", string(data))
 	return nil

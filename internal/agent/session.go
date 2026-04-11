@@ -2,6 +2,8 @@ package agent
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,12 +28,13 @@ type SessionPersister interface {
 // Session is a persisted conversation stored as a JSONL file.
 // Format: first line is a sessionHeader, subsequent lines are llm.Message.
 type Session struct {
-	ID        string
-	path      string
-	Principal identity.Principal
-	Messages  []llm.Message
-	persister SessionPersister // optional secondary persistence
-	logger    func(msg string, args ...any)
+	ID            string
+	path          string
+	Principal     identity.Principal
+	Messages      []llm.Message
+	appliedHashes map[string]struct{}
+	persister     SessionPersister // optional secondary persistence
+	logger        func(msg string, args ...any)
 }
 
 // WithPersister sets an optional secondary persistence backend.
@@ -74,7 +77,7 @@ func NewSession(dataDir string, principals ...identity.Principal) (*Session, err
 	if len(principals) > 0 && !principals[0].IsZero() {
 		principal = principals[0]
 	}
-	s := &Session{ID: id, path: path, Principal: principal}
+	s := &Session{ID: id, path: path, Principal: principal, appliedHashes: make(map[string]struct{})}
 	if err := s.writeHeader(); err != nil {
 		return nil, err
 	}
@@ -90,7 +93,7 @@ func LoadSession(dataDir, id string) (*Session, error) {
 	}
 	defer f.Close()
 
-	s := &Session{ID: id, path: path}
+	s := &Session{ID: id, path: path, appliedHashes: make(map[string]struct{})}
 	scanner := bufio.NewScanner(f)
 
 	// First line: header.
@@ -119,6 +122,9 @@ func LoadSession(dataDir, id string) (*Session, error) {
 			return nil, fmt.Errorf("session: parse message: %w", err)
 		}
 		s.Messages = append(s.Messages, msg)
+		if shouldDedupMessage(msg) {
+			s.appliedHashes[messageHash(msg)] = struct{}{}
+		}
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -132,6 +138,20 @@ func LoadSession(dataDir, id string) (*Session, error) {
 // updates the in-memory slice. JSONL lines are small enough that O_APPEND is
 // atomic on POSIX filesystems for reasonable message sizes.
 func (s *Session) AppendMessage(msg llm.Message) error {
+	hash := ""
+	if shouldDedupMessage(msg) {
+		hash = messageHash(msg)
+		if s.appliedHashes == nil {
+			s.appliedHashes = make(map[string]struct{})
+		}
+		if _, ok := s.appliedHashes[hash]; ok {
+			if s.logger != nil {
+				s.logger("session: skipped duplicate append", "session_id", s.ID, "hash", hash)
+			}
+			return nil
+		}
+	}
+
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return fmt.Errorf("session: marshal message: %w", err)
@@ -148,8 +168,21 @@ func (s *Session) AppendMessage(msg llm.Message) error {
 		return fmt.Errorf("session: write message: %w", err)
 	}
 
+	if hash != "" {
+		s.appliedHashes[hash] = struct{}{}
+	}
 	s.Messages = append(s.Messages, msg)
 	return nil
+}
+
+func messageHash(msg llm.Message) string {
+	data, _ := json.Marshal(msg)
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])[:16]
+}
+
+func shouldDedupMessage(msg llm.Message) bool {
+	return msg.Role == llm.RoleUser
 }
 
 // AppendMessages appends multiple messages in a single write for efficiency.

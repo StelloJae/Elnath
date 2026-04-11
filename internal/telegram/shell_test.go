@@ -79,7 +79,7 @@ func newTestShell(t *testing.T) (*Shell, *daemon.Queue, *daemon.ApprovalStore, *
 func TestShellHandleUpdateStatusAndFollowUp(t *testing.T) {
 	shell, queue, _, bot := newTestShell(t)
 
-	taskID, err := queue.Enqueue(context.Background(), "existing task")
+	taskID, _, err := queue.Enqueue(context.Background(), "existing task", "")
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
@@ -176,7 +176,7 @@ func TestShellHandleUpdateApprovalsAndNotifyCompletions(t *testing.T) {
 		t.Fatalf("approval decision = %q, want approved", row.Decision)
 	}
 
-	taskID, err := queue.Enqueue(context.Background(), "terminal task")
+	taskID, _, err := queue.Enqueue(context.Background(), "terminal task", "")
 	if err != nil {
 		t.Fatalf("Enqueue completion: %v", err)
 	}
@@ -266,6 +266,37 @@ func TestShellPlainTextAutoSubmit(t *testing.T) {
 	}
 	if payload.Principal.UserID != "99" || payload.Principal.Surface != "telegram" {
 		t.Fatalf("principal = %+v, want telegram principal for user 99", payload.Principal)
+	}
+}
+
+func TestShellDeduplicatesSameUserPrompt(t *testing.T) {
+	shell, queue, _, bot := newTestShell(t)
+
+	first := Update{ID: 1, Message: Message{ChatID: "chat-1", UserID: "99", MessageID: 1, Text: "Refactor the auth module"}}
+	second := Update{ID: 2, Message: Message{ChatID: "chat-1", UserID: "99", MessageID: 2, Text: "Refactor the auth module"}}
+
+	if err := shell.HandleUpdate(context.Background(), first); err != nil {
+		t.Fatalf("HandleUpdate(first): %v", err)
+	}
+	if err := shell.HandleUpdate(context.Background(), second); err != nil {
+		t.Fatalf("HandleUpdate(second): %v", err)
+	}
+
+	tasks, err := queue.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("queue tasks = %d, want 1", len(tasks))
+	}
+	if tasks[0].IdempotencyKey == "" {
+		t.Fatal("queue task should persist an idempotency key")
+	}
+	if len(bot.sent) != 2 {
+		t.Fatalf("sent messages = %d, want 2", len(bot.sent))
+	}
+	if !strings.Contains(bot.sent[1].text, "이미 처리 중입니다 (#") {
+		t.Fatalf("second reply = %q, want dedup message", bot.sent[1].text)
 	}
 }
 

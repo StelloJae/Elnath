@@ -15,10 +15,7 @@ func TestClosedAlphaTelemetryAggregatesRequiredSignals(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	firstID, err := q.Enqueue(ctx, "first alpha rehearsal")
-	if err != nil {
-		t.Fatalf("Enqueue(first): %v", err)
-	}
+	firstID := mustEnqueue(t, q, ctx, "first alpha rehearsal")
 	first, err := q.Next(ctx)
 	if err != nil {
 		t.Fatalf("Next(first): %v", err)
@@ -33,10 +30,7 @@ func TestClosedAlphaTelemetryAggregatesRequiredSignals(t *testing.T) {
 		t.Fatalf("MarkDone(first): %v", err)
 	}
 
-	second, err := q.Enqueue(ctx, "second alpha rehearsal")
-	if err != nil {
-		t.Fatalf("Enqueue(second): %v", err)
-	}
+	second := mustEnqueue(t, q, ctx, "second alpha rehearsal")
 	claimedSecond, err := q.Next(ctx)
 	if err != nil {
 		t.Fatalf("Next(second): %v", err)
@@ -51,10 +45,7 @@ func TestClosedAlphaTelemetryAggregatesRequiredSignals(t *testing.T) {
 		t.Fatalf("MarkDone(second): %v", err)
 	}
 
-	third, err := q.Enqueue(ctx, "timeout rehearsal")
-	if err != nil {
-		t.Fatalf("Enqueue(third): %v", err)
-	}
+	third := mustEnqueue(t, q, ctx, "timeout rehearsal")
 	claimedThird, err := q.Next(ctx)
 	if err != nil {
 		t.Fatalf("Next(third): %v", err)

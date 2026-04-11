@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"log/slog"
 	"testing"
@@ -10,13 +11,36 @@ import (
 
 // recordingSink captures all completions it receives.
 type recordingSink struct {
+	name     string
 	received []TaskCompletion
 	err      error
+	errs     []error
 }
 
 func (s *recordingSink) NotifyCompletion(_ context.Context, c TaskCompletion) error {
 	s.received = append(s.received, c)
+	if len(s.errs) > 0 {
+		err := s.errs[0]
+		s.errs = s.errs[1:]
+		return err
+	}
 	return s.err
+}
+
+func (s *recordingSink) String() string {
+	if s.name != "" {
+		return s.name
+	}
+	return "recordingSink"
+}
+
+func mustNewDeliveryRouter(t *testing.T, db *sql.DB) *DeliveryRouter {
+	t.Helper()
+	router, err := NewDeliveryRouter(db, slog.Default())
+	if err != nil {
+		t.Fatalf("NewDeliveryRouter: %v", err)
+	}
+	return router
 }
 
 func testCompletion() TaskCompletion {
@@ -33,14 +57,14 @@ func testCompletion() TaskCompletion {
 }
 
 func TestDeliveryRouter_NoSinks(t *testing.T) {
-	router := NewDeliveryRouter(slog.Default())
+	router := mustNewDeliveryRouter(t, nil)
 	if err := router.Deliver(context.Background(), testCompletion()); err != nil {
 		t.Errorf("expected nil error with no sinks, got: %v", err)
 	}
 }
 
 func TestDeliveryRouter_OneSinkSuccess(t *testing.T) {
-	router := NewDeliveryRouter(slog.Default())
+	router := mustNewDeliveryRouter(t, nil)
 	sink := &recordingSink{}
 	router.Register(sink)
 
@@ -56,8 +80,77 @@ func TestDeliveryRouter_OneSinkSuccess(t *testing.T) {
 	}
 }
 
+func TestDeliverDedupSameTaskSameSink(t *testing.T) {
+	router := mustNewDeliveryRouter(t, openTestDB(t))
+	sink := &recordingSink{name: "telegram"}
+	router.Register(sink)
+
+	completion := testCompletion()
+	if err := router.Deliver(context.Background(), completion); err != nil {
+		t.Fatalf("Deliver(first): %v", err)
+	}
+	if err := router.Deliver(context.Background(), completion); err != nil {
+		t.Fatalf("Deliver(second): %v", err)
+	}
+	if len(sink.received) != 1 {
+		t.Fatalf("sink received %d completions, want 1", len(sink.received))
+	}
+}
+
+func TestDeliverDifferentSinksBothCalled(t *testing.T) {
+	router := mustNewDeliveryRouter(t, openTestDB(t))
+	first := &recordingSink{name: "telegram"}
+	second := &recordingSink{name: "log"}
+	router.Register(first)
+	router.Register(second)
+
+	if err := router.Deliver(context.Background(), testCompletion()); err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+	if len(first.received) != 1 {
+		t.Fatalf("first sink received %d completions, want 1", len(first.received))
+	}
+	if len(second.received) != 1 {
+		t.Fatalf("second sink received %d completions, want 1", len(second.received))
+	}
+}
+
+func TestDeliverNoDBSkipsDedup(t *testing.T) {
+	router := mustNewDeliveryRouter(t, nil)
+	sink := &recordingSink{name: "telegram"}
+	router.Register(sink)
+
+	completion := testCompletion()
+	if err := router.Deliver(context.Background(), completion); err != nil {
+		t.Fatalf("Deliver(first): %v", err)
+	}
+	if err := router.Deliver(context.Background(), completion); err != nil {
+		t.Fatalf("Deliver(second): %v", err)
+	}
+	if len(sink.received) != 2 {
+		t.Fatalf("sink received %d completions, want 2", len(sink.received))
+	}
+}
+
+func TestDeliverRetriesAfterSinkFailure(t *testing.T) {
+	router := mustNewDeliveryRouter(t, openTestDB(t))
+	sink := &recordingSink{name: "telegram", errs: []error{errors.New("temporary failure")}}
+	router.Register(sink)
+
+	completion := testCompletion()
+	if err := router.Deliver(context.Background(), completion); err == nil {
+		t.Fatal("first delivery should fail when the only sink fails")
+	}
+	if err := router.Deliver(context.Background(), completion); err != nil {
+		t.Fatalf("second delivery should retry successfully: %v", err)
+	}
+	if len(sink.received) != 2 {
+		t.Fatalf("sink received %d completions, want 2", len(sink.received))
+	}
+}
+
 func TestDeliveryRouter_OneSinkFailure(t *testing.T) {
-	router := NewDeliveryRouter(slog.Default())
+	router := mustNewDeliveryRouter(t, nil)
 	sinkErr := errors.New("sink unavailable")
 	sink := &recordingSink{err: sinkErr}
 	router.Register(sink)
@@ -73,7 +166,7 @@ func TestDeliveryRouter_OneSinkFailure(t *testing.T) {
 }
 
 func TestDeliveryRouter_MixedSinks(t *testing.T) {
-	router := NewDeliveryRouter(slog.Default())
+	router := mustNewDeliveryRouter(t, nil)
 	failing := &recordingSink{err: errors.New("boom")}
 	succeeding := &recordingSink{}
 	router.Register(failing)
@@ -93,7 +186,7 @@ func TestDeliveryRouter_MixedSinks(t *testing.T) {
 }
 
 func TestDeliveryRouter_AllSinksFail(t *testing.T) {
-	router := NewDeliveryRouter(slog.Default())
+	router := mustNewDeliveryRouter(t, nil)
 	err1 := errors.New("err1")
 	err2 := errors.New("err2")
 	router.Register(&recordingSink{err: err1})

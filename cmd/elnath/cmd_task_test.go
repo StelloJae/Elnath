@@ -88,7 +88,7 @@ func TestResolveTaskSession(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	id, err := queue.Enqueue(ctx, "test task")
+	id, _, err := queue.Enqueue(ctx, "test task", "")
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}

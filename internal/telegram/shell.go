@@ -145,11 +145,14 @@ func (s *Shell) HandleUpdate(ctx context.Context, update Update) error {
 			_ = s.bot.SetReaction(ctx, s.chatID, update.Message.MessageID, "👀")
 		}
 		prompt := strings.TrimSpace(strings.TrimPrefix(text, "/submit"))
-		_ = s.bot.SendMessage(ctx, s.chatID, s.taskAcknowledgment(ctx, prompt))
-		taskID, err := s.enqueueTaskReturningID(ctx, prompt, principal)
+		taskID, existed, err := s.enqueueTaskReturningID(ctx, prompt, principal)
 		if err != nil {
 			return s.bot.SendMessage(ctx, s.chatID, "⚠️ "+err.Error())
 		}
+		if existed {
+			return s.bot.SendMessage(ctx, s.chatID, dedupMessage(taskID))
+		}
+		_ = s.bot.SendMessage(ctx, s.chatID, s.taskAcknowledgment(ctx, prompt))
 		if s.taskTracker != nil && update.Message.MessageID > 0 {
 			s.taskTracker.TrackUserMessage(taskID, update.Message.MessageID)
 		}
@@ -180,11 +183,14 @@ func (s *Shell) HandleUpdate(ctx context.Context, update Update) error {
 	if update.Message.MessageID > 0 {
 		_ = s.bot.SetReaction(ctx, s.chatID, update.Message.MessageID, "👀")
 	}
-	_ = s.bot.SendMessage(ctx, s.chatID, s.taskAcknowledgment(ctx, text))
-	taskID, err := s.enqueueTaskReturningID(ctx, text, principal)
+	taskID, existed, err := s.enqueueTaskReturningID(ctx, text, principal)
 	if err != nil {
 		return s.bot.SendMessage(ctx, s.chatID, "⚠️ "+err.Error())
 	}
+	if existed {
+		return s.bot.SendMessage(ctx, s.chatID, dedupMessage(taskID))
+	}
+	_ = s.bot.SendMessage(ctx, s.chatID, s.taskAcknowledgment(ctx, text))
 	if s.taskTracker != nil && update.Message.MessageID > 0 {
 		s.taskTracker.TrackUserMessage(taskID, update.Message.MessageID)
 	}
@@ -391,17 +397,27 @@ func (s *Shell) resolveApproval(ctx context.Context, fields []string, approved b
 	return fmt.Sprintf("❌ Denied <code>#%d</code>", id), nil
 }
 
-func (s *Shell) enqueueTaskReturningID(ctx context.Context, prompt string, principal identity.Principal) (int64, error) {
+func (s *Shell) enqueueTaskReturningID(ctx context.Context, prompt string, principal identity.Principal) (int64, bool, error) {
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
-		return 0, fmt.Errorf("usage: /submit <message> or just type your message")
+		return 0, false, fmt.Errorf("usage: /submit <message> or just type your message")
 	}
 	payload := daemon.TaskPayload{
 		Prompt:    prompt,
 		Surface:   "telegram",
 		Principal: principal,
 	}
-	return s.queue.Enqueue(ctx, daemon.EncodeTaskPayload(payload))
+	encoded := daemon.EncodeTaskPayload(payload)
+	parsed := daemon.ParseTaskPayload(encoded)
+	idemKey := identity.KeyFor(payload.Principal, parsed.Prompt)
+	id, existed, err := s.queue.Enqueue(ctx, encoded, idemKey)
+	if err != nil {
+		return 0, false, err
+	}
+	if existed {
+		s.logger.Info("telegram: enqueue deduplicated", "task_id", id, "user_id", payload.Principal.UserID)
+	}
+	return id, existed, nil
 }
 
 func (s *Shell) enqueueNewTask(ctx context.Context, raw string, principal identity.Principal) (string, error) {
@@ -409,9 +425,12 @@ func (s *Shell) enqueueNewTask(ctx context.Context, raw string, principal identi
 	if strings.HasPrefix(prompt, "/submit") {
 		prompt = strings.TrimSpace(strings.TrimPrefix(prompt, "/submit"))
 	}
-	id, err := s.enqueueTaskReturningID(ctx, prompt, principal)
+	id, existed, err := s.enqueueTaskReturningID(ctx, prompt, principal)
 	if err != nil {
 		return "", err
+	}
+	if existed {
+		return dedupMessage(id), nil
 	}
 	return fmt.Sprintf("🚀 Task <code>#%d</code> queued", id), nil
 }
@@ -430,11 +449,21 @@ func (s *Shell) enqueueFollowUp(ctx context.Context, raw string, principal ident
 	if payload.Prompt == "" || payload.SessionID == "" {
 		return "", fmt.Errorf("usage: /followup <session_id> <message>")
 	}
-	id, err := s.queue.Enqueue(ctx, daemon.EncodeTaskPayload(payload))
+	encoded := daemon.EncodeTaskPayload(payload)
+	parsed := daemon.ParseTaskPayload(encoded)
+	idemKey := identity.KeyFor(payload.Principal, parsed.Prompt)
+	id, existed, err := s.queue.Enqueue(ctx, encoded, idemKey)
 	if err != nil {
 		return "", err
 	}
+	if existed {
+		return dedupMessage(id), nil
+	}
 	return fmt.Sprintf("🔄 Follow-up <code>#%d</code> queued for session <code>%s</code>", id, payload.SessionID[:8]), nil
+}
+
+func dedupMessage(taskID int64) string {
+	return fmt.Sprintf("이미 처리 중입니다 (#%d)", taskID)
 }
 
 func (s *Shell) principalForMessage(message Message) identity.Principal {

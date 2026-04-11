@@ -15,6 +15,7 @@ const createQueueTable = `
 CREATE TABLE IF NOT EXISTS task_queue (
 	id           INTEGER PRIMARY KEY AUTOINCREMENT,
 	payload      TEXT    NOT NULL,
+	idempotency_key TEXT NOT NULL DEFAULT '',
 	session_id   TEXT    NOT NULL DEFAULT '',
 	status       TEXT    NOT NULL DEFAULT 'pending',
 	progress     TEXT    NOT NULL DEFAULT '',
@@ -36,6 +37,7 @@ CREATE INDEX IF NOT EXISTS task_queue_session ON task_queue(session_id);
 
 const defaultStaleTimeout = 5 * time.Minute
 const defaultMaxRecoveries = 3
+const idempotencyWindow = 30 * time.Second
 
 // TaskStatus represents the lifecycle state of a queued task.
 type TaskStatus string
@@ -71,6 +73,7 @@ type TaskCompletion struct {
 type Task struct {
 	ID                 int64
 	Payload            string
+	IdempotencyKey     string
 	SessionID          string
 	Status             TaskStatus
 	Progress           string
@@ -109,6 +112,9 @@ func NewQueue(db *sql.DB) (*Queue, error) {
 	if err := q.ensureColumns(context.Background()); err != nil {
 		return nil, fmt.Errorf("queue: ensure schema columns: %w", err)
 	}
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS task_queue_idem_active ON task_queue(idempotency_key) WHERE status IN ('pending','running') AND idempotency_key != ''`); err != nil {
+		return nil, fmt.Errorf("queue: create idempotency index: %w", err)
+	}
 
 	if _, err := q.RecoverStale(context.Background(), defaultStaleTimeout, defaultMaxRecoveries); err != nil {
 		return nil, fmt.Errorf("queue: recover stale: %w", err)
@@ -118,22 +124,42 @@ func NewQueue(db *sql.DB) (*Queue, error) {
 }
 
 // Enqueue inserts a new pending task and returns its ID.
-func (q *Queue) Enqueue(ctx context.Context, payload string) (int64, error) {
+func (q *Queue) Enqueue(ctx context.Context, payload string, idemKey string) (int64, bool, error) {
 	now := time.Now().UnixMilli()
-	res, err := q.db.ExecContext(ctx, `
-		INSERT INTO task_queue (payload, status, created_at, updated_at)
-		VALUES (?, ?, ?, ?)`,
-		payload, string(StatusPending), now, now,
-	)
+	idemKey = strings.TrimSpace(idemKey)
+	if idemKey != "" {
+		cutoff := now - idempotencyWindow.Milliseconds()
+		existingID, err := q.lookupActiveTaskID(ctx, idemKey, cutoff)
+		if err != nil {
+			return 0, false, fmt.Errorf("queue: enqueue dedup lookup: %w", err)
+		}
+		if existingID != 0 {
+			return existingID, true, nil
+		}
+		if err := q.releaseExpiredDedupClaims(ctx, idemKey, cutoff); err != nil {
+			return 0, false, fmt.Errorf("queue: enqueue release expired dedup claim: %w", err)
+		}
+	}
+
+	res, err := q.insertTask(ctx, payload, idemKey, now)
 	if err != nil {
-		return 0, fmt.Errorf("queue: enqueue: %w", err)
+		if idemKey != "" && isUniqueViolation(err) {
+			existingID, lookupErr := q.lookupActiveTaskID(ctx, idemKey, now-idempotencyWindow.Milliseconds())
+			if lookupErr != nil {
+				return 0, false, fmt.Errorf("queue: enqueue unique lookup: %w", lookupErr)
+			}
+			if existingID != 0 {
+				return existingID, true, nil
+			}
+		}
+		return 0, false, fmt.Errorf("queue: enqueue: %w", err)
 	}
 
 	id, err := res.LastInsertId()
 	if err != nil {
-		return 0, fmt.Errorf("queue: enqueue: last id: %w", err)
+		return 0, false, fmt.Errorf("queue: enqueue: last id: %w", err)
 	}
-	return id, nil
+	return id, false, nil
 }
 
 // Next atomically claims the oldest pending task by transitioning it to
@@ -152,13 +178,13 @@ func (q *Queue) Next(ctx context.Context) (*Task, error) {
 	var createdMs, updatedMs, startedMs, completedMs int64
 
 	err = tx.QueryRowContext(ctx, `
-		SELECT id, payload, session_id, status, progress, summary, result, completion, timeout_class, idle_timeout_count, active_timeout_count, created_at, updated_at, started_at, completed_at
+		SELECT id, payload, idempotency_key, session_id, status, progress, summary, result, completion, timeout_class, idle_timeout_count, active_timeout_count, created_at, updated_at, started_at, completed_at
 		FROM task_queue
 		WHERE status = ?
 		ORDER BY created_at ASC
 		LIMIT 1`,
 		string(StatusPending),
-	).Scan(&t.ID, &t.Payload, &t.SessionID, &statusStr, &t.Progress, &t.Summary, &t.Result, &completionJSON, &timeoutClass, &t.IdleTimeoutCount, &t.ActiveTimeoutCount, &createdMs, &updatedMs, &startedMs, &completedMs)
+	).Scan(&t.ID, &t.Payload, &t.IdempotencyKey, &t.SessionID, &statusStr, &t.Progress, &t.Summary, &t.Result, &completionJSON, &timeoutClass, &t.IdleTimeoutCount, &t.ActiveTimeoutCount, &createdMs, &updatedMs, &startedMs, &completedMs)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -261,7 +287,7 @@ func (q *Queue) MarkFailed(ctx context.Context, id int64, errMsg string) error {
 // List returns all tasks ordered by created_at descending.
 func (q *Queue) List(ctx context.Context) ([]Task, error) {
 	rows, err := q.db.QueryContext(ctx, `
-		SELECT id, payload, session_id, status, progress, summary, result, completion, timeout_class, idle_timeout_count, active_timeout_count, created_at, updated_at, started_at, completed_at
+		SELECT id, payload, idempotency_key, session_id, status, progress, summary, result, completion, timeout_class, idle_timeout_count, active_timeout_count, created_at, updated_at, started_at, completed_at
 		FROM task_queue
 		ORDER BY created_at DESC`)
 	if err != nil {
@@ -276,7 +302,7 @@ func (q *Queue) List(ctx context.Context) ([]Task, error) {
 		var completionJSON string
 		var timeoutClass string
 		var createdMs, updatedMs, startedMs, completedMs int64
-		if err := rows.Scan(&t.ID, &t.Payload, &t.SessionID, &statusStr, &t.Progress, &t.Summary, &t.Result, &completionJSON, &timeoutClass, &t.IdleTimeoutCount, &t.ActiveTimeoutCount,
+		if err := rows.Scan(&t.ID, &t.Payload, &t.IdempotencyKey, &t.SessionID, &statusStr, &t.Progress, &t.Summary, &t.Result, &completionJSON, &timeoutClass, &t.IdleTimeoutCount, &t.ActiveTimeoutCount,
 			&createdMs, &updatedMs, &startedMs, &completedMs); err != nil {
 			return nil, fmt.Errorf("queue: list: scan: %w", err)
 		}
@@ -305,10 +331,10 @@ func (q *Queue) Get(ctx context.Context, id int64) (*Task, error) {
 	var createdMs, updatedMs, startedMs, completedMs int64
 
 	err := q.db.QueryRowContext(ctx, `
-		SELECT id, payload, session_id, status, progress, summary, result, completion, timeout_class, idle_timeout_count, active_timeout_count, created_at, updated_at, started_at, completed_at
+		SELECT id, payload, idempotency_key, session_id, status, progress, summary, result, completion, timeout_class, idle_timeout_count, active_timeout_count, created_at, updated_at, started_at, completed_at
 		FROM task_queue
 		WHERE id = ?`, id,
-	).Scan(&t.ID, &t.Payload, &t.SessionID, &statusStr, &t.Progress, &t.Summary, &t.Result, &completionJSON, &timeoutClass, &t.IdleTimeoutCount, &t.ActiveTimeoutCount,
+	).Scan(&t.ID, &t.Payload, &t.IdempotencyKey, &t.SessionID, &statusStr, &t.Progress, &t.Summary, &t.Result, &completionJSON, &timeoutClass, &t.IdleTimeoutCount, &t.ActiveTimeoutCount,
 		&createdMs, &updatedMs, &startedMs, &completedMs)
 
 	if err == sql.ErrNoRows {
@@ -529,6 +555,7 @@ func (q *Queue) ensureColumns(ctx context.Context) error {
 		sql  string
 	}
 	for _, m := range []migration{
+		{name: "idempotency_key", sql: `ALTER TABLE task_queue ADD COLUMN idempotency_key TEXT NOT NULL DEFAULT ''`},
 		{name: "session_id", sql: `ALTER TABLE task_queue ADD COLUMN session_id TEXT NOT NULL DEFAULT ''`},
 		{name: "progress", sql: `ALTER TABLE task_queue ADD COLUMN progress TEXT NOT NULL DEFAULT ''`},
 		{name: "summary", sql: `ALTER TABLE task_queue ADD COLUMN summary TEXT NOT NULL DEFAULT ''`},
@@ -546,6 +573,85 @@ func (q *Queue) ensureColumns(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (q *Queue) lookupActiveTaskID(ctx context.Context, idemKey string, cutoff int64) (int64, error) {
+	var existingID int64
+	err := q.db.QueryRowContext(ctx, `
+		SELECT id FROM task_queue
+		WHERE idempotency_key = ?
+		  AND status IN ('pending','running')
+		  AND created_at >= ?
+		ORDER BY created_at DESC
+		LIMIT 1`,
+		idemKey, cutoff,
+	).Scan(&existingID)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return existingID, nil
+}
+
+func (q *Queue) insertTask(ctx context.Context, payload, idemKey string, now int64) (sql.Result, error) {
+	var (
+		res sql.Result
+		err error
+	)
+	for attempt := 0; attempt < 5; attempt++ {
+		res, err = q.db.ExecContext(ctx, `
+			INSERT INTO task_queue (payload, idempotency_key, status, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?)`,
+			payload, idemKey, string(StatusPending), now, now,
+		)
+		if !isBusyError(err) {
+			return res, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	return res, err
+}
+
+func (q *Queue) releaseExpiredDedupClaims(ctx context.Context, idemKey string, cutoff int64) error {
+	// A retry after the 30s window should enqueue fresh work even if an older row
+	// is still active, so its dedup claim has to age out of the unique index.
+	var count int
+	if err := q.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM task_queue
+		WHERE idempotency_key = ?
+		  AND status IN ('pending','running')
+		  AND created_at < ?`,
+		idemKey, cutoff,
+	).Scan(&count); err != nil {
+		return err
+	}
+	if count == 0 {
+		return nil
+	}
+
+	_, err := q.db.ExecContext(ctx, `
+		UPDATE task_queue
+		SET idempotency_key = ''
+		WHERE idempotency_key = ?
+		  AND status IN ('pending','running')
+		  AND created_at < ?`,
+		idemKey, cutoff,
+	)
+	return err
+}
+
+func isUniqueViolation(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "unique")
+}
+
+func isBusyError(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "database is locked")
 }
 
 func classifyTimeout(startedAt, updatedAt int64) TimeoutClass {

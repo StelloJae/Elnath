@@ -3,6 +3,8 @@ package daemon
 import (
 	"context"
 	"database/sql"
+	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -30,6 +32,42 @@ func openTestDB(t *testing.T) *sql.DB {
 		}
 	}
 	return db
+}
+
+func openConcurrentTestDB(t *testing.T) *sql.DB {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "queue.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open concurrent test db: %v", err)
+	}
+	db.SetMaxOpenConns(16)
+	t.Cleanup(func() { db.Close() })
+
+	pragmas := []string{
+		"PRAGMA journal_mode=WAL",
+		"PRAGMA synchronous=NORMAL",
+		"PRAGMA busy_timeout=5000",
+		"PRAGMA foreign_keys=ON",
+	}
+	for _, p := range pragmas {
+		if _, err := db.Exec(p); err != nil {
+			t.Fatalf("exec pragma %q: %v", p, err)
+		}
+	}
+	return db
+}
+
+func mustEnqueue(t *testing.T, q *Queue, ctx context.Context, payload string) int64 {
+	t.Helper()
+	id, existed, err := q.Enqueue(ctx, payload, "")
+	if err != nil {
+		t.Fatalf("Enqueue(%q): %v", payload, err)
+	}
+	if existed {
+		t.Fatalf("Enqueue(%q) unexpectedly deduplicated", payload)
+	}
+	return id
 }
 
 func TestNewQueue(t *testing.T) {
@@ -70,9 +108,12 @@ func TestEnqueue(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		id, err := q.Enqueue(ctx, tt.payload)
+		id, existed, err := q.Enqueue(ctx, tt.payload, "")
 		if err != nil {
 			t.Fatalf("Enqueue(%q): %v", tt.payload, err)
+		}
+		if existed {
+			t.Fatalf("Enqueue(%q) unexpectedly deduplicated", tt.payload)
 		}
 		if id != tt.wantID {
 			t.Errorf("Enqueue(%q) = %d, want %d", tt.payload, id, tt.wantID)
@@ -94,6 +135,254 @@ func TestEnqueue(t *testing.T) {
 	}
 }
 
+func TestEnqueueDedupReturnsExistingID(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+	ctx := context.Background()
+
+	const idemKey = "idem-task"
+	firstID, existed, err := q.Enqueue(ctx, "task one", idemKey)
+	if err != nil {
+		t.Fatalf("Enqueue(first): %v", err)
+	}
+	if existed {
+		t.Fatal("first enqueue should insert a new row")
+	}
+
+	secondID, existed, err := q.Enqueue(ctx, "task one", idemKey)
+	if err != nil {
+		t.Fatalf("Enqueue(second): %v", err)
+	}
+	if !existed {
+		t.Fatal("second enqueue should reuse the existing row")
+	}
+	if secondID != firstID {
+		t.Fatalf("second enqueue id = %d, want %d", secondID, firstID)
+	}
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM task_queue`).Scan(&count); err != nil {
+		t.Fatalf("count task_queue: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("row count = %d, want 1", count)
+	}
+
+	task, err := q.Get(ctx, firstID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if task.IdempotencyKey != idemKey {
+		t.Fatalf("Get idempotency key = %q, want %q", task.IdempotencyKey, idemKey)
+	}
+
+	tasks, err := q.List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].IdempotencyKey != idemKey {
+		t.Fatalf("List returned %+v, want one task with idempotency key %q", tasks, idemKey)
+	}
+}
+
+func TestEnqueueDedupExpiresAfterWindow(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+	ctx := context.Background()
+
+	const idemKey = "idem-expire"
+	firstID, existed, err := q.Enqueue(ctx, "task one", idemKey)
+	if err != nil {
+		t.Fatalf("Enqueue(first): %v", err)
+	}
+	if existed {
+		t.Fatal("first enqueue should insert a new row")
+	}
+
+	expiredAt := time.Now().Add(-idempotencyWindow - time.Second).UnixMilli()
+	if _, err := db.Exec(`UPDATE task_queue SET created_at = ? WHERE id = ?`, expiredAt, firstID); err != nil {
+		t.Fatalf("expire first row: %v", err)
+	}
+
+	secondID, existed, err := q.Enqueue(ctx, "task one", idemKey)
+	if err != nil {
+		t.Fatalf("Enqueue(second): %v", err)
+	}
+	if existed {
+		t.Fatal("expired idempotency window should allow a new row")
+	}
+	if secondID == firstID {
+		t.Fatalf("second enqueue id = %d, want new id", secondID)
+	}
+}
+
+func TestEnqueueEmptyKeyAlwaysInserts(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+	ctx := context.Background()
+
+	firstID, existed, err := q.Enqueue(ctx, "task one", "")
+	if err != nil {
+		t.Fatalf("Enqueue(first): %v", err)
+	}
+	if existed {
+		t.Fatal("empty key should not deduplicate")
+	}
+
+	secondID, existed, err := q.Enqueue(ctx, "task one", "")
+	if err != nil {
+		t.Fatalf("Enqueue(second): %v", err)
+	}
+	if existed {
+		t.Fatal("empty key should not deduplicate")
+	}
+	if secondID == firstID {
+		t.Fatalf("second enqueue id = %d, want new id", secondID)
+	}
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM task_queue`).Scan(&count); err != nil {
+		t.Fatalf("count task_queue: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("row count = %d, want 2", count)
+	}
+}
+
+func TestEnqueueDedupAcrossPendingAndRunning(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+	ctx := context.Background()
+
+	const idemKey = "idem-running"
+	firstID, existed, err := q.Enqueue(ctx, "task one", idemKey)
+	if err != nil {
+		t.Fatalf("Enqueue(first): %v", err)
+	}
+	if existed {
+		t.Fatal("first enqueue should insert a new row")
+	}
+
+	task, err := q.Next(ctx)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if task == nil {
+		t.Fatal("Next returned nil")
+	}
+	if task.IdempotencyKey != idemKey {
+		t.Fatalf("Next idempotency key = %q, want %q", task.IdempotencyKey, idemKey)
+	}
+
+	secondID, existed, err := q.Enqueue(ctx, "task one", idemKey)
+	if err != nil {
+		t.Fatalf("Enqueue(second): %v", err)
+	}
+	if !existed {
+		t.Fatal("running task should still deduplicate")
+	}
+	if secondID != firstID {
+		t.Fatalf("second enqueue id = %d, want %d", secondID, firstID)
+	}
+}
+
+func TestEnqueueDedupAfterDoneAllowsNew(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+	ctx := context.Background()
+
+	const idemKey = "idem-done"
+	firstID, existed, err := q.Enqueue(ctx, "task one", idemKey)
+	if err != nil {
+		t.Fatalf("Enqueue(first): %v", err)
+	}
+	if existed {
+		t.Fatal("first enqueue should insert a new row")
+	}
+
+	task, err := q.Next(ctx)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if err := q.MarkDone(ctx, task.ID, "ok", "done"); err != nil {
+		t.Fatalf("MarkDone: %v", err)
+	}
+
+	secondID, existed, err := q.Enqueue(ctx, "task one", idemKey)
+	if err != nil {
+		t.Fatalf("Enqueue(second): %v", err)
+	}
+	if existed {
+		t.Fatal("done task should not deduplicate")
+	}
+	if secondID == firstID {
+		t.Fatalf("second enqueue id = %d, want new id", secondID)
+	}
+}
+
+func TestEnqueueDedupConcurrentSameKey(t *testing.T) {
+	db := openConcurrentTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+
+	const workers = 100
+	const idemKey = "idem-race"
+
+	type result struct {
+		id  int64
+		err error
+	}
+
+	results := make(chan result, workers)
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			id, _, err := q.Enqueue(context.Background(), "task one", idemKey)
+			results <- result{id: id, err: err}
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	ids := map[int64]struct{}{}
+	for res := range results {
+		if res.err != nil {
+			t.Fatalf("Enqueue concurrent: %v", res.err)
+		}
+		ids[res.id] = struct{}{}
+	}
+	if len(ids) != 1 {
+		t.Fatalf("distinct ids = %d, want 1 (%v)", len(ids), ids)
+	}
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM task_queue WHERE idempotency_key = ?`, idemKey).Scan(&count); err != nil {
+		t.Fatalf("count task_queue: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("row count = %d, want 1", count)
+	}
+}
+
 func TestNext(t *testing.T) {
 	db := openTestDB(t)
 	q, err := NewQueue(db)
@@ -102,9 +391,9 @@ func TestNext(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	q.Enqueue(ctx, "first")
-	q.Enqueue(ctx, "second")
-	q.Enqueue(ctx, "third")
+	mustEnqueue(t, q, ctx, "first")
+	mustEnqueue(t, q, ctx, "second")
+	mustEnqueue(t, q, ctx, "third")
 
 	task, err := q.Next(ctx)
 	if err != nil {
@@ -164,7 +453,7 @@ func TestMarkDone(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	q.Enqueue(ctx, "do something")
+	mustEnqueue(t, q, ctx, "do something")
 	task, _ := q.Next(ctx)
 
 	if err := q.MarkDone(ctx, task.ID, "all good", "summary text"); err != nil {
@@ -212,7 +501,7 @@ func TestMarkFailed(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	q.Enqueue(ctx, "will fail")
+	mustEnqueue(t, q, ctx, "will fail")
 	task, _ := q.Next(ctx)
 	if err := q.BindSession(ctx, task.ID, "sess-fail"); err != nil {
 		t.Fatalf("BindSession: %v", err)
@@ -260,7 +549,7 @@ func TestRecoverStale(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	q.Enqueue(ctx, "stale task")
+	mustEnqueue(t, q, ctx, "stale task")
 	task, _ := q.Next(ctx)
 
 	staleTime := time.Now().Add(-10 * time.Minute).UnixMilli()
@@ -285,7 +574,7 @@ func TestRecoverStale(t *testing.T) {
 		t.Errorf("status = %q, want %q", got.Status, StatusPending)
 	}
 
-	q.Enqueue(ctx, "fresh task")
+	mustEnqueue(t, q, ctx, "fresh task")
 	fresh, _ := q.Next(ctx)
 	recovered2, err := q.RecoverStale(ctx, 5*time.Minute, 0)
 	if err != nil {
@@ -305,7 +594,7 @@ func TestRecoverStaleKeepsRecentlyActiveRunning(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	q.Enqueue(ctx, "long running task")
+	mustEnqueue(t, q, ctx, "long running task")
 	task, _ := q.Next(ctx)
 
 	startedAt := time.Now().Add(-10 * time.Minute).UnixMilli()
@@ -345,9 +634,9 @@ func TestRecoverStaleTimeoutMetrics(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	q.Enqueue(ctx, "idle task")
+	mustEnqueue(t, q, ctx, "idle task")
 	idleTask, _ := q.Next(ctx)
-	q.Enqueue(ctx, "active task")
+	mustEnqueue(t, q, ctx, "active task")
 	activeTask, _ := q.Next(ctx)
 
 	startedAt := time.Now().Add(-12 * time.Minute).UnixMilli()
@@ -419,7 +708,7 @@ func TestRecoverStaleMaxRecoveries(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	q.Enqueue(ctx, "doomed task")
+	mustEnqueue(t, q, ctx, "doomed task")
 	task, _ := q.Next(ctx)
 
 	staleTime := time.Now().Add(-10 * time.Minute).UnixMilli()
@@ -476,9 +765,9 @@ func TestList(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	q.Enqueue(ctx, "alpha")
-	q.Enqueue(ctx, "beta")
-	q.Enqueue(ctx, "gamma")
+	mustEnqueue(t, q, ctx, "alpha")
+	mustEnqueue(t, q, ctx, "beta")
+	mustEnqueue(t, q, ctx, "gamma")
 
 	q.Next(ctx)
 	task2, _ := q.Next(ctx)

@@ -2,7 +2,9 @@ package conversation
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -63,6 +65,7 @@ func InitSchema(db *sql.DB) error {
 			session_id TEXT NOT NULL REFERENCES conversations(id),
 			role       TEXT NOT NULL,
 			content    TEXT NOT NULL,
+			content_hash TEXT NOT NULL DEFAULT '',
 			created_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_conv_msgs_session ON conversation_messages(session_id)`,
@@ -72,6 +75,19 @@ func InitSchema(db *sql.DB) error {
 		if _, err := db.Exec(s); err != nil {
 			return fmt.Errorf("history: init schema: %w", err)
 		}
+	}
+
+	if err := ensureContentHashColumn(db); err != nil {
+		return err
+	}
+	if err := backfillContentHash(db); err != nil {
+		return err
+	}
+	if err := dedupeContentHashRows(db); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS uq_conv_msgs_session_hash ON conversation_messages(session_id, content_hash) WHERE content_hash != ''`); err != nil {
+		return fmt.Errorf("history: init schema: %w", err)
 	}
 
 	if core.HasFTS5(db) {
@@ -86,8 +102,7 @@ func InitSchema(db *sql.DB) error {
 	return nil
 }
 
-// Save persists the full message array for a session, replacing any prior messages.
-// It upserts the conversation row and replaces all messages in a single transaction.
+// Save persists the message array for a session using message-level upserts.
 func (s *DBHistoryStore) Save(ctx context.Context, sessionID string, messages []llm.Message) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -105,16 +120,10 @@ func (s *DBHistoryStore) Save(ctx context.Context, sessionID string, messages []
 		return fmt.Errorf("history: upsert conversation: %w", err)
 	}
 
-	// Delete existing messages so we can replace with the full array.
-	_, err = tx.ExecContext(ctx, `DELETE FROM conversation_messages WHERE session_id = ?`, sessionID)
-	if err != nil {
-		return fmt.Errorf("history: delete old messages: %w", err)
-	}
-
-	// Insert all messages.
 	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO conversation_messages(session_id, role, content)
-		VALUES (?, ?, ?)
+		INSERT INTO conversation_messages(session_id, role, content, content_hash)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(session_id, content_hash) WHERE content_hash != '' DO NOTHING
 	`)
 	if err != nil {
 		return fmt.Errorf("history: prepare insert: %w", err)
@@ -126,7 +135,8 @@ func (s *DBHistoryStore) Save(ctx context.Context, sessionID string, messages []
 		if err != nil {
 			return fmt.Errorf("history: marshal message: %w", err)
 		}
-		if _, err := stmt.ExecContext(ctx, sessionID, m.Role, string(data)); err != nil {
+		content := string(data)
+		if _, err := stmt.ExecContext(ctx, sessionID, m.Role, content, contentHash(content)); err != nil {
 			return fmt.Errorf("history: insert message: %w", err)
 		}
 	}
@@ -143,6 +153,88 @@ func (s *DBHistoryStore) Save(ctx context.Context, sessionID string, messages []
 	}
 
 	return nil
+}
+
+func ensureContentHashColumn(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(conversation_messages)`)
+	if err != nil {
+		return fmt.Errorf("history: pragma table_info: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt interface{}
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return fmt.Errorf("history: pragma scan: %w", err)
+		}
+		if name == "content_hash" {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("history: pragma rows: %w", err)
+	}
+	if _, err := db.Exec(`ALTER TABLE conversation_messages ADD COLUMN content_hash TEXT NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("history: add content_hash column: %w", err)
+	}
+	return nil
+}
+
+func backfillContentHash(db *sql.DB) error {
+	rows, err := db.Query(`SELECT id, content FROM conversation_messages WHERE content_hash = ''`)
+	if err != nil {
+		return fmt.Errorf("history: backfill query: %w", err)
+	}
+	defer rows.Close()
+
+	type row struct {
+		id      int64
+		content string
+	}
+	var pending []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.id, &r.content); err != nil {
+			return fmt.Errorf("history: backfill scan: %w", err)
+		}
+		pending = append(pending, r)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("history: backfill rows: %w", err)
+	}
+	for _, r := range pending {
+		if _, err := db.Exec(`UPDATE conversation_messages SET content_hash = ? WHERE id = ?`, contentHash(r.content), r.id); err != nil {
+			return fmt.Errorf("history: backfill update: %w", err)
+		}
+	}
+	return nil
+}
+
+func dedupeContentHashRows(db *sql.DB) error {
+	_, err := db.Exec(`
+		DELETE FROM conversation_messages
+		WHERE id IN (
+			SELECT newer.id
+			FROM conversation_messages AS newer
+			JOIN conversation_messages AS older
+			  ON older.session_id = newer.session_id
+			 AND older.content_hash = newer.content_hash
+			 AND older.content_hash != ''
+			 AND older.id < newer.id
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("history: dedupe rows: %w", err)
+	}
+	return nil
+}
+
+func contentHash(content string) string {
+	sum := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(sum[:])[:16]
 }
 
 // Load retrieves all messages for a session in insertion order.

@@ -101,7 +101,7 @@ func TestCmdDaemonSubmit(t *testing.T) {
 		}
 		resp := daemon.IPCResponse{
 			OK:   true,
-			Data: map[string]interface{}{"task_id": 42},
+			Data: map[string]interface{}{"task_id": 42, "existed": false},
 		}
 		enc := json.NewEncoder(conn)
 		_ = enc.Encode(resp)
@@ -116,8 +116,8 @@ func TestCmdDaemonSubmit(t *testing.T) {
 			t.Fatalf("cmdDaemonSubmit: %v", err)
 		}
 	})
-	if !strings.Contains(stdout, "Task submitted") {
-		t.Fatalf("stdout = %q, want task submitted", stdout)
+	if !strings.Contains(stdout, "Task #42 enqueued") {
+		t.Fatalf("stdout = %q, want enqueued output", stdout)
 	}
 	<-done
 }
@@ -146,7 +146,7 @@ func TestCmdDaemonSubmitWithSession(t *testing.T) {
 		}
 		resp := daemon.IPCResponse{
 			OK:   true,
-			Data: map[string]interface{}{"task_id": 99},
+			Data: map[string]interface{}{"task_id": 99, "existed": false},
 		}
 		enc := json.NewEncoder(conn)
 		_ = enc.Encode(resp)
@@ -161,8 +161,53 @@ func TestCmdDaemonSubmitWithSession(t *testing.T) {
 			t.Fatalf("cmdDaemonSubmit with session: %v", err)
 		}
 	})
-	if !strings.Contains(stdout, "Task submitted") {
-		t.Fatalf("stdout = %q, want task submitted", stdout)
+	if !strings.Contains(stdout, "Task #99 enqueued") {
+		t.Fatalf("stdout = %q, want enqueued output", stdout)
+	}
+	<-done
+}
+
+func TestCmdDaemonSubmitDeduplicated(t *testing.T) {
+	socketPath := testSocketPath(t, "subdedup")
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		var req daemon.IPCRequest
+		dec := json.NewDecoder(conn)
+		if err := dec.Decode(&req); err != nil {
+			return
+		}
+		resp := daemon.IPCResponse{
+			OK:   true,
+			Data: map[string]interface{}{"task_id": 42, "existed": true},
+		}
+		enc := json.NewEncoder(conn)
+		_ = enc.Encode(resp)
+	}()
+
+	cfgPath := writeDaemonTestConfig(t, onboarding.En, socketPath)
+	withArgs(t, []string{"elnath", "--config", cfgPath})
+	resetLoadLocaleCache()
+
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdDaemonSubmit(context.Background(), []string{"do", "the", "thing"}); err != nil {
+			t.Fatalf("cmdDaemonSubmit: %v", err)
+		}
+	})
+	if !strings.Contains(stdout, "Task #42 already running (deduplicated)") {
+		t.Fatalf("stdout = %q, want deduplicated output", stdout)
 	}
 	<-done
 }
@@ -1332,7 +1377,7 @@ func TestCmdDaemonDispatchesSubmit(t *testing.T) {
 		if err := dec.Decode(&req); err != nil {
 			return
 		}
-		resp := daemon.IPCResponse{OK: true, Data: map[string]interface{}{"task_id": 1}}
+		resp := daemon.IPCResponse{OK: true, Data: map[string]interface{}{"task_id": 1, "existed": false}}
 		enc := json.NewEncoder(conn)
 		_ = enc.Encode(resp)
 	}()
@@ -1346,8 +1391,8 @@ func TestCmdDaemonDispatchesSubmit(t *testing.T) {
 			t.Fatalf("cmdDaemon submit: %v", err)
 		}
 	})
-	if !strings.Contains(stdout, "Task submitted") {
-		t.Fatalf("stdout = %q, want task submitted", stdout)
+	if !strings.Contains(stdout, "Task #1 enqueued") {
+		t.Fatalf("stdout = %q, want enqueued output", stdout)
 	}
 	<-done
 }

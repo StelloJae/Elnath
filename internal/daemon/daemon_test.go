@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -150,6 +151,9 @@ func TestDaemonSubmitAndStatus(t *testing.T) {
 	if !submitResp.OK {
 		t.Fatalf("submit: not OK: %s", submitResp.Err)
 	}
+	if extractExisted(t, submitResp) {
+		t.Fatal("first submit should not report deduplication")
+	}
 
 	taskID := extractTaskID(t, submitResp)
 
@@ -188,6 +192,50 @@ func TestDaemonSubmitAndStatus(t *testing.T) {
 	}
 	if done.SessionID != "sess-test" {
 		t.Errorf("session_id = %q, want %q", done.SessionID, "sess-test")
+	}
+}
+
+func TestDaemonSubmitDeduplicatesByPrincipalAndPrompt(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+
+	release := make(chan struct{})
+	runner := func(_ context.Context, _ string, _ func(string)) (TaskResult, error) {
+		<-release
+		return TaskResult{Result: "ok", Summary: "ok"}, nil
+	}
+
+	socketPath := filepath.Join("/tmp", "elnath-dedup-"+strconv.FormatInt(time.Now().UnixNano(), 10)+".sock")
+	startDaemon(t, q, socketPath, runner, 1)
+	t.Cleanup(func() { close(release) })
+
+	raw := EncodeTaskPayload(TaskPayload{
+		Prompt:    "tell me a joke",
+		Surface:   "telegram",
+		Principal: identity.Principal{UserID: "42", ProjectID: "proj-1", Surface: "telegram"},
+	})
+
+	first := sendIPC(t, socketPath, IPCRequest{Command: "submit", Payload: mustMarshalString(t, raw)})
+	if !first.OK {
+		t.Fatalf("first submit: not OK: %s", first.Err)
+	}
+	if extractExisted(t, first) {
+		t.Fatal("first submit should not report deduplication")
+	}
+	firstID := extractTaskID(t, first)
+
+	second := sendIPC(t, socketPath, IPCRequest{Command: "submit", Payload: mustMarshalString(t, raw)})
+	if !second.OK {
+		t.Fatalf("second submit: not OK: %s", second.Err)
+	}
+	if !extractExisted(t, second) {
+		t.Fatal("second submit should report deduplication")
+	}
+	if secondID := extractTaskID(t, second); secondID != firstID {
+		t.Fatalf("second submit task id = %d, want %d", secondID, firstID)
 	}
 }
 
@@ -511,6 +559,23 @@ func extractTaskID(t *testing.T, resp IPCResponse) int64 {
 		t.Fatalf("task_id missing or not a number in response: %v", resp.Data)
 	}
 	return int64(idFloat)
+}
+
+func extractExisted(t *testing.T, resp IPCResponse) bool {
+	t.Helper()
+	m, ok := resp.Data.(map[string]interface{})
+	if !ok {
+		t.Fatalf("submit response Data is not a map: %T", resp.Data)
+	}
+	value, ok := m["existed"]
+	if !ok {
+		t.Fatal("submit response missing existed flag")
+	}
+	existed, ok := value.(bool)
+	if !ok {
+		t.Fatalf("submit response existed is not a bool: %T", value)
+	}
+	return existed
 }
 
 func extractTasks(t *testing.T, resp IPCResponse) []map[string]interface{} {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +16,15 @@ type legacySessionHeader struct {
 	ID        string    `json:"id"`
 	CreatedAt time.Time `json:"created_at"`
 	Version   int       `json:"version"`
+}
+
+func sessionMessageLineCount(t *testing.T, path string) int {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", path, err)
+	}
+	return strings.Count(string(data), "\n") - 1
 }
 
 func TestSessionNewAndAppend(t *testing.T) {
@@ -92,6 +102,62 @@ func TestSessionAppendMessages(t *testing.T) {
 	}
 	if len(loaded.Messages) != 3 {
 		t.Errorf("loaded messages = %d, want 3", len(loaded.Messages))
+	}
+}
+
+func TestAppendMessageDedupesIdenticalMessage(t *testing.T) {
+	dir := t.TempDir()
+
+	s, err := NewSession(dir)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	msg := llm.NewUserMessage("hello")
+
+	if err := s.AppendMessage(msg); err != nil {
+		t.Fatalf("AppendMessage(first): %v", err)
+	}
+	if err := s.AppendMessage(msg); err != nil {
+		t.Fatalf("AppendMessage(second): %v", err)
+	}
+
+	if len(s.Messages) != 1 {
+		t.Fatalf("in-memory messages = %d, want 1", len(s.Messages))
+	}
+	if got := sessionMessageLineCount(t, filepath.Join(dir, "sessions", s.ID+".jsonl")); got != 1 {
+		t.Fatalf("session file messages = %d, want 1", got)
+	}
+}
+
+func TestLoadSessionPopulatesAppliedHashes(t *testing.T) {
+	dir := t.TempDir()
+
+	s, err := NewSession(dir)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	msgs := []llm.Message{
+		llm.NewUserMessage("one"),
+		llm.NewAssistantMessage("two"),
+		llm.NewUserMessage("three"),
+	}
+	if err := s.AppendMessages(msgs); err != nil {
+		t.Fatalf("AppendMessages: %v", err)
+	}
+
+	loaded, err := LoadSession(dir, s.ID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if err := loaded.AppendMessage(msgs[2]); err != nil {
+		t.Fatalf("AppendMessage duplicate: %v", err)
+	}
+
+	if len(loaded.Messages) != 3 {
+		t.Fatalf("loaded messages = %d, want 3", len(loaded.Messages))
+	}
+	if got := sessionMessageLineCount(t, filepath.Join(dir, "sessions", loaded.ID+".jsonl")); got != 3 {
+		t.Fatalf("session file messages = %d, want 3", got)
 	}
 }
 
