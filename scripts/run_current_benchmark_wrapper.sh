@@ -390,6 +390,9 @@ run_elnath() {
   (
     cd "$WORKTREE"
     export ELNATH_EVAL_AUDIT_LOG="$AUDIT_LOG"
+    export ELNATH_BENCHMARK_MODE=1
+    export ELNATH_MAX_ITERATIONS=20
+    export ELNATH_TASK_LANGUAGE="$TASK_LANGUAGE"
     export ELNATH_PERMISSION_MODE="${ELNATH_BENCHMARK_PERMISSION_MODE:-bypass}"
     local -a args=("$ELNATH_BIN" "run" "--non-interactive")
     python3 - <<'PY' "$ELNATH_TIMEOUT" "$log_path" "$prompt" "${args[@]}"

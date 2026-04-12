@@ -27,6 +27,7 @@ const (
 type Agent struct {
 	provider      llm.Provider
 	tools         *tools.Registry
+	readTracker   *tools.ReadTracker
 	permission    *Permission
 	hooks         *HookRegistry
 	model         string
@@ -68,6 +69,10 @@ func WithHooks(h *HookRegistry) Option {
 	return func(a *Agent) { a.hooks = h }
 }
 
+func WithReadTracker(tracker *tools.ReadTracker) Option {
+	return func(a *Agent) { a.readTracker = tracker }
+}
+
 // New creates an Agent with the given provider and tool registry.
 func New(provider llm.Provider, reg *tools.Registry, opts ...Option) *Agent {
 	a := &Agent{
@@ -82,7 +87,16 @@ func New(provider llm.Provider, reg *tools.Registry, opts ...Option) *Agent {
 	if a.permission == nil {
 		a.permission = NewPermission()
 	}
+	if a.readTracker == nil && reg != nil {
+		a.readTracker = reg.ReadTracker()
+	}
 	return a
+}
+
+func (a *Agent) ResetReadTrackerDedup() {
+	if a.readTracker != nil {
+		a.readTracker.ResetDedup()
+	}
 }
 
 // RunResult is returned after the agent loop completes.
@@ -99,8 +113,20 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, onText func(str
 	toolDefs := buildToolDefs(a.tools)
 
 	totalUsage := llm.UsageStats{}
+	ackRetries := 0
 
 	for iter := 0; iter < a.maxIterations; iter++ {
+		// Budget pressure injection.
+		if pct := float64(iter) / float64(a.maxIterations); pct >= 0.9 {
+			messages = append(messages, llm.NewUserMessage(fmt.Sprintf(
+				"[BUDGET WARNING: Only %d iterations remaining. Provide your final response NOW. Do not start new explorations.]",
+				a.maxIterations-iter)))
+		} else if pct >= 0.7 {
+			messages = append(messages, llm.NewUserMessage(fmt.Sprintf(
+				"[BUDGET: Iteration %d/%d. %d remaining. Start consolidating your work.]",
+				iter, a.maxIterations, a.maxIterations-iter)))
+		}
+
 		req := llm.Request{
 			Model:       a.model,
 			Messages:    messages,
@@ -125,15 +151,25 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, onText func(str
 		// Collect tool calls from the assistant message.
 		toolCalls := llm.ExtractToolUseBlocks(assistantMsg)
 		if len(toolCalls) == 0 {
-			// No tool calls — the model is done.
+			// Ack-continuation: force execution when model only states intent.
+			if isAckOnly(assistantMsg.Text()) && ackRetries < 2 {
+				ackRetries++
+				messages = append(messages, llm.NewUserMessage(
+					"[System: Continue now. Execute the required tool calls. Do not describe what you plan to do — do it.]"))
+				continue
+			}
 			break
 		}
+		ackRetries = 0
 
 		// Execute each tool call and collect results.
 		messages, err = a.executeTools(ctx, messages, toolCalls, onText)
 		if err != nil {
 			return nil, err
 		}
+
+		// Truncate oversized tool results to keep context manageable.
+		truncateToolResults(messages)
 	}
 
 	if len(messages) > 0 {
@@ -440,4 +476,86 @@ func extractToolPreview(toolName, input string) string {
 		preview = string([]rune(preview)[:37]) + "..."
 	}
 	return preview
+}
+
+// isAckOnly returns true when the model only states intent without executing.
+func isAckOnly(text string) bool {
+	text = strings.TrimSpace(text)
+	if len(text) > 500 || text == "" {
+		return false
+	}
+	for _, p := range []string{
+		"I'll ", "I will ", "Let me ", "I'm going to ",
+		"I need to ", "First, I'll ", "I should ",
+	} {
+		if strings.HasPrefix(text, p) {
+			return true
+		}
+	}
+	return false
+}
+
+const (
+	toolResultPerToolLimit = 50_000
+	toolResultTotalLimit   = 200_000
+)
+
+// truncateToolResults caps oversized tool results in the message slice.
+// It operates on the last user-role message (which carries tool results)
+// and replaces any ToolResultBlock content that exceeds the per-tool limit.
+// When the aggregate exceeds the total limit, the largest results are
+// truncated first.
+func truncateToolResults(messages []llm.Message) {
+	if len(messages) == 0 {
+		return
+	}
+	last := &messages[len(messages)-1]
+	if last.Role != llm.RoleUser {
+		return
+	}
+
+	type trRef struct {
+		idx  int
+		size int
+	}
+	var refs []trRef
+	total := 0
+
+	for i, block := range last.Content {
+		tr, ok := block.(llm.ToolResultBlock)
+		if !ok {
+			continue
+		}
+		size := len(tr.Content)
+		refs = append(refs, trRef{idx: i, size: size})
+		total += size
+
+		if size > toolResultPerToolLimit {
+			tr.Content = tr.Content[:2000] + fmt.Sprintf(
+				"\n\n[Output truncated. %d total characters. Read specific sections with offset/limit for details.]", size)
+			last.Content[i] = tr
+			total = total - size + len(tr.Content)
+			refs[len(refs)-1].size = len(tr.Content)
+		}
+	}
+
+	for total > toolResultTotalLimit && len(refs) > 0 {
+		largest := 0
+		for j, r := range refs {
+			if r.size > refs[largest].size {
+				largest = j
+			}
+		}
+		r := refs[largest]
+		tr := last.Content[r.idx].(llm.ToolResultBlock)
+		oldSize := len(tr.Content)
+		if oldSize <= 2000 {
+			break
+		}
+		tr.Content = tr.Content[:2000] + fmt.Sprintf(
+			"\n\n[Output truncated. %d total characters. Read specific sections with offset/limit for details.]", oldSize)
+		last.Content[r.idx] = tr
+		total = total - oldSize + len(tr.Content)
+		refs[largest].size = len(tr.Content)
+	}
 }

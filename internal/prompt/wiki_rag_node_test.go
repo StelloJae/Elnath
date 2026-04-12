@@ -104,3 +104,19 @@ func TestWikiRAGNodeDefaultMaxResults(t *testing.T) {
 		t.Fatalf("maxResults = %d, want 3", node.maxResults)
 	}
 }
+
+func TestWikiRAGNodeSkipsInBenchmarkMode(t *testing.T) {
+	t.Parallel()
+
+	got, err := NewWikiRAGNode(10, 3).Render(context.Background(), &RenderState{
+		BenchmarkMode: true,
+		WikiIdx:       newTestWikiIndex(t),
+		UserInput:     "compiled language",
+	})
+	if err != nil {
+		t.Fatalf("Render error: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("Render = %q, want empty string", got)
+	}
+}

@@ -25,6 +25,9 @@ func (n *PersonaNode) Priority() int {
 }
 
 func (n *PersonaNode) Render(_ context.Context, state *RenderState) (string, error) {
+	if state != nil && state.BenchmarkMode {
+		return "", nil
+	}
 	if n == nil || state == nil {
 		return "", nil
 	}

@@ -17,6 +17,10 @@ type Registry struct {
 	tools map[string]Tool
 }
 
+type readTrackerProvider interface {
+	ReadTracker() *ReadTracker
+}
+
 // NewRegistry creates an empty Registry.
 func NewRegistry() *Registry {
 	return &Registry{tools: make(map[string]Tool)}
@@ -69,6 +73,21 @@ func (r *Registry) Names() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+func (r *Registry) ReadTracker() *ReadTracker {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, tool := range r.tools {
+		provider, ok := tool.(readTrackerProvider)
+		if !ok {
+			continue
+		}
+		if tracker := provider.ReadTracker(); tracker != nil {
+			return tracker
+		}
+	}
+	return nil
 }
 
 // ToolDefs returns the llm.ToolDef definitions for all registered tools,

@@ -20,14 +20,21 @@ const grepMaxMatches = 100
 // ---------------------------------------------------------------------------
 
 // ReadTool reads file contents, optionally with line offset and limit.
-type ReadTool struct{ guard *PathGuard }
+type ReadTool struct {
+	guard   *PathGuard
+	tracker *ReadTracker
+}
 
-func NewReadTool(guard *PathGuard) *ReadTool { return &ReadTool{guard: guard} }
+func NewReadTool(guard *PathGuard, tracker ...*ReadTracker) *ReadTool {
+	return &ReadTool{guard: guard, tracker: firstTracker(tracker)}
+}
 
 func (t *ReadTool) Name() string { return "read_file" }
 func (t *ReadTool) Description() string {
-	return "Read the contents of a file with optional line range."
+	return "Read a file from the local filesystem. Use this instead of cat/head/tail via bash.\n\nUsage:\n- Read up to 2000 lines by default. For files over 500 lines, use offset and limit to read in chunks.\n- When you already know which part you need, only read that part — do not read entire large files.\n- Results include line numbers (cat -n format).\n- This tool can read images and PDFs."
 }
+
+func (t *ReadTool) ReadTracker() *ReadTracker { return t.tracker }
 
 func (t *ReadTool) Schema() json.RawMessage {
 	return Object(map[string]Property{
@@ -65,6 +72,9 @@ func (t *ReadTool) Execute(_ context.Context, params json.RawMessage) (*Result, 
 	abs, err := t.guard.Resolve(p.FilePath)
 	if err != nil {
 		return ErrorResult(err.Error()), nil
+	}
+	if msg := t.tracker.CheckRead(abs, p.Offset, p.Limit); msg != "" {
+		return SuccessResult(msg), nil
 	}
 	data, err := os.ReadFile(abs)
 	if err != nil {
@@ -110,12 +120,21 @@ func (t *ReadTool) Execute(_ context.Context, params json.RawMessage) (*Result, 
 // ---------------------------------------------------------------------------
 
 // WriteTool creates or overwrites a file atomically.
-type WriteTool struct{ guard *PathGuard }
+type WriteTool struct {
+	guard   *PathGuard
+	tracker *ReadTracker
+}
 
-func NewWriteTool(guard *PathGuard) *WriteTool { return &WriteTool{guard: guard} }
+func NewWriteTool(guard *PathGuard, tracker ...*ReadTracker) *WriteTool {
+	return &WriteTool{guard: guard, tracker: firstTracker(tracker)}
+}
 
-func (t *WriteTool) Name() string        { return "write_file" }
-func (t *WriteTool) Description() string { return "Create or overwrite a file with the given content." }
+func (t *WriteTool) Name() string { return "write_file" }
+func (t *WriteTool) Description() string {
+	return "Create or overwrite a file. Use read_file first if the file already exists.\n\nUsage:\n- Prefer edit_file for modifying existing files — it only sends the diff.\n- Do not create files unless absolutely necessary for the task."
+}
+
+func (t *WriteTool) ReadTracker() *ReadTracker { return t.tracker }
 
 func (t *WriteTool) Schema() json.RawMessage {
 	return Object(map[string]Property{
@@ -175,6 +194,7 @@ func (t *WriteTool) Execute(_ context.Context, params json.RawMessage) (*Result,
 		_ = os.Remove(tmpName)
 		return ErrorResult(fmt.Sprintf("write_file rename: %v", err)), nil
 	}
+	t.tracker.RefreshPath(abs)
 	return SuccessResult(fmt.Sprintf("wrote %s", p.FilePath)), nil
 }
 
@@ -190,12 +210,21 @@ func firstErr(a, b error) error {
 // ---------------------------------------------------------------------------
 
 // EditTool performs an exact string replacement in a file.
-type EditTool struct{ guard *PathGuard }
+type EditTool struct {
+	guard   *PathGuard
+	tracker *ReadTracker
+}
 
-func NewEditTool(guard *PathGuard) *EditTool { return &EditTool{guard: guard} }
+func NewEditTool(guard *PathGuard, tracker ...*ReadTracker) *EditTool {
+	return &EditTool{guard: guard, tracker: firstTracker(tracker)}
+}
 
-func (t *EditTool) Name() string        { return "edit_file" }
-func (t *EditTool) Description() string { return "Replace an exact string in a file with new content." }
+func (t *EditTool) Name() string { return "edit_file" }
+func (t *EditTool) Description() string {
+	return "Replace an exact string in a file with new content.\n\nUsage:\n- You MUST read the file with read_file before editing. This tool will fail if you haven't read the file first.\n- The old_string must be unique in the file. Provide more surrounding context if needed.\n- Use the smallest old_string that's clearly unique — usually 2-4 adjacent lines is sufficient. Avoid including 10+ lines of context when less uniquely identifies the target.\n- Prefer editing existing files over creating new ones.\n- Do not add comments, docstrings, or type annotations to code you didn't change."
+}
+
+func (t *EditTool) ReadTracker() *ReadTracker { return t.tracker }
 
 func (t *EditTool) Schema() json.RawMessage {
 	return Object(map[string]Property{
@@ -265,6 +294,7 @@ func (t *EditTool) Execute(_ context.Context, params json.RawMessage) (*Result, 
 	if err := os.WriteFile(abs, []byte(updated), 0o644); err != nil {
 		return ErrorResult(fmt.Sprintf("edit_file write: %v", err)), nil
 	}
+	t.tracker.RefreshPath(abs)
 	return SuccessResult(fmt.Sprintf("edited %s", p.FilePath)), nil
 }
 
@@ -277,8 +307,10 @@ type GlobTool struct{ guard *PathGuard }
 
 func NewGlobTool(guard *PathGuard) *GlobTool { return &GlobTool{guard: guard} }
 
-func (t *GlobTool) Name() string        { return "glob" }
-func (t *GlobTool) Description() string { return "List files matching a glob pattern." }
+func (t *GlobTool) Name() string { return "glob" }
+func (t *GlobTool) Description() string {
+	return "Fast file pattern matching. Use this instead of find or ls via bash.\nSupports patterns like \"**/*.go\" or \"src/**/*.ts\".\nReturns matching file paths sorted by modification time."
+}
 
 func (t *GlobTool) Schema() json.RawMessage {
 	return Object(map[string]Property{
@@ -400,12 +432,21 @@ func recursiveGlob(searchBase, baseDir, pattern string) []fileEntry {
 // ---------------------------------------------------------------------------
 
 // GrepTool searches for a regex pattern across files in a directory.
-type GrepTool struct{ guard *PathGuard }
+type GrepTool struct {
+	guard   *PathGuard
+	tracker *ReadTracker
+}
 
-func NewGrepTool(guard *PathGuard) *GrepTool { return &GrepTool{guard: guard} }
+func NewGrepTool(guard *PathGuard, tracker ...*ReadTracker) *GrepTool {
+	return &GrepTool{guard: guard, tracker: firstTracker(tracker)}
+}
 
-func (t *GrepTool) Name() string        { return "grep" }
-func (t *GrepTool) Description() string { return "Search for a regex pattern in files." }
+func (t *GrepTool) Name() string { return "grep" }
+func (t *GrepTool) Description() string {
+	return "Search file contents with a regex pattern. Use this instead of grep or rg via bash.\nSupports full regex syntax. Filter by file type or glob pattern."
+}
+
+func (t *GrepTool) ReadTracker() *ReadTracker { return t.tracker }
 
 func (t *GrepTool) Schema() json.RawMessage {
 	return Object(map[string]Property{
@@ -477,6 +518,9 @@ func (t *GrepTool) Execute(_ context.Context, params json.RawMessage) (*Result, 
 		}
 		searchRoot = abs
 	}
+	if msg := t.tracker.CheckGrep(searchRoot, p.Pattern); msg != "" {
+		return SuccessResult(msg), nil
+	}
 
 	var sb strings.Builder
 	matchCount := 0
@@ -520,4 +564,11 @@ func (t *GrepTool) Execute(_ context.Context, params json.RawMessage) (*Result, 
 		sb.WriteString(fmt.Sprintf("... (output truncated at %d matches)\n", grepMaxMatches))
 	}
 	return SuccessResult(sb.String()), nil
+}
+
+func firstTracker(trackers []*ReadTracker) *ReadTracker {
+	if len(trackers) == 0 {
+		return nil
+	}
+	return trackers[0]
 }

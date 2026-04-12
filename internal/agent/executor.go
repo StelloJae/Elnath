@@ -146,6 +146,9 @@ func (a *Agent) executeToolBatch(ctx context.Context, batch []scheduledToolCall,
 			defer wg.Done()
 
 			result, err := a.tools.Execute(childCtx, call.call.Name, call.call.Input)
+			if a.readTracker != nil {
+				a.readTracker.NotifyTool(call.call.Name)
+			}
 			if err != nil {
 				if call.cancelOnErr {
 					once.Do(func() {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/stello/elnath/internal/agent"
@@ -171,10 +172,11 @@ func buildExecutionRuntime(
 
 	hooks := buildHookRegistry(cfg.Hooks)
 	wfCfg := orchestrator.WorkflowConfig{
-		Model:        model,
-		SystemPrompt: "",
-		Hooks:        hooks,
-		Permission:   perm,
+		Model:         model,
+		MaxIterations: maxIterationsFromEnv(),
+		SystemPrompt:  "",
+		Hooks:         hooks,
+		Permission:    perm,
 	}
 	b := prompt.NewBuilder()
 	b.Register(prompt.NewIdentityNode(100))
@@ -238,6 +240,7 @@ func (rt *executionRuntime) runTask(
 	}
 
 	routeCtx := buildRoutingContext(userInput)
+	routeCtx.BenchmarkMode = benchmarkModeEnabled()
 	routeCtx.ProjectID = rt.principal.ProjectID
 	pref, err := wiki.LoadWorkflowPreference(rt.wikiStore, routeCtx.ProjectID)
 	if err != nil {
@@ -274,19 +277,21 @@ func (rt *executionRuntime) runTask(
 		promptMessages = promptMessages[:len(promptMessages)-1]
 	}
 	renderState := &prompt.RenderState{
-		SessionID:    sess.ID,
-		UserInput:    userInput,
-		Self:         rt.selfState,
-		Messages:     promptMessages,
-		WikiIdx:      rt.wikiIdx,
-		TokenBudget:  0,
-		PersonaExtra: rt.personaExtra,
-		Model:        rt.wfCfg.Model,
-		Provider:     rt.provider.Name(),
-		ToolNames:    rt.reg.Names(),
-		WorkDir:      rt.workDir,
-		ExistingCode: routeCtx.ExistingCode,
-		VerifyHint:   routeCtx.VerificationHint,
+		SessionID:     sess.ID,
+		UserInput:     userInput,
+		Self:          rt.selfState,
+		Messages:      promptMessages,
+		WikiIdx:       rt.wikiIdx,
+		TokenBudget:   0,
+		PersonaExtra:  rt.personaExtra,
+		Model:         rt.wfCfg.Model,
+		Provider:      rt.provider.Name(),
+		ToolNames:     rt.reg.Names(),
+		WorkDir:       rt.workDir,
+		ExistingCode:  routeCtx.ExistingCode,
+		VerifyHint:    routeCtx.VerificationHint,
+		BenchmarkMode: routeCtx.BenchmarkMode,
+		TaskLanguage:  taskLanguageFromEnv(),
 	}
 	systemPrompt, err := rt.promptBuilder.Build(ctx, renderState)
 	if err != nil {
@@ -327,6 +332,26 @@ func (rt *executionRuntime) runTask(
 	}
 
 	return result.Messages, result.Summary, nil
+}
+
+func benchmarkModeEnabled() bool {
+	return os.Getenv("ELNATH_BENCHMARK_MODE") == "1"
+}
+
+func taskLanguageFromEnv() string {
+	return os.Getenv("ELNATH_TASK_LANGUAGE")
+}
+
+func maxIterationsFromEnv() int {
+	raw := os.Getenv("ELNATH_MAX_ITERATIONS")
+	if raw == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
 }
 
 func (rt *executionRuntime) newDaemonTaskRunner() daemon.TaskRunner {

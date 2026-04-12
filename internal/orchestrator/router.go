@@ -16,6 +16,7 @@ type RoutingContext struct {
 	ExistingCode bool
 	// VerificationHint indicates the task explicitly mentions tests, regressions, or validation.
 	VerificationHint bool
+	BenchmarkMode    bool
 }
 
 // Router maps a classified Intent to the appropriate Workflow.
@@ -43,6 +44,9 @@ func NewRouter(workflows map[string]Workflow) *Router {
 //	chat          -> single  (no tools)
 func (r *Router) Route(intent conversation.Intent, ctx *RoutingContext, pref *routingpref.WorkflowPreference) Workflow {
 	base := r.routeName(intent, ctx)
+	if ctx != nil && ctx.BenchmarkMode {
+		return r.get(base)
+	}
 	if preferred := pref.PreferredWorkflow(string(intent)); preferred != "" && !pref.Avoids(preferred) {
 		if wf, ok := r.workflows[preferred]; ok {
 			return wf
@@ -57,6 +61,9 @@ func (r *Router) Route(intent conversation.Intent, ctx *RoutingContext, pref *ro
 }
 
 func (r *Router) routeName(intent conversation.Intent, ctx *RoutingContext) string {
+	if ctx != nil && ctx.BenchmarkMode {
+		return "single"
+	}
 	switch intent {
 	case conversation.IntentComplexTask:
 		if ctx != nil && ctx.ExistingCode && ctx.VerificationHint {

@@ -2,6 +2,7 @@ package tools
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -115,5 +116,77 @@ func TestSchemaArray(t *testing.T) {
 	}
 	if p.Items.Type != "string" {
 		t.Errorf("Items.Type = %q, want %q", p.Items.Type, "string")
+	}
+}
+
+func TestBuiltinToolDescriptions(t *testing.T) {
+	guard := NewPathGuard(t.TempDir(), nil)
+	tracker := NewReadTracker()
+
+	cases := []struct {
+		name     string
+		got      string
+		contains []string
+	}{
+		{
+			name: "read_file guidance",
+			got:  NewReadTool(guard, tracker).Description(),
+			contains: []string{
+				"Use this instead of cat/head/tail via bash.",
+				"Read up to 2000 lines by default.",
+				"Results include line numbers",
+			},
+		},
+		{
+			name: "edit_file guidance",
+			got:  NewEditTool(guard, tracker).Description(),
+			contains: []string{
+				"You MUST read the file with read_file before editing.",
+				"Use the smallest old_string that's clearly unique",
+			},
+		},
+		{
+			name: "write_file guidance",
+			got:  NewWriteTool(guard, tracker).Description(),
+			contains: []string{
+				"Use read_file first if the file already exists.",
+				"Prefer edit_file for modifying existing files",
+			},
+		},
+		{
+			name: "bash guidance",
+			got:  NewBashTool(guard).Description(),
+			contains: []string{
+				"Do NOT use bash for tasks that have a dedicated tool",
+				"File search: use glob",
+				"Read files: use read_file",
+			},
+		},
+		{
+			name: "glob guidance",
+			got:  NewGlobTool(guard).Description(),
+			contains: []string{
+				"Use this instead of find or ls via bash.",
+				"Returns matching file paths sorted by modification time.",
+			},
+		},
+		{
+			name: "grep guidance",
+			got:  NewGrepTool(guard, tracker).Description(),
+			contains: []string{
+				"Use this instead of grep or rg via bash.",
+				"Supports full regex syntax.",
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, want := range tc.contains {
+				if !strings.Contains(tc.got, want) {
+					t.Fatalf("description missing %q:\n%s", want, tc.got)
+				}
+			}
+		})
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -394,6 +395,54 @@ func TestPartition_ConservativeScopeSerializes(t *testing.T) {
 	readStart, readFinish := read.interval()
 	if !intervalsDisjoint(intervals[0], [2]time.Time{readStart, readFinish}) {
 		t.Fatalf("conservative write overlapped with read: write=%v read=%s..%s", intervals[0], readStart, readFinish)
+	}
+}
+
+func TestExecuteToolsResetsReadTrackerOnNonReadTool(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "file.txt"), []byte("alpha\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	tracker := tools.NewReadTracker()
+	guard := tools.NewPathGuard(dir, nil)
+	reg := tools.NewRegistry()
+	reg.Register(tools.NewReadTool(guard, tracker))
+	reg.Register(&fakeTool{name: "other_tool", scope: tools.ToolScope{WritePaths: []string{filepath.Join(dir, "other")}, Persistent: true}})
+
+	a := New(&mockProvider{}, reg, WithPermission(NewPermission(WithMode(ModeBypass))), WithReadTracker(tracker))
+	readCall := []llm.ToolUseBlock{{ID: "read", Name: "read_file", Input: json.RawMessage(`{"file_path":"file.txt","offset":1,"limit":1}`)}}
+
+	messages, err := a.executeTools(context.Background(), nil, readCall, nil)
+	if err != nil {
+		t.Fatalf("first read: %v", err)
+	}
+	blocks := toolResultBlocks(t, messages)
+	if got := blocks[0].Content; !strings.Contains(got, "alpha") {
+		t.Fatalf("first read output = %q", got)
+	}
+
+	messages, err = a.executeTools(context.Background(), nil, readCall, nil)
+	if err != nil {
+		t.Fatalf("second read: %v", err)
+	}
+	blocks = toolResultBlocks(t, messages)
+	if got := blocks[0].Content; !strings.Contains(got, "File unchanged") {
+		t.Fatalf("second read output = %q", got)
+	}
+
+	_, err = a.executeTools(context.Background(), nil, []llm.ToolUseBlock{{ID: "other", Name: "other_tool", Input: json.RawMessage(`{}`)}}, nil)
+	if err != nil {
+		t.Fatalf("other tool: %v", err)
+	}
+
+	messages, err = a.executeTools(context.Background(), nil, readCall, nil)
+	if err != nil {
+		t.Fatalf("read after reset: %v", err)
+	}
+	blocks = toolResultBlocks(t, messages)
+	if got := blocks[0].Content; strings.Contains(got, "WARNING") || strings.Contains(got, "BLOCKED") {
+		t.Fatalf("read after reset output = %q", got)
 	}
 }
 

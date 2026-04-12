@@ -170,3 +170,29 @@ func TestRoutePreferenceUnknownWorkflowFallsBackToBaseWorkflow(t *testing.T) {
 		t.Fatalf("got %q, want %q", wf.Name(), "single")
 	}
 }
+
+func TestRouteBenchmarkModeForcesSingle(t *testing.T) {
+	r := newTestRouter()
+	wf := r.Route(conversation.IntentComplexTask, &RoutingContext{
+		EstimatedFiles: 4,
+		ExistingCode:   true,
+		BenchmarkMode:  true,
+	}, nil)
+	if wf.Name() != "single" {
+		t.Fatalf("got %q, want %q", wf.Name(), "single")
+	}
+}
+
+func TestRouteBenchmarkModeIgnoresPreferenceOverride(t *testing.T) {
+	r := newTestRouter()
+	pref := &routingpref.WorkflowPreference{
+		PreferredWorkflows: map[string]string{"complex_task": "team"},
+	}
+	wf := r.Route(conversation.IntentComplexTask, &RoutingContext{
+		EstimatedFiles: 4,
+		BenchmarkMode:  true,
+	}, pref)
+	if wf.Name() != "single" {
+		t.Fatalf("got %q, want %q", wf.Name(), "single")
+	}
+}

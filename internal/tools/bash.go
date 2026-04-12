@@ -30,8 +30,10 @@ func NewBashTool(guard *PathGuard) *BashTool {
 	return &BashTool{guard: guard, defaultTimeout: bashDefaultTimeout}
 }
 
-func (t *BashTool) Name() string        { return "bash" }
-func (t *BashTool) Description() string { return "Execute a shell command in the working directory." }
+func (t *BashTool) Name() string { return "bash" }
+func (t *BashTool) Description() string {
+	return "Execute a shell command in the working directory.\n\nIMPORTANT: Do NOT use bash for tasks that have a dedicated tool:\n- File search: use glob (not find or ls)\n- Content search: use grep (not grep or rg)\n- Read files: use read_file (not cat/head/tail)\n- Edit files: use edit_file (not sed/awk)\n- Write files: use write_file (not echo/cat heredoc)\n\nUsing dedicated tools is faster and lets the user review your work more easily."
+}
 
 func (t *BashTool) Schema() json.RawMessage {
 	return Object(map[string]Property{

@@ -547,10 +547,10 @@ func TestExecutionRuntimeBuildsPerRequestSystemPrompt(t *testing.T) {
 		"You are Elnath.",
 		"You have access to tools",
 		"__DYNAMIC_BOUNDARY__",
-		"Brownfield execution guidance:",
+		"# Execution Discipline",
 		"Project context:",
 		"internal/middleware/request_id.go",
-		"This task explicitly emphasizes verification or regression safety",
+		"Report outcomes faithfully",
 	}
 	for _, want := range checks {
 		if !strings.Contains(provider.lastSystem, want) {

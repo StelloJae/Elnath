@@ -32,6 +32,9 @@ func (n *WikiRAGNode) Priority() int {
 }
 
 func (n *WikiRAGNode) Render(ctx context.Context, state *RenderState) (string, error) {
+	if state != nil && state.BenchmarkMode {
+		return "", nil
+	}
 	if n == nil || state == nil || state.WikiIdx == nil || strings.TrimSpace(state.UserInput) == "" {
 		return "", nil
 	}

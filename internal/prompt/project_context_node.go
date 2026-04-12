@@ -30,6 +30,9 @@ func (n *ProjectContextNode) Priority() int {
 }
 
 func (n *ProjectContextNode) Render(ctx context.Context, state *RenderState) (string, error) {
+	if state != nil && state.BenchmarkMode {
+		return "", nil
+	}
 	if n == nil || state == nil || !state.ExistingCode {
 		return "", nil
 	}
