@@ -84,3 +84,31 @@ func TestTrackDeltaRegressionRate(t *testing.T) {
 		t.Fatalf("bugfix RegressionRateDelta = %v, want 0", got)
 	}
 }
+
+func TestDiffIncludesMonth3Deltas(t *testing.T) {
+	current := &Scorecard{Version: "v1", System: "elnath", Results: []RunResult{
+		{TaskID: "A", Track: TrackBrownfieldFeature, Language: LanguageGo, Success: true, VerificationPassed: true, InterventionCount: 1, DurationSeconds: 10},
+		{TaskID: "B", Track: TrackBugfix, Language: LanguageGo, Success: false, VerificationPassed: false, InterventionCount: 3, DurationSeconds: 50},
+	}}
+	baseline := &Scorecard{Version: "v1", System: "baseline", Results: []RunResult{
+		{TaskID: "A", Track: TrackBrownfieldFeature, Language: LanguageGo, Success: true, VerificationPassed: false, InterventionCount: 2, DurationSeconds: 30},
+		{TaskID: "B", Track: TrackBugfix, Language: LanguageGo, Success: false, VerificationPassed: false, InterventionCount: 1, DurationSeconds: 60},
+	}}
+
+	diff, err := Diff(current, baseline)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if math.Abs(diff.SuccessAndVerifiedRateDelta-0.5) > 1e-9 {
+		t.Fatalf("SuccessAndVerifiedRateDelta = %v, want 0.5", diff.SuccessAndVerifiedRateDelta)
+	}
+	if math.Abs(diff.InterventionMeanDelta-0.5) > 1e-9 {
+		t.Fatalf("InterventionMeanDelta = %v, want 0.5", diff.InterventionMeanDelta)
+	}
+	if math.Abs(diff.SuccessDurationMeanDelta+20) > 1e-9 {
+		t.Fatalf("SuccessDurationMeanDelta = %v, want -20", diff.SuccessDurationMeanDelta)
+	}
+	if math.Abs(diff.ByTrack[TrackBrownfieldFeature].SuccessAndVerifiedRateDelta-1) > 1e-9 {
+		t.Fatalf("brownfield SuccessAndVerifiedRateDelta = %v, want 1", diff.ByTrack[TrackBrownfieldFeature].SuccessAndVerifiedRateDelta)
+	}
+}

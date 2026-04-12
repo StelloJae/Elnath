@@ -76,3 +76,25 @@ func TestCorpusValidateErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestCorpusValidateAllowsResearchTrack(t *testing.T) {
+	corpus := Corpus{
+		Version: "v1",
+		Tasks: []Task{{
+			ID:                 "R-1",
+			Title:              "Investigate flaky benchmark",
+			Track:              TrackResearch,
+			Language:           LanguageGo,
+			RepoClass:          "cli_dev_tool",
+			BenchmarkFamily:    "research_primary",
+			Prompt:             "Investigate and summarize the issue",
+			Repo:               "https://github.com/example/repo",
+			RepoRef:            "deadbeef",
+			AcceptanceCriteria: []string{"summary is written"},
+		}},
+	}
+
+	if err := corpus.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+}

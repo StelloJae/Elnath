@@ -74,10 +74,29 @@ func (s *Scorecard) Summary() Summary {
 		return summary
 	}
 
+	trackSuccessAndVerified := make(map[Track]int)
+	trackInterventionTotals := make(map[Track]int)
+	trackSuccessDurationTotals := make(map[Track]float64)
+	trackSuccessDurationCounts := make(map[Track]int)
+	successAndVerified := 0
+	interventionTotal := 0
+	successDurationTotal := 0.0
+	successDurationCount := 0
+
 	for _, result := range s.Results {
 		summary.Total++
+		interventionTotal += result.InterventionCount
+		trackInterventionTotals[result.Track] += result.InterventionCount
 		if result.Success {
 			summary.Successes++
+			successDurationTotal += result.DurationSeconds
+			successDurationCount++
+			trackSuccessDurationTotals[result.Track] += result.DurationSeconds
+			trackSuccessDurationCounts[result.Track]++
+		}
+		if result.Success && result.VerificationPassed {
+			successAndVerified++
+			trackSuccessAndVerified[result.Track]++
 		}
 		if result.RegressionTriggered {
 			summary.RegressionsTriggered++
@@ -129,26 +148,36 @@ func (s *Scorecard) Summary() Summary {
 
 	if summary.Total > 0 {
 		summary.SuccessRate = float64(summary.Successes) / float64(summary.Total)
+		summary.SuccessAndVerifiedRate = float64(successAndVerified) / float64(summary.Total)
 		if summary.Successes > 0 {
 			summary.RegressionRate = float64(summary.RegressionsTriggered) / float64(summary.Successes)
 		}
 		summary.InterventionRate = float64(summary.Interventions) / float64(summary.Total)
+		summary.InterventionMean = float64(interventionTotal) / float64(summary.Total)
 		summary.VerificationPassRate = float64(summary.VerificationPasses) / float64(summary.Total)
 		if summary.RecoveryAttempts > 0 {
 			summary.RecoverySuccessRate = float64(summary.RecoverySuccesses) / float64(summary.RecoveryAttempts)
 		}
 	}
+	if successDurationCount > 0 {
+		summary.SuccessDurationMean = successDurationTotal / float64(successDurationCount)
+	}
 	for track, trackSummary := range summary.ByTrack {
 		if trackSummary.Total > 0 {
 			trackSummary.SuccessRate = float64(trackSummary.Successes) / float64(trackSummary.Total)
+			trackSummary.SuccessAndVerifiedRate = float64(trackSuccessAndVerified[track]) / float64(trackSummary.Total)
 			if trackSummary.Successes > 0 {
 				trackSummary.RegressionRate = float64(trackSummary.RegressionsTriggered) / float64(trackSummary.Successes)
 			}
 			trackSummary.InterventionRate = float64(trackSummary.Interventions) / float64(trackSummary.Total)
+			trackSummary.InterventionMean = float64(trackInterventionTotals[track]) / float64(trackSummary.Total)
 			trackSummary.VerificationPassRate = float64(trackSummary.VerificationPasses) / float64(trackSummary.Total)
 			if trackSummary.RecoveryAttempts > 0 {
 				trackSummary.RecoverySuccessRate = float64(trackSummary.RecoverySuccesses) / float64(trackSummary.RecoveryAttempts)
 			}
+		}
+		if trackSuccessDurationCounts[track] > 0 {
+			trackSummary.SuccessDurationMean = trackSuccessDurationTotals[track] / float64(trackSuccessDurationCounts[track])
 		}
 		summary.ByTrack[track] = trackSummary
 	}

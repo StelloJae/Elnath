@@ -18,6 +18,7 @@ Subcommands:
   diff <current.json> <baseline.json> Compare two scorecards
   report <corpus.json> <current.json> <baseline.json> <output.md> Write a markdown benchmark report
   gate-month2 <corpus.json> <current.json> <baseline.json> Evaluate Month-2 brownfield proof gate
+  month3-gate <current1.json> <current2.json> <current3.json> <baseline.json> Evaluate Month-3 gate
   rules <corpus.json> <scorecard.json> Check anti-vanity benchmark rules
   run-baseline <plan.json>   Execute a baseline runner plan and write a scorecard
   run-current <plan.json>    Execute a current-system runner plan and write a scorecard
@@ -56,9 +57,12 @@ Subcommands:
 		fmt.Printf("Benchmark complete: system=%s baseline=%s tasks=%d\n", scorecard.System, scorecard.Baseline, summary.Total)
 		fmt.Printf("MC2 metrics:\n")
 		fmt.Printf("  success_rate           = %.4f\n", summary.SuccessRate)
+		fmt.Printf("  success_and_verified_rate = %.4f\n", summary.SuccessAndVerifiedRate)
 		fmt.Printf("  intervention_rate      = %.4f\n", summary.InterventionRate)
+		fmt.Printf("  intervention_mean      = %.4f\n", summary.InterventionMean)
 		fmt.Printf("  verification_pass_rate = %.4f\n", summary.VerificationPassRate)
 		fmt.Printf("  recovery_success_rate  = %.4f\n", summary.RecoverySuccessRate)
+		fmt.Printf("  success_duration_mean  = %.4f\n", summary.SuccessDurationMean)
 		fmt.Printf("  regression_rate        = %.4f\n", summary.RegressionRate)
 		return nil
 	case "summarize":
@@ -74,17 +78,17 @@ Subcommands:
 		if scorecard.Baseline != "" {
 			fmt.Printf("Baseline: %s\n", scorecard.Baseline)
 		}
-		fmt.Printf("Overall: total=%d success=%d success_rate=%.2f intervention_rate=%.2f\n",
-			summary.Total, summary.Successes, summary.SuccessRate, summary.InterventionRate)
-		fmt.Printf("Verification: pass_rate=%.2f recovery_success_rate=%.2f regression_rate=%.4f\n",
-			summary.VerificationPassRate, summary.RecoverySuccessRate, summary.RegressionRate)
-		for _, track := range []eval.Track{eval.TrackBrownfieldFeature, eval.TrackBugfix, eval.TrackGreenfield} {
+		fmt.Printf("Overall: total=%d success=%d success_rate=%.2f success_and_verified_rate=%.2f intervention_rate=%.2f intervention_mean=%.2f\n",
+			summary.Total, summary.Successes, summary.SuccessRate, summary.SuccessAndVerifiedRate, summary.InterventionRate, summary.InterventionMean)
+		fmt.Printf("Verification: pass_rate=%.2f recovery_success_rate=%.2f regression_rate=%.4f success_duration_mean=%.2f\n",
+			summary.VerificationPassRate, summary.RecoverySuccessRate, summary.RegressionRate, summary.SuccessDurationMean)
+		for _, track := range []eval.Track{eval.TrackBrownfieldFeature, eval.TrackBugfix, eval.TrackGreenfield, eval.TrackResearch} {
 			trackSummary, ok := summary.ByTrack[track]
 			if !ok || trackSummary.Total == 0 {
 				continue
 			}
-			fmt.Printf("Track %s: total=%d success=%d success_rate=%.2f intervention_rate=%.2f verification_pass_rate=%.2f recovery_success_rate=%.2f regression_rate=%.4f\n",
-				track, trackSummary.Total, trackSummary.Successes, trackSummary.SuccessRate, trackSummary.InterventionRate, trackSummary.VerificationPassRate, trackSummary.RecoverySuccessRate, trackSummary.RegressionRate)
+			fmt.Printf("Track %s: total=%d success=%d success_rate=%.2f success_and_verified_rate=%.2f intervention_rate=%.2f intervention_mean=%.2f verification_pass_rate=%.2f recovery_success_rate=%.2f regression_rate=%.4f success_duration_mean=%.2f\n",
+				track, trackSummary.Total, trackSummary.Successes, trackSummary.SuccessRate, trackSummary.SuccessAndVerifiedRate, trackSummary.InterventionRate, trackSummary.InterventionMean, trackSummary.VerificationPassRate, trackSummary.RecoverySuccessRate, trackSummary.RegressionRate, trackSummary.SuccessDurationMean)
 		}
 		if len(summary.FailureFamilies) > 0 {
 			fmt.Println("Failure families:")
@@ -109,15 +113,15 @@ Subcommands:
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Overall delta: success_rate_delta=%.2f verification_pass_delta=%.2f recovery_success_delta=%.2f regression_rate_delta=%.4f\n",
-			diff.SuccessRateDelta, diff.VerificationPassDelta, diff.RecoverySuccessDelta, diff.RegressionRateDelta)
-		for _, track := range []eval.Track{eval.TrackBrownfieldFeature, eval.TrackBugfix, eval.TrackGreenfield} {
+		fmt.Printf("Overall delta: success_rate_delta=%.2f success_and_verified_rate_delta=%.2f verification_pass_delta=%.2f recovery_success_delta=%.2f intervention_mean_delta=%.2f success_duration_mean_delta=%.2f regression_rate_delta=%.4f\n",
+			diff.SuccessRateDelta, diff.SuccessAndVerifiedRateDelta, diff.VerificationPassDelta, diff.RecoverySuccessDelta, diff.InterventionMeanDelta, diff.SuccessDurationMeanDelta, diff.RegressionRateDelta)
+		for _, track := range []eval.Track{eval.TrackBrownfieldFeature, eval.TrackBugfix, eval.TrackGreenfield, eval.TrackResearch} {
 			trackDiff := diff.ByTrack[track]
 			if trackDiff.Current.Total == 0 && trackDiff.Baseline.Total == 0 {
 				continue
 			}
-			fmt.Printf("Track %s delta: success_rate_delta=%.2f verification_pass_delta=%.2f recovery_success_delta=%.2f regression_rate_delta=%.4f\n",
-				track, trackDiff.SuccessRateDelta, trackDiff.VerificationPassDelta, trackDiff.RecoverySuccessDelta, trackDiff.RegressionRateDelta)
+			fmt.Printf("Track %s delta: success_rate_delta=%.2f success_and_verified_rate_delta=%.2f verification_pass_delta=%.2f recovery_success_delta=%.2f intervention_mean_delta=%.2f success_duration_mean_delta=%.2f regression_rate_delta=%.4f\n",
+				track, trackDiff.SuccessRateDelta, trackDiff.SuccessAndVerifiedRateDelta, trackDiff.VerificationPassDelta, trackDiff.RecoverySuccessDelta, trackDiff.InterventionMeanDelta, trackDiff.SuccessDurationMeanDelta, trackDiff.RegressionRateDelta)
 		}
 		return nil
 	case "report":
@@ -174,6 +178,39 @@ Subcommands:
 		}
 		if !gate.Pass {
 			return fmt.Errorf("month 2 gate failed")
+		}
+		return nil
+	case "month3-gate":
+		if len(args) < 5 {
+			return fmt.Errorf("usage: elnath eval month3-gate <current1.json> <current2.json> <current3.json> <baseline.json>")
+		}
+		scorecards := make([]*eval.Scorecard, 0, len(args)-2)
+		for _, path := range args[1 : len(args)-1] {
+			scorecard, err := eval.LoadScorecard(path)
+			if err != nil {
+				return err
+			}
+			scorecards = append(scorecards, scorecard)
+		}
+		baseline, err := eval.LoadScorecard(args[len(args)-1])
+		if err != nil {
+			return err
+		}
+		gate, err := eval.EvaluateMonth3Gate(scorecards, baseline)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Month 3 gate: %s\n", passFail(gate.Pass))
+		for i, h1 := range gate.H1Results {
+			printH1Result(fmt.Sprintf("Run %d H1", i+1), h1)
+		}
+		printH1Result("Average H1", gate.AverageH1Result)
+		fmt.Printf("Stability: %s\n", passFail(gate.StabilityPass))
+		for _, reason := range gate.Reasons {
+			fmt.Printf("reason: %s\n", reason)
+		}
+		if !gate.Pass {
+			return fmt.Errorf("month 3 gate failed")
 		}
 		return nil
 	case "rules":
@@ -248,4 +285,20 @@ Subcommands:
 	default:
 		return fmt.Errorf("unknown eval subcommand: %s", args[0])
 	}
+}
+
+func printH1Result(label string, result eval.H1Result) {
+	fmt.Printf("%s: %s\n", label, passFail(result.Pass))
+	for _, key := range []string{"T_brownfield", "T_bugfix", "T_intervent", "T_regression", "T_time"} {
+		check := result.ThresholdResults[key]
+		fmt.Printf("  %s: %s current=%.4f baseline=%.4f threshold=%.4f\n", key, passFail(check.Pass), check.Current, check.Baseline, check.Threshold)
+	}
+	fmt.Printf("  hard_gate_pass=%t soft_gate_count=%d soft_gate_pass=%t\n", result.HardGatePass, result.SoftGateCount, result.SoftGatePass)
+}
+
+func passFail(pass bool) string {
+	if pass {
+		return "PASS"
+	}
+	return "FAIL"
 }

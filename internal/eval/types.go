@@ -7,6 +7,7 @@ const (
 	TrackBrownfieldFeature Track = "brownfield_feature"
 	TrackBugfix            Track = "bugfix"
 	TrackGreenfield        Track = "greenfield"
+	TrackResearch          Track = "research"
 )
 
 // Language is the primary language for a benchmark task.
@@ -73,37 +74,43 @@ type Scorecard struct {
 
 // TrackSummary is the aggregate result for one track.
 type TrackSummary struct {
-	Total                int
-	Successes            int
-	SuccessRate          float64
-	Interventions        int
-	InterventionRate     float64
-	VerificationPasses   int
-	VerificationPassRate float64
-	RecoveryAttempts     int
-	RecoverySuccesses    int
-	RecoverySuccessRate  float64
-	FailureFamilies      map[string]int
-	RegressionsTriggered int
-	RegressionRate       float64
+	Total                  int
+	Successes              int
+	SuccessRate            float64
+	SuccessAndVerifiedRate float64
+	Interventions          int
+	InterventionRate       float64
+	InterventionMean       float64
+	VerificationPasses     int
+	VerificationPassRate   float64
+	RecoveryAttempts       int
+	RecoverySuccesses      int
+	RecoverySuccessRate    float64
+	FailureFamilies        map[string]int
+	RegressionsTriggered   int
+	RegressionRate         float64
+	SuccessDurationMean    float64
 }
 
 // Summary is the aggregate result for a whole scorecard.
 type Summary struct {
-	Total                int
-	Successes            int
-	SuccessRate          float64
-	Interventions        int
-	InterventionRate     float64
-	VerificationPasses   int
-	VerificationPassRate float64
-	RecoveryAttempts     int
-	RecoverySuccesses    int
-	RecoverySuccessRate  float64
-	FailureFamilies      map[string]int
-	ByTrack              map[Track]TrackSummary
-	RegressionsTriggered int
-	RegressionRate       float64
+	Total                  int
+	Successes              int
+	SuccessRate            float64
+	SuccessAndVerifiedRate float64
+	Interventions          int
+	InterventionRate       float64
+	InterventionMean       float64
+	VerificationPasses     int
+	VerificationPassRate   float64
+	RecoveryAttempts       int
+	RecoverySuccesses      int
+	RecoverySuccessRate    float64
+	FailureFamilies        map[string]int
+	ByTrack                map[Track]TrackSummary
+	RegressionsTriggered   int
+	RegressionRate         float64
+	SuccessDurationMean    float64
 }
 
 // DiffSummary compares two scorecards with the same task universe shape.
@@ -111,23 +118,29 @@ type Summary struct {
 // regressions than baseline (i.e. worse). Opposite polarity from SuccessRateDelta
 // where positive means better.
 type DiffSummary struct {
-	Current               Summary
-	Baseline              Summary
-	SuccessRateDelta      float64
-	VerificationPassDelta float64
-	RecoverySuccessDelta  float64
-	ByTrack               map[Track]TrackDelta
-	RegressionRateDelta   float64
+	Current                     Summary
+	Baseline                    Summary
+	SuccessRateDelta            float64
+	SuccessAndVerifiedRateDelta float64
+	VerificationPassDelta       float64
+	RecoverySuccessDelta        float64
+	InterventionMeanDelta       float64
+	SuccessDurationMeanDelta    float64
+	ByTrack                     map[Track]TrackDelta
+	RegressionRateDelta         float64
 }
 
 // TrackDelta compares one track between scorecards.
 type TrackDelta struct {
-	Current               TrackSummary
-	Baseline              TrackSummary
-	SuccessRateDelta      float64
-	VerificationPassDelta float64
-	RecoverySuccessDelta  float64
-	RegressionRateDelta   float64
+	Current                     TrackSummary
+	Baseline                    TrackSummary
+	SuccessRateDelta            float64
+	SuccessAndVerifiedRateDelta float64
+	VerificationPassDelta       float64
+	RecoverySuccessDelta        float64
+	InterventionMeanDelta       float64
+	SuccessDurationMeanDelta    float64
+	RegressionRateDelta         float64
 }
 
 // BaselineRunPlan is a starter scaffold for evaluating an external baseline.

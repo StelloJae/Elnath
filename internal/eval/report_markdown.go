@@ -61,17 +61,20 @@ func BuildMarkdownReport(corpus *Corpus, current, baseline *Scorecard) (string, 
 	}
 	fmt.Fprintf(&b, "## Overall Delta\n\n")
 	fmt.Fprintf(&b, "- Success rate delta: %.2f\n", diff.SuccessRateDelta)
+	fmt.Fprintf(&b, "- Success+verified rate delta: %.2f\n", diff.SuccessAndVerifiedRateDelta)
+	fmt.Fprintf(&b, "- Intervention mean delta: %.2f\n", diff.InterventionMeanDelta)
 	fmt.Fprintf(&b, "- Verification pass delta: %.2f\n", diff.VerificationPassDelta)
-	fmt.Fprintf(&b, "- Recovery success delta: %.2f\n\n", diff.RecoverySuccessDelta)
+	fmt.Fprintf(&b, "- Recovery success delta: %.2f\n", diff.RecoverySuccessDelta)
+	fmt.Fprintf(&b, "- Success duration mean delta: %.2f\n\n", diff.SuccessDurationMeanDelta)
 
 	fmt.Fprintf(&b, "## Track Deltas\n\n")
-	for _, track := range []Track{TrackBrownfieldFeature, TrackBugfix, TrackGreenfield} {
+	for _, track := range []Track{TrackBrownfieldFeature, TrackBugfix, TrackGreenfield, TrackResearch} {
 		trackDiff := diff.ByTrack[track]
 		if trackDiff.Current.Total == 0 && trackDiff.Baseline.Total == 0 {
 			continue
 		}
-		fmt.Fprintf(&b, "- %s: success %.2f, verification %.2f, recovery %.2f\n",
-			track, trackDiff.SuccessRateDelta, trackDiff.VerificationPassDelta, trackDiff.RecoverySuccessDelta)
+		fmt.Fprintf(&b, "- %s: success %.2f, success+verified %.2f, intervention mean %.2f, verification %.2f, recovery %.2f, success duration mean %.2f\n",
+			track, trackDiff.SuccessRateDelta, trackDiff.SuccessAndVerifiedRateDelta, trackDiff.InterventionMeanDelta, trackDiff.VerificationPassDelta, trackDiff.RecoverySuccessDelta, trackDiff.SuccessDurationMeanDelta)
 	}
 
 	fmt.Fprintf(&b, "\n## Repo Class Summary\n\n")

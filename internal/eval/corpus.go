@@ -8,7 +8,7 @@ import (
 
 func validTrack(track Track) bool {
 	switch track {
-	case TrackBrownfieldFeature, TrackBugfix, TrackGreenfield:
+	case TrackBrownfieldFeature, TrackBugfix, TrackGreenfield, TrackResearch:
 		return true
 	default:
 		return false

@@ -105,6 +105,44 @@ func TestSummaryRegressionRateZeroSuccesses(t *testing.T) {
 	}
 }
 
+func TestSummaryComputesMonth3Metrics(t *testing.T) {
+	summary := (&Scorecard{Version: "v1", System: "elnath", Results: []RunResult{
+		{TaskID: "A", Track: TrackBugfix, Language: LanguageGo, Success: true, VerificationPassed: true, InterventionCount: 1, DurationSeconds: 10},
+		{TaskID: "B", Track: TrackBugfix, Language: LanguageGo, Success: true, VerificationPassed: false, InterventionCount: 0, DurationSeconds: 20},
+		{TaskID: "C", Track: TrackBrownfieldFeature, Language: LanguageGo, Success: false, VerificationPassed: true, InterventionCount: 3, DurationSeconds: 30},
+		{TaskID: "D", Track: TrackResearch, Language: LanguageGo, Success: true, VerificationPassed: true, InterventionCount: 2, DurationSeconds: 40},
+	}}).Summary()
+
+	if math.Abs(summary.SuccessAndVerifiedRate-0.5) > 1e-9 {
+		t.Fatalf("SuccessAndVerifiedRate = %v, want 0.5", summary.SuccessAndVerifiedRate)
+	}
+	if math.Abs(summary.InterventionMean-1.5) > 1e-9 {
+		t.Fatalf("InterventionMean = %v, want 1.5", summary.InterventionMean)
+	}
+	if math.Abs(summary.SuccessDurationMean-(70.0/3.0)) > 1e-9 {
+		t.Fatalf("SuccessDurationMean = %v, want %v", summary.SuccessDurationMean, 70.0/3.0)
+	}
+
+	bugfix := summary.ByTrack[TrackBugfix]
+	if math.Abs(bugfix.SuccessAndVerifiedRate-0.5) > 1e-9 {
+		t.Fatalf("bugfix SuccessAndVerifiedRate = %v, want 0.5", bugfix.SuccessAndVerifiedRate)
+	}
+	if math.Abs(bugfix.InterventionMean-0.5) > 1e-9 {
+		t.Fatalf("bugfix InterventionMean = %v, want 0.5", bugfix.InterventionMean)
+	}
+	if math.Abs(bugfix.SuccessDurationMean-15) > 1e-9 {
+		t.Fatalf("bugfix SuccessDurationMean = %v, want 15", bugfix.SuccessDurationMean)
+	}
+
+	research := summary.ByTrack[TrackResearch]
+	if research.Total != 1 {
+		t.Fatalf("research Total = %d, want 1", research.Total)
+	}
+	if math.Abs(research.SuccessAndVerifiedRate-1) > 1e-9 {
+		t.Fatalf("research SuccessAndVerifiedRate = %v, want 1", research.SuccessAndVerifiedRate)
+	}
+}
+
 func TestSummaryRegressionRateExcludesFailedTasks(t *testing.T) {
 	summary := (&Scorecard{Version: "v1", System: "elnath", Results: []RunResult{
 		{TaskID: "A", Track: TrackBugfix, Language: LanguageGo, Success: true, RegressionTriggered: true},
@@ -158,5 +196,27 @@ func TestValidateBackwardCompatRegressionTriggeredAbsent(t *testing.T) {
 	}
 	if scorecard.Results[0].RegressionTriggered {
 		t.Fatal("RegressionTriggered = true, want default false")
+	}
+}
+
+func TestScorecardValidateAllowsResearchTrack(t *testing.T) {
+	scorecard := &Scorecard{
+		Version: "v1",
+		System:  "elnath",
+		Results: []RunResult{{
+			TaskID:             "R-1",
+			Track:              TrackResearch,
+			Language:           LanguageGo,
+			Success:            true,
+			VerificationPassed: true,
+			DurationSeconds:    5,
+		}},
+	}
+
+	if err := scorecard.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if got := scorecard.Summary().ByTrack[TrackResearch].Total; got != 1 {
+		t.Fatalf("research track total = %d, want 1", got)
 	}
 }
