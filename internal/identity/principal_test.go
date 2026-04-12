@@ -126,3 +126,28 @@ func shortHash(value string) string {
 	sum := sha1.Sum([]byte(value))
 	return hex.EncodeToString(sum[:])[:8]
 }
+
+func TestPrincipalSurfaceIdentity(t *testing.T) {
+	tests := []struct {
+		name    string
+		surface string
+		userID  string
+		want    string
+	}{
+		{"both_set", "telegram", "12345", "telegram:12345"},
+		{"surface_only", "cli", "", "cli"},
+		{"user_only", "", "stello", "stello"},
+		{"both_empty", "", "", ""},
+		{"whitespace_only", "  ", "  ", ""},
+		{"surface_with_whitespace_user", "telegram", "  ", "telegram"},
+		{"whitespace_surface_with_user", "  ", "12345", "12345"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := Principal{Surface: tt.surface, UserID: tt.userID}
+			if got := p.SurfaceIdentity(); got != tt.want {
+				t.Errorf("SurfaceIdentity() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

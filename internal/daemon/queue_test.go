@@ -837,3 +837,28 @@ func TestList(t *testing.T) {
 		}
 	}
 }
+
+func TestTaskCompletionDuration(t *testing.T) {
+	base := time.Date(2026, time.April, 11, 10, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name        string
+		startedAt   time.Time
+		completedAt time.Time
+		want        time.Duration
+	}{
+		{"normal", base, base.Add(95 * time.Second), 95 * time.Second},
+		{"zero_started", time.Time{}, base, 0},
+		{"zero_completed", base, time.Time{}, 0},
+		{"both_zero", time.Time{}, time.Time{}, 0},
+		{"completed_before_started", base.Add(time.Minute), base, 0},
+		{"same_instant", base, base, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := TaskCompletion{StartedAt: tt.startedAt, CompletedAt: tt.completedAt}
+			if got := c.Duration(); got != tt.want {
+				t.Errorf("Duration() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

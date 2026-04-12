@@ -202,6 +202,7 @@ func cmdRun(ctx context.Context, args []string) error {
 		return fmt.Errorf("stdin: %w", err)
 	}
 
+	// StartedAt/Duration omitted: interactive sessions have no bounded execution window.
 	rt.maybeAutoDocumentSession(ctx, wiki.IngestEvent{
 		SessionID: sess.ID,
 		Messages:  messages,
