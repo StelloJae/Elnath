@@ -590,9 +590,15 @@ if run_verification_command "$VERIFY_LOG"; then
   exit 0
 fi
 
-printf -v RECOVERY_PROMPT '%s\n\n%s' \
+VERIFY_OUTPUT=""
+if [[ -f "$VERIFY_LOG" ]]; then
+  VERIFY_OUTPUT="$(tail -50 "$VERIFY_LOG")"
+fi
+printf -v RECOVERY_PROMPT '%s\n\n%s\n\nVerification output (last 50 lines):\n```\n%s\n```\n\n%s' \
   "$BENCHMARK_PROMPT" \
-  "The repo-native verification command '${VERIFY_CMD}' failed after your first attempt. Make the smallest corrections needed so the verification passes. Your final answer must explicitly list modified files and state whether '${VERIFY_CMD}' passed."
+  "The repo-native verification command '${VERIFY_CMD}' failed after your first attempt." \
+  "$VERIFY_OUTPUT" \
+  "Fix the EXACT errors shown above. Make the smallest corrections needed so the verification passes. Your final answer must explicitly list modified files and state whether '${VERIFY_CMD}' passed."
 RECOVERY_ATTEMPTED=true
 RECOVERY_EXIT=0
 if ! run_elnath "$RECOVERY_PROMPT" "$RECOVERY_LOG"; then
