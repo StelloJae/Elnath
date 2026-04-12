@@ -24,6 +24,7 @@ func Diff(current, baseline *Scorecard) (DiffSummary, error) {
 		Current:               currentSummary,
 		Baseline:              baselineSummary,
 		SuccessRateDelta:      currentSummary.SuccessRate - baselineSummary.SuccessRate,
+		RegressionRateDelta:   currentSummary.RegressionRate - baselineSummary.RegressionRate,
 		VerificationPassDelta: currentSummary.VerificationPassRate - baselineSummary.VerificationPassRate,
 		RecoverySuccessDelta:  currentSummary.RecoverySuccessRate - baselineSummary.RecoverySuccessRate,
 		ByTrack:               make(map[Track]TrackDelta),
@@ -34,6 +35,7 @@ func Diff(current, baseline *Scorecard) (DiffSummary, error) {
 			Current:               currentSummary.ByTrack[track],
 			Baseline:              baselineSummary.ByTrack[track],
 			SuccessRateDelta:      currentSummary.ByTrack[track].SuccessRate - baselineSummary.ByTrack[track].SuccessRate,
+			RegressionRateDelta:   currentSummary.ByTrack[track].RegressionRate - baselineSummary.ByTrack[track].RegressionRate,
 			VerificationPassDelta: currentSummary.ByTrack[track].VerificationPassRate - baselineSummary.ByTrack[track].VerificationPassRate,
 			RecoverySuccessDelta:  currentSummary.ByTrack[track].RecoverySuccessRate - baselineSummary.ByTrack[track].RecoverySuccessRate,
 		}

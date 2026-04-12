@@ -56,6 +56,7 @@ type RunResult struct {
 	RecoverySucceeded   bool     `json:"recovery_succeeded,omitempty"`
 	DurationSeconds     float64  `json:"duration_seconds"`
 	Notes               string   `json:"notes,omitempty"`
+	RegressionTriggered bool     `json:"regression_triggered,omitempty"`
 }
 
 // Scorecard is a versioned result bundle for one evaluated system/baseline.
@@ -83,6 +84,8 @@ type TrackSummary struct {
 	RecoverySuccesses    int
 	RecoverySuccessRate  float64
 	FailureFamilies      map[string]int
+	RegressionsTriggered int
+	RegressionRate       float64
 }
 
 // Summary is the aggregate result for a whole scorecard.
@@ -99,6 +102,8 @@ type Summary struct {
 	RecoverySuccessRate  float64
 	FailureFamilies      map[string]int
 	ByTrack              map[Track]TrackSummary
+	RegressionsTriggered int
+	RegressionRate       float64
 }
 
 // DiffSummary compares two scorecards with the same task universe shape.
@@ -109,6 +114,7 @@ type DiffSummary struct {
 	VerificationPassDelta float64
 	RecoverySuccessDelta  float64
 	ByTrack               map[Track]TrackDelta
+	RegressionRateDelta   float64
 }
 
 // TrackDelta compares one track between scorecards.
@@ -118,6 +124,7 @@ type TrackDelta struct {
 	SuccessRateDelta      float64
 	VerificationPassDelta float64
 	RecoverySuccessDelta  float64
+	RegressionRateDelta   float64
 }
 
 // BaselineRunPlan is a starter scaffold for evaluating an external baseline.

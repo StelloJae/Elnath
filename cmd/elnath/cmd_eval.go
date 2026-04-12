@@ -13,6 +13,7 @@ func cmdEval(_ context.Context, args []string) error {
 
 Subcommands:
   validate <corpus.json>     Validate a benchmark corpus file
+  benchmark <plan.json>      Run a benchmark plan and print MC2 metrics
   summarize <scorecard.json> Summarize a benchmark scorecard
   diff <current.json> <baseline.json> Compare two scorecards
   report <corpus.json> <current.json> <baseline.json> <output.md> Write a markdown benchmark report
@@ -36,6 +37,27 @@ Subcommands:
 		}
 		fmt.Printf("Corpus OK: version=%s tasks=%d\n", corpus.Version, len(corpus.Tasks))
 		return nil
+	case "benchmark":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: elnath eval benchmark <plan.json>")
+		}
+		plan, err := eval.LoadBaselineRunPlan(args[1])
+		if err != nil {
+			return err
+		}
+		scorecard, err := eval.RunBaselinePlan(plan)
+		if err != nil {
+			return err
+		}
+		summary := scorecard.Summary()
+		fmt.Printf("Benchmark complete: system=%s baseline=%s tasks=%d\n", scorecard.System, scorecard.Baseline, summary.Total)
+		fmt.Printf("MC2 metrics:\n")
+		fmt.Printf("  success_rate           = %.4f\n", summary.SuccessRate)
+		fmt.Printf("  intervention_rate      = %.4f\n", summary.InterventionRate)
+		fmt.Printf("  verification_pass_rate = %.4f\n", summary.VerificationPassRate)
+		fmt.Printf("  recovery_success_rate  = %.4f\n", summary.RecoverySuccessRate)
+		fmt.Printf("  regression_rate        = %.4f\n", summary.RegressionRate)
+		return nil
 	case "summarize":
 		if len(args) < 2 {
 			return fmt.Errorf("usage: elnath eval summarize <scorecard.json>")
@@ -51,15 +73,15 @@ Subcommands:
 		}
 		fmt.Printf("Overall: total=%d success=%d success_rate=%.2f intervention_rate=%.2f\n",
 			summary.Total, summary.Successes, summary.SuccessRate, summary.InterventionRate)
-		fmt.Printf("Verification: pass_rate=%.2f recovery_success_rate=%.2f\n",
-			summary.VerificationPassRate, summary.RecoverySuccessRate)
+		fmt.Printf("Verification: pass_rate=%.2f recovery_success_rate=%.2f regression_rate=%.4f\n",
+			summary.VerificationPassRate, summary.RecoverySuccessRate, summary.RegressionRate)
 		for _, track := range []eval.Track{eval.TrackBrownfieldFeature, eval.TrackBugfix, eval.TrackGreenfield} {
 			trackSummary, ok := summary.ByTrack[track]
 			if !ok || trackSummary.Total == 0 {
 				continue
 			}
-			fmt.Printf("Track %s: total=%d success=%d success_rate=%.2f intervention_rate=%.2f verification_pass_rate=%.2f recovery_success_rate=%.2f\n",
-				track, trackSummary.Total, trackSummary.Successes, trackSummary.SuccessRate, trackSummary.InterventionRate, trackSummary.VerificationPassRate, trackSummary.RecoverySuccessRate)
+			fmt.Printf("Track %s: total=%d success=%d success_rate=%.2f intervention_rate=%.2f verification_pass_rate=%.2f recovery_success_rate=%.2f regression_rate=%.4f\n",
+				track, trackSummary.Total, trackSummary.Successes, trackSummary.SuccessRate, trackSummary.InterventionRate, trackSummary.VerificationPassRate, trackSummary.RecoverySuccessRate, trackSummary.RegressionRate)
 		}
 		if len(summary.FailureFamilies) > 0 {
 			fmt.Println("Failure families:")
@@ -84,15 +106,15 @@ Subcommands:
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Overall delta: success_rate_delta=%.2f verification_pass_delta=%.2f recovery_success_delta=%.2f\n",
-			diff.SuccessRateDelta, diff.VerificationPassDelta, diff.RecoverySuccessDelta)
+		fmt.Printf("Overall delta: success_rate_delta=%.2f verification_pass_delta=%.2f recovery_success_delta=%.2f regression_rate_delta=%.4f\n",
+			diff.SuccessRateDelta, diff.VerificationPassDelta, diff.RecoverySuccessDelta, diff.RegressionRateDelta)
 		for _, track := range []eval.Track{eval.TrackBrownfieldFeature, eval.TrackBugfix, eval.TrackGreenfield} {
 			trackDiff := diff.ByTrack[track]
 			if trackDiff.Current.Total == 0 && trackDiff.Baseline.Total == 0 {
 				continue
 			}
-			fmt.Printf("Track %s delta: success_rate_delta=%.2f verification_pass_delta=%.2f recovery_success_delta=%.2f\n",
-				track, trackDiff.SuccessRateDelta, trackDiff.VerificationPassDelta, trackDiff.RecoverySuccessDelta)
+			fmt.Printf("Track %s delta: success_rate_delta=%.2f verification_pass_delta=%.2f recovery_success_delta=%.2f regression_rate_delta=%.4f\n",
+				track, trackDiff.SuccessRateDelta, trackDiff.VerificationPassDelta, trackDiff.RecoverySuccessDelta, trackDiff.RegressionRateDelta)
 		}
 		return nil
 	case "report":

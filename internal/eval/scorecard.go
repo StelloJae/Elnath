@@ -79,6 +79,9 @@ func (s *Scorecard) Summary() Summary {
 		if result.Success {
 			summary.Successes++
 		}
+		if result.RegressionTriggered {
+			summary.RegressionsTriggered++
+		}
 		if result.InterventionNeeded {
 			summary.Interventions++
 		}
@@ -103,6 +106,9 @@ func (s *Scorecard) Summary() Summary {
 		if result.Success {
 			trackSummary.Successes++
 		}
+		if result.RegressionTriggered {
+			trackSummary.RegressionsTriggered++
+		}
 		if result.InterventionNeeded {
 			trackSummary.Interventions++
 		}
@@ -123,6 +129,9 @@ func (s *Scorecard) Summary() Summary {
 
 	if summary.Total > 0 {
 		summary.SuccessRate = float64(summary.Successes) / float64(summary.Total)
+		if summary.Successes > 0 {
+			summary.RegressionRate = float64(summary.RegressionsTriggered) / float64(summary.Successes)
+		}
 		summary.InterventionRate = float64(summary.Interventions) / float64(summary.Total)
 		summary.VerificationPassRate = float64(summary.VerificationPasses) / float64(summary.Total)
 		if summary.RecoveryAttempts > 0 {
@@ -132,6 +141,9 @@ func (s *Scorecard) Summary() Summary {
 	for track, trackSummary := range summary.ByTrack {
 		if trackSummary.Total > 0 {
 			trackSummary.SuccessRate = float64(trackSummary.Successes) / float64(trackSummary.Total)
+			if trackSummary.Successes > 0 {
+				trackSummary.RegressionRate = float64(trackSummary.RegressionsTriggered) / float64(trackSummary.Successes)
+			}
 			trackSummary.InterventionRate = float64(trackSummary.Interventions) / float64(trackSummary.Total)
 			trackSummary.VerificationPassRate = float64(trackSummary.VerificationPasses) / float64(trackSummary.Total)
 			if trackSummary.RecoveryAttempts > 0 {
