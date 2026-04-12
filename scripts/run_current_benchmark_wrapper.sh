@@ -38,10 +38,17 @@ TASK_BENCHMARK_FAMILY="$9"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 ELNATH_BIN="${ELNATH_BIN:-$REPO_ROOT/elnath}"
-ELNATH_TIMEOUT="${ELNATH_TIMEOUT:-180}"
+ELNATH_TIMEOUT="${ELNATH_TIMEOUT:-300}"
 
 START_TS="$(date +%s)"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/elnath-current-benchmark.XXXXXX")"
+
+# macOS ships python3 only; LLMs often emit bare `python`.
+if ! command -v python >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
+  mkdir -p "$TMP_DIR/bin"
+  ln -s "$(command -v python3)" "$TMP_DIR/bin/python"
+  export PATH="$TMP_DIR/bin:$PATH"
+fi
 cleanup() {
   if [[ "${ELNATH_BENCHMARK_KEEP_TMP:-}" == "1" ]]; then
     echo "Keeping benchmark temp dir: $TMP_DIR" >&2
@@ -509,6 +516,9 @@ Execution discipline:
 - Treat the hinted files as primary investigation targets before exploring adjacent code.
 - Do not answer with test-only changes when the task asks for a production flow change.
 - Prefer the smallest production-code patch plus the narrowest regression test needed to prove it.
+- CRITICAL: Run the repo test suite before finishing. All existing tests MUST still pass. If your change breaks tests, revert to a smaller, safer approach.
+- Use python3 (not python) for any scripting. Bare python is unavailable.
+- Limit exploration: read at most 6-8 files before making your change. Do not exhaustively scan the repo.
 
 $TASK_PROMPT"
 
