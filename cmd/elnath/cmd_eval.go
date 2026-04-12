@@ -49,6 +49,9 @@ Subcommands:
 		if err != nil {
 			return err
 		}
+		if err := scorecard.Validate(); err != nil {
+			return fmt.Errorf("benchmark: scorecard validate: %w", err)
+		}
 		summary := scorecard.Summary()
 		fmt.Printf("Benchmark complete: system=%s baseline=%s tasks=%d\n", scorecard.System, scorecard.Baseline, summary.Total)
 		fmt.Printf("MC2 metrics:\n")

@@ -87,8 +87,8 @@ func TestCmdEvalSummarizeIncludesRegression(t *testing.T) {
 			t.Fatalf("cmdEval summarize: %v", err)
 		}
 	})
-	if !strings.Contains(stdout, "regression_rate=") {
-		t.Fatalf("stdout = %q, want regression_rate", stdout)
+	if !strings.Contains(stdout, "regression_rate=0.5000") {
+		t.Fatalf("stdout = %q, want regression_rate=0.5000", stdout)
 	}
 }
 
@@ -122,7 +122,7 @@ func TestCmdEvalDiffIncludesRegressionDelta(t *testing.T) {
 			t.Fatalf("cmdEval diff: %v", err)
 		}
 	})
-	if !strings.Contains(stdout, "regression_rate_delta=") {
-		t.Fatalf("stdout = %q, want regression_rate_delta", stdout)
+	if !strings.Contains(stdout, "regression_rate_delta=0.5000") {
+		t.Fatalf("stdout = %q, want regression_rate_delta=0.5000", stdout)
 	}
 }

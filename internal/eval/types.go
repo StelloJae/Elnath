@@ -107,6 +107,9 @@ type Summary struct {
 }
 
 // DiffSummary compares two scorecards with the same task universe shape.
+// RegressionRateDelta sign convention: positive means current has MORE
+// regressions than baseline (i.e. worse). Opposite polarity from SuccessRateDelta
+// where positive means better.
 type DiffSummary struct {
 	Current               Summary
 	Baseline              Summary
