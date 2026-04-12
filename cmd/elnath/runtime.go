@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
-	"strings"
 	"time"
 
 	"github.com/stello/elnath/internal/agent"
@@ -18,6 +16,8 @@ import (
 	"github.com/stello/elnath/internal/identity"
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/orchestrator"
+	"github.com/stello/elnath/internal/prompt"
+	"github.com/stello/elnath/internal/self"
 	"github.com/stello/elnath/internal/tools"
 	"github.com/stello/elnath/internal/wiki"
 )
@@ -80,17 +80,20 @@ func (o orchestrationOutput) emitUsage(summary string) {
 }
 
 type executionRuntime struct {
-	app       *core.App
-	provider  llm.Provider
-	mgr       *conversation.Manager
-	router    *orchestrator.Router
-	reg       *tools.Registry
-	wfCfg     orchestrator.WorkflowConfig
-	wikiIdx   *wiki.Index
-	wikiStore *wiki.Store
-	gitSync   *wiki.GitSync
-	workDir   string
-	principal identity.Principal
+	app           *core.App
+	provider      llm.Provider
+	mgr           *conversation.Manager
+	router        *orchestrator.Router
+	reg           *tools.Registry
+	wfCfg         orchestrator.WorkflowConfig
+	promptBuilder *prompt.Builder
+	selfState     *self.SelfState
+	personaExtra  string
+	wikiIdx       *wiki.Index
+	wikiStore     *wiki.Store
+	gitSync       *wiki.GitSync
+	workDir       string
+	principal     identity.Principal
 }
 
 type routeAuditRecord struct {
@@ -111,7 +114,8 @@ func buildExecutionRuntime(
 	db *core.DB,
 	provider llm.Provider,
 	model string,
-	systemPrompt string,
+	selfState *self.SelfState,
+	personaExtra string,
 	perm *agent.Permission,
 	workDir string,
 	protectedPaths []string,
@@ -161,27 +165,43 @@ func buildExecutionRuntime(
 			wikiStore = ws
 		}
 	}
+	if selfState == nil {
+		selfState = self.New(cfg.DataDir)
+	}
 
 	hooks := buildHookRegistry(cfg.Hooks)
 	wfCfg := orchestrator.WorkflowConfig{
 		Model:        model,
-		SystemPrompt: systemPrompt,
+		SystemPrompt: "",
 		Hooks:        hooks,
 		Permission:   perm,
 	}
+	b := prompt.NewBuilder()
+	b.Register(prompt.NewIdentityNode(100))
+	b.Register(prompt.NewPersonaNode(90))
+	b.Register(prompt.NewToolCatalogNode(80))
+	b.Register(prompt.NewModelGuidanceNode(70))
+	b.Register(prompt.NewDynamicBoundaryNode())
+	b.Register(prompt.NewWikiRAGNode(60, 3))
+	b.Register(prompt.NewProjectContextNode(50))
+	b.Register(prompt.NewBrownfieldNode(40))
+	b.Register(prompt.NewSessionSummaryNode(30, 5, 800))
 
 	return &executionRuntime{
-		app:       app,
-		provider:  provider,
-		mgr:       mgr,
-		router:    buildRouter(wfCfg),
-		reg:       reg,
-		wfCfg:     wfCfg,
-		wikiIdx:   wikiIdx,
-		wikiStore: wikiStore,
-		gitSync:   gitSync,
-		workDir:   effectiveWorkDir,
-		principal: defaultPrincipal,
+		app:           app,
+		provider:      provider,
+		mgr:           mgr,
+		router:        buildRouter(wfCfg),
+		reg:           reg,
+		wfCfg:         wfCfg,
+		promptBuilder: b,
+		selfState:     selfState,
+		personaExtra:  personaExtra,
+		wikiIdx:       wikiIdx,
+		wikiStore:     wikiStore,
+		gitSync:       gitSync,
+		workDir:       effectiveWorkDir,
+		principal:     defaultPrincipal,
 	}, nil
 }
 
@@ -240,21 +260,31 @@ func (rt *executionRuntime) runTask(
 		Workflow:         wf.Name(),
 	})
 
+	promptMessages := prepared
+	if len(promptMessages) > 0 && promptMessages[len(promptMessages)-1].Role == llm.RoleUser {
+		promptMessages = promptMessages[:len(promptMessages)-1]
+	}
+	renderState := &prompt.RenderState{
+		SessionID:    sess.ID,
+		UserInput:    userInput,
+		Self:         rt.selfState,
+		Messages:     promptMessages,
+		WikiIdx:      rt.wikiIdx,
+		TokenBudget:  0,
+		PersonaExtra: rt.personaExtra,
+		Model:        rt.wfCfg.Model,
+		Provider:     rt.provider.Name(),
+		ToolNames:    rt.reg.Names(),
+		WorkDir:      rt.workDir,
+		ExistingCode: routeCtx.ExistingCode,
+		VerifyHint:   routeCtx.VerificationHint,
+	}
+	systemPrompt, err := rt.promptBuilder.Build(ctx, renderState)
+	if err != nil {
+		return nil, "", fmt.Errorf("prompt build: %w", err)
+	}
 	cfg := rt.wfCfg
-	if rt.wikiIdx != nil {
-		if ragCtx := wiki.BuildRAGContext(ctx, rt.wikiIdx, userInput, 3); ragCtx != "" {
-			cfg.SystemPrompt += "\n\n" + ragCtx
-		}
-	}
-	if routeCtx.ExistingCode {
-		cfg.SystemPrompt += "\n\nBrownfield execution guidance:\n- Inspect existing files, tests, and nearby patterns before editing.\n- Keep scope bounded to the smallest correct change.\n- Prefer repo-native verification commands and reuse existing abstractions.\n- Ask the user only when missing information would materially change the outcome or the decision is costly to reverse."
-		if hints := likelyRepoFiles(rt.workDir, userInput, 8); len(hints) > 0 {
-			cfg.SystemPrompt += "\n- Likely relevant files:\n  - " + strings.Join(hints, "\n  - ")
-		}
-	}
-	if routeCtx.VerificationHint {
-		cfg.SystemPrompt += "\n- This task explicitly emphasizes verification or regression safety; prioritize proving the change with tests or repo-native checks."
-	}
+	cfg.SystemPrompt = systemPrompt
 
 	input := orchestrator.WorkflowInput{
 		Message:  userInput,
@@ -345,128 +375,6 @@ func (rt *executionRuntime) newDaemonTaskRunner() daemon.TaskRunner {
 			SessionID: sess.ID,
 		}, nil
 	}
-}
-
-func likelyRepoFiles(root, prompt string, limit int) []string {
-	if root == "" || limit <= 0 {
-		return nil
-	}
-	keywords := keywordHints(prompt)
-	if len(keywords) == 0 {
-		return nil
-	}
-
-	type candidate struct {
-		path  string
-		score int
-	}
-	var candidates []candidate
-	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if d.IsDir() {
-			name := d.Name()
-			if name == ".git" || name == "node_modules" || name == "vendor" || name == "dist" || name == ".github" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return nil
-		}
-		lower := strings.ToLower(rel)
-		score := 0
-		for _, kw := range keywords {
-			if strings.Contains(lower, kw) {
-				score += 2
-			}
-		}
-		if strings.HasPrefix(lower, "test/") || strings.HasPrefix(lower, "examples/") {
-			score -= 2
-		}
-		if strings.Contains(lower, "/fixtures/") {
-			score -= 2
-		}
-		if strings.Contains(lower, "/runtime/") || strings.Contains(lower, "/worker") || strings.Contains(lower, "/workers/") {
-			score += 2
-		}
-		if strings.HasSuffix(lower, ".go") || strings.HasSuffix(lower, ".ts") || strings.HasSuffix(lower, ".tsx") || strings.HasSuffix(lower, ".js") {
-			score++
-		}
-		if score < 2 {
-			contentScore := scoreFileContents(path, keywords)
-			score += contentScore
-		}
-		if score > 0 {
-			candidates = append(candidates, candidate{path: rel, score: score})
-		}
-		return nil
-	})
-
-	sort.Slice(candidates, func(i, j int) bool {
-		if candidates[i].score == candidates[j].score {
-			return candidates[i].path < candidates[j].path
-		}
-		return candidates[i].score > candidates[j].score
-	})
-	if len(candidates) > limit {
-		candidates = candidates[:limit]
-	}
-	out := make([]string, 0, len(candidates))
-	for _, c := range candidates {
-		out = append(out, c.path)
-	}
-	return out
-}
-
-func scoreFileContents(path string, keywords []string) int {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return 0
-	}
-	if len(data) > 8192 {
-		data = data[:8192]
-	}
-	lower := strings.ToLower(string(data))
-	score := 0
-	for _, kw := range keywords {
-		if strings.Contains(lower, kw) {
-			score++
-		}
-	}
-	return score
-}
-
-func keywordHints(prompt string) []string {
-	stop := map[string]struct{}{
-		"the": {}, "and": {}, "with": {}, "into": {}, "without": {}, "existing": {}, "repository": {},
-		"codebase": {}, "task": {}, "this": {}, "that": {}, "must": {}, "should": {}, "make": {},
-		"smallest": {}, "correct": {}, "change": {}, "verify": {}, "verification": {}, "tests": {},
-		"test": {}, "feature": {}, "brownfield": {}, "track": {}, "language": {}, "repo": {},
-		"extend": {}, "current": {}, "behavior": {}, "regressing": {}, "emit": {}, "flow": {},
-		"service": {},
-	}
-	fields := strings.FieldsFunc(strings.ToLower(prompt), func(r rune) bool {
-		return !(r == '-' || r == '_' || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'))
-	})
-	seen := map[string]struct{}{}
-	var out []string
-	for _, field := range fields {
-		if len(field) < 4 {
-			continue
-		}
-		if _, ok := stop[field]; ok {
-			continue
-		}
-		if _, ok := seen[field]; ok {
-			continue
-		}
-		seen[field] = struct{}{}
-		out = append(out, field)
-	}
-	return out
 }
 
 func (rt *executionRuntime) maybeCommitWiki(message string) {

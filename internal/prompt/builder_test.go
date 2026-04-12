@@ -205,3 +205,54 @@ func TestBuilderDeterministic(t *testing.T) {
 		t.Fatalf("Build outputs differ: %q != %q", first, second)
 	}
 }
+
+func TestBuildContainsSingleBoundary(t *testing.T) {
+	t.Parallel()
+
+	b := NewBuilder()
+	b.Register(stubNode{name: "identity", priority: 100, body: "identity"})
+	b.Register(NewDynamicBoundaryNode())
+	b.Register(stubNode{name: "dynamic", priority: 10, body: "dynamic"})
+
+	got, err := b.Build(context.Background(), &RenderState{})
+	if err != nil {
+		t.Fatalf("Build error: %v", err)
+	}
+	if strings.Count(got, dynamicBoundary) != 1 {
+		t.Fatalf("Build = %q, want exactly one boundary", got)
+	}
+}
+
+func TestBudgetDropNeverRemovesBoundary(t *testing.T) {
+	t.Parallel()
+
+	b := NewBuilder()
+	b.Register(stubNode{name: "low", priority: 1, body: strings.Repeat("a", 300)})
+	b.Register(NewDynamicBoundaryNode())
+	b.Register(stubNode{name: "mid", priority: 10, body: strings.Repeat("b", 300)})
+
+	got, err := b.Build(context.Background(), &RenderState{TokenBudget: 10})
+	if err != nil {
+		t.Fatalf("Build error: %v", err)
+	}
+	if !strings.Contains(got, dynamicBoundary) {
+		t.Fatalf("Build = %q, want boundary to remain", got)
+	}
+}
+
+func TestBudgetDropNeverRemovesBoundaryWithCompetingHighPriority(t *testing.T) {
+	t.Parallel()
+
+	b := NewBuilder()
+	b.Register(stubNode{name: "ultra-high", priority: 1000, body: strings.Repeat("x", 300)})
+	b.Register(NewDynamicBoundaryNode())
+	b.Register(stubNode{name: "low", priority: 1, body: strings.Repeat("y", 300)})
+
+	got, err := b.Build(context.Background(), &RenderState{TokenBudget: 1})
+	if err != nil {
+		t.Fatalf("Build error: %v", err)
+	}
+	if !strings.Contains(got, dynamicBoundary) {
+		t.Fatalf("Build = %q, want boundary to survive even with competing priority 1000 node", got)
+	}
+}

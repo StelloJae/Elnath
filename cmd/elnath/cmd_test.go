@@ -1696,52 +1696,6 @@ func TestLoadCodexModelNoModelLine(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// keywordHints additional edge cases (main table-driven tests in runtime_test.go)
-// ---------------------------------------------------------------------------
-
-func TestKeywordHintsEdgeCases(t *testing.T) {
-	t.Run("deduplicates", func(t *testing.T) {
-		got := keywordHints("handler handler handler handler")
-		if len(got) != 1 || got[0] != "handler" {
-			t.Fatalf("keywordHints dedup = %v, want [handler]", got)
-		}
-	})
-
-	t.Run("empty prompt", func(t *testing.T) {
-		got := keywordHints("")
-		if len(got) != 0 {
-			t.Fatalf("keywordHints empty = %v, want nil", got)
-		}
-	})
-}
-
-// ---------------------------------------------------------------------------
-// scoreFileContents
-// ---------------------------------------------------------------------------
-
-func TestScoreFileContentsEdgeCases(t *testing.T) {
-	dir := t.TempDir()
-
-	t.Run("nonexistent file", func(t *testing.T) {
-		score := scoreFileContents("/nonexistent/file.go", []string{"anything"})
-		if score != 0 {
-			t.Fatalf("score = %d, want 0 for nonexistent", score)
-		}
-	})
-
-	t.Run("matching keywords", func(t *testing.T) {
-		p := filepath.Join(dir, "handler.go")
-		if err := os.WriteFile(p, []byte("func handleSubscription() {\n\twebhook.Process()\n}"), 0o644); err != nil {
-			t.Fatalf("write: %v", err)
-		}
-		score := scoreFileContents(p, []string{"subscription", "webhook", "missing"})
-		if score != 2 {
-			t.Fatalf("score = %d, want 2", score)
-		}
-	})
-}
-
-// ---------------------------------------------------------------------------
 // cmdWiki with actual wiki pages
 // ---------------------------------------------------------------------------
 

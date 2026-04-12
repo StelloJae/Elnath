@@ -17,6 +17,10 @@ func TestRenderStateNilSafe(t *testing.T) {
 		NewIdentityNode(10),
 		NewSessionSummaryNode(20, 5, 200),
 		NewWikiRAGNode(30, 3),
+		NewPersonaNode(40),
+		NewBrownfieldNode(50),
+		NewProjectContextNode(60),
+		NewModelGuidanceNode(70),
 	}
 
 	for _, node := range nodes {

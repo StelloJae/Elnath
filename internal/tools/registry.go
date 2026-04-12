@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/stello/elnath/internal/llm"
@@ -56,6 +57,17 @@ func (r *Registry) List() []Tool {
 	for _, t := range r.tools {
 		out = append(out, t)
 	}
+	return out
+}
+
+func (r *Registry) Names() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]string, 0, len(r.tools))
+	for name := range r.tools {
+		out = append(out, name)
+	}
+	sort.Strings(out)
 	return out
 }
 

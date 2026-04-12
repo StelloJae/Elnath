@@ -11,12 +11,19 @@ import (
 // RenderState is a read-only snapshot passed to every Node.Render call.
 // Any field may be nil or empty; nodes must handle that gracefully.
 type RenderState struct {
-	SessionID   string
-	UserInput   string
-	Self        *self.SelfState
-	Messages    []llm.Message
-	WikiIdx     *wiki.Index
-	TokenBudget int
+	SessionID    string
+	UserInput    string
+	Self         *self.SelfState
+	Messages     []llm.Message
+	WikiIdx      *wiki.Index
+	TokenBudget  int
+	PersonaExtra string
+	Model        string
+	Provider     string
+	ToolNames    []string
+	WorkDir      string
+	ExistingCode bool
+	VerifyHint   bool
 }
 
 // Node is a single prompt contribution rendered into the builder output.

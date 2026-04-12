@@ -97,8 +97,6 @@ func cmdDaemonStart(ctx context.Context) error {
 		app.Logger.Warn("failed to load self state for daemon, using defaults", "error", err)
 		selfState = self.New(cfg.DataDir)
 	}
-	daemonPrompt := self.BuildSystemPrompt(selfState, "")
-
 	workDir := cfg.Daemon.WorkDir
 	if workDir == "" {
 		home, _ := os.UserHomeDir()
@@ -118,7 +116,8 @@ func cmdDaemonStart(ctx context.Context) error {
 		db,
 		provider,
 		model,
-		daemonPrompt,
+		selfState,
+		"",
 		perm,
 		workDir,
 		cfg.Daemon.ProtectedPaths,

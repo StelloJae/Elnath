@@ -100,6 +100,9 @@ func applyBudget(rendered []renderedNode, budget int) {
 		if !rendered[idx].keep || rendered[idx].body == "" {
 			continue
 		}
+		if rendered[idx].priority >= 999 {
+			continue
+		}
 		rendered[idx].keep = false
 		remaining--
 	}

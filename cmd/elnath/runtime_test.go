@@ -15,12 +15,14 @@ import (
 	"github.com/stello/elnath/internal/daemon"
 	"github.com/stello/elnath/internal/identity"
 	"github.com/stello/elnath/internal/llm"
+	"github.com/stello/elnath/internal/self"
 )
 
 type countingProvider struct {
 	chatCalls   int
 	streamCalls int
 	streamText  string
+	lastSystem  string
 }
 
 func (p *countingProvider) Name() string { return "mock" }
@@ -37,8 +39,9 @@ func (p *countingProvider) Chat(_ context.Context, req llm.ChatRequest) (*llm.Ch
 	return &llm.ChatResponse{Content: "wiki summary"}, nil
 }
 
-func (p *countingProvider) Stream(_ context.Context, _ llm.ChatRequest, cb func(llm.StreamEvent)) error {
+func (p *countingProvider) Stream(_ context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
 	p.streamCalls++
+	p.lastSystem = req.System
 	if p.streamText != "" {
 		cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: p.streamText})
 	}
@@ -81,9 +84,10 @@ func newTestExecutionRuntime(t *testing.T, provider llm.Provider) *executionRunt
 		db,
 		provider,
 		"mock-model",
-		"system prompt",
-		perm,
+		self.New(cfg.DataDir),
 		"",
+		perm,
+		root,
 		nil,
 		identity.LegacyPrincipal(),
 	)
@@ -373,16 +377,15 @@ func TestExecutionRuntimeWritesRouteAuditWhenEnabled(t *testing.T) {
 	}
 }
 
-func TestLikelyRepoFiles(t *testing.T) {
-	root := t.TempDir()
+func TestExecutionRuntimeBuildsPerRequestSystemPrompt(t *testing.T) {
+	provider := &countingProvider{streamText: "runtime answer"}
+	rt := newTestExecutionRuntime(t, provider)
+
 	for _, path := range []string{
 		"internal/middleware/request_id.go",
-		"internal/logging/logger.go",
-		"cmd/server/main.go",
 		"pkg/transport/context.go",
-		"test/integration/request_id.test.ts",
 	} {
-		full := filepath.Join(root, path)
+		full := filepath.Join(rt.workDir, path)
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 			t.Fatalf("MkdirAll: %v", err)
 		}
@@ -395,61 +398,60 @@ func TestLikelyRepoFiles(t *testing.T) {
 		}
 	}
 
-	hints := likelyRepoFiles(root, "add request id middleware and thread logging", 5)
-	if len(hints) == 0 {
-		t.Fatal("expected non-empty hints")
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
 	}
-	if !strings.Contains(strings.Join(hints, "\n"), "request_id.go") {
-		t.Fatalf("expected request_id.go in hints, got %v", hints)
+
+	_, _, err = rt.runTask(context.Background(), sess, nil, "fix regression in existing handler and add tests for request id middleware", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask: %v", err)
 	}
-	if !strings.Contains(strings.Join(hints, "\n"), "context.go") {
-		t.Fatalf("expected content-matched context.go in hints, got %v", hints)
+
+	checks := []string{
+		"You are Elnath.",
+		"You have access to tools",
+		"__DYNAMIC_BOUNDARY__",
+		"Brownfield execution guidance:",
+		"Project context:",
+		"internal/middleware/request_id.go",
+		"This task explicitly emphasizes verification or regression safety",
+	}
+	for _, want := range checks {
+		if !strings.Contains(provider.lastSystem, want) {
+			t.Fatalf("system prompt missing %q\n%s", want, provider.lastSystem)
+		}
+	}
+	if got := strings.Count(provider.lastSystem, "__DYNAMIC_BOUNDARY__"); got != 1 {
+		t.Fatalf("boundary count = %d, want 1\n%s", got, provider.lastSystem)
 	}
 }
 
-func TestLikelyRepoFilesPrefersRuntimeOverTests(t *testing.T) {
-	root := t.TempDir()
-	files := map[string]string{
-		"packages/vitest/src/runtime/worker.ts":          "retry telemetry worker runtime",
-		"packages/vitest/src/node/types/worker.ts":       "retry telemetry worker type",
-		"test/cli/test/retry-telemetry.test.ts":          "retry telemetry worker test",
-		"examples/opentelemetry/src/basic.test.ts":       "retry telemetry example",
-		"test/browser/fixtures/user-event/retry.test.ts": "retry telemetry fixture",
-	}
-	for path, body := range files {
-		full := filepath.Join(root, path)
-		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-			t.Fatalf("MkdirAll: %v", err)
-		}
-		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
-			t.Fatalf("WriteFile: %v", err)
-		}
+func TestExecutionRuntimePromptSessionSummaryUsesPriorPreparedHistory(t *testing.T) {
+	provider := &countingProvider{streamText: "runtime answer"}
+	rt := newTestExecutionRuntime(t, provider)
+
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
 	}
 
-	hints := likelyRepoFiles(root, "extend an existing TypeScript worker flow to emit retry telemetry without regressing current behavior", 5)
-	if len(hints) == 0 {
-		t.Fatal("expected non-empty hints")
+	messages, _, err := rt.runTask(context.Background(), sess, nil, "first user request", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("first runTask: %v", err)
 	}
-	joined := strings.Join(hints, "\n")
-	if !strings.Contains(joined, "packages/vitest/src/runtime/worker.ts") {
-		t.Fatalf("expected runtime worker hint, got %v", hints)
-	}
-	if strings.Index(joined, "test/cli/test/retry-telemetry.test.ts") != -1 && strings.Index(joined, "packages/vitest/src/runtime/worker.ts") > strings.Index(joined, "test/cli/test/retry-telemetry.test.ts") {
-		t.Fatalf("expected runtime worker file to rank ahead of test file, got %v", hints)
-	}
-}
 
-func TestKeywordHintsSkipsGenericBrownfieldWords(t *testing.T) {
-	hints := keywordHints("extend an existing TypeScript worker flow to emit retry telemetry without regressing current behavior")
-	joined := strings.Join(hints, ",")
-	for _, banned := range []string{"extend", "existing", "flow", "emit", "current", "behavior", "regressing"} {
-		if strings.Contains(joined, banned) {
-			t.Fatalf("expected %q to be filtered from keyword hints, got %v", banned, hints)
-		}
+	_, _, err = rt.runTask(context.Background(), sess, messages, "second user request", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("second runTask: %v", err)
 	}
-	for _, want := range []string{"retry", "telemetry", "worker"} {
-		if !strings.Contains(joined, want) {
-			t.Fatalf("expected %q in keyword hints, got %v", want, hints)
-		}
+	if !strings.Contains(provider.lastSystem, "Recent conversation:") {
+		t.Fatalf("system prompt missing session summary\n%s", provider.lastSystem)
+	}
+	if !strings.Contains(provider.lastSystem, "first user request") {
+		t.Fatalf("system prompt missing prior user message\n%s", provider.lastSystem)
+	}
+	if strings.Contains(provider.lastSystem, "second user request") {
+		t.Fatalf("system prompt should not duplicate current user input\n%s", provider.lastSystem)
 	}
 }
