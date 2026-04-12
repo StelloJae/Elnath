@@ -10,7 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stello/elnath/internal/agent"
 	"github.com/stello/elnath/internal/daemon"
+	"github.com/stello/elnath/internal/identity"
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/wiki"
 )
@@ -24,7 +26,7 @@ type recordingEventIngester struct {
 	sleep   time.Duration
 }
 
-func (r *recordingEventIngester) IngestEvent(_ context.Context, event wiki.IngestEvent) error {
+func (r *recordingEventIngester) IngestSession(_ context.Context, event wiki.IngestEvent) error {
 	if r.started != nil {
 		close(r.started)
 	}
@@ -36,6 +38,9 @@ func (r *recordingEventIngester) IngestEvent(_ context.Context, event wiki.Inges
 		SessionID: event.SessionID,
 		Messages:  append([]llm.Message(nil), event.Messages...),
 		Reason:    event.Reason,
+		Principal: event.Principal,
+		StartedAt: event.StartedAt,
+		Duration:  event.Duration,
 	})
 	r.mu.Unlock()
 	if r.done != nil {
@@ -86,7 +91,12 @@ func TestSpine_NotifyCompletion_InvalidSessionIDIsLoggedNoError(t *testing.T) {
 }
 
 func TestSpine_NotifyCompletion_LoadsAndDispatchesIngest(t *testing.T) {
-	sess, dir := newTestSession(t)
+	dir := t.TempDir()
+	principal := identity.Principal{UserID: "12345", ProjectID: "elnath", Surface: "telegram"}
+	sess, err := agent.NewSession(dir, principal)
+	if err != nil {
+		t.Fatalf("agent.NewSession: %v", err)
+	}
 	if err := sess.AppendMessages([]llm.Message{
 		llm.NewUserMessage("hello spine"),
 		llm.NewAssistantMessage("hello back"),
@@ -96,8 +106,14 @@ func TestSpine_NotifyCompletion_LoadsAndDispatchesIngest(t *testing.T) {
 
 	ing := &recordingEventIngester{done: make(chan struct{})}
 	spine := NewSpine(dir, ing, newTestLogger(io.Discard))
+	startedAt := time.Date(2026, time.April, 11, 10, 0, 0, 0, time.UTC)
+	completedAt := startedAt.Add(95 * time.Second)
 
-	if err := spine.NotifyCompletion(context.Background(), daemon.TaskCompletion{SessionID: sess.ID}); err != nil {
+	if err := spine.NotifyCompletion(context.Background(), daemon.TaskCompletion{
+		SessionID:   sess.ID,
+		StartedAt:   startedAt,
+		CompletedAt: completedAt,
+	}); err != nil {
 		t.Fatalf("NotifyCompletion: %v", err)
 	}
 
@@ -119,6 +135,15 @@ func TestSpine_NotifyCompletion_LoadsAndDispatchesIngest(t *testing.T) {
 	}
 	if events[0].Reason != "task_completed" {
 		t.Fatalf("reason = %q, want %q", events[0].Reason, "task_completed")
+	}
+	if events[0].Principal != "telegram:12345" {
+		t.Fatalf("principal = %q, want %q", events[0].Principal, "telegram:12345")
+	}
+	if !events[0].StartedAt.Equal(startedAt) {
+		t.Fatalf("started_at = %v, want %v", events[0].StartedAt, startedAt)
+	}
+	if events[0].Duration != 95*time.Second {
+		t.Fatalf("duration = %v, want %v", events[0].Duration, 95*time.Second)
 	}
 }
 
@@ -207,16 +232,16 @@ func TestSpine_Snapshot_IsStable(t *testing.T) {
 	}
 }
 
-func TestIngestEvent_EmptySessionIDIsNoop(t *testing.T) {
+func TestIngestSession_EmptySessionIDIsNoop(t *testing.T) {
 	store, err := wiki.NewStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
 	ing := wiki.NewIngester(store, nil)
 
-	err = ing.IngestEvent(context.Background(), wiki.IngestEvent{Messages: []llm.Message{llm.NewUserMessage("hello")}})
+	err = ing.IngestSession(context.Background(), wiki.IngestEvent{Messages: []llm.Message{llm.NewUserMessage("hello")}})
 	if err != nil {
-		t.Fatalf("IngestEvent: %v", err)
+		t.Fatalf("IngestSession: %v", err)
 	}
 
 	pages, err := store.List()
@@ -228,16 +253,16 @@ func TestIngestEvent_EmptySessionIDIsNoop(t *testing.T) {
 	}
 }
 
-func TestIngestEvent_EmptyMessagesIsNoop(t *testing.T) {
+func TestIngestSession_EmptyMessagesIsNoop(t *testing.T) {
 	store, err := wiki.NewStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
 	ing := wiki.NewIngester(store, nil)
 
-	err = ing.IngestEvent(context.Background(), wiki.IngestEvent{SessionID: "sess-empty"})
+	err = ing.IngestSession(context.Background(), wiki.IngestEvent{SessionID: "sess-empty"})
 	if err != nil {
-		t.Fatalf("IngestEvent: %v", err)
+		t.Fatalf("IngestSession: %v", err)
 	}
 
 	pages, err := store.List()
@@ -249,28 +274,32 @@ func TestIngestEvent_EmptyMessagesIsNoop(t *testing.T) {
 	}
 }
 
-func TestIngestEvent_DelegatesToIngestConversation(t *testing.T) {
+func TestIngestSession_CreatesStructuredSessionPage(t *testing.T) {
 	store, err := wiki.NewStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
 	ing := wiki.NewIngester(store, nil)
 
-	err = ing.IngestEvent(context.Background(), wiki.IngestEvent{
+	err = ing.IngestSession(context.Background(), wiki.IngestEvent{
 		SessionID: "sess-event",
 		Messages: []llm.Message{
 			llm.NewUserMessage("Hello from event"),
 			llm.NewAssistantMessage("Hello from ingest"),
 		},
-		Reason: "task_completed",
+		Reason:    "task_completed",
+		Principal: "cli:stello",
 	})
 	if err != nil {
-		t.Fatalf("IngestEvent: %v", err)
+		t.Fatalf("IngestSession: %v", err)
 	}
 
-	page, err := store.Read("sources/conversations/sess-event.md")
+	page, err := store.Read("sessions/sess-event.md")
 	if err != nil {
 		t.Fatalf("store.Read: %v", err)
+	}
+	if !strings.Contains(page.Content, "## Session Metadata") {
+		t.Fatalf("expected metadata section, got:\n%s", page.Content)
 	}
 	if !strings.Contains(page.Content, "Hello from event") {
 		t.Fatalf("expected event transcript content, got:\n%s", page.Content)

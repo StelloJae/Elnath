@@ -36,6 +36,19 @@ func (p Principal) IsZero() bool {
 	return strings.TrimSpace(p.UserID) == "" && strings.TrimSpace(p.ProjectID) == "" && strings.TrimSpace(p.Surface) == ""
 }
 
+func (p Principal) SurfaceIdentity() string {
+	surface := strings.TrimSpace(p.Surface)
+	userID := strings.TrimSpace(p.UserID)
+	switch {
+	case surface != "" && userID != "":
+		return surface + ":" + userID
+	case surface != "":
+		return surface
+	default:
+		return userID
+	}
+}
+
 func LegacyPrincipal() Principal {
 	return Principal{UserID: "legacy", ProjectID: "unknown", Surface: "unknown"}
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/onboarding"
 	"github.com/stello/elnath/internal/self"
+	"github.com/stello/elnath/internal/wiki"
 )
 
 func cmdRun(ctx context.Context, args []string) error {
@@ -201,7 +202,12 @@ func cmdRun(ctx context.Context, args []string) error {
 		return fmt.Errorf("stdin: %w", err)
 	}
 
-	rt.maybeAutoDocumentSession(ctx, sess.ID, messages)
+	rt.maybeAutoDocumentSession(ctx, wiki.IngestEvent{
+		SessionID: sess.ID,
+		Messages:  messages,
+		Reason:    "interactive_session",
+		Principal: sess.Principal.SurfaceIdentity(),
+	})
 
 	return nil
 }

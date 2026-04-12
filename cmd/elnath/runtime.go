@@ -368,7 +368,6 @@ func (rt *executionRuntime) newDaemonTaskRunner() daemon.TaskRunner {
 		}
 
 		rt.maybeCommitWiki("auto: wiki update")
-		rt.maybeAutoDocumentSession(ctx, sess.ID, messages)
 		return daemon.TaskResult{
 			Result:    summary,
 			Summary:   summary,
@@ -386,19 +385,19 @@ func (rt *executionRuntime) maybeCommitWiki(message string) {
 	}
 }
 
-func (rt *executionRuntime) maybeAutoDocumentSession(ctx context.Context, sessionID string, messages []llm.Message) {
+func (rt *executionRuntime) maybeAutoDocumentSession(ctx context.Context, event wiki.IngestEvent) {
 	if rt.wikiStore == nil {
 		return
 	}
 
-	ad := wiki.NewAutoDocumenter(rt.wikiStore, rt.provider, rt.app.Logger)
-	if err := ad.IngestSession(ctx, sessionID, messages); err != nil {
+	ing := wiki.NewIngester(rt.wikiStore, rt.provider)
+	if err := ing.IngestSession(ctx, event); err != nil {
 		rt.app.Logger.Warn("auto-documentation failed", "error", err)
 		return
 	}
 
-	rt.app.Logger.Info("session auto-documented to wiki", "session", sessionID)
-	rt.maybeCommitWiki("auto: document session " + sessionID)
+	rt.app.Logger.Info("session auto-documented to wiki", "session", event.SessionID)
+	rt.maybeCommitWiki("auto: document session " + event.SessionID)
 }
 
 func (rt *executionRuntime) appendRouteAudit(record routeAuditRecord) {

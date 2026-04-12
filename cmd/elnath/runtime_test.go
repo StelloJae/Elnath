@@ -16,6 +16,7 @@ import (
 	"github.com/stello/elnath/internal/identity"
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/self"
+	"github.com/stello/elnath/internal/wiki"
 )
 
 type countingProvider struct {
@@ -331,6 +332,35 @@ func TestDaemonTaskRunnerCreatesSessionWithPayloadPrincipal(t *testing.T) {
 	}
 	if sess.Principal != principal {
 		t.Fatalf("session principal = %+v, want %+v", sess.Principal, principal)
+	}
+}
+
+func TestExecutionRuntimeMaybeAutoDocumentSessionIngestsStructuredPage(t *testing.T) {
+	provider := &countingProvider{}
+	rt := newTestExecutionRuntime(t, provider)
+
+	rt.maybeAutoDocumentSession(context.Background(), wiki.IngestEvent{
+		SessionID: "sess-cli",
+		Messages: []llm.Message{
+			llm.NewUserMessage("hello runtime ingest"),
+			llm.NewAssistantMessage("structured wiki page"),
+		},
+		Reason:    "interactive_session",
+		Principal: "cli:stello",
+	})
+
+	page, err := rt.wikiStore.Read("sessions/sess-cli.md")
+	if err != nil {
+		t.Fatalf("Read session page: %v", err)
+	}
+	if !strings.Contains(page.Content, "## Session Metadata") {
+		t.Fatalf("expected metadata section, got:\n%s", page.Content)
+	}
+	if !strings.Contains(page.Content, "**Principal**: cli:stello") {
+		t.Fatalf("expected principal metadata, got:\n%s", page.Content)
+	}
+	if !strings.Contains(page.Content, "wiki summary") {
+		t.Fatalf("expected provider summary, got:\n%s", page.Content)
 	}
 }
 

@@ -13,7 +13,7 @@ import (
 const defaultSpineIngestTimeout = 60 * time.Second
 
 type eventIngester interface {
-	IngestEvent(ctx context.Context, event wiki.IngestEvent) error
+	IngestSession(ctx context.Context, event wiki.IngestEvent) error
 }
 
 // Spine snapshots completed sessions and forwards them to wiki ingest.
@@ -61,6 +61,9 @@ func (s *Spine) NotifyCompletion(_ context.Context, completion daemon.TaskComple
 		SessionID: completion.SessionID,
 		Messages:  sess.SnapshotMessages(),
 		Reason:    "task_completed",
+		Principal: sess.Principal.SurfaceIdentity(),
+		StartedAt: completion.StartedAt,
+		Duration:  completion.Duration(),
 	}
 	go s.runIngest(event)
 
@@ -70,7 +73,7 @@ func (s *Spine) NotifyCompletion(_ context.Context, completion daemon.TaskComple
 func (s *Spine) runIngest(event wiki.IngestEvent) {
 	ctx, cancel := context.WithTimeout(context.Background(), s.ingestTimeout)
 	defer cancel()
-	if err := s.ingester.IngestEvent(ctx, event); err != nil {
+	if err := s.ingester.IngestSession(ctx, event); err != nil {
 		s.logger.Warn("conversation spine: ingest failed",
 			"session_id", event.SessionID,
 			"reason", event.Reason,

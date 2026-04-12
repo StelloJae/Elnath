@@ -26,6 +26,9 @@ type IngestEvent struct {
 	SessionID string
 	Messages  []llm.Message
 	Reason    string // Free-form trigger label such as "task_completed".
+	Principal string
+	StartedAt time.Time
+	Duration  time.Duration
 }
 
 // NewIngester creates an Ingester. provider may be nil for plain ingest without summarisation.
@@ -33,8 +36,8 @@ func NewIngester(store *Store, provider llm.Provider) *Ingester {
 	return &Ingester{store: store, provider: provider}
 }
 
-// IngestEvent ingests a pre-snapshotted conversation transcript.
-func (ing *Ingester) IngestEvent(ctx context.Context, event IngestEvent) error {
+// IngestSession ingests a pre-snapshotted session transcript.
+func (ing *Ingester) IngestSession(ctx context.Context, event IngestEvent) error {
 	if ing == nil || ing.store == nil {
 		return nil
 	}
@@ -44,7 +47,34 @@ func (ing *Ingester) IngestEvent(ctx context.Context, event IngestEvent) error {
 	if len(event.Messages) == 0 {
 		return nil
 	}
-	return ing.IngestConversation(ctx, event.SessionID, event.Messages)
+
+	transcript := renderTranscript(event.Messages)
+	summary := ""
+	if ing.provider != nil {
+		if generated, err := ing.summarise(ctx, transcript); err == nil {
+			summary = strings.TrimSpace(generated)
+		}
+	}
+
+	page := &Page{
+		Path:    fmt.Sprintf("sessions/%s.md", event.SessionID),
+		Title:   fmt.Sprintf("Session %s", event.SessionID),
+		Type:    PageTypeSource,
+		Content: renderSessionPageContent(event, transcript, summary),
+		Tags:    sessionTags(event),
+	}
+	if err := ing.store.Upsert(page); err != nil {
+		return err
+	}
+
+	if ing.provider != nil {
+		ke := NewKnowledgeExtractor(ing.store, ing.provider, slog.Default())
+		if err := ke.ExtractFromConversation(ctx, event.SessionID, event.Messages); err != nil {
+			slog.Default().Warn("knowledge extraction failed, source page still saved", "error", err)
+		}
+	}
+
+	return nil
 }
 
 // gitCommit holds the parsed output of a single git log entry.
@@ -134,58 +164,71 @@ func (ing *Ingester) ingestCommit(c gitCommit, repoPath string) error {
 	return ing.store.Upsert(page)
 }
 
-// IngestConversation extracts notable facts from a list of conversation turns
-// and creates wiki pages for each. If a provider is available, it is used for
-// LLM-assisted extraction; otherwise a simple heuristic is applied.
-func (ing *Ingester) IngestConversation(ctx context.Context, sessionID string, turns []llm.Message) error {
-	if len(turns) == 0 {
-		return nil
-	}
-
-	// Concatenate all turns into a readable transcript.
+func renderTranscript(messages []llm.Message) string {
 	var sb strings.Builder
-	for _, t := range turns {
-		sb.WriteString(t.Role)
+	for _, message := range messages {
+		sb.WriteString(message.Role)
 		sb.WriteString(": ")
-		sb.WriteString(t.TextContent())
+		sb.WriteString(message.TextContent())
 		sb.WriteByte('\n')
 	}
-	transcript := sb.String()
+	return sb.String()
+}
 
-	// Derive a simple summary page from the session transcript.
-	title := fmt.Sprintf("Session %s", sessionID)
-	pagePath := fmt.Sprintf("sources/conversations/%s.md", sessionID)
-
-	content := fmt.Sprintf("## Conversation Transcript\n\n```\n%s\n```\n", transcript)
-
-	if ing.provider != nil {
-		summary, err := ing.summarise(ctx, transcript)
-		if err == nil && summary != "" {
-			content = fmt.Sprintf("## Summary\n\n%s\n\n## Transcript\n\n```\n%s\n```\n", summary, transcript)
-		}
+func renderSessionPageContent(event IngestEvent, transcript, summary string) string {
+	reason := strings.TrimSpace(event.Reason)
+	if reason == "" {
+		reason = "unknown"
 	}
 
-	page := &Page{
-		Path:    pagePath,
-		Title:   title,
-		Type:    PageTypeSource,
-		Content: content,
-		Tags:    []string{"conversation", sessionID},
+	var sb strings.Builder
+	sb.WriteString("## Session Metadata\n\n")
+	sb.WriteString("- **Session ID**: ")
+	sb.WriteString(event.SessionID)
+	sb.WriteByte('\n')
+	sb.WriteString("- **Reason**: ")
+	sb.WriteString(reason)
+	sb.WriteByte('\n')
+	if principal := strings.TrimSpace(event.Principal); principal != "" {
+		sb.WriteString("- **Principal**: ")
+		sb.WriteString(principal)
+		sb.WriteByte('\n')
+	}
+	if !event.StartedAt.IsZero() {
+		sb.WriteString("- **Started**: ")
+		sb.WriteString(event.StartedAt.UTC().Format(time.RFC3339))
+		sb.WriteByte('\n')
+	}
+	if event.Duration > 0 {
+		sb.WriteString("- **Duration**: ")
+		sb.WriteString(event.Duration.String())
+		sb.WriteByte('\n')
 	}
 
-	if err := ing.store.Upsert(page); err != nil {
-		return err
+	if summary != "" {
+		sb.WriteString("\n## Summary\n\n")
+		sb.WriteString(summary)
+		sb.WriteByte('\n')
 	}
 
-	// Knowledge extraction: create structured entity/concept pages from the conversation.
-	if ing.provider != nil {
-		ke := NewKnowledgeExtractor(ing.store, ing.provider, slog.Default())
-		if err := ke.ExtractFromConversation(ctx, sessionID, turns); err != nil {
-			slog.Default().Warn("knowledge extraction failed, source page still saved", "error", err)
-		}
+	sb.WriteString("\n## Transcript\n\n```\n")
+	sb.WriteString(transcript)
+	if transcript == "" || !strings.HasSuffix(transcript, "\n") {
+		sb.WriteByte('\n')
 	}
+	sb.WriteString("```\n")
+	return sb.String()
+}
 
-	return nil
+func sessionTags(event IngestEvent) []string {
+	tags := []string{"session"}
+	if reason := strings.TrimSpace(event.Reason); reason != "" {
+		tags = append(tags, reason)
+	}
+	if principal := strings.TrimSpace(event.Principal); principal != "" {
+		tags = append(tags, "principal:"+principal)
+	}
+	return tags
 }
 
 // summarise calls the LLM provider to produce a brief summary of a transcript.

@@ -163,60 +163,99 @@ func TestIngestGitLog(t *testing.T) {
 	}
 }
 
-// TestIngestConversation verifies plain transcript ingest without an LLM provider.
-func TestIngestConversation(t *testing.T) {
+// TestIngestSession verifies structured session ingest without an LLM provider.
+func TestIngestSession(t *testing.T) {
 	store := newTestStore(t)
 	ing := NewIngester(store, nil)
 
 	sessionID := "sess-001"
-	turns := []llm.Message{
-		llm.NewUserMessage("Hello, how are you?"),
-		llm.NewUserMessage("Tell me about Go."),
+	startedAt := time.Date(2026, time.April, 11, 9, 30, 0, 0, time.UTC)
+	event := IngestEvent{
+		SessionID: sessionID,
+		Messages: []llm.Message{
+			llm.NewUserMessage("Hello, how are you?"),
+			llm.NewUserMessage("Tell me about Go."),
+		},
+		Reason:    "interactive_session",
+		Principal: "cli:stello",
+		StartedAt: startedAt,
+		Duration:  2*time.Minute + 5*time.Second,
 	}
 
 	ctx := context.Background()
-	if err := ing.IngestConversation(ctx, sessionID, turns); err != nil {
-		t.Fatalf("IngestConversation: %v", err)
+	if err := ing.IngestSession(ctx, event); err != nil {
+		t.Fatalf("IngestSession: %v", err)
 	}
 
-	wantPath := "sources/conversations/" + sessionID + ".md"
+	wantPath := "sessions/" + sessionID + ".md"
 	page, err := store.Read(wantPath)
 	if err != nil {
 		t.Fatalf("store.Read(%q): %v", wantPath, err)
 	}
 
+	if !strings.Contains(page.Content, "## Session Metadata") {
+		t.Fatalf("expected metadata section, got:\n%s", page.Content)
+	}
+	if !strings.Contains(page.Content, "**Session ID**: "+sessionID) {
+		t.Fatalf("expected session ID in metadata, got:\n%s", page.Content)
+	}
+	if !strings.Contains(page.Content, "**Reason**: interactive_session") {
+		t.Fatalf("expected reason in metadata, got:\n%s", page.Content)
+	}
+	if !strings.Contains(page.Content, "**Principal**: cli:stello") {
+		t.Fatalf("expected principal in metadata, got:\n%s", page.Content)
+	}
+	if !strings.Contains(page.Content, "**Started**: "+startedAt.Format(time.RFC3339)) {
+		t.Fatalf("expected start time in metadata, got:\n%s", page.Content)
+	}
+	if !strings.Contains(page.Content, "**Duration**: 2m5s") {
+		t.Fatalf("expected duration in metadata, got:\n%s", page.Content)
+	}
 	if !strings.Contains(page.Content, "Hello, how are you?") {
 		t.Errorf("first turn missing from transcript content")
 	}
 	if !strings.Contains(page.Content, "Tell me about Go.") {
 		t.Errorf("second turn missing from transcript content")
 	}
+	if !strings.Contains(page.Content, "## Transcript") {
+		t.Errorf("expected transcript header in content")
+	}
 	if strings.Contains(page.Content, "## Summary") {
 		t.Errorf("unexpected ## Summary section when provider is nil")
 	}
+	if !slicesEqual(page.Tags, []string{"session", "interactive_session", "principal:cli:stello"}) {
+		t.Fatalf("tags = %v, want session tags", page.Tags)
+	}
 }
 
-// TestIngestConversationWithProvider verifies that a mock provider's summary is included.
-func TestIngestConversationWithProvider(t *testing.T) {
+// TestIngestSessionWithProvider verifies that a mock provider's summary is included.
+func TestIngestSessionWithProvider(t *testing.T) {
 	store := newTestStore(t)
 	ing := NewIngester(store, &mockLLMProvider{})
 
 	sessionID := "sess-002"
-	turns := []llm.Message{
-		llm.NewUserMessage("What is the capital of France?"),
+	event := IngestEvent{
+		SessionID: sessionID,
+		Messages: []llm.Message{
+			llm.NewUserMessage("What is the capital of France?"),
+		},
+		Reason: "task_completed",
 	}
 
 	ctx := context.Background()
-	if err := ing.IngestConversation(ctx, sessionID, turns); err != nil {
-		t.Fatalf("IngestConversation: %v", err)
+	if err := ing.IngestSession(ctx, event); err != nil {
+		t.Fatalf("IngestSession: %v", err)
 	}
 
-	wantPath := "sources/conversations/" + sessionID + ".md"
+	wantPath := "sessions/" + sessionID + ".md"
 	page, err := store.Read(wantPath)
 	if err != nil {
 		t.Fatalf("store.Read(%q): %v", wantPath, err)
 	}
 
+	if !strings.Contains(page.Content, "## Session Metadata") {
+		t.Fatalf("expected metadata section, got:\n%s", page.Content)
+	}
 	if !strings.Contains(page.Content, "Summary bullet points") {
 		t.Errorf("expected mock summary in content, got:\n%s", page.Content)
 	}
@@ -229,16 +268,19 @@ func TestIngestConversationWithProvider(t *testing.T) {
 	if !strings.Contains(page.Content, "## Transcript") {
 		t.Errorf("expected ## Transcript header in content")
 	}
+	if !slicesEqual(page.Tags, []string{"session", "task_completed"}) {
+		t.Fatalf("tags = %v, want session/task_completed", page.Tags)
+	}
 }
 
-// TestIngestConversationEmpty verifies that empty turns return nil without creating a page.
-func TestIngestConversationEmpty(t *testing.T) {
+// TestIngestSessionEmpty verifies that empty turns return nil without creating a page.
+func TestIngestSessionEmpty(t *testing.T) {
 	store := newTestStore(t)
 	ing := NewIngester(store, nil)
 
 	ctx := context.Background()
-	if err := ing.IngestConversation(ctx, "sess-empty", nil); err != nil {
-		t.Fatalf("IngestConversation with empty turns: %v", err)
+	if err := ing.IngestSession(ctx, IngestEvent{SessionID: "sess-empty"}); err != nil {
+		t.Fatalf("IngestSession with empty turns: %v", err)
 	}
 
 	pages, err := store.List()
@@ -248,6 +290,18 @@ func TestIngestConversationEmpty(t *testing.T) {
 	if len(pages) != 0 {
 		t.Errorf("expected no pages for empty turns, got %d", len(pages))
 	}
+}
+
+func slicesEqual(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // TestIngestFile verifies that a regular file is ingested into the store.

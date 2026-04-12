@@ -75,6 +75,13 @@ type TaskCompletion struct {
 	CompletedAt time.Time
 }
 
+func (c TaskCompletion) Duration() time.Duration {
+	if c.StartedAt.IsZero() || c.CompletedAt.IsZero() || c.CompletedAt.Before(c.StartedAt) {
+		return 0
+	}
+	return c.CompletedAt.Sub(c.StartedAt)
+}
+
 // Task is a single unit of work in the queue.
 type Task struct {
 	ID                 int64
