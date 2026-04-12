@@ -238,7 +238,16 @@ func (rt *executionRuntime) runTask(
 	}
 
 	routeCtx := buildRoutingContext(userInput)
-	wf := rt.router.Route(intent, routeCtx)
+	routeCtx.ProjectID = rt.principal.ProjectID
+	pref, err := wiki.LoadWorkflowPreference(rt.wikiStore, routeCtx.ProjectID)
+	if err != nil {
+		rt.app.Logger.Warn("routing preference unavailable, using base routing",
+			"project_id", routeCtx.ProjectID,
+			"error", err,
+		)
+		pref = nil
+	}
+	wf := rt.router.Route(intent, routeCtx, pref)
 	if wf == nil {
 		return nil, "", fmt.Errorf("no workflow available for intent %q", intent)
 	}

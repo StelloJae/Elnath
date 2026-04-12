@@ -22,7 +22,7 @@ const (
 
 // Page represents a single wiki page parsed from a markdown file with YAML frontmatter.
 type Page struct {
-	Path       string    // relative path within wiki dir (e.g. "entities/foo.md")
+	Path       string // relative path within wiki dir (e.g. "entities/foo.md")
 	Title      string
 	Type       PageType
 	Content    string // markdown body without frontmatter
@@ -31,6 +31,7 @@ type Page struct {
 	Updated    time.Time
 	TTL        string // e.g. "7d", "30d", "" for permanent
 	Confidence string // "high", "medium", "low"
+	Extra      map[string]any
 }
 
 // frontmatterYAML is the on-disk representation of the YAML block.
@@ -45,6 +46,16 @@ type frontmatterYAML struct {
 }
 
 const timeLayout = time.RFC3339
+
+var frontmatterKnownKeys = map[string]struct{}{
+	"title":      {},
+	"type":       {},
+	"tags":       {},
+	"created":    {},
+	"updated":    {},
+	"ttl":        {},
+	"confidence": {},
+}
 
 // ParseFrontmatter parses a raw markdown file that begins with a YAML frontmatter block.
 // The frontmatter must be delimited by "---\n" lines.
@@ -79,6 +90,16 @@ func ParseFrontmatter(raw []byte) (*Page, error) {
 	if err := yaml.Unmarshal([]byte(yamlBlock), &fm); err != nil {
 		return nil, fmt.Errorf("wiki: parse frontmatter yaml: %w", err)
 	}
+	var extra map[string]any
+	if err := yaml.Unmarshal([]byte(yamlBlock), &extra); err != nil {
+		return nil, fmt.Errorf("wiki: parse frontmatter extras: %w", err)
+	}
+	for key := range frontmatterKnownKeys {
+		delete(extra, key)
+	}
+	if len(extra) == 0 {
+		extra = nil
+	}
 
 	if fm.Title == "" {
 		return nil, fmt.Errorf("wiki: frontmatter missing required field 'title'")
@@ -91,6 +112,7 @@ func ParseFrontmatter(raw []byte) (*Page, error) {
 		TTL:        fm.TTL,
 		Confidence: fm.Confidence,
 		Content:    body,
+		Extra:      extra,
 	}
 
 	if fm.Created != "" {
@@ -126,14 +148,25 @@ func RenderFrontmatter(page *Page) ([]byte, error) {
 		page.Updated = now
 	}
 
-	fm := frontmatterYAML{
-		Title:      page.Title,
-		Type:       page.Type,
-		Tags:       page.Tags,
-		Created:    page.Created.UTC().Format(timeLayout),
-		Updated:    page.Updated.UTC().Format(timeLayout),
-		TTL:        page.TTL,
-		Confidence: page.Confidence,
+	fm := map[string]any{}
+	for key, value := range page.Extra {
+		if _, known := frontmatterKnownKeys[key]; known {
+			continue
+		}
+		fm[key] = value
+	}
+	fm["title"] = page.Title
+	fm["type"] = page.Type
+	if len(page.Tags) > 0 {
+		fm["tags"] = page.Tags
+	}
+	fm["created"] = page.Created.UTC().Format(timeLayout)
+	fm["updated"] = page.Updated.UTC().Format(timeLayout)
+	if page.TTL != "" {
+		fm["ttl"] = page.TTL
+	}
+	if page.Confidence != "" {
+		fm["confidence"] = page.Confidence
 	}
 
 	var buf bytes.Buffer

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stello/elnath/internal/conversation"
+	routingpref "github.com/stello/elnath/internal/routing"
 )
 
 type mockWorkflow struct{ name string }
@@ -26,7 +27,7 @@ func newTestRouter() *Router {
 
 func TestRouteQuestion(t *testing.T) {
 	r := newTestRouter()
-	wf := r.Route(conversation.IntentQuestion, nil)
+	wf := r.Route(conversation.IntentQuestion, nil, nil)
 	if wf.Name() != "single" {
 		t.Errorf("got %q, want %q", wf.Name(), "single")
 	}
@@ -34,7 +35,7 @@ func TestRouteQuestion(t *testing.T) {
 
 func TestRouteSimpleTask(t *testing.T) {
 	r := newTestRouter()
-	wf := r.Route(conversation.IntentSimpleTask, nil)
+	wf := r.Route(conversation.IntentSimpleTask, nil, nil)
 	if wf.Name() != "single" {
 		t.Errorf("got %q, want %q", wf.Name(), "single")
 	}
@@ -44,7 +45,7 @@ func TestRouteComplexTask(t *testing.T) {
 	r := newTestRouter()
 	// nil context → EstimatedFiles defaults to 0, which is < 4, so single
 	// To trigger team we need EstimatedFiles >= 4
-	wf := r.Route(conversation.IntentComplexTask, &RoutingContext{EstimatedFiles: 4})
+	wf := r.Route(conversation.IntentComplexTask, &RoutingContext{EstimatedFiles: 4}, nil)
 	if wf.Name() != "team" {
 		t.Errorf("got %q, want %q", wf.Name(), "team")
 	}
@@ -52,7 +53,7 @@ func TestRouteComplexTask(t *testing.T) {
 
 func TestRouteComplexTaskSmall(t *testing.T) {
 	r := newTestRouter()
-	wf := r.Route(conversation.IntentComplexTask, &RoutingContext{EstimatedFiles: 3})
+	wf := r.Route(conversation.IntentComplexTask, &RoutingContext{EstimatedFiles: 3}, nil)
 	if wf.Name() != "single" {
 		t.Errorf("got %q, want %q", wf.Name(), "single")
 	}
@@ -61,10 +62,10 @@ func TestRouteComplexTaskSmall(t *testing.T) {
 func TestRouteComplexTaskBrownfieldMultiFile(t *testing.T) {
 	r := newTestRouter()
 	wf := r.Route(conversation.IntentComplexTask, &RoutingContext{
-		EstimatedFiles:    1,
-		ExistingCode:      true,
-		VerificationHint:  true,
-	})
+		EstimatedFiles:   1,
+		ExistingCode:     true,
+		VerificationHint: true,
+	}, nil)
 	if wf.Name() != "ralph" {
 		t.Errorf("got %q, want %q", wf.Name(), "ralph")
 	}
@@ -72,7 +73,7 @@ func TestRouteComplexTaskBrownfieldMultiFile(t *testing.T) {
 
 func TestRouteProject(t *testing.T) {
 	r := newTestRouter()
-	wf := r.Route(conversation.IntentProject, nil)
+	wf := r.Route(conversation.IntentProject, nil, nil)
 	if wf.Name() != "autopilot" {
 		t.Errorf("got %q, want %q", wf.Name(), "autopilot")
 	}
@@ -83,7 +84,7 @@ func TestRouteProjectWithExistingCodeFallsBackToTeam(t *testing.T) {
 	wf := r.Route(conversation.IntentProject, &RoutingContext{
 		EstimatedFiles: 3,
 		ExistingCode:   true,
-	})
+	}, nil)
 	if wf.Name() != "team" {
 		t.Errorf("got %q, want %q", wf.Name(), "team")
 	}
@@ -91,7 +92,7 @@ func TestRouteProjectWithExistingCodeFallsBackToTeam(t *testing.T) {
 
 func TestRouteResearch(t *testing.T) {
 	r := newTestRouter()
-	wf := r.Route(conversation.IntentResearch, nil)
+	wf := r.Route(conversation.IntentResearch, nil, nil)
 	if wf.Name() != "research" {
 		t.Errorf("got %q, want %q", wf.Name(), "research")
 	}
@@ -99,7 +100,7 @@ func TestRouteResearch(t *testing.T) {
 
 func TestRouteWikiQuery(t *testing.T) {
 	r := newTestRouter()
-	wf := r.Route(conversation.IntentWikiQuery, nil)
+	wf := r.Route(conversation.IntentWikiQuery, nil, nil)
 	if wf.Name() != "single" {
 		t.Errorf("got %q, want %q", wf.Name(), "single")
 	}
@@ -107,7 +108,7 @@ func TestRouteWikiQuery(t *testing.T) {
 
 func TestRouteChat(t *testing.T) {
 	r := newTestRouter()
-	wf := r.Route(conversation.IntentChat, nil)
+	wf := r.Route(conversation.IntentChat, nil, nil)
 	if wf.Name() != "single" {
 		t.Errorf("got %q, want %q", wf.Name(), "single")
 	}
@@ -115,8 +116,57 @@ func TestRouteChat(t *testing.T) {
 
 func TestRouteUnknown(t *testing.T) {
 	r := newTestRouter()
-	wf := r.Route(conversation.Intent("completely_unknown"), nil)
+	wf := r.Route(conversation.Intent("completely_unknown"), nil, nil)
 	if wf.Name() != "single" {
 		t.Errorf("got %q, want %q", wf.Name(), "single")
+	}
+}
+
+func TestRoutePreferenceOverride(t *testing.T) {
+	r := newTestRouter()
+	pref := &routingpref.WorkflowPreference{
+		PreferredWorkflows: map[string]string{"question": "research"},
+	}
+
+	wf := r.Route(conversation.IntentQuestion, nil, pref)
+	if wf.Name() != "research" {
+		t.Fatalf("got %q, want %q", wf.Name(), "research")
+	}
+}
+
+func TestRoutePreferenceAvoidFallsBackToBaseWorkflow(t *testing.T) {
+	r := newTestRouter()
+	pref := &routingpref.WorkflowPreference{
+		PreferredWorkflows: map[string]string{"question": "research"},
+		AvoidWorkflows:     []string{"research"},
+	}
+
+	wf := r.Route(conversation.IntentQuestion, nil, pref)
+	if wf.Name() != "single" {
+		t.Fatalf("got %q, want %q", wf.Name(), "single")
+	}
+}
+
+func TestRouteAvoidedBaseWorkflowFallsBackToSingle(t *testing.T) {
+	r := newTestRouter()
+	pref := &routingpref.WorkflowPreference{AvoidWorkflows: []string{"team"}}
+
+	wf := r.Route(conversation.IntentComplexTask, &RoutingContext{
+		EstimatedFiles: 4,
+	}, pref)
+	if wf.Name() != "single" {
+		t.Fatalf("got %q, want %q", wf.Name(), "single")
+	}
+}
+
+func TestRoutePreferenceUnknownWorkflowFallsBackToBaseWorkflow(t *testing.T) {
+	r := newTestRouter()
+	pref := &routingpref.WorkflowPreference{
+		PreferredWorkflows: map[string]string{"question": "does-not-exist"},
+	}
+
+	wf := r.Route(conversation.IntentQuestion, nil, pref)
+	if wf.Name() != "single" {
+		t.Fatalf("got %q, want %q", wf.Name(), "single")
 	}
 }

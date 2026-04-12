@@ -15,6 +15,7 @@ import (
 	"github.com/stello/elnath/internal/daemon"
 	"github.com/stello/elnath/internal/identity"
 	"github.com/stello/elnath/internal/llm"
+	"github.com/stello/elnath/internal/orchestrator"
 	"github.com/stello/elnath/internal/self"
 	"github.com/stello/elnath/internal/wiki"
 )
@@ -24,6 +25,18 @@ type countingProvider struct {
 	streamCalls int
 	streamText  string
 	lastSystem  string
+}
+
+type stubWorkflow struct{ name string }
+
+func (w *stubWorkflow) Name() string { return w.name }
+
+func (w *stubWorkflow) Run(_ context.Context, input orchestrator.WorkflowInput) (*orchestrator.WorkflowResult, error) {
+	return &orchestrator.WorkflowResult{
+		Messages: append(input.Messages, llm.NewAssistantMessage(w.name+" workflow")),
+		Summary:  w.name + " workflow",
+		Workflow: w.name,
+	}, nil
 }
 
 func (p *countingProvider) Name() string { return "mock" }
@@ -205,6 +218,98 @@ func TestExecutionRuntimeRunTaskEmitsStructuredProgressEvents(t *testing.T) {
 	}
 	if !sawUsage {
 		t.Fatal("expected usage progress event")
+	}
+}
+
+func TestExecutionRuntimeRunTaskAppliesWorkflowPreference(t *testing.T) {
+	provider := &countingProvider{}
+	rt := newTestExecutionRuntime(t, provider)
+	rt.principal = identity.Principal{UserID: "legacy", ProjectID: "elnath", Surface: "cli"}
+	rt.router = orchestrator.NewRouter(map[string]orchestrator.Workflow{
+		"single":   &stubWorkflow{name: "single"},
+		"research": &stubWorkflow{name: "research"},
+	})
+
+	relPath := filepath.Join("projects", "elnath", "routing-preferences.md")
+	absPath := filepath.Join(rt.wikiStore.WikiDir(), relPath)
+	if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	raw := `---
+title: Project Routing Preferences
+type: concept
+preferred_workflows:
+  question: research
+---
+
+Prefer research for question intents.
+`
+	if err := os.WriteFile(absPath, []byte(raw), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	var gotWorkflow string
+	_, summary, err := rt.runTask(context.Background(), sess, nil, "what changed in Stella?", orchestrationOutput{
+		OnWorkflow: func(_ conversation.Intent, workflow string) {
+			gotWorkflow = workflow
+		},
+	})
+	if err != nil {
+		t.Fatalf("runTask: %v", err)
+	}
+	if gotWorkflow != "research" {
+		t.Fatalf("workflow = %q, want research", gotWorkflow)
+	}
+	if summary != "research workflow" {
+		t.Fatalf("summary = %q, want %q", summary, "research workflow")
+	}
+}
+
+func TestExecutionRuntimeRunTaskIgnoresMalformedWorkflowPreference(t *testing.T) {
+	provider := &countingProvider{}
+	rt := newTestExecutionRuntime(t, provider)
+	rt.principal = identity.Principal{UserID: "legacy", ProjectID: "elnath", Surface: "cli"}
+	rt.router = orchestrator.NewRouter(map[string]orchestrator.Workflow{
+		"single":   &stubWorkflow{name: "single"},
+		"research": &stubWorkflow{name: "research"},
+	})
+
+	relPath := filepath.Join("projects", "elnath", "routing-preferences.md")
+	absPath := filepath.Join(rt.wikiStore.WikiDir(), relPath)
+	if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	raw := `---
+title: Broken Routing Preferences
+type: concept
+preferred_workflows: [question
+---
+`
+	if err := os.WriteFile(absPath, []byte(raw), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	var gotWorkflow string
+	_, _, err = rt.runTask(context.Background(), sess, nil, "what changed in Stella?", orchestrationOutput{
+		OnWorkflow: func(_ conversation.Intent, workflow string) {
+			gotWorkflow = workflow
+		},
+	})
+	if err != nil {
+		t.Fatalf("runTask: %v", err)
+	}
+	if gotWorkflow != "single" {
+		t.Fatalf("workflow = %q, want single", gotWorkflow)
 	}
 }
 
