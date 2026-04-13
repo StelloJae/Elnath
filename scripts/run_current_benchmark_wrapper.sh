@@ -511,7 +511,21 @@ if [[ "$TASK_REPO" == *"vercel/next.js"* && "$TASK_PROMPT" == *"file-watcher reg
 Next.js-specific guidance:
 - Prefer the hinted config/watcher seam such as \`packages/next/src/server/lib/router-utils/setup-dev-bundler.ts\` and \`packages/next/src/lib/find-config.ts\` before exploring unrelated dev-server or e2e infrastructure.
 - Prefer a narrow regression test like \`packages/next/src/lib/find-config.test.ts\` when it directly exercises the changed path; avoid broad dev/e2e watch suites unless the narrower unit path cannot prove the fix.
-- Do not drift into unrelated Jest/build infrastructure fixes; the benchmark wants the smallest real fix in the config/watcher path."
+- Do not drift into unrelated Jest/build infrastructure fixes; the benchmark wants the smallest real fix in the config/watcher path.
+- CRITICAL: In \`findConfig()\`, the \`_returnFile\` parameter is declared but NOT implemented — it is prefixed with underscore meaning unused. This is likely the bug. Implement it to return the config file path (a string) when \`_returnFile\` is true, instead of returning the parsed config content.
+- Do NOT add cache-busting query parameters (\`?ts=Date.now()\`) to \`import()\` or \`require()\` calls. Jest's module resolver cannot resolve file paths with query strings — ALL ESM import tests will fail with 'Cannot find module'.
+- Do NOT modify the \`esmImport\` helper or ESM \`import()\` paths. The fix should only add conditional \`return filePath\` / \`return packageJsonPath\` branches when \`_returnFile\` is true.
+- Your regression test should verify that \`findConfig(dir, key, true)\` returns a string file path, not the parsed config object."
+fi
+if [[ "$TASK_REPO" == *"spf13/viper"* && "$TASK_PROMPT" == *"configuration reload"* ]]; then
+  BENCHMARK_PROMPT+="
+
+Viper-specific guidance:
+- For config reload bugs, start at \`WatchConfig()\` in \`viper.go\` — this is where fsnotify events trigger config re-reads via \`ReadInConfig()\`.
+- The most common reload regression is stale state: a field (like \`configFile\`) not being updated before \`ReadInConfig()\` is called inside the watcher callback. Check whether the resolved file path is being written back to \`v.configFile\` before the re-read.
+- Do NOT modify \`SetConfigFile()\`, \`getConfigFile()\`, or error types in \`errors.go\` — these are stable public APIs. Changing them to fix a reload bug will break existing tests like \`TestReadConfigWithSetConfigFile\` and \`TestWrongFileNotFound\`. If you feel the need to change them, you are chasing the wrong root cause.
+- A correct config reload fix is typically 1-3 lines in the watcher callback. If your fix touches more than \`viper.go\` + \`viper_test.go\`, reconsider.
+- Add a focused regression test under the existing \`TestWatchFile\` test group to prove the reload works after a config file change."
 fi
 
 BENCHMARK_PROMPT+="
