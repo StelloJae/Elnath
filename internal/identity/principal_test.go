@@ -23,6 +23,9 @@ func TestResolveCLIPrincipalPrefersFlagOverConfigAndEnv(t *testing.T) {
 	if got.UserID != "flag-user" {
 		t.Fatalf("UserID = %q, want flag-user", got.UserID)
 	}
+	if got.ResumeUserID() != "flag-user" {
+		t.Fatalf("ResumeUserID = %q, want flag-user", got.ResumeUserID())
+	}
 	if got.ProjectID != shortHash(remote) {
 		t.Fatalf("ProjectID = %q, want %q", got.ProjectID, shortHash(remote))
 	}
@@ -42,6 +45,9 @@ func TestResolveCLIPrincipalUsesConfigWhenFlagMissing(t *testing.T) {
 	if got.UserID != "config-user" {
 		t.Fatalf("UserID = %q, want config-user", got.UserID)
 	}
+	if got.ResumeUserID() != "config-user" {
+		t.Fatalf("ResumeUserID = %q, want config-user", got.ResumeUserID())
+	}
 	if got.ProjectID != shortHash(filepath.Clean(dir)) {
 		t.Fatalf("ProjectID = %q, want cwd hash", got.ProjectID)
 	}
@@ -55,6 +61,9 @@ func TestResolveCLIPrincipalFallsBackToUserAtHostname(t *testing.T) {
 
 	if !strings.HasPrefix(got.UserID, "stello@") {
 		t.Fatalf("UserID = %q, want stello@<hostname>", got.UserID)
+	}
+	if got.ResumeUserID() != got.UserID {
+		t.Fatalf("ResumeUserID = %q, want %q", got.ResumeUserID(), got.UserID)
 	}
 	if got.ProjectID != shortHash(filepath.Clean(dir)) {
 		t.Fatalf("ProjectID = %q, want cwd hash", got.ProjectID)
@@ -83,10 +92,14 @@ func TestResolveProjectIDUsesGitRemoteHash(t *testing.T) {
 
 func TestResolveTelegramPrincipalUsesTelegramUserID(t *testing.T) {
 	dir := t.TempDir()
+	t.Setenv("USER", "stello")
 	got := ResolveTelegramPrincipal(42, dir)
 
 	if got.UserID != "42" {
 		t.Fatalf("UserID = %q, want 42", got.UserID)
+	}
+	if !strings.HasPrefix(got.ResumeUserID(), "stello@") {
+		t.Fatalf("ResumeUserID = %q, want stello@<hostname>", got.ResumeUserID())
 	}
 	if got.ProjectID != shortHash(filepath.Clean(dir)) {
 		t.Fatalf("ProjectID = %q, want cwd hash", got.ProjectID)
@@ -149,5 +162,12 @@ func TestPrincipalSurfaceIdentity(t *testing.T) {
 				t.Errorf("SurfaceIdentity() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestPrincipalResumeUserIDPrefersCanonical(t *testing.T) {
+	p := Principal{UserID: "42", CanonicalUserID: "stello@host", Surface: "telegram"}
+	if got := p.ResumeUserID(); got != "stello@host" {
+		t.Fatalf("ResumeUserID() = %q, want stello@host", got)
 	}
 }

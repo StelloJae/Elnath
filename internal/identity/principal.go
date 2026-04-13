@@ -13,22 +13,25 @@ import (
 )
 
 type Principal struct {
-	UserID    string `json:"user_id"`
-	ProjectID string `json:"project_id"`
-	Surface   string `json:"surface"`
+	UserID          string `json:"user_id"`
+	CanonicalUserID string `json:"canonical_user_id,omitempty"`
+	ProjectID       string `json:"project_id"`
+	Surface         string `json:"surface"`
 }
 
 type PrincipalSource struct {
-	UserID    string
-	ProjectID string
-	Surface   string
+	UserID          string
+	CanonicalUserID string
+	ProjectID       string
+	Surface         string
 }
 
 func NewPrincipal(source PrincipalSource) Principal {
 	return Principal{
-		UserID:    strings.TrimSpace(source.UserID),
-		ProjectID: strings.TrimSpace(source.ProjectID),
-		Surface:   strings.TrimSpace(source.Surface),
+		UserID:          strings.TrimSpace(source.UserID),
+		CanonicalUserID: strings.TrimSpace(source.CanonicalUserID),
+		ProjectID:       strings.TrimSpace(source.ProjectID),
+		Surface:         strings.TrimSpace(source.Surface),
 	}
 }
 
@@ -47,6 +50,13 @@ func (p Principal) SurfaceIdentity() string {
 	default:
 		return userID
 	}
+}
+
+func (p Principal) ResumeUserID() string {
+	if canonical := strings.TrimSpace(p.CanonicalUserID); canonical != "" {
+		return canonical
+	}
+	return strings.TrimSpace(p.UserID)
 }
 
 func LegacyPrincipal() Principal {

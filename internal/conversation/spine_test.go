@@ -39,6 +39,7 @@ func (r *recordingEventIngester) IngestSession(_ context.Context, event wiki.Ing
 		Messages:  append([]llm.Message(nil), event.Messages...),
 		Reason:    event.Reason,
 		Principal: event.Principal,
+		Resumes:   append([]wiki.ResumeRecord(nil), event.Resumes...),
 		StartedAt: event.StartedAt,
 		Duration:  event.Duration,
 	})
@@ -229,6 +230,48 @@ func TestSpine_Snapshot_IsStable(t *testing.T) {
 	}
 	if events[0].Reason != "task_completed" {
 		t.Fatalf("reason = %q, want %q", events[0].Reason, "task_completed")
+	}
+}
+
+func TestSpine_NotifyCompletion_IncludesResumeHistory(t *testing.T) {
+	dir := t.TempDir()
+	createdBy := identity.Principal{UserID: "12345", ProjectID: "elnath", Surface: "telegram"}
+	resumedBy := identity.Principal{UserID: "stello@host", ProjectID: "elnath", Surface: "cli"}
+	sess, err := agent.NewSession(dir, createdBy)
+	if err != nil {
+		t.Fatalf("agent.NewSession: %v", err)
+	}
+	if err := sess.AppendMessage(llm.NewUserMessage("resume me later")); err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+	if err := sess.RecordResume(resumedBy); err != nil {
+		t.Fatalf("RecordResume: %v", err)
+	}
+
+	ing := &recordingEventIngester{done: make(chan struct{})}
+	spine := NewSpine(dir, ing, newTestLogger(io.Discard))
+	if err := spine.NotifyCompletion(context.Background(), daemon.TaskCompletion{SessionID: sess.ID}); err != nil {
+		t.Fatalf("NotifyCompletion: %v", err)
+	}
+
+	select {
+	case <-ing.done:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for ingest")
+	}
+
+	events := ing.snapshot()
+	if len(events) != 1 {
+		t.Fatalf("ingest events = %d, want 1", len(events))
+	}
+	if len(events[0].Resumes) != 1 {
+		t.Fatalf("resume count = %d, want 1", len(events[0].Resumes))
+	}
+	if events[0].Resumes[0].Surface != "cli" {
+		t.Fatalf("resume surface = %q, want cli", events[0].Resumes[0].Surface)
+	}
+	if events[0].Resumes[0].Principal != "cli:stello@host" {
+		t.Fatalf("resume principal = %q, want cli:stello@host", events[0].Resumes[0].Principal)
 	}
 }
 

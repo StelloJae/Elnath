@@ -39,6 +39,22 @@ type Session struct {
 	logger        func(msg string, args ...any)
 }
 
+// SessionHeader is the JSONL header stored on the first line of each session.
+type SessionHeader struct {
+	ID        string
+	CreatedAt time.Time
+	Version   int
+	Principal identity.Principal
+}
+
+// SessionResumeEvent records a surface transition for a persisted session.
+type SessionResumeEvent struct {
+	Type      string             `json:"type"`
+	Surface   string             `json:"surface"`
+	Principal identity.Principal `json:"principal"`
+	At        time.Time          `json:"at"`
+}
+
 // WithPersister sets an optional secondary persistence backend.
 func (s *Session) WithPersister(p SessionPersister) {
 	s.persister = p
@@ -64,6 +80,7 @@ type SessionFileInfo struct {
 	Path         string
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
+	Principal    identity.Principal
 	MessageCount int
 }
 
@@ -102,21 +119,24 @@ func LoadSession(dataDir, id string) (*Session, error) {
 	if !scanner.Scan() {
 		return nil, fmt.Errorf("session: empty file")
 	}
-	var hdr sessionHeader
-	if err := json.Unmarshal(scanner.Bytes(), &hdr); err != nil {
-		return nil, fmt.Errorf("session: parse header: %w", err)
+	hdr, err := decodeSessionHeader(scanner.Bytes())
+	if err != nil {
+		return nil, err
 	}
 	s.ID = hdr.ID
-	if hdr.Principal == nil || hdr.Principal.IsZero() {
-		s.Principal = identity.LegacyPrincipal()
-	} else {
-		s.Principal = *hdr.Principal
-	}
+	s.Principal = hdr.Principal
 
 	// Remaining lines: messages.
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {
+			continue
+		}
+		lineType, err := sessionLineType(line)
+		if err != nil {
+			return nil, fmt.Errorf("session: inspect line: %w", err)
+		}
+		if lineType != "" {
 			continue
 		}
 		var msg llm.Message
@@ -134,6 +154,61 @@ func LoadSession(dataDir, id string) (*Session, error) {
 	}
 
 	return s, nil
+}
+
+// ReadSessionHeader reads only the JSONL header line for a session file.
+func ReadSessionHeader(path string) (*SessionHeader, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("session: open header: %w", err)
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	if !scanner.Scan() {
+		if err := scanner.Err(); err != nil {
+			return nil, fmt.Errorf("session: read header: %w", err)
+		}
+		return nil, fmt.Errorf("session: empty file")
+	}
+	return decodeSessionHeader(scanner.Bytes())
+}
+
+// LoadSessionResumeEvents reads resume metadata lines from a persisted session.
+func LoadSessionResumeEvents(dataDir, id string) ([]SessionResumeEvent, error) {
+	return readSessionResumeEvents(sessionPath(dataDir, id))
+}
+
+// RecordResume appends a metadata-only resume event line to the session JSONL.
+func (s *Session) RecordResume(principal identity.Principal) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if principal.IsZero() {
+		principal = s.Principal
+	}
+	event := SessionResumeEvent{
+		Type:      "resume",
+		Surface:   strings.TrimSpace(principal.Surface),
+		Principal: principal,
+		At:        time.Now().UTC(),
+	}
+	data, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("session: marshal resume: %w", err)
+	}
+
+	f, err := os.OpenFile(s.path, os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return fmt.Errorf("session: open for resume append: %w", err)
+	}
+	defer f.Close()
+
+	data = append(data, '\n')
+	if _, err := f.Write(data); err != nil {
+		return fmt.Errorf("session: write resume: %w", err)
+	}
+	return nil
 }
 
 // AppendMessage appends a single message to the session file (O_APPEND) and
@@ -345,17 +420,26 @@ func readSessionFileInfo(path string) (SessionFileInfo, error) {
 		return SessionFileInfo{}, fmt.Errorf("session: empty file")
 	}
 
-	var hdr sessionHeader
-	if err := json.Unmarshal(scanner.Bytes(), &hdr); err != nil {
-		return SessionFileInfo{}, fmt.Errorf("session: parse metadata header: %w", err)
+	hdr, err := decodeSessionHeader(scanner.Bytes())
+	if err != nil {
+		return SessionFileInfo{}, err
 	}
 
 	info := SessionFileInfo{
 		ID:        hdr.ID,
 		CreatedAt: hdr.CreatedAt.UTC(),
+		Principal: hdr.Principal,
 	}
 	for scanner.Scan() {
-		if len(scanner.Bytes()) == 0 {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		lineType, err := sessionLineType(line)
+		if err != nil {
+			return SessionFileInfo{}, fmt.Errorf("session: inspect metadata line: %w", err)
+		}
+		if lineType != "" {
 			continue
 		}
 		info.MessageCount++
@@ -365,4 +449,71 @@ func readSessionFileInfo(path string) (SessionFileInfo, error) {
 	}
 
 	return info, nil
+}
+
+func decodeSessionHeader(data []byte) (*SessionHeader, error) {
+	var hdr sessionHeader
+	if err := json.Unmarshal(data, &hdr); err != nil {
+		return nil, fmt.Errorf("session: parse header: %w", err)
+	}
+	principal := identity.LegacyPrincipal()
+	if hdr.Principal != nil && !hdr.Principal.IsZero() {
+		principal = *hdr.Principal
+	}
+	return &SessionHeader{
+		ID:        hdr.ID,
+		CreatedAt: hdr.CreatedAt.UTC(),
+		Version:   hdr.Version,
+		Principal: principal,
+	}, nil
+}
+
+func readSessionResumeEvents(path string) ([]SessionResumeEvent, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("session: open resumes: %w", err)
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	if !scanner.Scan() {
+		if err := scanner.Err(); err != nil {
+			return nil, fmt.Errorf("session: read resumes header: %w", err)
+		}
+		return nil, fmt.Errorf("session: empty file")
+	}
+
+	var resumes []SessionResumeEvent
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		lineType, err := sessionLineType(line)
+		if err != nil {
+			return nil, fmt.Errorf("session: inspect resume line: %w", err)
+		}
+		if lineType != "resume" {
+			continue
+		}
+		var resume SessionResumeEvent
+		if err := json.Unmarshal(line, &resume); err != nil {
+			return nil, fmt.Errorf("session: parse resume: %w", err)
+		}
+		resumes = append(resumes, resume)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("session: scan resumes: %w", err)
+	}
+	return resumes, nil
+}
+
+func sessionLineType(line []byte) (string, error) {
+	var meta struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(line, &meta); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(meta.Type), nil
 }

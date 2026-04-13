@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"time"
 
 	"github.com/stello/elnath/internal/agent"
 	"github.com/stello/elnath/internal/identity"
@@ -42,6 +43,15 @@ type Manager struct {
 	context          ContextWindowManager
 	history          HistoryStore
 	maxContextTokens int
+}
+
+// SessionMeta is the resumable-session index entry derived from JSONL files.
+type SessionMeta struct {
+	ID        string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	Principal identity.Principal
+	MsgCount  int
 }
 
 // NewManager creates a Manager with the given database and data directory.
@@ -122,26 +132,84 @@ func (m *Manager) LoadSession(sessionID string) (*agent.Session, error) {
 	return s, nil
 }
 
+// LoadSessionForPrincipal loads a known session ID and enforces strict ownership.
+func (m *Manager) LoadSessionForPrincipal(sessionID string, principal identity.Principal) (*agent.Session, error) {
+	s, err := m.LoadSession(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if principal.IsZero() || sessionPrincipalAllowed(s.Principal, principal) {
+		return s, nil
+	}
+	return nil, fmt.Errorf("conversation: session %s is not resumable for principal %s/%s", sessionID, principal.UserID, principal.ProjectID)
+}
+
+// SessionIndex returns resumable session metadata sorted by most recently updated.
+func (m *Manager) SessionIndex() ([]SessionMeta, error) {
+	infos, err := agent.ListSessionFiles(m.dataDir)
+	if err != nil {
+		return nil, fmt.Errorf("conversation: list sessions: %w", err)
+	}
+	index := make([]SessionMeta, 0, len(infos))
+	for _, info := range infos {
+		index = append(index, SessionMeta{
+			ID:        info.ID,
+			CreatedAt: info.CreatedAt,
+			UpdatedAt: info.UpdatedAt,
+			Principal: info.Principal,
+			MsgCount:  info.MessageCount,
+		})
+	}
+	return index, nil
+}
+
 // LoadLatestSession finds and loads the most recent resumable transcript.
 // JSONL files are the canonical source of truth for resume because they are the
 // append-only transcript the runtime replays; the secondary history store is
 // only used for indexing/listing and must not change which session
 // `--continue` resolves to.
-func (m *Manager) LoadLatestSession() (*agent.Session, error) {
-	sessions, err := agent.ListSessionFiles(m.dataDir)
+func (m *Manager) LoadLatestSession(principals ...identity.Principal) (*agent.Session, error) {
+	sessions, err := m.SessionIndex()
 	if err != nil {
-		return nil, fmt.Errorf("conversation: list sessions: %w", err)
+		return nil, err
 	}
 	if len(sessions) == 0 {
 		return nil, fmt.Errorf("conversation: no sessions found")
 	}
 
+	filter := identity.Principal{}
+	if len(principals) > 0 {
+		filter = principals[0]
+	}
+	if !filter.IsZero() {
+		if s, err, found := m.loadLatestMatchingSession(sessions, func(info SessionMeta) bool {
+			return sameResumePrincipal(info.Principal, filter)
+		}); found {
+			return s, err
+		}
+		if s, err, found := m.loadLatestMatchingSession(sessions, func(info SessionMeta) bool {
+			return isLegacyPrincipal(info.Principal)
+		}); found {
+			return s, err
+		}
+		return nil, fmt.Errorf("conversation: no sessions found for principal %s/%s", filter.UserID, filter.ProjectID)
+	}
+	if s, err, found := m.loadLatestMatchingSession(sessions, nil); found {
+		return s, err
+	}
+	return nil, fmt.Errorf("conversation: no loadable sessions found")
+}
+
+func (m *Manager) loadLatestMatchingSession(sessions []SessionMeta, match func(SessionMeta) bool) (*agent.Session, error, bool) {
 	var lastErr error
 	for _, info := range sessions {
+		if match != nil && !match(info) {
+			continue
+		}
 		s, err := m.LoadSession(info.ID)
 		if err == nil {
 			m.logger.Info("resuming latest session", "session_id", info.ID)
-			return s, nil
+			return s, nil, true
 		}
 		lastErr = err
 		if m.logger != nil {
@@ -152,9 +220,21 @@ func (m *Manager) LoadLatestSession() (*agent.Session, error) {
 		}
 	}
 	if lastErr != nil {
-		return nil, fmt.Errorf("conversation: load latest session: %w", lastErr)
+		return nil, fmt.Errorf("conversation: load latest session: %w", lastErr), true
 	}
-	return nil, fmt.Errorf("conversation: no loadable sessions found")
+	return nil, nil, false
+}
+
+func sameResumePrincipal(candidate, target identity.Principal) bool {
+	return candidate.ResumeUserID() == target.ResumeUserID() && candidate.ProjectID == target.ProjectID
+}
+
+func sessionPrincipalAllowed(candidate, target identity.Principal) bool {
+	return sameResumePrincipal(candidate, target) || isLegacyPrincipal(candidate)
+}
+
+func isLegacyPrincipal(principal identity.Principal) bool {
+	return principal == identity.LegacyPrincipal()
 }
 
 // SendMessage processes a user message for the given session.

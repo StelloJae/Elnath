@@ -346,6 +346,104 @@ func TestListSessionFiles(t *testing.T) {
 	}
 }
 
+func TestReadSessionHeader(t *testing.T) {
+	dir := t.TempDir()
+	want := identity.Principal{UserID: "stello", ProjectID: "elnath", Surface: "cli"}
+
+	s, err := NewSession(dir, want)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	hdr, err := ReadSessionHeader(sessionPath(dir, s.ID))
+	if err != nil {
+		t.Fatalf("ReadSessionHeader: %v", err)
+	}
+	if hdr.ID != s.ID {
+		t.Fatalf("header ID = %q, want %q", hdr.ID, s.ID)
+	}
+	if hdr.Principal != want {
+		t.Fatalf("header principal = %+v, want %+v", hdr.Principal, want)
+	}
+}
+
+func TestReadSessionHeader_EmptyFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "empty.jsonl")
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	_, err := ReadSessionHeader(path)
+	if err == nil {
+		t.Fatal("ReadSessionHeader() error = nil, want error for empty file")
+	}
+}
+
+func TestRecordResume(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewSession(dir, identity.Principal{UserID: "12345", ProjectID: "elnath", Surface: "telegram"})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	want := identity.Principal{UserID: "stello@host", ProjectID: "elnath", Surface: "cli"}
+
+	if err := s.RecordResume(want); err != nil {
+		t.Fatalf("RecordResume: %v", err)
+	}
+
+	resumes, err := LoadSessionResumeEvents(dir, s.ID)
+	if err != nil {
+		t.Fatalf("LoadSessionResumeEvents: %v", err)
+	}
+	if len(resumes) != 1 {
+		t.Fatalf("resume count = %d, want 1", len(resumes))
+	}
+	if resumes[0].Type != "resume" {
+		t.Fatalf("resume type = %q, want resume", resumes[0].Type)
+	}
+	if resumes[0].Surface != want.Surface {
+		t.Fatalf("resume surface = %q, want %q", resumes[0].Surface, want.Surface)
+	}
+	if resumes[0].Principal != want {
+		t.Fatalf("resume principal = %+v, want %+v", resumes[0].Principal, want)
+	}
+}
+
+func TestLoadSessionSkipsResumeLines(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewSession(dir, identity.Principal{UserID: "12345", ProjectID: "elnath", Surface: "telegram"})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if err := s.AppendMessage(llm.NewUserMessage("hello before resume")); err != nil {
+		t.Fatalf("AppendMessage user: %v", err)
+	}
+	if err := s.RecordResume(identity.Principal{UserID: "stello@host", ProjectID: "elnath", Surface: "cli"}); err != nil {
+		t.Fatalf("RecordResume: %v", err)
+	}
+	if err := s.AppendMessage(llm.NewAssistantMessage("hello after resume")); err != nil {
+		t.Fatalf("AppendMessage assistant: %v", err)
+	}
+
+	loaded, err := LoadSession(dir, s.ID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if len(loaded.Messages) != 2 {
+		t.Fatalf("loaded messages = %d, want 2", len(loaded.Messages))
+	}
+	if got := loaded.Messages[0].Text(); got != "hello before resume" {
+		t.Fatalf("first message = %q, want hello before resume", got)
+	}
+	if got := loaded.Messages[1].Text(); got != "hello after resume" {
+		t.Fatalf("second message = %q, want hello after resume", got)
+	}
+	if got := sessionMessageLineCount(t, filepath.Join(dir, "sessions", s.ID+".jsonl")); got != 3 {
+		t.Fatalf("session file non-header lines = %d, want 3 including resume metadata", got)
+	}
+}
+
 func TestSessionNewPersistsPrincipal(t *testing.T) {
 	dir := t.TempDir()
 	want := identity.Principal{UserID: "stello", ProjectID: "elnath", Surface: "cli"}

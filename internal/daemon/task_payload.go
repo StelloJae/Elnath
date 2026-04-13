@@ -50,9 +50,10 @@ func normalizeTaskPayload(payload TaskPayload) TaskPayload {
 	payload.SessionID = strings.TrimSpace(payload.SessionID)
 	payload.Surface = strings.TrimSpace(payload.Surface)
 	payload.Principal = identity.NewPrincipal(identity.PrincipalSource{
-		UserID:    payload.Principal.UserID,
-		ProjectID: payload.Principal.ProjectID,
-		Surface:   payload.Principal.Surface,
+		UserID:          payload.Principal.UserID,
+		CanonicalUserID: payload.Principal.CanonicalUserID,
+		ProjectID:       payload.Principal.ProjectID,
+		Surface:         payload.Principal.Surface,
 	})
 	if payload.Principal.Surface == "" && payload.Surface != "" {
 		payload.Principal.Surface = payload.Surface

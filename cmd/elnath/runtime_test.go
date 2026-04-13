@@ -440,6 +440,117 @@ func TestDaemonTaskRunnerCreatesSessionWithPayloadPrincipal(t *testing.T) {
 	}
 }
 
+func TestDaemonTaskRunnerFollowUpRecordsResumeEvent(t *testing.T) {
+	provider := &countingProvider{streamText: "follow-up answer"}
+	rt := newTestExecutionRuntime(t, provider)
+	createdBy := identity.Principal{UserID: "77", ProjectID: "elnath", Surface: "telegram"}
+	resumedBy := identity.Principal{UserID: "77", ProjectID: "elnath", Surface: "telegram"}
+
+	sess, err := rt.mgr.NewSessionWithPrincipal(createdBy)
+	if err != nil {
+		t.Fatalf("NewSessionWithPrincipal: %v", err)
+	}
+	_, _, err = rt.runTask(context.Background(), sess, nil, "initial request", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("seed runTask: %v", err)
+	}
+
+	payload := daemon.EncodeTaskPayload(daemon.TaskPayload{
+		Prompt:    "continue from telegram",
+		SessionID: sess.ID,
+		Surface:   "telegram",
+		Principal: resumedBy,
+	})
+	if _, err := rt.newDaemonTaskRunner()(context.Background(), payload, nil); err != nil {
+		t.Fatalf("daemon task runner follow-up: %v", err)
+	}
+
+	resumes, err := agent.LoadSessionResumeEvents(rt.app.Config.DataDir, sess.ID)
+	if err != nil {
+		t.Fatalf("LoadSessionResumeEvents: %v", err)
+	}
+	if len(resumes) != 1 {
+		t.Fatalf("resume count = %d, want 1", len(resumes))
+	}
+	if resumes[0].Principal != resumedBy {
+		t.Fatalf("resume principal = %+v, want %+v", resumes[0].Principal, resumedBy)
+	}
+}
+
+func TestDaemonTaskRunnerCreatesTelegramSessionResumableFromCLI(t *testing.T) {
+	provider := &countingProvider{streamText: "daemon answer"}
+	rt := newTestExecutionRuntime(t, provider)
+	t.Setenv("USER", "stello")
+	telegramPrincipal := identity.ResolveTelegramPrincipal(77, rt.workDir)
+
+	payload := daemon.EncodeTaskPayload(daemon.TaskPayload{
+		Prompt:    "tell me a joke",
+		Surface:   "telegram",
+		Principal: telegramPrincipal,
+	})
+	result, err := rt.newDaemonTaskRunner()(context.Background(), payload, nil)
+	if err != nil {
+		t.Fatalf("daemon task runner: %v", err)
+	}
+
+	latest, err := rt.mgr.LoadLatestSession(identity.ResolveCLIPrincipal(nil, "", rt.workDir))
+	if err != nil {
+		t.Fatalf("LoadLatestSession: %v", err)
+	}
+	if latest.ID != result.SessionID {
+		t.Fatalf("latest session = %q, want %q", latest.ID, result.SessionID)
+	}
+}
+
+func TestDaemonTaskRunnerRejectsFollowUpForDifferentPrincipal(t *testing.T) {
+	provider := &countingProvider{streamText: "follow-up answer"}
+	rt := newTestExecutionRuntime(t, provider)
+
+	sess, err := rt.mgr.NewSessionWithPrincipal(identity.Principal{UserID: "owner", ProjectID: "elnath", Surface: "telegram"})
+	if err != nil {
+		t.Fatalf("NewSessionWithPrincipal: %v", err)
+	}
+	payload := daemon.EncodeTaskPayload(daemon.TaskPayload{
+		Prompt:    "steal this session",
+		SessionID: sess.ID,
+		Surface:   "telegram",
+		Principal: identity.Principal{UserID: "intruder", ProjectID: "elnath", Surface: "telegram"},
+	})
+
+	_, err = rt.newDaemonTaskRunner()(context.Background(), payload, nil)
+	if err == nil {
+		t.Fatal("daemon task runner different-principal follow-up error = nil, want error")
+	}
+}
+
+func TestInteractiveSessionIngestEventIncludesResumeHistory(t *testing.T) {
+	provider := &countingProvider{}
+	rt := newTestExecutionRuntime(t, provider)
+	principal := identity.Principal{UserID: "12345", ProjectID: "elnath", Surface: "telegram"}
+
+	sess, err := rt.mgr.NewSessionWithPrincipal(principal)
+	if err != nil {
+		t.Fatalf("NewSessionWithPrincipal: %v", err)
+	}
+	if err := sess.AppendMessage(llm.NewUserMessage("hello from telegram")); err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+	if err := sess.RecordResume(identity.Principal{UserID: "stello@host", ProjectID: "elnath", Surface: "cli"}); err != nil {
+		t.Fatalf("RecordResume: %v", err)
+	}
+
+	event, err := interactiveSessionIngestEvent(rt.app.Config.DataDir, sess, sess.Messages)
+	if err != nil {
+		t.Fatalf("interactiveSessionIngestEvent: %v", err)
+	}
+	if len(event.Resumes) != 1 {
+		t.Fatalf("resume count = %d, want 1", len(event.Resumes))
+	}
+	if event.Resumes[0].Principal != "cli:stello@host" {
+		t.Fatalf("resume principal = %q, want cli:stello@host", event.Resumes[0].Principal)
+	}
+}
+
 func TestExecutionRuntimeMaybeAutoDocumentSessionIngestsStructuredPage(t *testing.T) {
 	provider := &countingProvider{}
 	rt := newTestExecutionRuntime(t, provider)

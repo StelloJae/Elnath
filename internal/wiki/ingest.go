@@ -27,8 +27,15 @@ type IngestEvent struct {
 	Messages  []llm.Message
 	Reason    string // Free-form trigger label such as "task_completed".
 	Principal string
+	Resumes   []ResumeRecord
 	StartedAt time.Time
 	Duration  time.Duration
+}
+
+type ResumeRecord struct {
+	Surface   string    `json:"surface"`
+	Principal string    `json:"principal"`
+	At        time.Time `json:"at"`
 }
 
 // NewIngester creates an Ingester. provider may be nil for plain ingest without summarisation.
@@ -192,6 +199,23 @@ func renderSessionPageContent(event IngestEvent, transcript, summary string) str
 	if principal := strings.TrimSpace(event.Principal); principal != "" {
 		sb.WriteString("- **Principal**: ")
 		sb.WriteString(principal)
+		sb.WriteByte('\n')
+	}
+	for _, resume := range event.Resumes {
+		principal := strings.TrimSpace(resume.Principal)
+		if principal == "" {
+			principal = strings.TrimSpace(resume.Surface)
+		}
+		if principal == "" {
+			continue
+		}
+		sb.WriteString("- **Resumed by**: ")
+		sb.WriteString(principal)
+		if !resume.At.IsZero() {
+			sb.WriteString(" (")
+			sb.WriteString(resume.At.UTC().Format(time.RFC3339))
+			sb.WriteString(")")
+		}
 		sb.WriteByte('\n')
 	}
 	if !event.StartedAt.IsZero() {

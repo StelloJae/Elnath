@@ -145,16 +145,22 @@ func cmdRun(ctx context.Context, args []string) error {
 	var sess *agent.Session
 	var messages []llm.Message
 	if sid := extractSessionFlag(os.Args); sid != "" {
-		sess, err = rt.mgr.LoadSession(sid)
+		sess, err = rt.mgr.LoadSessionForPrincipal(sid, principal)
 		if err != nil {
 			return fmt.Errorf("resume session %s: %w", sid, err)
+		}
+		if err := sess.RecordResume(principal); err != nil {
+			return fmt.Errorf("record session resume %s: %w", sid, err)
 		}
 		messages = sess.Messages
 		app.Logger.Info("resumed session", "id", sess.ID, "messages", len(messages))
 	} else if hasFlag(os.Args, "--continue") {
-		sess, err = rt.mgr.LoadLatestSession()
+		sess, err = rt.mgr.LoadLatestSession(principal)
 		if err != nil {
 			return fmt.Errorf("resume latest session: %w", err)
+		}
+		if err := sess.RecordResume(principal); err != nil {
+			return fmt.Errorf("record latest session resume %s: %w", sess.ID, err)
 		}
 		messages = sess.Messages
 		app.Logger.Info("resumed latest session", "id", sess.ID, "messages", len(messages))
@@ -203,14 +209,35 @@ func cmdRun(ctx context.Context, args []string) error {
 	}
 
 	// StartedAt/Duration omitted: interactive sessions have no bounded execution window.
-	rt.maybeAutoDocumentSession(ctx, wiki.IngestEvent{
+	event, err := interactiveSessionIngestEvent(rt.app.Config.DataDir, sess, messages)
+	if err != nil {
+		app.Logger.Warn("interactive session resume history unavailable", "session_id", sess.ID, "error", err)
+	} else {
+		rt.maybeAutoDocumentSession(ctx, event)
+	}
+
+	return nil
+}
+
+func interactiveSessionIngestEvent(dataDir string, sess *agent.Session, messages []llm.Message) (wiki.IngestEvent, error) {
+	event := wiki.IngestEvent{
 		SessionID: sess.ID,
 		Messages:  messages,
 		Reason:    "interactive_session",
 		Principal: sess.Principal.SurfaceIdentity(),
-	})
-
-	return nil
+	}
+	resumes, err := agent.LoadSessionResumeEvents(dataDir, sess.ID)
+	if err != nil {
+		return wiki.IngestEvent{}, err
+	}
+	for _, resume := range resumes {
+		event.Resumes = append(event.Resumes, wiki.ResumeRecord{
+			Surface:   resume.Surface,
+			Principal: resume.Principal.SurfaceIdentity(),
+			At:        resume.At,
+		})
+	}
+	return event, nil
 }
 
 func runPromptArgs(args []string) []string {

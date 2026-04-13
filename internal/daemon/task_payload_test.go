@@ -24,7 +24,7 @@ func TestEncodeTaskPayloadRoundTripsStructuredPayload(t *testing.T) {
 		Prompt:    "continue the fix and summarize the result",
 		SessionID: "sess-123",
 		Surface:   "telegram",
-		Principal: identity.Principal{UserID: "user-1", ProjectID: "proj-1", Surface: "telegram"},
+		Principal: identity.Principal{UserID: "user-1", CanonicalUserID: "stello@host", ProjectID: "proj-1", Surface: "telegram"},
 	}
 
 	raw := EncodeTaskPayload(payload)

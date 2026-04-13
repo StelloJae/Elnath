@@ -273,6 +273,39 @@ func TestIngestSessionWithProvider(t *testing.T) {
 	}
 }
 
+func TestIngestSessionIncludesResumeHistory(t *testing.T) {
+	store := newTestStore(t)
+	ing := NewIngester(store, nil)
+
+	resumedAt := time.Date(2026, time.April, 13, 10, 30, 0, 0, time.UTC)
+	event := IngestEvent{
+		SessionID: "sess-resume",
+		Messages: []llm.Message{
+			llm.NewUserMessage("continue the telegram session from CLI"),
+		},
+		Reason:    "task_completed",
+		Principal: "telegram:12345",
+		Resumes: []ResumeRecord{
+			{Surface: "cli", Principal: "cli:stello@host", At: resumedAt},
+		},
+	}
+
+	if err := ing.IngestSession(context.Background(), event); err != nil {
+		t.Fatalf("IngestSession: %v", err)
+	}
+
+	page, err := store.Read("sessions/sess-resume.md")
+	if err != nil {
+		t.Fatalf("store.Read: %v", err)
+	}
+	if !strings.Contains(page.Content, "**Principal**: telegram:12345") {
+		t.Fatalf("expected original principal in metadata, got:\n%s", page.Content)
+	}
+	if !strings.Contains(page.Content, "**Resumed by**: cli:stello@host ("+resumedAt.Format(time.RFC3339)+")") {
+		t.Fatalf("expected resume history in metadata, got:\n%s", page.Content)
+	}
+}
+
 // TestIngestSessionEmpty verifies that empty turns return nil without creating a page.
 func TestIngestSessionEmpty(t *testing.T) {
 	store := newTestStore(t)

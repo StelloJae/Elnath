@@ -2,6 +2,7 @@ package conversation
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/stello/elnath/internal/agent"
+	"github.com/stello/elnath/internal/identity"
 	"github.com/stello/elnath/internal/llm"
 )
 
@@ -572,6 +574,256 @@ func TestManagerLoadLatestSession_IgnoresStoreOnlyNewerCandidates(t *testing.T) 
 		if latest.ID != sess.ID {
 			t.Fatalf("LoadLatestSession run %d = %q, want %q", i+1, latest.ID, sess.ID)
 		}
+	}
+}
+
+func TestManagerSessionIndex(t *testing.T) {
+	dir := t.TempDir()
+	olderPrincipal := identity.Principal{UserID: "user-1", ProjectID: "proj-1", Surface: "telegram"}
+	newerPrincipal := identity.Principal{UserID: "user-2", ProjectID: "proj-1", Surface: "cli"}
+
+	older, err := agent.NewSession(dir, olderPrincipal)
+	if err != nil {
+		t.Fatalf("NewSession older: %v", err)
+	}
+	if err := older.AppendMessage(llm.NewUserMessage("older")); err != nil {
+		t.Fatalf("AppendMessage older: %v", err)
+	}
+
+	newer, err := agent.NewSession(dir, newerPrincipal)
+	if err != nil {
+		t.Fatalf("NewSession newer: %v", err)
+	}
+	if err := newer.AppendMessages([]llm.Message{
+		llm.NewUserMessage("newer-1"),
+		llm.NewAssistantMessage("newer-2"),
+	}); err != nil {
+		t.Fatalf("AppendMessages newer: %v", err)
+	}
+
+	now := time.Now().UTC()
+	if err := os.Chtimes(filepath.Join(dir, "sessions", older.ID+".jsonl"), now.Add(-time.Hour), now.Add(-time.Hour)); err != nil {
+		t.Fatalf("Chtimes older: %v", err)
+	}
+	if err := os.Chtimes(filepath.Join(dir, "sessions", newer.ID+".jsonl"), now, now); err != nil {
+		t.Fatalf("Chtimes newer: %v", err)
+	}
+
+	mgr := NewManager(nil, dir)
+	index, err := mgr.SessionIndex()
+	if err != nil {
+		t.Fatalf("SessionIndex: %v", err)
+	}
+	if len(index) != 2 {
+		t.Fatalf("session index count = %d, want 2", len(index))
+	}
+	if index[0].ID != newer.ID {
+		t.Fatalf("latest index entry = %q, want %q", index[0].ID, newer.ID)
+	}
+	if index[0].Principal != newerPrincipal {
+		t.Fatalf("latest principal = %+v, want %+v", index[0].Principal, newerPrincipal)
+	}
+	if index[0].MsgCount != 2 {
+		t.Fatalf("latest MsgCount = %d, want 2", index[0].MsgCount)
+	}
+	if index[1].ID != older.ID {
+		t.Fatalf("older index entry = %q, want %q", index[1].ID, older.ID)
+	}
+	if index[1].Principal != olderPrincipal {
+		t.Fatalf("older principal = %+v, want %+v", index[1].Principal, olderPrincipal)
+	}
+}
+
+func TestManagerLoadLatestSession_PrincipalFilter(t *testing.T) {
+	dir := t.TempDir()
+	matching := identity.Principal{UserID: "user-1", ProjectID: "proj-1", Surface: "telegram"}
+	other := identity.Principal{UserID: "user-2", ProjectID: "proj-1", Surface: "cli"}
+
+	wantSession, err := agent.NewSession(dir, matching)
+	if err != nil {
+		t.Fatalf("NewSession matching: %v", err)
+	}
+	if err := wantSession.AppendMessage(llm.NewUserMessage("telegram work")); err != nil {
+		t.Fatalf("AppendMessage matching: %v", err)
+	}
+
+	otherSession, err := agent.NewSession(dir, other)
+	if err != nil {
+		t.Fatalf("NewSession other: %v", err)
+	}
+	if err := otherSession.AppendMessage(llm.NewUserMessage("someone else's work")); err != nil {
+		t.Fatalf("AppendMessage other: %v", err)
+	}
+
+	now := time.Now().UTC()
+	if err := os.Chtimes(filepath.Join(dir, "sessions", wantSession.ID+".jsonl"), now.Add(-time.Hour), now.Add(-time.Hour)); err != nil {
+		t.Fatalf("Chtimes matching: %v", err)
+	}
+	if err := os.Chtimes(filepath.Join(dir, "sessions", otherSession.ID+".jsonl"), now, now); err != nil {
+		t.Fatalf("Chtimes other: %v", err)
+	}
+
+	mgr := NewManager(nil, dir)
+	latest, err := mgr.LoadLatestSession(identity.Principal{UserID: "user-1", ProjectID: "proj-1", Surface: "cli"})
+	if err != nil {
+		t.Fatalf("LoadLatestSession(filtered): %v", err)
+	}
+	if latest.ID != wantSession.ID {
+		t.Fatalf("filtered latest session = %q, want %q", latest.ID, wantSession.ID)
+	}
+}
+
+func TestManagerLoadLatestSession_CrossSurface(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("USER", "stello")
+	wantPrincipal := identity.ResolveTelegramPrincipal(12345, dir)
+
+	sess, err := agent.NewSession(dir, wantPrincipal)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if err := sess.AppendMessage(llm.NewUserMessage("resume me from CLI")); err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+
+	mgr := NewManager(nil, dir)
+	latest, err := mgr.LoadLatestSession(identity.ResolveCLIPrincipal(nil, "", dir))
+	if err != nil {
+		t.Fatalf("LoadLatestSession(cross-surface): %v", err)
+	}
+	if latest.ID != sess.ID {
+		t.Fatalf("cross-surface latest session = %q, want %q", latest.ID, sess.ID)
+	}
+}
+
+func TestManagerLoadLatestSession_DifferentCrossSurfaceUserRejected(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("USER", "stello")
+	first, err := agent.NewSession(dir, identity.Principal{UserID: "111", CanonicalUserID: "other@host", ProjectID: "proj-1", Surface: "telegram"})
+	if err != nil {
+		t.Fatalf("NewSession first: %v", err)
+	}
+	if err := first.AppendMessage(llm.NewUserMessage("first telegram transcript")); err != nil {
+		t.Fatalf("AppendMessage first: %v", err)
+	}
+
+	mgr := NewManager(nil, dir)
+	_, err = mgr.LoadLatestSession(identity.ResolveCLIPrincipal(nil, "", dir))
+	if err == nil {
+		t.Fatal("LoadLatestSession(different cross-surface user) error = nil, want error")
+	}
+}
+
+func TestManagerLoadLatestSession_DifferentUserReturnsNoMatch(t *testing.T) {
+	dir := t.TempDir()
+	sess, err := agent.NewSession(dir, identity.Principal{UserID: "user-1", ProjectID: "proj-1", Surface: "cli"})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if err := sess.AppendMessage(llm.NewUserMessage("private transcript")); err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+
+	mgr := NewManager(nil, dir)
+	_, err = mgr.LoadLatestSession(identity.Principal{UserID: "user-2", ProjectID: "proj-1", Surface: "cli"})
+	if err == nil {
+		t.Fatal("LoadLatestSession(different user) error = nil, want error")
+	}
+}
+
+func TestManagerLoadSessionForPrincipal_DifferentUserRejected(t *testing.T) {
+	dir := t.TempDir()
+	sess, err := agent.NewSession(dir, identity.Principal{UserID: "user-1", ProjectID: "proj-1", Surface: "telegram"})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	mgr := NewManager(nil, dir)
+	_, err = mgr.LoadSessionForPrincipal(sess.ID, identity.Principal{UserID: "user-2", ProjectID: "proj-1", Surface: "cli"})
+	if err == nil {
+		t.Fatal("LoadSessionForPrincipal(different user) error = nil, want error")
+	}
+}
+
+func TestManagerLoadSessionForPrincipal_LegacySessionAllowed(t *testing.T) {
+	dir := t.TempDir()
+	sessionsDir := filepath.Join(dir, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	hdr, err := json.Marshal(struct {
+		ID        string    `json:"id"`
+		CreatedAt time.Time `json:"created_at"`
+		Version   int       `json:"version"`
+	}{
+		ID:        "legacy-sess",
+		CreatedAt: time.Now().UTC(),
+		Version:   1,
+	})
+	if err != nil {
+		t.Fatalf("marshal header: %v", err)
+	}
+	msg, err := json.Marshal(llm.NewUserMessage("legacy transcript"))
+	if err != nil {
+		t.Fatalf("marshal message: %v", err)
+	}
+	path := filepath.Join(sessionsDir, "legacy-sess.jsonl")
+	data := append(hdr, '\n')
+	data = append(data, msg...)
+	data = append(data, '\n')
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	mgr := NewManager(nil, dir)
+	loaded, err := mgr.LoadSessionForPrincipal("legacy-sess", identity.Principal{UserID: "stello@host", ProjectID: "proj-1", Surface: "cli"})
+	if err != nil {
+		t.Fatalf("LoadSessionForPrincipal(legacy): %v", err)
+	}
+	if loaded.ID != "legacy-sess" {
+		t.Fatalf("loaded legacy session = %q, want legacy-sess", loaded.ID)
+	}
+}
+
+func TestManagerLoadLatestSession_LegacySessionFallback(t *testing.T) {
+	dir := t.TempDir()
+	sessionsDir := filepath.Join(dir, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	hdr, err := json.Marshal(struct {
+		ID        string    `json:"id"`
+		CreatedAt time.Time `json:"created_at"`
+		Version   int       `json:"version"`
+	}{
+		ID:        "legacy-sess",
+		CreatedAt: time.Now().UTC(),
+		Version:   1,
+	})
+	if err != nil {
+		t.Fatalf("marshal header: %v", err)
+	}
+	msg, err := json.Marshal(llm.NewUserMessage("legacy transcript"))
+	if err != nil {
+		t.Fatalf("marshal message: %v", err)
+	}
+	path := filepath.Join(sessionsDir, "legacy-sess.jsonl")
+	data := append(hdr, '\n')
+	data = append(data, msg...)
+	data = append(data, '\n')
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	mgr := NewManager(nil, dir)
+	latest, err := mgr.LoadLatestSession(identity.Principal{UserID: "stello@host", ProjectID: "proj-1", Surface: "cli"})
+	if err != nil {
+		t.Fatalf("LoadLatestSession(legacy): %v", err)
+	}
+	if latest.ID != "legacy-sess" {
+		t.Fatalf("legacy fallback session = %q, want legacy-sess", latest.ID)
 	}
 }
 

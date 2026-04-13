@@ -56,6 +56,10 @@ func (s *Spine) NotifyCompletion(_ context.Context, completion daemon.TaskComple
 		s.logger.Warn("conversation spine: load session failed", "session_id", completion.SessionID, "error", err)
 		return nil
 	}
+	resumes, err := agent.LoadSessionResumeEvents(s.dataDir, completion.SessionID)
+	if err != nil {
+		s.logger.Warn("conversation spine: load resume history failed", "session_id", completion.SessionID, "error", err)
+	}
 
 	event := wiki.IngestEvent{
 		SessionID: completion.SessionID,
@@ -64,6 +68,13 @@ func (s *Spine) NotifyCompletion(_ context.Context, completion daemon.TaskComple
 		Principal: sess.Principal.SurfaceIdentity(),
 		StartedAt: completion.StartedAt,
 		Duration:  completion.Duration(),
+	}
+	for _, resume := range resumes {
+		event.Resumes = append(event.Resumes, wiki.ResumeRecord{
+			Surface:   resume.Surface,
+			Principal: resume.Principal.SurfaceIdentity(),
+			At:        resume.At,
+		})
 	}
 	go s.runIngest(event)
 

@@ -28,9 +28,10 @@ func ResolveCLIPrincipal(cfg *config.Config, flagValue, cwd string) Principal {
 		userID = LegacyPrincipal().UserID
 	}
 	return NewPrincipal(PrincipalSource{
-		UserID:    userID,
-		ProjectID: ResolveProjectID(cwd, ""),
-		Surface:   "cli",
+		UserID:          userID,
+		CanonicalUserID: userID,
+		ProjectID:       ResolveProjectID(cwd, ""),
+		Surface:         "cli",
 	})
 }
 
@@ -39,9 +40,14 @@ func ResolveTelegramPrincipal(fromID int64, cwd string) Principal {
 	if userID == "" {
 		userID = LegacyPrincipal().UserID
 	}
+	canonicalUserID := fromEnv()
+	if canonicalUserID == "" {
+		canonicalUserID = userID
+	}
 	return NewPrincipal(PrincipalSource{
-		UserID:    userID,
-		ProjectID: ResolveProjectID(cwd, ""),
-		Surface:   "telegram",
+		UserID:          userID,
+		CanonicalUserID: canonicalUserID,
+		ProjectID:       ResolveProjectID(cwd, ""),
+		Surface:         "telegram",
 	})
 }

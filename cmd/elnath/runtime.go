@@ -367,17 +367,23 @@ func (rt *executionRuntime) newDaemonTaskRunner() daemon.TaskRunner {
 			messages []llm.Message
 			err      error
 		)
+		principal := taskPayload.Principal
+		if principal.IsZero() {
+			principal = rt.principal
+		}
 		if taskPayload.SessionID != "" {
-			sess, err = rt.mgr.LoadSession(taskPayload.SessionID)
+			sess, err = rt.mgr.LoadSessionForPrincipal(taskPayload.SessionID, principal)
 			if err != nil {
 				return daemon.TaskResult{}, fmt.Errorf("load session %s: %w", taskPayload.SessionID, err)
 			}
+			if principal.IsZero() {
+				principal = sess.Principal
+			}
+			if err := sess.RecordResume(principal); err != nil {
+				return daemon.TaskResult{}, fmt.Errorf("record resume %s: %w", taskPayload.SessionID, err)
+			}
 			messages = sess.Messages
 		} else {
-			principal := taskPayload.Principal
-			if principal.IsZero() {
-				principal = rt.principal
-			}
 			if principal.IsZero() {
 				principal = identity.LegacyPrincipal()
 			}
