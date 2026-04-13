@@ -55,7 +55,10 @@ func (n *BrownfieldNode) Render(_ context.Context, state *RenderState) (string, 
 		b.WriteString("- Run `go test ./...` FIRST to establish baseline before any edit.\n")
 		b.WriteString("- Preserve existing API surface — do not rename exported types or functions.\n")
 		b.WriteString("- Prefer the smallest diff: one function change > new file.\n")
-		b.WriteString("- Use existing error handling patterns from adjacent code.")
+		b.WriteString("- Use existing error handling patterns from adjacent code.\n")
+		b.WriteString("- CRITICAL: Before changing any function/method signature, grep for ALL callers across the entire codebase (`grep -rn 'functionName' . --include='*.go'`) and update every call site. Missing a caller causes a build failure.\n")
+		b.WriteString("- If `go test` or `go build` shows 'not enough arguments' or 'too many arguments', you missed a call site. Search for the function name, fix ALL remaining callers, then re-run tests.\n")
+		b.WriteString("- When threading a new parameter (e.g. context.Context) through callers that don't have one available, use context.TODO() as the safe placeholder — never invent field accesses on structs you haven't verified.")
 	case "typescript":
 		b.WriteString("\n\nTypeScript-specific:\n")
 		b.WriteString("- Check existing test command (npm test / pnpm test) FIRST.\n")

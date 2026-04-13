@@ -600,7 +600,7 @@ printf -v RECOVERY_PROMPT '%s\n\n%s\n\nVerification output (last 50 lines):\n```
   "$BENCHMARK_PROMPT" \
   "The repo-native verification command '${VERIFY_CMD}' failed after your first attempt." \
   "$VERIFY_OUTPUT" \
-  "Fix the EXACT errors shown above. Make the smallest corrections needed so the verification passes. Your final answer must explicitly list modified files and state whether '${VERIFY_CMD}' passed."
+  "Fix the EXACT errors shown above. Do NOT re-run the verification command before making code changes. Read the error messages, identify which files and lines need editing, make the fixes, THEN run '${VERIFY_CMD}'. If errors mention 'not enough arguments' or 'too many arguments', grep for the function name to find all remaining call sites and fix them. Your final answer must explicitly list modified files and state whether '${VERIFY_CMD}' passed."
 RECOVERY_ATTEMPTED=true
 RECOVERY_EXIT=0
 RECOVERY_TIMEOUT=$(( ELNATH_TIMEOUT / 2 ))

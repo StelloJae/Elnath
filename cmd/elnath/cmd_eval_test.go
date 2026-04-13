@@ -195,7 +195,8 @@ func TestCmdEvalMonth3Gate(t *testing.T) {
 	for _, needle := range []string{
 		"Month 3 gate: PASS",
 		"Run 1 H1: PASS",
-		"Average H1: PASS",
+		"Average H1 (no margin): PASS",
+		"Aggregate H1 (75% margin): PASS",
 		"T_brownfield",
 	} {
 		if !strings.Contains(stdout, needle) {

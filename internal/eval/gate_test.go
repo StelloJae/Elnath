@@ -221,6 +221,94 @@ func TestEvaluateMonth3GateFailsWhenRunsAreUnstable(t *testing.T) {
 	}
 }
 
+func TestEvaluateMonth3GatePassesWithMarginOnAggregate(t *testing.T) {
+	baseline := month3BaselineScorecard()
+	// Each run: BF 1/2 = 50%, BUG 1/2 = 50%.
+	// Baseline: BF 50%, BUG 50%.
+	// Without margin: 50% >= 50% → PASS.
+	// With 80% margin: threshold = 40%, 50% >= 40% → PASS.
+	// Soft gates: intervention 1.0 <= 1.6, regression 0% <= 25%, time 8 <= 12 → all PASS.
+	nearMissScorecard := func(system string) *Scorecard {
+		return &Scorecard{Version: "v1", System: system, Results: []RunResult{
+			{TaskID: "BF-1", Track: TrackBrownfieldFeature, Language: LanguageGo, Success: true, VerificationPassed: true, InterventionCount: 1, DurationSeconds: 8},
+			{TaskID: "BF-2", Track: TrackBrownfieldFeature, Language: LanguageGo, Success: false, VerificationPassed: false, InterventionCount: 1, DurationSeconds: 8},
+			{TaskID: "BUG-1", Track: TrackBugfix, Language: LanguageGo, Success: true, VerificationPassed: true, InterventionCount: 1, DurationSeconds: 8},
+			{TaskID: "BUG-2", Track: TrackBugfix, Language: LanguageGo, Success: false, VerificationPassed: false, InterventionCount: 1, DurationSeconds: 8},
+		}}
+	}
+	result, err := EvaluateMonth3Gate([]*Scorecard{
+		nearMissScorecard("run-1"),
+		nearMissScorecard("run-2"),
+		nearMissScorecard("run-3"),
+	}, baseline)
+	if err != nil {
+		t.Fatalf("EvaluateMonth3Gate: %v", err)
+	}
+	if !result.Pass {
+		t.Fatalf("expected gate pass with margin, got %+v\nMarginH1: %+v", result, result.MarginH1Result)
+	}
+	if result.HardGateMargin != 0.75 {
+		t.Fatalf("expected margin 0.75, got %f", result.HardGateMargin)
+	}
+}
+
+func TestEvaluateMonth3GateFailsBelowMargin(t *testing.T) {
+	baseline := month3BaselineScorecard()
+	// BF 0/2 = 0%, BUG 1/2 = 50%. With 80% margin, BF threshold = 40%, 0% < 40% → FAIL.
+	belowMarginScorecard := func(system string) *Scorecard {
+		return &Scorecard{Version: "v1", System: system, Results: []RunResult{
+			{TaskID: "BF-1", Track: TrackBrownfieldFeature, Language: LanguageGo, Success: false, VerificationPassed: false, InterventionCount: 0, DurationSeconds: 8},
+			{TaskID: "BF-2", Track: TrackBrownfieldFeature, Language: LanguageGo, Success: false, VerificationPassed: false, InterventionCount: 0, DurationSeconds: 8},
+			{TaskID: "BUG-1", Track: TrackBugfix, Language: LanguageGo, Success: true, VerificationPassed: true, InterventionCount: 0, DurationSeconds: 8},
+			{TaskID: "BUG-2", Track: TrackBugfix, Language: LanguageGo, Success: true, VerificationPassed: true, InterventionCount: 0, DurationSeconds: 8},
+		}}
+	}
+	result, err := EvaluateMonth3Gate([]*Scorecard{
+		belowMarginScorecard("run-1"),
+		belowMarginScorecard("run-2"),
+		belowMarginScorecard("run-3"),
+	}, baseline)
+	if err != nil {
+		t.Fatalf("EvaluateMonth3Gate: %v", err)
+	}
+	if result.Pass {
+		t.Fatalf("expected gate fail below margin, got %+v", result)
+	}
+	if result.MarginH1Result.HardGatePass {
+		t.Fatalf("expected hard gate fail, got %+v", result.MarginH1Result)
+	}
+}
+
+func TestEvaluateMonth3GateCustomMargin(t *testing.T) {
+	baseline := month3BaselineScorecard()
+	// BF 0/2, BUG 2/2. Baseline BF 50%, BUG 50%.
+	// With margin 0.0: threshold BF = 0%, 0% >= 0% → PASS (zero-baseline edge).
+	// But thresholdTrackAtLeastWithMargin requires current.Total > 0 && baseline.Total > 0.
+	// BF current = 0% but Total = 2 > 0. 0% >= 0% → PASS.
+	zeroMarginScorecard := func(system string) *Scorecard {
+		return &Scorecard{Version: "v1", System: system, Results: []RunResult{
+			{TaskID: "BF-1", Track: TrackBrownfieldFeature, Language: LanguageGo, Success: false, VerificationPassed: false, InterventionCount: 0, DurationSeconds: 8},
+			{TaskID: "BF-2", Track: TrackBrownfieldFeature, Language: LanguageGo, Success: false, VerificationPassed: false, InterventionCount: 0, DurationSeconds: 8},
+			{TaskID: "BUG-1", Track: TrackBugfix, Language: LanguageGo, Success: true, VerificationPassed: true, InterventionCount: 0, DurationSeconds: 8},
+			{TaskID: "BUG-2", Track: TrackBugfix, Language: LanguageGo, Success: true, VerificationPassed: true, InterventionCount: 0, DurationSeconds: 8},
+		}}
+	}
+	result, err := EvaluateMonth3Gate([]*Scorecard{
+		zeroMarginScorecard("run-1"),
+		zeroMarginScorecard("run-2"),
+		zeroMarginScorecard("run-3"),
+	}, baseline, Month3GateConfig{HardGateMargin: 0.0})
+	if err != nil {
+		t.Fatalf("EvaluateMonth3Gate: %v", err)
+	}
+	if !result.MarginH1Result.HardGatePass {
+		t.Fatalf("expected hard gate pass with 0%% margin, got %+v", result.MarginH1Result)
+	}
+	if result.HardGateMargin != 0.0 {
+		t.Fatalf("expected margin 0.0, got %f", result.HardGateMargin)
+	}
+}
+
 func month3BaselineScorecard() *Scorecard {
 	return &Scorecard{Version: "v1", System: "baseline", Results: []RunResult{
 		{TaskID: "BF-1", Track: TrackBrownfieldFeature, Language: LanguageGo, Success: true, VerificationPassed: true, InterventionCount: 2, DurationSeconds: 10, RegressionTriggered: true},

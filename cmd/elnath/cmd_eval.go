@@ -200,12 +200,13 @@ Subcommands:
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Month 3 gate: %s\n", passFail(gate.Pass))
+		fmt.Printf("Month 3 gate: %s (margin: %.0f%%)\n", passFail(gate.Pass), gate.HardGateMargin*100)
 		for i, h1 := range gate.H1Results {
 			printH1Result(fmt.Sprintf("Run %d H1", i+1), h1)
 		}
-		printH1Result("Average H1", gate.AverageH1Result)
-		fmt.Printf("Stability: %s\n", passFail(gate.StabilityPass))
+		printH1Result("Average H1 (no margin)", gate.AverageH1Result)
+		printH1Result(fmt.Sprintf("Aggregate H1 (%.0f%% margin)", gate.HardGateMargin*100), gate.MarginH1Result)
+		fmt.Printf("Stability (diagnostic): %s\n", passFail(gate.StabilityPass))
 		for _, reason := range gate.Reasons {
 			fmt.Printf("reason: %s\n", reason)
 		}
