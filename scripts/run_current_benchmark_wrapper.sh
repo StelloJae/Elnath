@@ -387,6 +387,7 @@ run_verification_command() {
 run_elnath() {
   local prompt="$1"
   local log_path="$2"
+  local timeout_override="${3:-$ELNATH_TIMEOUT}"
   (
     cd "$WORKTREE"
     export ELNATH_EVAL_AUDIT_LOG="$AUDIT_LOG"
@@ -395,7 +396,7 @@ run_elnath() {
     export ELNATH_TASK_LANGUAGE="$TASK_LANGUAGE"
     export ELNATH_PERMISSION_MODE="${ELNATH_BENCHMARK_PERMISSION_MODE:-bypass}"
     local -a args=("$ELNATH_BIN" "run" "--non-interactive")
-    python3 - <<'PY' "$ELNATH_TIMEOUT" "$log_path" "$prompt" "${args[@]}"
+    python3 - <<'PY' "$timeout_override" "$log_path" "$prompt" "${args[@]}"
 import subprocess, sys
 timeout = int(sys.argv[1])
 log_path = sys.argv[2]
@@ -542,7 +543,8 @@ if [[ "$HAS_CHANGES" == "false" ]]; then
   printf -v NO_CHANGE_PROMPT '%s\n\n%s' \
     "$BENCHMARK_PROMPT" \
     "Your first attempt ended without producing any code changes. You must inspect the repository, modify files, and create the smallest correct patch that satisfies the task. Your final answer must explicitly list modified files and state whether '${VERIFY_CMD}' passed."
-  if ! run_elnath "$NO_CHANGE_PROMPT" "$RECOVERY_LOG"; then
+  RECOVERY_TIMEOUT=$(( ELNATH_TIMEOUT / 2 ))
+  if ! run_elnath "$NO_CHANGE_PROMPT" "$RECOVERY_LOG" "$RECOVERY_TIMEOUT"; then
     RECOVERY_EXIT=$?
   fi
   if [[ -n "$(working_tree_changes)" ]]; then
@@ -601,7 +603,8 @@ printf -v RECOVERY_PROMPT '%s\n\n%s\n\nVerification output (last 50 lines):\n```
   "Fix the EXACT errors shown above. Make the smallest corrections needed so the verification passes. Your final answer must explicitly list modified files and state whether '${VERIFY_CMD}' passed."
 RECOVERY_ATTEMPTED=true
 RECOVERY_EXIT=0
-if ! run_elnath "$RECOVERY_PROMPT" "$RECOVERY_LOG"; then
+RECOVERY_TIMEOUT=$(( ELNATH_TIMEOUT / 2 ))
+if ! run_elnath "$RECOVERY_PROMPT" "$RECOVERY_LOG" "$RECOVERY_TIMEOUT"; then
   RECOVERY_EXIT=$?
 fi
 
