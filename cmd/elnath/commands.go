@@ -409,6 +409,13 @@ func buildRoutingContext(input string) *orchestrator.RoutingContext {
 	verificationCues := []string{
 		"test", "tests", "verify", "verification", "regression", "coverage", "lint", "build",
 	}
+	// newWorkCues override existingCodeCues. Without this, prompts like
+	// "Create a Go module with tests" tripped existingCodeCues ("module",
+	// "test") and routed simple scaffolding tasks to ralph (retry-heavy).
+	newWorkCues := []string{
+		"create", "new ", "scaffold", "build a ", "build new",
+		"make a ", "set up", "from scratch", "generate",
+	}
 
 	ctx := &orchestrator.RoutingContext{
 		EstimatedFiles: estimateFiles(input),
@@ -416,6 +423,12 @@ func buildRoutingContext(input string) *orchestrator.RoutingContext {
 	for _, cue := range existingCodeCues {
 		if strings.Contains(lower, cue) {
 			ctx.ExistingCode = true
+			break
+		}
+	}
+	for _, cue := range newWorkCues {
+		if strings.Contains(lower, cue) {
+			ctx.ExistingCode = false
 			break
 		}
 	}

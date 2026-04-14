@@ -1189,6 +1189,18 @@ func TestBuildRoutingContextEdgeCases(t *testing.T) {
 			t.Fatalf("EstimatedFiles = %d, want >= 2 for brownfield+verification", ctx.EstimatedFiles)
 		}
 	})
+
+	t.Run("scaffolding with verification stays greenfield", func(t *testing.T) {
+		// "test" / "module" cues used to flip ExistingCode and route this
+		// to ralph; newWorkCues now override that.
+		ctx := buildRoutingContext("Create a Go module with calc.go and calc_test.go, then run go test")
+		if ctx.ExistingCode {
+			t.Fatal("expected ExistingCode = false (newWork cue overrides existingCode cue)")
+		}
+		if !ctx.VerificationHint {
+			t.Fatal("expected VerificationHint = true")
+		}
+	})
 }
 
 // ---------------------------------------------------------------------------
