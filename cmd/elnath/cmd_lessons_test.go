@@ -24,6 +24,7 @@ func TestLessonsList(t *testing.T) {
 		{name: "json", run: runLessonsListJSONFlag},
 		{name: "json empty", run: runLessonsListJSONEmpty},
 		{name: "topic filter", run: runLessonsListTopicFilter},
+		{name: "source flag", run: runLessonsListSourceFlag},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, tt.run)
@@ -83,6 +84,8 @@ func TestLessonsStats(t *testing.T) {
 	}{
 		{name: "human", run: runLessonsStatsHuman},
 		{name: "json", run: runLessonsStatsJSON},
+		{name: "includes by source", run: runLessonsStatsIncludesBySource},
+		{name: "json includes by source", run: runLessonsStatsJSONIncludesBySource},
 		{name: "large archive", run: runLessonsStatsHandlesLargeArchiveEntry},
 	}
 	for _, tt := range tests {
@@ -184,6 +187,33 @@ func runLessonsListTopicFilter(t *testing.T) {
 	}
 	if lesson.Topic != "bravo" {
 		t.Fatalf("Topic = %q, want bravo", lesson.Topic)
+	}
+}
+
+func runLessonsListSourceFlag(t *testing.T) {
+	_, cfgPath, store, _ := newLessonsFixture(t)
+	appendManualLessons(t, store,
+		learning.Lesson{Text: "Ralph lesson found a flaky edge.", Topic: "ops", Source: "agent:ralph", Confidence: "high"},
+		learning.Lesson{Text: "Team lesson captured a shared workflow.", Topic: "ops", Source: "agent:team", Confidence: "medium"},
+	)
+	withArgs(t, []string{"elnath", "--config", cfgPath})
+
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdLessons(context.Background(), []string{"list", "--source", "agent:ralph", "--json"}); err != nil {
+			t.Fatalf("cmdLessons(list --source agent:ralph --json) error = %v", err)
+		}
+	})
+
+	lines := nonEmptyLines(stdout)
+	if len(lines) != 1 {
+		t.Fatalf("json line count = %d, want 1", len(lines))
+	}
+	var lesson learning.Lesson
+	if err := json.Unmarshal([]byte(lines[0]), &lesson); err != nil {
+		t.Fatalf("json line %q unmarshal error = %v", lines[0], err)
+	}
+	if lesson.Source != "agent:ralph" {
+		t.Fatalf("Source = %q, want agent:ralph", lesson.Source)
 	}
 }
 
@@ -454,6 +484,52 @@ func runLessonsStatsJSON(t *testing.T) {
 	}
 	if payload.ByTopic["alpha"] != 1 || payload.ByTopic["alpha-ops"] != 1 || payload.ByTopic["bravo"] != 1 {
 		t.Fatalf("ByTopic = %#v, want alpha/alpha-ops/bravo counts", payload.ByTopic)
+	}
+}
+
+func runLessonsStatsIncludesBySource(t *testing.T) {
+	_, cfgPath, store, _ := newLessonsFixture(t)
+	appendManualLessons(t, store,
+		learning.Lesson{Text: "Ralph lesson found a flaky edge.", Topic: "ops", Source: "agent:ralph", Confidence: "high"},
+		learning.Lesson{Text: "Team lesson captured a shared workflow.", Topic: "ops", Source: "agent:team", Confidence: "medium"},
+	)
+	withArgs(t, []string{"elnath", "--config", cfgPath})
+
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdLessons(context.Background(), []string{"stats"}); err != nil {
+			t.Fatalf("cmdLessons(stats) error = %v", err)
+		}
+	})
+
+	for _, want := range []string{"By source:", "research", "agent:ralph", "agent:team"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout = %q, want substring %q", stdout, want)
+		}
+	}
+}
+
+func runLessonsStatsJSONIncludesBySource(t *testing.T) {
+	_, cfgPath, store, _ := newLessonsFixture(t)
+	appendManualLessons(t, store,
+		learning.Lesson{Text: "Ralph lesson found a flaky edge.", Topic: "ops", Source: "agent:ralph", Confidence: "high"},
+		learning.Lesson{Text: "Team lesson captured a shared workflow.", Topic: "ops", Source: "agent:team", Confidence: "medium"},
+	)
+	withArgs(t, []string{"elnath", "--config", cfgPath})
+
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdLessons(context.Background(), []string{"stats", "--json"}); err != nil {
+			t.Fatalf("cmdLessons(stats --json) error = %v", err)
+		}
+	})
+
+	var payload struct {
+		BySource map[string]int `json:"by_source"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+		t.Fatalf("stats json unmarshal error = %v", err)
+	}
+	if payload.BySource["research"] != 3 || payload.BySource["agent:ralph"] != 1 || payload.BySource["agent:team"] != 1 {
+		t.Fatalf("BySource = %#v, want research=3 agent:ralph=1 agent:team=1", payload.BySource)
 	}
 }
 

@@ -77,6 +77,7 @@ func lessonsList(store *learning.Store, args []string) error {
 
 	topic := fs.String("topic", "", "")
 	confidence := fs.String("confidence", "", "")
+	source := fs.String("source", "", "")
 	sinceRaw := fs.String("since", "", "")
 	beforeRaw := fs.String("before", "", "")
 	limit := fs.Int("limit", 50, "")
@@ -98,6 +99,7 @@ func lessonsList(store *learning.Store, args []string) error {
 	lessons, err := store.ListFiltered(learning.Filter{
 		Topic:      *topic,
 		Confidence: *confidence,
+		Source:     *source,
 		Since:      since,
 		Before:     before,
 		Limit:      *limit,
@@ -356,6 +358,26 @@ func lessonsStats(store *learning.Store, activePath string, args []string) error
 	}
 
 	fmt.Println()
+	fmt.Println("By source:")
+	sources := make([]sourceCount, 0, len(stats.BySource))
+	for src, count := range stats.BySource {
+		label := src
+		if label == "" {
+			label = "(empty)"
+		}
+		sources = append(sources, sourceCount{Source: label, Count: count})
+	}
+	sort.Slice(sources, func(i, j int) bool {
+		if sources[i].Count == sources[j].Count {
+			return sources[i].Source < sources[j].Source
+		}
+		return sources[i].Count > sources[j].Count
+	})
+	for _, source := range sources {
+		fmt.Printf("  %-18s %d\n", source.Source, source.Count)
+	}
+
+	fmt.Println()
 	fmt.Println("By topic (top 10):")
 	topics := make([]topicCount, 0, len(stats.ByTopic))
 	for topic, count := range stats.ByTopic {
@@ -519,6 +541,11 @@ func archiveMetrics(activePath string) (int, int64, error) {
 type topicCount struct {
 	Topic string
 	Count int
+}
+
+type sourceCount struct {
+	Source string
+	Count  int
 }
 
 func formatBytes(size int64) string {

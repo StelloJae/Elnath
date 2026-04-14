@@ -18,6 +18,7 @@ const scanMaxTokenSize = 8 * 1024 * 1024
 type Filter struct {
 	Topic      string
 	Confidence string
+	Source     string
 	Since      time.Time
 	Before     time.Time
 	IDs        []string
@@ -26,7 +27,7 @@ type Filter struct {
 }
 
 func (f Filter) isZero() bool {
-	return f.Topic == "" && f.Confidence == "" &&
+	return f.Topic == "" && f.Confidence == "" && f.Source == "" &&
 		f.Since.IsZero() && f.Before.IsZero() && len(f.IDs) == 0
 }
 
@@ -41,6 +42,9 @@ func (f Filter) match(lesson Lesson) bool {
 		}
 	}
 	if f.Confidence != "" && !strings.EqualFold(lesson.Confidence, f.Confidence) {
+		return false
+	}
+	if !matchSource(lesson.Source, f.Source) {
 		return false
 	}
 	if !f.Since.IsZero() && lesson.Created.Before(f.Since) {
@@ -62,6 +66,16 @@ func (f Filter) match(lesson Lesson) bool {
 		}
 	}
 	return true
+}
+
+func matchSource(lessonSource, filter string) bool {
+	if filter == "" {
+		return true
+	}
+	if strings.HasSuffix(filter, ":") {
+		return strings.HasPrefix(lessonSource, filter)
+	}
+	return lessonSource == filter
 }
 
 type Store struct {
@@ -349,6 +363,7 @@ type Stats struct {
 	Total        int
 	ByTopic      map[string]int
 	ByConfidence map[string]int
+	BySource     map[string]int `json:"by_source"`
 	OldestAt     time.Time
 	NewestAt     time.Time
 	FileBytes    int64
@@ -359,6 +374,7 @@ func (s *Store) Summary() (Stats, error) {
 		return Stats{
 			ByTopic:      make(map[string]int),
 			ByConfidence: make(map[string]int),
+			BySource:     make(map[string]int),
 		}, nil
 	}
 
@@ -370,6 +386,7 @@ func (s *Store) Summary() (Stats, error) {
 	stats := Stats{
 		ByTopic:      make(map[string]int),
 		ByConfidence: make(map[string]int),
+		BySource:     make(map[string]int),
 	}
 	if fi, statErr := os.Stat(s.path); statErr == nil {
 		stats.FileBytes = fi.Size()
@@ -378,6 +395,7 @@ func (s *Store) Summary() (Stats, error) {
 		stats.Total++
 		stats.ByTopic[lesson.Topic]++
 		stats.ByConfidence[lesson.Confidence]++
+		stats.BySource[lesson.Source]++
 		if stats.OldestAt.IsZero() || lesson.Created.Before(stats.OldestAt) {
 			stats.OldestAt = lesson.Created
 		}

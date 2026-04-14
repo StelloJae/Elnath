@@ -460,6 +460,69 @@ func TestStoreListFiltered(t *testing.T) {
 	}
 }
 
+func TestListFiltered_SourceExact(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "lessons.jsonl")
+	store := NewStore(path)
+	appendLessons(t, store, sourceFilterLessons(time.Date(2026, 4, 13, 12, 0, 0, 0, time.UTC)))
+
+	got, err := store.ListFiltered(Filter{Source: "agent:team"})
+	if err != nil {
+		t.Fatalf("ListFiltered() error = %v", err)
+	}
+	assertLessonTexts(t, got, []string{"source-agent-team"})
+}
+
+func TestListFiltered_SourcePrefix(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "lessons.jsonl")
+	store := NewStore(path)
+	appendLessons(t, store, sourceFilterLessons(time.Date(2026, 4, 13, 12, 0, 0, 0, time.UTC)))
+
+	got, err := store.ListFiltered(Filter{Source: "agent:"})
+	if err != nil {
+		t.Fatalf("ListFiltered() error = %v", err)
+	}
+	assertLessonTexts(t, got, []string{"source-agent-single", "source-agent-team", "source-agent-ralph"})
+}
+
+func TestListFiltered_SourceLegacyExact(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "lessons.jsonl")
+	store := NewStore(path)
+	appendLessons(t, store, sourceFilterLessons(time.Date(2026, 4, 13, 12, 0, 0, 0, time.UTC)))
+
+	got, err := store.ListFiltered(Filter{Source: "agent"})
+	if err != nil {
+		t.Fatalf("ListFiltered() error = %v", err)
+	}
+	assertLessonTexts(t, got, []string{"source-agent-legacy"})
+}
+
+func TestListFiltered_SourceEmpty(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "lessons.jsonl")
+	store := NewStore(path)
+	seed := sourceFilterLessons(time.Date(2026, 4, 13, 12, 0, 0, 0, time.UTC))
+	appendLessons(t, store, seed)
+
+	got, err := store.ListFiltered(Filter{Source: ""})
+	if err != nil {
+		t.Fatalf("ListFiltered() error = %v", err)
+	}
+	assertLessonTexts(t, got, []string{
+		"source-agent-legacy",
+		"source-agent-single",
+		"source-agent-team",
+		"source-agent-ralph",
+		"source-research",
+	})
+}
+
 func TestStoreDelete(t *testing.T) {
 	t.Parallel()
 
@@ -945,6 +1008,9 @@ func TestStoreSummary(t *testing.T) {
 				if len(stats.ByConfidence) != 0 {
 					t.Fatalf("ByConfidence length = %d, want 0", len(stats.ByConfidence))
 				}
+				if len(stats.BySource) != 0 {
+					t.Fatalf("BySource length = %d, want 0", len(stats.BySource))
+				}
 			},
 		},
 		{
@@ -989,6 +1055,29 @@ func TestStoreSummary(t *testing.T) {
 			}
 			tt.assert(t, stats)
 		})
+	}
+}
+
+func TestSummary_BySource(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "lessons.jsonl")
+	store := NewStore(path)
+	appendLessons(t, store, []Lesson{
+		{Text: "summary-source-agent", Topic: "alpha", Source: "agent", Confidence: "high", Created: time.Date(2026, 4, 13, 22, 0, 0, 0, time.UTC)},
+		{Text: "summary-source-agent-single", Topic: "alpha", Source: "agent:single", Confidence: "high", Created: time.Date(2026, 4, 13, 22, 1, 0, 0, time.UTC)},
+		{Text: "summary-source-agent-team", Topic: "bravo", Source: "agent:team", Confidence: "medium", Created: time.Date(2026, 4, 13, 22, 2, 0, 0, time.UTC)},
+		{Text: "summary-source-agent-ralph", Topic: "charlie", Source: "agent:ralph", Confidence: "low", Created: time.Date(2026, 4, 13, 22, 3, 0, 0, time.UTC)},
+		{Text: "summary-source-research", Topic: "delta", Source: "research", Confidence: "medium", Created: time.Date(2026, 4, 13, 22, 4, 0, 0, time.UTC)},
+	})
+
+	stats, err := store.Summary()
+	if err != nil {
+		t.Fatalf("Summary() error = %v", err)
+	}
+
+	if stats.BySource["agent"] != 1 || stats.BySource["agent:single"] != 1 || stats.BySource["agent:team"] != 1 || stats.BySource["agent:ralph"] != 1 || stats.BySource["research"] != 1 {
+		t.Fatalf("BySource = %#v, want agent/agent:single/agent:team/agent:ralph/research counts", stats.BySource)
 	}
 }
 
@@ -1161,6 +1250,16 @@ func appendLessons(t *testing.T, store *Store, lessons []Lesson) {
 		if err := store.Append(lesson); err != nil {
 			t.Fatalf("Append(%q) error = %v", lesson.Text, err)
 		}
+	}
+}
+
+func sourceFilterLessons(base time.Time) []Lesson {
+	return []Lesson{
+		{Text: "source-agent-legacy", Topic: "alpha", Source: "agent", Confidence: "high", Created: base},
+		{Text: "source-agent-single", Topic: "bravo", Source: "agent:single", Confidence: "medium", Created: base.Add(1 * time.Minute)},
+		{Text: "source-agent-team", Topic: "charlie", Source: "agent:team", Confidence: "medium", Created: base.Add(2 * time.Minute)},
+		{Text: "source-agent-ralph", Topic: "delta", Source: "agent:ralph", Confidence: "low", Created: base.Add(3 * time.Minute)},
+		{Text: "source-research", Topic: "echo", Source: "research", Confidence: "high", Created: base.Add(4 * time.Minute)},
 	}
 }
 
