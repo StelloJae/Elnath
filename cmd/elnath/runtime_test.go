@@ -792,8 +792,10 @@ func TestExecutionRuntimeLearningDepsLLMEnabled(t *testing.T) {
 	if deps == nil {
 		t.Fatal("learningDeps() = nil, want deps")
 	}
-	if _, ok := deps.LLMExtractor.(*learning.MockLLMExtractor); !ok {
-		t.Fatalf("LLMExtractor type = %T, want *learning.MockLLMExtractor", deps.LLMExtractor)
+	// Without a dedicated Anthropic credential, lesson extraction reuses the
+	// main provider (here countingProvider) wrapped in an AnthropicExtractor.
+	if _, ok := deps.LLMExtractor.(*learning.AnthropicExtractor); !ok {
+		t.Fatalf("LLMExtractor type = %T, want *learning.AnthropicExtractor (reusing main provider)", deps.LLMExtractor)
 	}
 	if deps.Breaker == nil {
 		t.Fatal("Breaker = nil, want initialized breaker")

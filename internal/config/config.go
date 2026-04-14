@@ -108,6 +108,14 @@ type LLMExtractionConfig struct {
 	Enabled     bool   `yaml:"enabled"`
 	Model       string `yaml:"model"`
 	MinMessages int    `yaml:"min_messages"`
+	// APIKey, when set, isolates lesson extraction onto a dedicated Anthropic
+	// credential. Falls back to Anthropic.APIKey. When both are empty, the
+	// main provider (Codex OAuth / OpenAI / etc.) is reused.
+	APIKey string `yaml:"api_key"`
+	// ClaudeCodeSignature prepends the Claude Code identity line to the
+	// extraction system prompt. Last-resort workaround for Claude Code OAuth
+	// scope rejecting tool-laden requests that lack that signature.
+	ClaudeCodeSignature bool `yaml:"claude_code_signature"`
 }
 
 func Load(path string) (*Config, error) {

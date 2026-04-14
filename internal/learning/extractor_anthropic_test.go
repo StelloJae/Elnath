@@ -75,8 +75,8 @@ func TestAnthropicExtractorExtractParsesLessons(t *testing.T) {
 	if provider.chatCalls != 1 {
 		t.Fatalf("chatCalls = %d, want 1", provider.chatCalls)
 	}
-	if provider.lastReq.Model != defaultAnthropicExtractorModel {
-		t.Fatalf("request model = %q, want default model", provider.lastReq.Model)
+	if provider.lastReq.Model != "" {
+		t.Fatalf("request model = %q, want empty (provider-default pass-through)", provider.lastReq.Model)
 	}
 	if !provider.lastReq.EnableCache {
 		t.Fatal("EnableCache = false, want true")

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -16,7 +17,33 @@ const (
 	anthropicDefaultBaseURL = "https://api.anthropic.com"
 	anthropicAPIVersion     = "2023-06-01"
 	anthropicDefaultTimeout = 120 * time.Second
+
+	// anthropicOAuthTokenPrefix identifies a Claude Code OAuth access token.
+	// Such tokens authenticate via Authorization: Bearer + the claude-code
+	// anthropic-beta feature flag, not the standard x-api-key header.
+	anthropicOAuthTokenPrefix = "sk-ant-oat01-"
+	anthropicOAuthBeta        = "claude-code-20250219,oauth-2025-04-20"
+	anthropicOAuthUserAgent   = "claude-cli/2.1.2 (external, cli)"
 )
+
+// isAnthropicOAuthToken reports whether key is a Claude Code OAuth access token.
+func isAnthropicOAuthToken(key string) bool {
+	return strings.HasPrefix(key, anthropicOAuthTokenPrefix)
+}
+
+// setAnthropicAuthHeaders applies the correct auth headers based on token type.
+// OAuth tokens use Authorization: Bearer plus the claude-code beta feature flag;
+// standard API keys use x-api-key.
+func setAnthropicAuthHeaders(h http.Header, apiKey string) {
+	if isAnthropicOAuthToken(apiKey) {
+		h.Set("Authorization", "Bearer "+apiKey)
+		h.Set("anthropic-beta", anthropicOAuthBeta)
+		h.Set("user-agent", anthropicOAuthUserAgent)
+		h.Set("x-app", "cli")
+		return
+	}
+	h.Set("x-api-key", apiKey)
+}
 
 // AnthropicProvider implements Provider for Anthropic's Messages API.
 type AnthropicProvider struct {
@@ -73,7 +100,7 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req Request, cb func(Str
 		return fmt.Errorf("anthropic: new http request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("x-api-key", p.apiKey)
+	setAnthropicAuthHeaders(httpReq.Header, p.apiKey)
 	httpReq.Header.Set("anthropic-version", anthropicAPIVersion)
 	httpReq.Header.Set("Accept", "text/event-stream")
 
@@ -85,6 +112,9 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req Request, cb func(Str
 
 	if resp.StatusCode != http.StatusOK {
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		if dumpPath := os.Getenv("ELNATH_ANTHROPIC_DUMP"); dumpPath != "" {
+			_ = os.WriteFile(dumpPath, append([]byte("REQUEST BODY:\n"), append(body, append([]byte("\n\nRESPONSE:\n"), errBody...)...)...), 0o600)
+		}
 		switch resp.StatusCode {
 		case 429:
 			return fmt.Errorf("anthropic: rate limit (429): %s", errBody)
@@ -472,21 +502,21 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRes
 // anthropicModels lists the supported Anthropic models with approximate pricing.
 var anthropicModels = []ModelInfo{
 	{
-		ID:              "claude-opus-4-20250514",
+		ID:              "claude-opus-4-6",
 		Name:            "Claude Opus 4",
 		MaxTokens:       32000,
 		InputPricePerM:  15.0,
 		OutputPricePerM: 75.0,
 	},
 	{
-		ID:              "claude-sonnet-4-20250514",
+		ID:              "claude-sonnet-4-6",
 		Name:            "Claude Sonnet 4",
 		MaxTokens:       16000,
 		InputPricePerM:  3.0,
 		OutputPricePerM: 15.0,
 	},
 	{
-		ID:              "claude-haiku-4-20251001",
+		ID:              "claude-haiku-4-5",
 		Name:            "Claude Haiku 4",
 		MaxTokens:       8192,
 		InputPricePerM:  0.8,

@@ -238,12 +238,23 @@ func buildExecutionRuntime(
 		breaker = learning.NewBreaker(app.Logger, learning.BreakerConfig{
 			StatePath: filepath.Join(cfg.DataDir, "llm_extraction_state.json"),
 		})
-		if anthropicProvider := buildAnthropicLessonProvider(cfg); anthropicProvider != nil {
-			llmExtractor = learning.NewAnthropicExtractor(anthropicProvider, cfg.LLMExtraction.Model)
-			app.Logger.Info("llm lesson: anthropic extractor enabled", "model", cfg.LLMExtraction.Model)
+		lessonProvider, lessonModel := buildLessonProvider(cfg, provider)
+		if lessonProvider != nil {
+			var extractorOpts []learning.AnthropicExtractorOption
+			if cfg.LLMExtraction.ClaudeCodeSignature {
+				extractorOpts = append(extractorOpts, learning.WithSystemPrefix(
+					"You are Claude Code, Anthropic's official CLI for Claude.\n\n",
+				))
+			}
+			llmExtractor = learning.NewAnthropicExtractor(lessonProvider, lessonModel, extractorOpts...)
+			app.Logger.Info("llm lesson: extractor enabled",
+				"provider", lessonProvider.Name(),
+				"model", lessonModel,
+				"claude_code_signature", cfg.LLMExtraction.ClaudeCodeSignature,
+			)
 		} else {
 			llmExtractor = &learning.MockLLMExtractor{}
-			app.Logger.Warn("llm lesson: enabled but no anthropic provider, falling back to mock")
+			app.Logger.Warn("llm lesson: enabled but no provider available, falling back to mock")
 		}
 	}
 	b := prompt.NewBuilder()
@@ -292,22 +303,39 @@ func buildExecutionRuntime(
 	}, nil
 }
 
-func buildAnthropicLessonProvider(cfg *config.Config) llm.Provider {
-	if cfg == nil || strings.TrimSpace(cfg.Anthropic.APIKey) == "" {
-		return nil
+// buildLessonProvider returns the provider + model used for lesson extraction.
+// Priority:
+//  1. A dedicated Anthropic credential (cfg.LLMExtraction.APIKey, then
+//     cfg.Anthropic.APIKey) — isolates lesson traffic.
+//  2. The main provider (Codex OAuth / OpenAI / etc.) — shared auth, no
+//     duplicate credential required.
+//
+// The returned model string may be empty, in which case the provider's own
+// default is used.
+func buildLessonProvider(cfg *config.Config, mainProvider llm.Provider) (llm.Provider, string) {
+	if cfg == nil {
+		return mainProvider, ""
 	}
-	var opts []llm.AnthropicOption
-	if cfg.Anthropic.BaseURL != "" {
-		opts = append(opts, llm.WithAnthropicBaseURL(cfg.Anthropic.BaseURL))
+	apiKey := strings.TrimSpace(cfg.LLMExtraction.APIKey)
+	if apiKey == "" {
+		apiKey = strings.TrimSpace(cfg.Anthropic.APIKey)
 	}
-	if cfg.Anthropic.Timeout > 0 {
-		opts = append(opts, llm.WithAnthropicTimeout(time.Duration(cfg.Anthropic.Timeout)*time.Second))
+	if apiKey != "" {
+		var opts []llm.AnthropicOption
+		if cfg.Anthropic.BaseURL != "" {
+			opts = append(opts, llm.WithAnthropicBaseURL(cfg.Anthropic.BaseURL))
+		}
+		if cfg.Anthropic.Timeout > 0 {
+			opts = append(opts, llm.WithAnthropicTimeout(time.Duration(cfg.Anthropic.Timeout)*time.Second))
+		}
+		model := cfg.LLMExtraction.Model
+		if model == "" {
+			model = llm.ResolveModel("haiku")
+		}
+		resolved := llm.ResolveModel(model)
+		return llm.NewAnthropicProvider(apiKey, resolved, opts...), resolved
 	}
-	model := cfg.LLMExtraction.Model
-	if model == "" {
-		model = llm.ResolveModel("haiku")
-	}
-	return llm.NewAnthropicProvider(cfg.Anthropic.APIKey, llm.ResolveModel(model), opts...)
+	return mainProvider, cfg.LLMExtraction.Model
 }
 
 func buildHookRegistry(cfgHooks []config.HookConfig) *agent.HookRegistry {

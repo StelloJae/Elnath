@@ -10,7 +10,7 @@ import (
 	"github.com/stello/elnath/internal/llm"
 )
 
-const defaultAnthropicExtractorModel = "claude-haiku-4-5-20251213"
+const defaultAnthropicExtractorModel = "claude-haiku-4-5"
 
 const extractionSystemPrompt = `You extract lessons from agent runs for Elnath's learning store.
 Output STRICT JSON matching the lessons schema. No commentary, no code fences.
@@ -34,15 +34,30 @@ Schema (top-level):
                  "persona_magnitude": string (optional) } ] }`
 
 type AnthropicExtractor struct {
-	provider llm.Provider
-	model    string
+	provider     llm.Provider
+	model        string
+	systemPrefix string
 }
 
-func NewAnthropicExtractor(p llm.Provider, model string) *AnthropicExtractor {
-	if model == "" {
-		model = defaultAnthropicExtractorModel
+// AnthropicExtractorOption configures an AnthropicExtractor.
+type AnthropicExtractorOption func(*AnthropicExtractor)
+
+// WithSystemPrefix prepends text to the extraction system prompt. Used as a
+// last-resort workaround when the provider's OAuth scope rejects requests that
+// do not start with a specific identity signature (e.g. Claude Code OAuth).
+func WithSystemPrefix(prefix string) AnthropicExtractorOption {
+	return func(e *AnthropicExtractor) { e.systemPrefix = prefix }
+}
+
+func NewAnthropicExtractor(p llm.Provider, model string, opts ...AnthropicExtractorOption) *AnthropicExtractor {
+	// An empty model is passed through so the underlying provider uses its own
+	// default (relevant when the extractor reuses the main provider — e.g.
+	// Codex OAuth — whose default model is not claude-haiku-4-5).
+	e := &AnthropicExtractor{provider: p, model: llm.ResolveModel(model)}
+	for _, o := range opts {
+		o(e)
 	}
-	return &AnthropicExtractor{provider: p, model: llm.ResolveModel(model)}
+	return e
 }
 
 func (a *AnthropicExtractor) Extract(ctx context.Context, req ExtractRequest) ([]Lesson, error) {
@@ -50,6 +65,9 @@ func (a *AnthropicExtractor) Extract(ctx context.Context, req ExtractRequest) ([
 		return nil, fmt.Errorf("anthropic extract: provider unavailable")
 	}
 	system, user := buildExtractionPrompt(req)
+	if a.systemPrefix != "" {
+		system = a.systemPrefix + system
+	}
 	resp, err := a.provider.Chat(ctx, llm.ChatRequest{
 		Model:       a.model,
 		System:      system,

@@ -474,7 +474,7 @@ func TestAnthropicChatToolUse(t *testing.T) {
 // specified Request: model, max_tokens, system, stream flag, tools, messages.
 func TestBuildAnthropicRequest(t *testing.T) {
 	req := Request{
-		Model:     "claude-opus-4-20250514",
+		Model:     "claude-opus-4-6",
 		MaxTokens: 1024,
 		System:    "You are a test assistant.",
 		Messages:  []Message{NewUserMessage("ping")},
@@ -531,7 +531,7 @@ func TestBuildAnthropicRequest(t *testing.T) {
 		}
 	}
 
-	checkStringField("model", "claude-opus-4-20250514")
+	checkStringField("model", "claude-opus-4-6")
 	checkBoolField("stream", true)
 	checkIntField("max_tokens", 1024)
 
@@ -603,7 +603,7 @@ func TestBuildAnthropicRequestDefaults(t *testing.T) {
 // TestAnthropicProviderMetadata verifies Name() and Models() return the
 // expected values.
 func TestAnthropicProviderMetadata(t *testing.T) {
-	p := NewAnthropicProvider("key", "claude-sonnet-4-20250514")
+	p := NewAnthropicProvider("key", "claude-sonnet-4-6")
 
 	if got := p.Name(); got != "anthropic" {
 		t.Errorf("Name() = %q, want %q", got, "anthropic")
@@ -615,9 +615,9 @@ func TestAnthropicProviderMetadata(t *testing.T) {
 	}
 
 	wantIDs := map[string]bool{
-		"claude-opus-4-20250514":   true,
-		"claude-sonnet-4-20250514": true,
-		"claude-haiku-4-20251001":  true,
+		"claude-opus-4-6":   true,
+		"claude-sonnet-4-6": true,
+		"claude-haiku-4-5":  true,
 	}
 	for _, m := range models {
 		if !wantIDs[m.ID] {
@@ -627,6 +627,46 @@ func TestAnthropicProviderMetadata(t *testing.T) {
 	}
 	for id := range wantIDs {
 		t.Errorf("expected model ID %q not found in Models()", id)
+	}
+}
+
+// TestAnthropicOAuthHeaders verifies that Stream swaps to OAuth-style headers
+// when the API key is a Claude Code OAuth access token (sk-ant-oat01- prefix):
+// Authorization: Bearer, anthropic-beta claude-code flag, user-agent, x-app,
+// and no x-api-key.
+func TestAnthropicOAuthHeaders(t *testing.T) {
+	var capturedHeaders http.Header
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedHeaders = r.Header.Clone()
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		msgStop := mustJSON(map[string]any{"type": "message_stop"})
+		fmt.Fprint(w, anthropicSSE(sseEvent("message_stop", msgStop)))
+	}))
+	t.Cleanup(srv.Close)
+
+	const oauthToken = "sk-ant-oat01-dummy-oauth-token"
+	p := NewAnthropicProvider(oauthToken, "claude-test", WithAnthropicBaseURL(srv.URL))
+	_, err := collectEvents(t, p, Request{Messages: []Message{NewUserMessage("hi")}})
+	if err != nil {
+		t.Fatalf("Stream() error: %v", err)
+	}
+
+	if got := capturedHeaders.Get("Authorization"); got != "Bearer "+oauthToken {
+		t.Errorf("Authorization = %q, want %q", got, "Bearer "+oauthToken)
+	}
+	if got := capturedHeaders.Get("Anthropic-Beta"); got != anthropicOAuthBeta {
+		t.Errorf("anthropic-beta = %q, want %q", got, anthropicOAuthBeta)
+	}
+	if got := capturedHeaders.Get("User-Agent"); got != anthropicOAuthUserAgent {
+		t.Errorf("user-agent = %q, want %q", got, anthropicOAuthUserAgent)
+	}
+	if got := capturedHeaders.Get("X-App"); got != "cli" {
+		t.Errorf("x-app = %q, want %q", got, "cli")
+	}
+	if got := capturedHeaders.Get("X-Api-Key"); got != "" {
+		t.Errorf("x-api-key = %q, want empty (OAuth mode must not send x-api-key)", got)
 	}
 }
 
