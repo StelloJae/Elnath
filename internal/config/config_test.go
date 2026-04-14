@@ -42,8 +42,8 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.LLMExtraction.MinMessages != 5 {
 		t.Errorf("expected LLMExtraction.MinMessages %d, got %d", 5, cfg.LLMExtraction.MinMessages)
 	}
-	if cfg.LLMExtraction.Model != "claude-haiku-4-5-20251213" {
-		t.Errorf("expected LLMExtraction.Model %q, got %q", "claude-haiku-4-5-20251213", cfg.LLMExtraction.Model)
+	if cfg.LLMExtraction.Model != "claude-haiku-4-5" {
+		t.Errorf("expected LLMExtraction.Model %q, got %q", "claude-haiku-4-5", cfg.LLMExtraction.Model)
 	}
 	if cfg.LLMExtraction.Enabled {
 		t.Error("LLMExtraction.Enabled should default to false")
@@ -208,7 +208,7 @@ func TestLoad_LLMExtractionDefaultsWithoutBlock(t *testing.T) {
 	if cfg.LLMExtraction.MinMessages != 5 {
 		t.Fatalf("LLMExtraction.MinMessages = %d, want 5", cfg.LLMExtraction.MinMessages)
 	}
-	if cfg.LLMExtraction.Model != "claude-haiku-4-5-20251213" {
+	if cfg.LLMExtraction.Model != "claude-haiku-4-5" {
 		t.Fatalf("LLMExtraction.Model = %q, want default", cfg.LLMExtraction.Model)
 	}
 	if cfg.LLMExtraction.Enabled {
@@ -239,7 +239,7 @@ func TestLoad_LLMExtractionPartialBlockKeepsDefaults(t *testing.T) {
 	if cfg.LLMExtraction.MinMessages != 5 {
 		t.Fatalf("LLMExtraction.MinMessages = %d, want 5", cfg.LLMExtraction.MinMessages)
 	}
-	if cfg.LLMExtraction.Model != "claude-haiku-4-5-20251213" {
+	if cfg.LLMExtraction.Model != "claude-haiku-4-5" {
 		t.Fatalf("LLMExtraction.Model = %q, want default", cfg.LLMExtraction.Model)
 	}
 }

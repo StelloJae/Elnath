@@ -126,9 +126,9 @@ func estimateCost(provider, model string, stats UsageStats) float64 {
 
 	prices := map[string]pricing{
 		// Anthropic Claude 4 / Sonnet 4
-		"claude-sonnet-4-20250514": {3.0, 15.0},
-		"claude-opus-4-20250514":   {15.0, 75.0},
-		"claude-haiku-4-20251001":  {0.8, 4.0},
+		"claude-sonnet-4-6": {3.0, 15.0},
+		"claude-opus-4-6":   {15.0, 75.0},
+		"claude-haiku-4-5":  {0.8, 4.0},
 		// OpenAI GPT-4o
 		"gpt-4o":      {2.5, 10.0},
 		"gpt-4o-mini": {0.15, 0.60},

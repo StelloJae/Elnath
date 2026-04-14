@@ -137,7 +137,7 @@ wiki_dir: %q
 locale: %q
 anthropic:
   api_key: %q
-  model: claude-sonnet-4-20250514
+  model: claude-sonnet-4-6
 permission:
   mode: %q
 `, result.DataDir, result.WikiDir, locale, result.APIKey, permMode)

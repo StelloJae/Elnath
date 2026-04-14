@@ -473,7 +473,7 @@ func runLessonsStatsLLMEnabled(t *testing.T) {
 			t.Fatalf("cmdLessons(stats) error = %v", err)
 		}
 	})
-	for _, want := range []string{"LLM extraction:", "Enabled (model=claude-haiku-4-5-20251213)", "Breaker: closed"} {
+	for _, want := range []string{"LLM extraction:", "Enabled (model=claude-haiku-4-5)", "Breaker: closed"} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("stdout = %q, want substring %q", stdout, want)
 		}

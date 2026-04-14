@@ -84,7 +84,7 @@ func TestResolveModel(t *testing.T) {
 	}{
 		{"opus", "claude-opus-4-6"},
 		{"sonnet", "claude-sonnet-4-6"},
-		{"haiku", "claude-haiku-4-5-20251213"},
+		{"haiku", "claude-haiku-4-5"},
 		{"unknown", "unknown"},
 		{"claude-opus-4-6", "claude-opus-4-6"},
 	}

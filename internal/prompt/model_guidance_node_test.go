@@ -9,7 +9,7 @@ import (
 func TestModelGuidanceNodeAnthropic(t *testing.T) {
 	t.Parallel()
 
-	got, err := NewModelGuidanceNode(70).Render(context.Background(), &RenderState{Provider: "anthropic", Model: "claude-sonnet-4-20250514"})
+	got, err := NewModelGuidanceNode(70).Render(context.Background(), &RenderState{Provider: "anthropic", Model: "claude-sonnet-4-6"})
 	if err != nil {
 		t.Fatalf("Render error: %v", err)
 	}

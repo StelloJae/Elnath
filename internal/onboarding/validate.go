@@ -25,7 +25,7 @@ func ValidateAnthropicKey(ctx context.Context, apiKey string) ValidationResult {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	body := `{"model":"claude-haiku-4-5-20251001","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}`
+	body := `{"model":"claude-haiku-4-5","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}`
 	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.anthropic.com/v1/messages", strings.NewReader(body))
 	if err != nil {
 		return ValidationResult{Valid: false, Error: fmt.Errorf("create request: %w", err)}

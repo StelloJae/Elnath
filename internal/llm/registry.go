@@ -86,7 +86,7 @@ func ResolveModel(model string) string {
 	aliases := map[string]string{
 		"opus":   "claude-opus-4-6",
 		"sonnet": "claude-sonnet-4-6",
-		"haiku":  "claude-haiku-4-5-20251213",
+		"haiku":  "claude-haiku-4-5",
 	}
 	if canonical, ok := aliases[model]; ok {
 		return canonical

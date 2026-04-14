@@ -15,7 +15,7 @@ func TestFormatUsageSummary(t *testing.T) {
 	}{
 		{
 			name:  "basic sonnet usage",
-			model: "claude-sonnet-4-20250514",
+			model: "claude-sonnet-4-6",
 			stats: UsageStats{InputTokens: 1000, OutputTokens: 500},
 			wantIn: []string{
 				"1,000 in",
@@ -25,13 +25,13 @@ func TestFormatUsageSummary(t *testing.T) {
 		},
 		{
 			name:  "zero usage returns empty",
-			model: "claude-sonnet-4-20250514",
+			model: "claude-sonnet-4-6",
 			stats: UsageStats{},
 			wantIn: []string{""},
 		},
 		{
 			name:  "with cache tokens",
-			model: "claude-sonnet-4-20250514",
+			model: "claude-sonnet-4-6",
 			stats: UsageStats{
 				InputTokens:  2000,
 				OutputTokens: 1000,
@@ -57,7 +57,7 @@ func TestFormatUsageSummary(t *testing.T) {
 		},
 		{
 			name:  "large token counts formatted with commas",
-			model: "claude-opus-4-20250514",
+			model: "claude-opus-4-6",
 			stats: UsageStats{InputTokens: 1234567, OutputTokens: 89012},
 			wantIn: []string{
 				"1,234,567 in",
@@ -94,7 +94,7 @@ func TestFormatUsageSummary(t *testing.T) {
 func TestFormatUsageSummary_CostAccuracy(t *testing.T) {
 	// Sonnet: $3/M in, $15/M out
 	stats := UsageStats{InputTokens: 1_000_000, OutputTokens: 1_000_000}
-	got := FormatUsageSummary("claude-sonnet-4-20250514", stats)
+	got := FormatUsageSummary("claude-sonnet-4-6", stats)
 
 	// Expected: $3 input + $15 output = $18.00
 	if !strings.Contains(got, "$18.00") {

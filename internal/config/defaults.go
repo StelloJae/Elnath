@@ -16,7 +16,7 @@ func DefaultConfig() *Config {
 		LogLevel: "info",
 
 		Anthropic: ProviderConfig{
-			Model:   "claude-sonnet-4-20250514",
+			Model:   "claude-sonnet-4-6",
 			Timeout: 120,
 		},
 		OpenAI: ProviderConfig{
@@ -40,7 +40,7 @@ func DefaultConfig() *Config {
 			CostCapUSD: 5.0,
 		},
 		LLMExtraction: LLMExtractionConfig{
-			Model:       "claude-haiku-4-5-20251213",
+			Model:       "claude-haiku-4-5",
 			MinMessages: 5,
 		},
 	}
