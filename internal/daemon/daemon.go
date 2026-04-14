@@ -36,7 +36,7 @@ type TaskResult struct {
 	SessionID string `json:"session_id,omitempty"`
 }
 
-// AgentTaskRunner executes one queued task and returns structured task output.
+// AgentTaskRunner executes one legacy agent task payload.
 // Callers may forward streamed text through onText during execution.
 type AgentTaskRunner func(ctx context.Context, payload string, onText func(string)) (TaskResult, error)
 
@@ -45,13 +45,18 @@ type ProgressObserver interface {
 	OnProgress(taskID int64, progress string)
 }
 
+type Scheduler interface {
+	Run(ctx context.Context) error
+}
+
 // Daemon runs background task processing with Unix domain socket IPC.
 type Daemon struct {
 	queue             *Queue
 	listener          net.Listener
 	socketPath        string
 	maxWorkers        int
-	taskRunner        AgentTaskRunner
+	agentRunner       AgentTaskRunner
+	researchRunner    TaskRunner
 	fallbackPrincipal identity.Principal
 	logger            *slog.Logger
 	deliveryRouter    *DeliveryRouter
@@ -59,6 +64,7 @@ type Daemon struct {
 	wallClockTimeout  time.Duration
 	watchdogInterval  time.Duration
 	progressObserver  ProgressObserver
+	scheduler         Scheduler
 	cancel            context.CancelFunc
 	wg                sync.WaitGroup
 }
@@ -72,11 +78,11 @@ func New(queue *Queue, socketPath string, maxWorkers int, runner AgentTaskRunner
 		logger = slog.Default()
 	}
 	return &Daemon{
-		queue:      queue,
-		socketPath: socketPath,
-		maxWorkers: maxWorkers,
-		taskRunner: runner,
-		logger:     logger,
+		queue:       queue,
+		socketPath:  socketPath,
+		maxWorkers:  maxWorkers,
+		agentRunner: runner,
+		logger:      logger,
 	}
 }
 
@@ -102,8 +108,16 @@ func (d *Daemon) WithProgressObserver(obs ProgressObserver) {
 	d.progressObserver = obs
 }
 
+func (d *Daemon) WithScheduler(s Scheduler) {
+	d.scheduler = s
+}
+
 func (d *Daemon) WithFallbackPrincipal(principal identity.Principal) {
 	d.fallbackPrincipal = principal
+}
+
+func (d *Daemon) SetResearchRunner(r TaskRunner) {
+	d.researchRunner = r
 }
 
 func (d *Daemon) watchdogTick() time.Duration {
@@ -128,10 +142,21 @@ func (d *Daemon) Start(ctx context.Context) error {
 	}
 	d.listener = ln
 	d.logger.Info("daemon started", "socket", d.socketPath, "workers", d.maxWorkers)
+	d.deliverExistingCompletions(ctx)
 
 	for i := 0; i < d.maxWorkers; i++ {
 		d.wg.Add(1)
 		go d.worker(ctx, i)
+	}
+
+	if d.scheduler != nil {
+		d.wg.Add(1)
+		go func() {
+			defer d.wg.Done()
+			if err := d.scheduler.Run(ctx); err != nil && ctx.Err() == nil {
+				d.logger.Error("scheduler stopped unexpectedly", "error", err)
+			}
+		}()
 	}
 
 	d.wg.Add(1)
@@ -225,13 +250,29 @@ func (d *Daemon) handleSubmit(ctx context.Context, conn net.Conn, req IPCRequest
 		d.writeResponse(conn, IPCResponse{Err: "payload is required"})
 		return
 	}
+	if strings.TrimSpace(payload) == "" {
+		d.writeResponse(conn, IPCResponse{Err: "payload is required"})
+		return
+	}
 
 	parsed := ParseTaskPayload(payload)
+	if parsed.Prompt == "" {
+		d.writeResponse(conn, IPCResponse{Err: "payload is required"})
+		return
+	}
+	if parsed.Type == TaskTypeResearch && d.researchRunner == nil {
+		d.writeResponse(conn, IPCResponse{Err: "research runner not configured"})
+		return
+	}
 	principal := parsed.Principal
 	if principal.IsZero() {
 		principal = d.fallbackPrincipal
 	}
-	idemKey := identity.KeyFor(principal, parsed.Prompt)
+	idemKey := identity.KeyFor(principal, EncodeTaskPayload(TaskPayload{
+		Type:      parsed.Type,
+		Prompt:    parsed.Prompt,
+		SessionID: parsed.SessionID,
+	}))
 
 	id, existed, err := d.queue.Enqueue(ctx, payload, idemKey)
 	if err != nil {
@@ -396,9 +437,48 @@ func (d *Daemon) deliver(ctx context.Context, taskID int64) {
 	}
 }
 
+func (d *Daemon) deliverExistingCompletions(ctx context.Context) {
+	if d.deliveryRouter == nil {
+		return
+	}
+	tasks, err := d.queue.List(ctx)
+	if err != nil {
+		d.logger.Error("daemon: list existing completions", "error", err)
+		return
+	}
+	for _, task := range tasks {
+		if task.Completion == nil {
+			continue
+		}
+		d.deliver(ctx, task.ID)
+	}
+}
+
 func (d *Daemon) runTask(ctx context.Context, task *Task) (TaskResult, error) {
-	if d.taskRunner == nil {
-		return TaskResult{}, fmt.Errorf("daemon: task runner is nil")
+	payload := ParseTaskPayload(task.Payload)
+	captureOutput := true
+	exec := func(taskCtx context.Context, onText func(string)) (TaskResult, error) {
+		if d.agentRunner == nil {
+			return TaskResult{}, fmt.Errorf("daemon: task runner is nil")
+		}
+		return d.agentRunner(taskCtx, task.Payload, onText)
+	}
+	if payload.Type == TaskTypeResearch {
+		if d.researchRunner == nil {
+			return TaskResult{}, fmt.Errorf("research runner not configured")
+		}
+		captureOutput = false
+		exec = func(taskCtx context.Context, onText func(string)) (TaskResult, error) {
+			result, err := d.researchRunner.Run(taskCtx, payload, onText)
+			if err != nil {
+				return TaskResult{}, err
+			}
+			sessionID := result.SessionID
+			if sessionID == "" {
+				sessionID = payload.SessionID
+			}
+			return TaskResult{Result: result.Result, Summary: result.Summary, SessionID: sessionID}, nil
+		}
 	}
 
 	taskCtx, taskCancel := context.WithCancel(ctx)
@@ -422,7 +502,7 @@ func (d *Daemon) runTask(ctx context.Context, task *Task) (TaskResult, error) {
 	}
 
 	var output strings.Builder
-	result, err := d.taskRunner(taskCtx, task.Payload, func(text string) {
+	result, err := exec(taskCtx, func(text string) {
 		lastActivity.Store(time.Now().UnixMilli())
 
 		progress := text
@@ -456,7 +536,7 @@ func (d *Daemon) runTask(ctx context.Context, task *Task) (TaskResult, error) {
 		}
 	}
 
-	if output.Len() > 0 {
+	if captureOutput && output.Len() > 0 {
 		result.Result = output.String()
 	}
 	if result.Result == "" {

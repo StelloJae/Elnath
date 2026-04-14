@@ -30,9 +30,6 @@ CREATE TABLE IF NOT EXISTS task_queue (
 	started_at   INTEGER NOT NULL DEFAULT 0,
 	completed_at INTEGER NOT NULL DEFAULT 0
 );
-CREATE INDEX IF NOT EXISTS task_queue_status ON task_queue(status);
-CREATE INDEX IF NOT EXISTS task_queue_created ON task_queue(created_at);
-CREATE INDEX IF NOT EXISTS task_queue_session ON task_queue(session_id);
 `
 
 const defaultStaleTimeout = 5 * time.Minute
@@ -125,6 +122,15 @@ func NewQueue(db *sql.DB) (*Queue, error) {
 	if err := q.ensureColumns(context.Background()); err != nil {
 		return nil, fmt.Errorf("queue: ensure schema columns: %w", err)
 	}
+	for _, stmt := range []string{
+		`CREATE INDEX IF NOT EXISTS task_queue_status ON task_queue(status)`,
+		`CREATE INDEX IF NOT EXISTS task_queue_created ON task_queue(created_at)`,
+		`CREATE INDEX IF NOT EXISTS task_queue_session ON task_queue(session_id)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			return nil, fmt.Errorf("queue: create index: %w", err)
+		}
+	}
 	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS task_queue_idem_active ON task_queue(idempotency_key) WHERE status IN ('pending','running') AND idempotency_key != ''`); err != nil {
 		return nil, fmt.Errorf("queue: create idempotency index: %w", err)
 	}
@@ -204,12 +210,16 @@ func (q *Queue) Next(ctx context.Context) (*Task, error) {
 	}
 
 	now := time.Now().UnixMilli()
-	_, err = tx.ExecContext(ctx, `
-		UPDATE task_queue SET status = ?, started_at = ?, updated_at = ? WHERE id = ?`,
-		string(StatusRunning), now, now, t.ID,
+	res, err := tx.ExecContext(ctx, `
+		UPDATE task_queue SET status = ?, started_at = ?, updated_at = ? WHERE id = ? AND status = ?`,
+		string(StatusRunning), now, now, t.ID, string(StatusPending),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("queue: next: update: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return nil, nil
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -245,8 +255,8 @@ func (q *Queue) BindSession(ctx context.Context, id int64, sessionID string) err
 // UpdateProgress stores a short progress string and refreshes updated_at.
 func (q *Queue) UpdateProgress(ctx context.Context, id int64, progress string) error {
 	_, err := q.db.ExecContext(ctx, `
-		UPDATE task_queue SET progress = ?, updated_at = ? WHERE id = ?`,
-		progress, time.Now().UnixMilli(), id,
+		UPDATE task_queue SET progress = ?, updated_at = ? WHERE id = ? AND status = ?`,
+		progress, time.Now().UnixMilli(), id, string(StatusRunning),
 	)
 	if err != nil {
 		return fmt.Errorf("queue: update progress: %w", err)
@@ -282,7 +292,7 @@ func (q *Queue) MarkFailed(ctx context.Context, id int64, errMsg string) error {
 	}
 	res, err := q.db.ExecContext(ctx, `
 		UPDATE task_queue SET status = ?, progress = ?, summary = ?, result = ?, completion = ?, updated_at = ?, completed_at = ?, timeout_class = ? WHERE id = ? AND status = ?`,
-		string(StatusFailed), "failed", "", errMsg, completionJSON, time.Now().UnixMilli(), time.Now().UnixMilli(), string(TimeoutClassNone), id, string(StatusRunning),
+		string(StatusFailed), "failed", completionSummary(StatusFailed, "", errMsg), errMsg, completionJSON, time.Now().UnixMilli(), time.Now().UnixMilli(), string(TimeoutClassNone), id, string(StatusRunning),
 	)
 	if err != nil {
 		return fmt.Errorf("queue: mark failed: %w", err)
@@ -465,7 +475,7 @@ func (q *Queue) RecoverStale(ctx context.Context, staleTimeout time.Duration, ma
 	defer tx.Rollback()
 
 	rows, err := tx.QueryContext(ctx, `
-		SELECT id, started_at, updated_at, idle_timeout_count, active_timeout_count
+		SELECT id, session_id, created_at, started_at, updated_at, idle_timeout_count, active_timeout_count
 		FROM task_queue
 		WHERE status = ? AND started_at > 0 AND updated_at < ?`,
 		string(StatusRunning), cutoff,
@@ -477,9 +487,10 @@ func (q *Queue) RecoverStale(ctx context.Context, staleTimeout time.Duration, ma
 
 	var recovered int
 	for rows.Next() {
-		var id, startedAt, updatedAt int64
+		var id, createdAt, startedAt, updatedAt int64
+		var sessionID string
 		var idleCount, activeCount int
-		if err := rows.Scan(&id, &startedAt, &updatedAt, &idleCount, &activeCount); err != nil {
+		if err := rows.Scan(&id, &sessionID, &createdAt, &startedAt, &updatedAt, &idleCount, &activeCount); err != nil {
 			return 0, fmt.Errorf("queue: recover stale: scan: %w", err)
 		}
 
@@ -494,11 +505,24 @@ func (q *Queue) RecoverStale(ctx context.Context, staleTimeout time.Duration, ma
 
 		totalRecoveries := idleCount + activeCount + idleInc + activeInc
 		if maxRecoveries > 0 && totalRecoveries > maxRecoveries {
+			errMsg := fmt.Sprintf("task failed after %d recovery attempts", totalRecoveries-1)
+			completionJSON, err := json.Marshal(taskCompletionRecord{
+				TaskID:      id,
+				SessionID:   sessionID,
+				Summary:     completionSummary(StatusFailed, "", errMsg),
+				Status:      StatusFailed,
+				CreatedAt:   createdAt,
+				StartedAt:   startedAt,
+				CompletedAt: now,
+			})
+			if err != nil {
+				return 0, fmt.Errorf("queue: recover stale: completion %d: %w", id, err)
+			}
 			if _, err := tx.ExecContext(ctx, `
 				UPDATE task_queue
-				SET status = ?, progress = ?, summary = ?, timeout_class = ?, idle_timeout_count = idle_timeout_count + ?, active_timeout_count = active_timeout_count + ?, updated_at = ?, completed_at = ?
+				SET status = ?, progress = ?, summary = ?, result = ?, completion = ?, timeout_class = ?, idle_timeout_count = idle_timeout_count + ?, active_timeout_count = active_timeout_count + ?, updated_at = ?, completed_at = ?
 				WHERE id = ?`,
-				string(StatusFailed), "exceeded max recoveries", fmt.Sprintf("task failed after %d recovery attempts", totalRecoveries-1),
+				string(StatusFailed), "failed", completionSummary(StatusFailed, "", errMsg), errMsg, string(completionJSON),
 				string(timeoutClass), idleInc, activeInc, now, now, id,
 			); err != nil {
 				return 0, fmt.Errorf("queue: recover stale: fail %d: %w", id, err)
@@ -569,11 +593,14 @@ func (q *Queue) ensureColumns(ctx context.Context) error {
 		{name: "session_id", sql: `ALTER TABLE task_queue ADD COLUMN session_id TEXT NOT NULL DEFAULT ''`},
 		{name: "progress", sql: `ALTER TABLE task_queue ADD COLUMN progress TEXT NOT NULL DEFAULT ''`},
 		{name: "summary", sql: `ALTER TABLE task_queue ADD COLUMN summary TEXT NOT NULL DEFAULT ''`},
+		{name: "result", sql: `ALTER TABLE task_queue ADD COLUMN result TEXT NOT NULL DEFAULT ''`},
 		{name: "completion", sql: `ALTER TABLE task_queue ADD COLUMN completion TEXT NOT NULL DEFAULT ''`},
 		{name: "timeout_class", sql: `ALTER TABLE task_queue ADD COLUMN timeout_class TEXT NOT NULL DEFAULT ''`},
 		{name: "idle_timeout_count", sql: `ALTER TABLE task_queue ADD COLUMN idle_timeout_count INTEGER NOT NULL DEFAULT 0`},
 		{name: "active_timeout_count", sql: `ALTER TABLE task_queue ADD COLUMN active_timeout_count INTEGER NOT NULL DEFAULT 0`},
 		{name: "updated_at", sql: `ALTER TABLE task_queue ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0`},
+		{name: "started_at", sql: `ALTER TABLE task_queue ADD COLUMN started_at INTEGER NOT NULL DEFAULT 0`},
+		{name: "completed_at", sql: `ALTER TABLE task_queue ADD COLUMN completed_at INTEGER NOT NULL DEFAULT 0`},
 	} {
 		if _, ok := cols[m.name]; ok {
 			continue
@@ -625,15 +652,16 @@ func (q *Queue) lookupActiveTaskIDAny(ctx context.Context, idemKey string) (int6
 }
 
 func (q *Queue) insertTask(ctx context.Context, payload, idemKey string, now int64) (sql.Result, error) {
+	sessionID := ParseTaskPayload(payload).SessionID
 	var (
 		res sql.Result
 		err error
 	)
 	for attempt := 0; attempt < 5; attempt++ {
 		res, err = q.db.ExecContext(ctx, `
-			INSERT INTO task_queue (payload, idempotency_key, status, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?)`,
-			payload, idemKey, string(StatusPending), now, now,
+			INSERT INTO task_queue (payload, idempotency_key, session_id, status, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?)`,
+			payload, idemKey, sessionID, string(StatusPending), now, now,
 		)
 		if !isBusyError(err) {
 			return res, err

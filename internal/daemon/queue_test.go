@@ -135,6 +135,61 @@ func TestEnqueue(t *testing.T) {
 	}
 }
 
+func TestEnqueuePersistsStructuredSessionID(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+	ctx := context.Background()
+	payload := EncodeTaskPayload(TaskPayload{Prompt: "hello", SessionID: "sess-123"})
+
+	id, existed, err := q.Enqueue(ctx, payload, "")
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if existed {
+		t.Fatal("expected new task, got deduplicated")
+	}
+	task, err := q.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if task.SessionID != "sess-123" {
+		t.Fatalf("session_id = %q, want sess-123", task.SessionID)
+	}
+}
+
+func TestNewQueueMigratesLegacyColumns(t *testing.T) {
+	db := openTestDB(t)
+	_, err := db.Exec(`
+		DROP TABLE IF EXISTS task_queue;
+		CREATE TABLE task_queue (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			payload TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'pending',
+			created_at INTEGER NOT NULL
+		);`)
+	if err != nil {
+		t.Fatalf("create legacy schema: %v", err)
+	}
+
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+	id, existed, err := q.Enqueue(context.Background(), "hello", "")
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if existed {
+		t.Fatal("expected new task, got deduplicated")
+	}
+	if _, err := q.Get(context.Background(), id); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+}
+
 func TestEnqueueDedupReturnsExistingID(t *testing.T) {
 	db := openTestDB(t)
 	q, err := NewQueue(db)
@@ -554,6 +609,9 @@ func TestMarkFailed(t *testing.T) {
 	if got.Result != "something broke" {
 		t.Errorf("result = %q, want %q", got.Result, "something broke")
 	}
+	if got.Summary == "" {
+		t.Error("summary should be non-empty for failed task")
+	}
 	if got.Completion == nil {
 		t.Fatal("expected completion payload to be stored")
 	}
@@ -571,6 +629,32 @@ func TestMarkFailed(t *testing.T) {
 	}
 	if got.CompletedAt.UnixMilli() == 0 {
 		t.Error("completed_at should be set")
+	}
+}
+
+func TestUpdateProgressDoesNotOverwriteCompletedTask(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+	ctx := context.Background()
+
+	mustEnqueue(t, q, ctx, "do something")
+	task, _ := q.Next(ctx)
+	if err := q.MarkDone(ctx, task.ID, "all good", "summary text"); err != nil {
+		t.Fatalf("MarkDone: %v", err)
+	}
+	if err := q.UpdateProgress(ctx, task.ID, "still working"); err != nil {
+		t.Fatalf("UpdateProgress: %v", err)
+	}
+
+	got, err := q.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Progress != "completed" {
+		t.Fatalf("progress = %q, want completed", got.Progress)
 	}
 }
 
@@ -787,6 +871,12 @@ func TestRecoverStaleMaxRecoveries(t *testing.T) {
 	got, _ = q.Get(ctx, task.ID)
 	if got.Status != StatusFailed {
 		t.Fatalf("status = %q, want failed after exceeding max recoveries", got.Status)
+	}
+	if got.Result == "" {
+		t.Fatal("result = empty, want failure reason")
+	}
+	if got.Completion == nil {
+		t.Fatal("completion = nil, want completion payload")
 	}
 }
 

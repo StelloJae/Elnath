@@ -7,9 +7,17 @@ import (
 	"github.com/stello/elnath/internal/identity"
 )
 
+type TaskType string
+
+const (
+	TaskTypeAgent    TaskType = ""
+	TaskTypeResearch TaskType = "research"
+)
+
 // TaskPayload is the shared queue payload contract for daemon work.
 // Plain string payloads remain supported for backward compatibility.
 type TaskPayload struct {
+	Type      TaskType           `json:"type,omitempty"`
 	Prompt    string             `json:"prompt"`
 	SessionID string             `json:"session_id,omitempty"`
 	Surface   string             `json:"surface,omitempty"`
@@ -25,7 +33,7 @@ func ParseTaskPayload(raw string) TaskPayload {
 	var payload TaskPayload
 	if strings.HasPrefix(raw, "{") && json.Unmarshal([]byte(raw), &payload) == nil {
 		payload = normalizeTaskPayload(payload)
-		if payload.Prompt != "" {
+		if payload.Prompt != "" || payload.Type != TaskTypeAgent || payload.SessionID != "" || payload.Surface != "" || !payload.Principal.IsZero() {
 			return payload
 		}
 	}
@@ -35,7 +43,7 @@ func ParseTaskPayload(raw string) TaskPayload {
 
 func EncodeTaskPayload(payload TaskPayload) string {
 	payload = normalizeTaskPayload(payload)
-	if payload.SessionID == "" && payload.Surface == "" && payload.Principal.IsZero() {
+	if payload.Type == TaskTypeAgent && payload.SessionID == "" && payload.Surface == "" && payload.Principal.IsZero() {
 		return payload.Prompt
 	}
 	data, err := json.Marshal(payload)

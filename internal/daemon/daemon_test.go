@@ -9,6 +9,9 @@ import (
 	"net"
 	"path/filepath"
 	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,6 +32,44 @@ func (r mockTaskRunner) run(_ context.Context, _ string, onText func(string)) (T
 		onText(r.text)
 	}
 	return TaskResult{Result: r.text, Summary: r.text, SessionID: "sess-test"}, nil
+}
+
+type mockPayloadTaskRunner struct {
+	result TaskRunnerResult
+	err    error
+
+	mu      sync.Mutex
+	payload TaskPayload
+}
+
+func (r *mockPayloadTaskRunner) Run(_ context.Context, payload TaskPayload, _ func(string)) (TaskRunnerResult, error) {
+	r.mu.Lock()
+	r.payload = payload
+	r.mu.Unlock()
+	if r.err != nil {
+		return TaskRunnerResult{}, r.err
+	}
+	return r.result, nil
+}
+
+func (r *mockPayloadTaskRunner) Payload() TaskPayload {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.payload
+}
+
+var _ TaskRunner = (*mockPayloadTaskRunner)(nil)
+
+type mockScheduler struct {
+	started atomic.Bool
+	stopped atomic.Bool
+}
+
+func (m *mockScheduler) Run(ctx context.Context) error {
+	m.started.Store(true)
+	<-ctx.Done()
+	m.stopped.Store(true)
+	return nil
 }
 
 func TestResolveTaskLogPrincipalFallsBackToDaemonPrincipal(t *testing.T) {
@@ -247,7 +288,7 @@ func TestDaemonSubmitEmptyPayload(t *testing.T) {
 		t.Fatalf("NewQueue: %v", err)
 	}
 
-	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	socketPath := filepath.Join("/tmp", "elnath-whitespace-"+strconv.FormatInt(time.Now().UnixNano(), 10)+".sock")
 	startDaemon(t, q, socketPath, mockTaskRunner{text: "ok"}.run, 1)
 
 	resp := sendIPC(t, socketPath, IPCRequest{
@@ -270,12 +311,81 @@ func TestDaemonSubmitNoPayload(t *testing.T) {
 		t.Fatalf("NewQueue: %v", err)
 	}
 
-	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	socketPath := filepath.Join("/tmp", "elnath-whitespace-"+strconv.FormatInt(time.Now().UnixNano(), 10)+".sock")
 	startDaemon(t, q, socketPath, mockTaskRunner{text: "ok"}.run, 1)
 
 	resp := sendIPC(t, socketPath, IPCRequest{Command: "submit"})
 	if resp.OK {
 		t.Fatal("expected error for missing payload, got OK")
+	}
+}
+
+func TestDaemonSubmitWhitespacePayload(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+
+	socketPath := filepath.Join("/tmp", "elnath-whitespace-"+strconv.FormatInt(time.Now().UnixNano(), 10)+".sock")
+	startDaemon(t, q, socketPath, mockTaskRunner{text: "ok"}.run, 1)
+
+	resp := sendIPC(t, socketPath, IPCRequest{
+		Command: "submit",
+		Payload: mustMarshalString(t, "   "),
+	})
+	if resp.OK {
+		t.Fatal("expected error for whitespace-only payload, got OK")
+	}
+	if resp.Err == "" {
+		t.Fatal("expected non-empty error message")
+	}
+}
+
+func TestDaemonSubmitRejectsBlankStructuredAgentPayload(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+
+	socketPath := filepath.Join("/tmp", "elnath-blank-structured-"+strconv.FormatInt(time.Now().UnixNano(), 10)+".sock")
+	startDaemon(t, q, socketPath, mockTaskRunner{text: "ok"}.run, 1)
+
+	payload := EncodeTaskPayload(TaskPayload{Prompt: "   ", SessionID: "sess-1"})
+	resp := sendIPC(t, socketPath, IPCRequest{
+		Command: "submit",
+		Payload: mustMarshalString(t, payload),
+	})
+	if resp.OK {
+		t.Fatal("expected error for blank structured agent payload, got OK")
+	}
+	if resp.Err == "" {
+		t.Fatal("expected non-empty error message")
+	}
+}
+
+func TestDaemonSubmitRejectsBlankStructuredResearchPayload(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+
+	socketPath := filepath.Join("/tmp", "elnath-blank-research-"+strconv.FormatInt(time.Now().UnixNano(), 10)+".sock")
+	d := startDaemon(t, q, socketPath, mockTaskRunner{text: "ok"}.run, 1)
+	d.SetResearchRunner(&mockPayloadTaskRunner{result: TaskRunnerResult{Summary: "research summary", Result: "research result"}})
+
+	payload := EncodeTaskPayload(TaskPayload{Type: TaskTypeResearch, Prompt: "   "})
+	resp := sendIPC(t, socketPath, IPCRequest{
+		Command: "submit",
+		Payload: mustMarshalString(t, payload),
+	})
+	if resp.OK {
+		t.Fatal("expected error for blank structured research payload, got OK")
+	}
+	if resp.Err == "" {
+		t.Fatal("expected non-empty error message")
 	}
 }
 
@@ -430,6 +540,346 @@ func TestDaemonWorkerFailure(t *testing.T) {
 	if task.Result == "" {
 		t.Error("expected non-empty error message in task.Result")
 	}
+}
+
+func TestDaemonStartRunsScheduler(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	d := New(q, socketPath, 1, mockTaskRunner{text: "ok"}.run, nil)
+	sch := &mockScheduler{}
+	d.WithScheduler(sch)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- d.Start(ctx)
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if sch.started.Load() {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !sch.started.Load() {
+		t.Fatal("scheduler did not start")
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Start returned error: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("daemon did not stop within timeout")
+	}
+
+	if !sch.stopped.Load() {
+		t.Fatal("scheduler did not stop")
+	}
+}
+
+func TestDaemonStartDeliversExistingCompletions(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+	ctx := context.Background()
+
+	mustEnqueue(t, q, ctx, "completed before daemon start")
+	task, _ := q.Next(ctx)
+	if err := q.MarkDone(ctx, task.ID, "all good", "summary text"); err != nil {
+		t.Fatalf("MarkDone: %v", err)
+	}
+
+	socketPath := filepath.Join("/tmp", "elnath-start-deliver-"+strconv.FormatInt(time.Now().UnixNano(), 10)+".sock")
+	d := New(q, socketPath, 1, mockTaskRunner{text: "ok"}.run, nil)
+	router := mustNewDeliveryRouter(t, db)
+	sink := &recordingSink{name: "telegram"}
+	router.Register(sink)
+	d.WithDeliveryRouter(router)
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- d.Start(runCtx)
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if sink.Count() > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Start returned error: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("daemon did not stop within timeout")
+	}
+
+	if sink.Count() != 1 {
+		t.Fatalf("sink received %d completions, want 1", sink.Count())
+	}
+	if sink.Completion(0).TaskID != task.ID {
+		t.Fatalf("completion task_id = %d, want %d", sink.Completion(0).TaskID, task.ID)
+	}
+}
+
+func TestDaemonResearchTaskRequiresConfiguredRunner(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+
+	socketPath := filepath.Join("/tmp", "elnath-research-missing-"+strconv.FormatInt(time.Now().UnixNano(), 10)+".sock")
+	startDaemon(t, q, socketPath, mockTaskRunner{text: "agent should not run"}.run, 1)
+
+	payload := EncodeTaskPayload(TaskPayload{Type: TaskTypeResearch, Prompt: "ambient research loop"})
+	resp := sendIPC(t, socketPath, IPCRequest{Command: "submit", Payload: mustMarshalString(t, payload)})
+	if resp.OK {
+		t.Fatal("expected submit-time error for missing research runner")
+	}
+	if !strings.Contains(resp.Err, "research runner not configured") {
+		t.Fatalf("resp.Err = %q, want missing research runner error", resp.Err)
+	}
+	tasks, err := q.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(tasks) != 0 {
+		t.Fatalf("queued tasks = %d, want 0", len(tasks))
+	}
+}
+
+func TestDaemonResearchTaskUsesConfiguredRunner(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+
+	socketPath := filepath.Join("/tmp", "elnath-research-runner-"+strconv.FormatInt(time.Now().UnixNano(), 10)+".sock")
+	d := startDaemon(t, q, socketPath, func(_ context.Context, _ string, _ func(string)) (TaskResult, error) {
+		return TaskResult{}, errors.New("agent runner should not run for research tasks")
+	}, 1)
+	researchRunner := &mockPayloadTaskRunner{result: TaskRunnerResult{Summary: "research summary", Result: "research result"}}
+	d.SetResearchRunner(researchRunner)
+
+	payload := EncodeTaskPayload(TaskPayload{Type: TaskTypeResearch, Prompt: "ambient research loop", SessionID: "sess-123"})
+	resp := sendIPC(t, socketPath, IPCRequest{Command: "submit", Payload: mustMarshalString(t, payload)})
+	if !resp.OK {
+		t.Fatalf("submit: %s", resp.Err)
+	}
+
+	taskID := extractTaskID(t, resp)
+	task := pollTaskStatus(t, q, taskID, StatusDone, 5*time.Second)
+	if task.Result != "research result" {
+		t.Fatalf("result = %q, want research result", task.Result)
+	}
+	if task.Summary != "research summary" {
+		t.Fatalf("summary = %q, want research summary", task.Summary)
+	}
+	if task.SessionID != "sess-123" {
+		t.Fatalf("session_id = %q, want sess-123", task.SessionID)
+	}
+	if got := researchRunner.Payload(); got != (TaskPayload{Type: TaskTypeResearch, Prompt: "ambient research loop", SessionID: "sess-123"}) {
+		t.Fatalf("runner payload = %+v", got)
+	}
+}
+
+func TestDaemonResearchTaskUsesRunnerSessionID(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+
+	socketPath := filepath.Join("/tmp", "elnath-research-session-"+strconv.FormatInt(time.Now().UnixNano(), 10)+".sock")
+	d := startDaemon(t, q, socketPath, func(_ context.Context, _ string, _ func(string)) (TaskResult, error) {
+		return TaskResult{}, errors.New("agent runner should not run for research tasks")
+	}, 1)
+	d.SetResearchRunner(&mockPayloadTaskRunner{result: TaskRunnerResult{Summary: "research summary", Result: "research result", SessionID: "research-sess"}})
+
+	payload := EncodeTaskPayload(TaskPayload{Type: TaskTypeResearch, Prompt: "ambient research loop"})
+	resp := sendIPC(t, socketPath, IPCRequest{Command: "submit", Payload: mustMarshalString(t, payload)})
+	if !resp.OK {
+		t.Fatalf("submit: %s", resp.Err)
+	}
+
+	taskID := extractTaskID(t, resp)
+	task := pollTaskStatus(t, q, taskID, StatusDone, 5*time.Second)
+	if task.SessionID != "research-sess" {
+		t.Fatalf("session_id = %q, want research-sess", task.SessionID)
+	}
+}
+
+func TestDaemonSubmitDoesNotDeduplicateAcrossTaskTypes(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+
+	release := make(chan struct{})
+	agentRunner := func(_ context.Context, _ string, _ func(string)) (TaskResult, error) {
+		<-release
+		return TaskResult{Result: "agent result", Summary: "agent result"}, nil
+	}
+
+	socketPath := filepath.Join("/tmp", "elnath-type-dedup-"+strconv.FormatInt(time.Now().UnixNano(), 10)+".sock")
+	d := startDaemon(t, q, socketPath, agentRunner, 1)
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+	d.SetResearchRunner(&mockPayloadTaskRunner{result: TaskRunnerResult{Summary: "research result", Result: "research result"}})
+
+	principal := identity.Principal{UserID: "42", ProjectID: "proj-1", Surface: "telegram"}
+	agentPayload := EncodeTaskPayload(TaskPayload{Prompt: "same prompt", Surface: "telegram", Principal: principal})
+	first := sendIPC(t, socketPath, IPCRequest{Command: "submit", Payload: mustMarshalString(t, agentPayload)})
+	if !first.OK {
+		t.Fatalf("first submit: %s", first.Err)
+	}
+	if extractExisted(t, first) {
+		t.Fatal("first submit should not report deduplication")
+	}
+	firstID := extractTaskID(t, first)
+
+	researchPayload := EncodeTaskPayload(TaskPayload{Type: TaskTypeResearch, Prompt: "same prompt", Surface: "telegram", Principal: principal})
+	second := sendIPC(t, socketPath, IPCRequest{Command: "submit", Payload: mustMarshalString(t, researchPayload)})
+	if !second.OK {
+		t.Fatalf("second submit: %s", second.Err)
+	}
+	if extractExisted(t, second) {
+		t.Fatal("research submit should not deduplicate against agent task")
+	}
+	if secondID := extractTaskID(t, second); secondID == firstID {
+		t.Fatalf("second task id = %d, want different from %d", secondID, firstID)
+	}
+
+	close(release)
+	pollTaskStatus(t, q, firstID, StatusDone, 5*time.Second)
+	pollTaskStatus(t, q, extractTaskID(t, second), StatusDone, 5*time.Second)
+}
+
+func TestDaemonSubmitDoesNotDeduplicateAcrossSessions(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+
+	release := make(chan struct{})
+	agentRunner := func(_ context.Context, _ string, _ func(string)) (TaskResult, error) {
+		<-release
+		return TaskResult{Result: "agent result", Summary: "agent result"}, nil
+	}
+
+	socketPath := filepath.Join("/tmp", "elnath-session-dedup-"+strconv.FormatInt(time.Now().UnixNano(), 10)+".sock")
+	startDaemon(t, q, socketPath, agentRunner, 1)
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+
+	principal := identity.Principal{UserID: "42", ProjectID: "proj-1", Surface: "telegram"}
+	firstPayload := EncodeTaskPayload(TaskPayload{Prompt: "same prompt", SessionID: "sess-1", Surface: "telegram", Principal: principal})
+	first := sendIPC(t, socketPath, IPCRequest{Command: "submit", Payload: mustMarshalString(t, firstPayload)})
+	if !first.OK {
+		t.Fatalf("first submit: %s", first.Err)
+	}
+	if extractExisted(t, first) {
+		t.Fatal("first submit should not report deduplication")
+	}
+	firstID := extractTaskID(t, first)
+
+	secondPayload := EncodeTaskPayload(TaskPayload{Prompt: "same prompt", SessionID: "sess-2", Surface: "telegram", Principal: principal})
+	second := sendIPC(t, socketPath, IPCRequest{Command: "submit", Payload: mustMarshalString(t, secondPayload)})
+	if !second.OK {
+		t.Fatalf("second submit: %s", second.Err)
+	}
+	if extractExisted(t, second) {
+		t.Fatal("second submit should not deduplicate against a different session")
+	}
+	if secondID := extractTaskID(t, second); secondID == firstID {
+		t.Fatalf("second task id = %d, want different from %d", secondID, firstID)
+	}
+
+	close(release)
+	pollTaskStatus(t, q, firstID, StatusDone, 5*time.Second)
+	pollTaskStatus(t, q, extractTaskID(t, second), StatusDone, 5*time.Second)
+}
+
+func TestDaemonSubmitDoesNotDeduplicateCollidingEncodedFields(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+
+	release := make(chan struct{})
+	agentRunner := func(_ context.Context, _ string, _ func(string)) (TaskResult, error) {
+		<-release
+		return TaskResult{Result: "agent result", Summary: "agent result"}, nil
+	}
+
+	socketPath := filepath.Join("/tmp", "elnath-key-collision-"+strconv.FormatInt(time.Now().UnixNano(), 10)+".sock")
+	d := startDaemon(t, q, socketPath, agentRunner, 1)
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+	d.SetResearchRunner(&mockPayloadTaskRunner{result: TaskRunnerResult{Summary: "research result", Result: "research result"}})
+
+	principal := identity.Principal{UserID: "42", ProjectID: "proj-1", Surface: "telegram"}
+	agentPayload := EncodeTaskPayload(TaskPayload{Prompt: "research:foo", Surface: "telegram", Principal: principal})
+	first := sendIPC(t, socketPath, IPCRequest{Command: "submit", Payload: mustMarshalString(t, agentPayload)})
+	if !first.OK {
+		t.Fatalf("first submit: %s", first.Err)
+	}
+	if extractExisted(t, first) {
+		t.Fatal("first submit should not report deduplication")
+	}
+	firstID := extractTaskID(t, first)
+
+	researchPayload := EncodeTaskPayload(TaskPayload{Type: TaskTypeResearch, Prompt: "foo", Surface: "telegram", Principal: principal})
+	second := sendIPC(t, socketPath, IPCRequest{Command: "submit", Payload: mustMarshalString(t, researchPayload)})
+	if !second.OK {
+		t.Fatalf("second submit: %s", second.Err)
+	}
+	if extractExisted(t, second) {
+		t.Fatal("colliding encoded fields should not deduplicate distinct tasks")
+	}
+	if secondID := extractTaskID(t, second); secondID == firstID {
+		t.Fatalf("second task id = %d, want different from %d", secondID, firstID)
+	}
+
+	close(release)
+	pollTaskStatus(t, q, firstID, StatusDone, 5*time.Second)
+	pollTaskStatus(t, q, extractTaskID(t, second), StatusDone, 5*time.Second)
 }
 
 // TestDaemonInvalidJSON verifies that a non-JSON line results in an error response.

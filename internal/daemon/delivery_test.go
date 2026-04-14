@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 )
@@ -15,9 +16,12 @@ type recordingSink struct {
 	received []TaskCompletion
 	err      error
 	errs     []error
+	mu       sync.Mutex
 }
 
 func (s *recordingSink) NotifyCompletion(_ context.Context, c TaskCompletion) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.received = append(s.received, c)
 	if len(s.errs) > 0 {
 		err := s.errs[0]
@@ -25,6 +29,18 @@ func (s *recordingSink) NotifyCompletion(_ context.Context, c TaskCompletion) er
 		return err
 	}
 	return s.err
+}
+
+func (s *recordingSink) Count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.received)
+}
+
+func (s *recordingSink) Completion(i int) TaskCompletion {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.received[i]
 }
 
 func (s *recordingSink) String() string {
@@ -72,11 +88,11 @@ func TestDeliveryRouter_OneSinkSuccess(t *testing.T) {
 	if err := router.Deliver(context.Background(), c); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(sink.received) != 1 {
-		t.Fatalf("sink received %d completions, want 1", len(sink.received))
+	if sink.Count() != 1 {
+		t.Fatalf("sink received %d completions, want 1", sink.Count())
 	}
-	if sink.received[0].TaskID != c.TaskID {
-		t.Errorf("task_id = %d, want %d", sink.received[0].TaskID, c.TaskID)
+	if sink.Completion(0).TaskID != c.TaskID {
+		t.Errorf("task_id = %d, want %d", sink.Completion(0).TaskID, c.TaskID)
 	}
 }
 
@@ -92,8 +108,8 @@ func TestDeliverDedupSameTaskSameSink(t *testing.T) {
 	if err := router.Deliver(context.Background(), completion); err != nil {
 		t.Fatalf("Deliver(second): %v", err)
 	}
-	if len(sink.received) != 1 {
-		t.Fatalf("sink received %d completions, want 1", len(sink.received))
+	if sink.Count() != 1 {
+		t.Fatalf("sink received %d completions, want 1", sink.Count())
 	}
 }
 
@@ -107,11 +123,11 @@ func TestDeliverDifferentSinksBothCalled(t *testing.T) {
 	if err := router.Deliver(context.Background(), testCompletion()); err != nil {
 		t.Fatalf("Deliver: %v", err)
 	}
-	if len(first.received) != 1 {
-		t.Fatalf("first sink received %d completions, want 1", len(first.received))
+	if first.Count() != 1 {
+		t.Fatalf("first sink received %d completions, want 1", first.Count())
 	}
-	if len(second.received) != 1 {
-		t.Fatalf("second sink received %d completions, want 1", len(second.received))
+	if second.Count() != 1 {
+		t.Fatalf("second sink received %d completions, want 1", second.Count())
 	}
 }
 
@@ -127,8 +143,8 @@ func TestDeliverNoDBSkipsDedup(t *testing.T) {
 	if err := router.Deliver(context.Background(), completion); err != nil {
 		t.Fatalf("Deliver(second): %v", err)
 	}
-	if len(sink.received) != 2 {
-		t.Fatalf("sink received %d completions, want 2", len(sink.received))
+	if sink.Count() != 2 {
+		t.Fatalf("sink received %d completions, want 2", sink.Count())
 	}
 }
 
@@ -144,8 +160,8 @@ func TestDeliverRetriesAfterSinkFailure(t *testing.T) {
 	if err := router.Deliver(context.Background(), completion); err != nil {
 		t.Fatalf("second delivery should retry successfully: %v", err)
 	}
-	if len(sink.received) != 2 {
-		t.Fatalf("sink received %d completions, want 2", len(sink.received))
+	if sink.Count() != 2 {
+		t.Fatalf("sink received %d completions, want 2", sink.Count())
 	}
 }
 
@@ -176,12 +192,12 @@ func TestDeliveryRouter_MixedSinks(t *testing.T) {
 	if err := router.Deliver(context.Background(), testCompletion()); err != nil {
 		t.Errorf("expected nil when at least one sink succeeds, got: %v", err)
 	}
-	if len(succeeding.received) != 1 {
-		t.Errorf("succeeding sink received %d completions, want 1", len(succeeding.received))
+	if succeeding.Count() != 1 {
+		t.Errorf("succeeding sink received %d completions, want 1", succeeding.Count())
 	}
 	// Failing sink still had NotifyCompletion called.
-	if len(failing.received) != 1 {
-		t.Errorf("failing sink received %d completions, want 1", len(failing.received))
+	if failing.Count() != 1 {
+		t.Errorf("failing sink received %d completions, want 1", failing.Count())
 	}
 }
 
