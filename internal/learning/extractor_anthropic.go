@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -78,6 +79,12 @@ func (a *AnthropicExtractor) Extract(ctx context.Context, req ExtractRequest) ([
 	})
 	if err != nil {
 		return nil, fmt.Errorf("anthropic extract: %w", err)
+	}
+	if dumpPath := os.Getenv("ELNATH_LESSON_DUMP"); dumpPath != "" && resp != nil {
+		_ = os.WriteFile(dumpPath, []byte(fmt.Sprintf(
+			"== SYSTEM ==\n%s\n\n== USER ==\n%s\n\n== MODEL ==\n%s\n\n== RESPONSE ==\n%s\n",
+			system, user, a.model, resp.Content,
+		)), 0o600)
 	}
 	return parseLessonResponse(resp.Content, req)
 }
