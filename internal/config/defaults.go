@@ -39,5 +39,9 @@ func DefaultConfig() *Config {
 			MaxRounds:  5,
 			CostCapUSD: 5.0,
 		},
+		LLMExtraction: LLMExtractionConfig{
+			Model:       "claude-haiku-4-5-20251213",
+			MinMessages: 5,
+		},
 	}
 }

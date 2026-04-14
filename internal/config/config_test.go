@@ -39,6 +39,15 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Research.MaxRounds <= 0 {
 		t.Error("Research.MaxRounds should be positive")
 	}
+	if cfg.LLMExtraction.MinMessages != 5 {
+		t.Errorf("expected LLMExtraction.MinMessages %d, got %d", 5, cfg.LLMExtraction.MinMessages)
+	}
+	if cfg.LLMExtraction.Model != "claude-haiku-4-5-20251213" {
+		t.Errorf("expected LLMExtraction.Model %q, got %q", "claude-haiku-4-5-20251213", cfg.LLMExtraction.Model)
+	}
+	if cfg.LLMExtraction.Enabled {
+		t.Error("LLMExtraction.Enabled should default to false")
+	}
 }
 
 // --- DefaultConfigPath ---
@@ -176,6 +185,62 @@ func TestLoad_EnvOverridesApplied(t *testing.T) {
 	}
 	if cfg.LogLevel != "warn" {
 		t.Errorf("expected LogLevel %q, got %q", "warn", cfg.LogLevel)
+	}
+}
+
+func TestLoad_LLMExtractionDefaultsWithoutBlock(t *testing.T) {
+	dir := t.TempDir()
+	wikiDir := filepath.Join(dir, "wiki")
+	if err := os.MkdirAll(wikiDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	yaml := "data_dir: " + dir + "\nwiki_dir: " + wikiDir + "\n"
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.LLMExtraction.MinMessages != 5 {
+		t.Fatalf("LLMExtraction.MinMessages = %d, want 5", cfg.LLMExtraction.MinMessages)
+	}
+	if cfg.LLMExtraction.Model != "claude-haiku-4-5-20251213" {
+		t.Fatalf("LLMExtraction.Model = %q, want default", cfg.LLMExtraction.Model)
+	}
+	if cfg.LLMExtraction.Enabled {
+		t.Fatal("LLMExtraction.Enabled = true, want false")
+	}
+}
+
+func TestLoad_LLMExtractionPartialBlockKeepsDefaults(t *testing.T) {
+	dir := t.TempDir()
+	wikiDir := filepath.Join(dir, "wiki")
+	if err := os.MkdirAll(wikiDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	yaml := "data_dir: " + dir + "\nwiki_dir: " + wikiDir + "\nllm_extraction:\n  enabled: true\n"
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if !cfg.LLMExtraction.Enabled {
+		t.Fatal("LLMExtraction.Enabled = false, want true")
+	}
+	if cfg.LLMExtraction.MinMessages != 5 {
+		t.Fatalf("LLMExtraction.MinMessages = %d, want 5", cfg.LLMExtraction.MinMessages)
+	}
+	if cfg.LLMExtraction.Model != "claude-haiku-4-5-20251213" {
+		t.Fatalf("LLMExtraction.Model = %q, want default", cfg.LLMExtraction.Model)
 	}
 }
 

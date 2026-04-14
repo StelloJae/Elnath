@@ -56,11 +56,11 @@ func TestStoreAppendSetsDefaultsAndWritesJSONL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
-	if len(lessons) != 2 {
-		t.Fatalf("List length = %d, want 2", len(lessons))
+	if len(lessons) != 1 {
+		t.Fatalf("List length = %d, want 1 after duplicate append", len(lessons))
 	}
-	if lessons[0].ID != lessons[1].ID {
-		t.Fatalf("IDs = %q and %q, want identical hashes for identical text", lessons[0].ID, lessons[1].ID)
+	if lessons[0].ID != deriveID(lesson.Text) {
+		t.Fatalf("ID = %q, want %q", lessons[0].ID, deriveID(lesson.Text))
 	}
 }
 
@@ -286,6 +286,48 @@ func TestStoreAppendWithRedactor(t *testing.T) {
 			t.Fatalf("ID = %q, want redacted-text-derived hash instead of original", got[0].ID)
 		}
 	})
+}
+
+func TestStoreAppendRedactsRationaleAndEvidence(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "lessons.jsonl")
+	store := NewStore(path, WithRedactor(func(s string) string {
+		return strings.ReplaceAll(s, "SECRET", "[X]")
+	}))
+
+	if err := store.Append(Lesson{
+		Text:       "safe text",
+		Source:     "agent:llm:single",
+		Confidence: "high",
+		Rationale:  "contains SECRET rationale",
+		Evidence:   []string{"SECRET evidence", "clean"},
+	}); err != nil {
+		t.Fatalf("Append() error = %v", err)
+	}
+
+	got, err := store.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("List length = %d, want 1", len(got))
+	}
+	if strings.Contains(got[0].Rationale, "SECRET") {
+		t.Fatalf("Rationale not redacted: %q", got[0].Rationale)
+	}
+	if len(got[0].Evidence) != 2 {
+		t.Fatalf("Evidence length = %d, want 2", len(got[0].Evidence))
+	}
+	if strings.Contains(got[0].Evidence[0], "SECRET") {
+		t.Fatalf("Evidence[0] not redacted: %q", got[0].Evidence[0])
+	}
+	if got[0].Rationale != "contains [X] rationale" {
+		t.Fatalf("Rationale = %q, want redacted value", got[0].Rationale)
+	}
+	if got[0].Evidence[0] != "[X] evidence" {
+		t.Fatalf("Evidence[0] = %q, want redacted value", got[0].Evidence[0])
+	}
 }
 
 func TestStoreAppendNilRedactor(t *testing.T) {

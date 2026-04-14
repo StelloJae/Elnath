@@ -94,6 +94,10 @@ type executionRuntime struct {
 	wfCfg              orchestrator.WorkflowConfig
 	promptBuilder      *prompt.Builder
 	learningStore      *learning.Store
+	cursorStore        *learning.CursorStore
+	llmExtractor       learning.LLMExtractor
+	failCounter        *learning.FailCounter
+	llmComplexityGate  learning.ComplexityGate
 	usageTracker       *llm.UsageTracker
 	researchMaxRounds  int
 	researchCostCapUSD float64
@@ -220,6 +224,18 @@ func buildExecutionRuntime(
 		learningPath,
 		learning.WithRedactor(learningDetector.RedactString),
 	)
+	cursorStore := learning.NewCursorStore(filepath.Join(cfg.DataDir, "lesson_cursors.jsonl"))
+	llmMinMessages := cfg.LLMExtraction.MinMessages
+	if llmMinMessages == 0 {
+		llmMinMessages = learning.DefaultComplexityGate.MinMessages
+	}
+	llmComplexityGate := learning.ComplexityGate{MinMessages: llmMinMessages, RequireToolCall: true}
+	var llmExtractor learning.LLMExtractor
+	var failCounter *learning.FailCounter
+	if cfg.LLMExtraction.Enabled {
+		llmExtractor = &learning.MockLLMExtractor{}
+		failCounter = learning.NewFailCounter(3)
+	}
 	b := prompt.NewBuilder()
 	b.Register(prompt.NewIdentityNode(100))
 	b.Register(prompt.NewContextFilesNode(95))
@@ -245,6 +261,10 @@ func buildExecutionRuntime(
 		wfCfg:              wfCfg,
 		promptBuilder:      b,
 		learningStore:      learningStore,
+		cursorStore:        cursorStore,
+		llmExtractor:       llmExtractor,
+		failCounter:        failCounter,
+		llmComplexityGate:  llmComplexityGate,
 		usageTracker:       usageTracker,
 		researchMaxRounds:  cfg.Research.MaxRounds,
 		researchCostCapUSD: cfg.Research.CostCapUSD,
@@ -282,9 +302,13 @@ func (rt *executionRuntime) learningDeps() *orchestrator.LearningDeps {
 		return nil
 	}
 	return &orchestrator.LearningDeps{
-		Store:     rt.learningStore,
-		SelfState: rt.selfState,
-		Logger:    rt.app.Logger,
+		Store:          rt.learningStore,
+		SelfState:      rt.selfState,
+		Logger:         rt.app.Logger,
+		LLMExtractor:   rt.llmExtractor,
+		CursorStore:    rt.cursorStore,
+		ComplexityGate: rt.llmComplexityGate,
+		FailCounter:    rt.failCounter,
 	}
 }
 

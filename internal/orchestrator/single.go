@@ -49,7 +49,17 @@ func (w *SingleWorkflow) Run(ctx context.Context, input WorkflowInput) (*Workflo
 			ToolStats:     toAgentToolStats(result.ToolStats),
 			Workflow:      "single",
 		}
-		applyAgentLearning(input.Learning, info)
+		deps := *input.Learning
+		if input.Session != nil {
+			deps.SessionID = input.Session.ID
+		}
+		deps.MessageCount = len(result.Messages) - len(input.Messages)
+		if deps.MessageCount < 0 {
+			deps.MessageCount = 0
+		}
+		deps.ToolCallCount = workflowToolCallCount(result.ToolStats)
+		deps.CompactSummary = func() (string, int) { return "", 0 }
+		applyAgentLearning(&deps, info)
 	}
 
 	summary := extractSummary(result.Messages)

@@ -101,8 +101,13 @@ func NewStore(path string, opts ...StoreOption) *Store {
 }
 
 func (s *Store) Append(lesson Lesson) error {
+	_, err := s.AppendNew(lesson)
+	return err
+}
+
+func (s *Store) AppendNew(lesson Lesson) (bool, error) {
 	if s == nil || s.path == "" {
-		return nil
+		return false, nil
 	}
 
 	s.mu.Lock()
@@ -112,10 +117,14 @@ func (s *Store) Append(lesson Lesson) error {
 		lesson.Text = s.redactor(lesson.Text)
 		lesson.Topic = s.redactor(lesson.Topic)
 		lesson.Source = s.redactor(lesson.Source)
+		lesson.Rationale = s.redactor(lesson.Rationale)
+		for i := range lesson.Evidence {
+			lesson.Evidence[i] = s.redactor(lesson.Evidence[i])
+		}
 	}
 
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
-		return fmt.Errorf("learning store: create dir: %w", err)
+		return false, fmt.Errorf("learning store: create dir: %w", err)
 	}
 	if lesson.Created.IsZero() {
 		lesson.Created = time.Now().UTC()
@@ -123,19 +132,28 @@ func (s *Store) Append(lesson Lesson) error {
 	if lesson.ID == "" {
 		lesson.ID = deriveID(lesson.Text)
 	}
+	existing, err := s.readAllLocked()
+	if err != nil {
+		return false, err
+	}
+	for _, prior := range existing {
+		if prior.ID == lesson.ID {
+			return false, nil
+		}
+	}
 
 	file, err := os.OpenFile(s.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
-		return fmt.Errorf("learning store: open file: %w", err)
+		return false, fmt.Errorf("learning store: open file: %w", err)
 	}
 	if err := json.NewEncoder(file).Encode(lesson); err != nil {
 		file.Close()
-		return fmt.Errorf("learning store: encode lesson: %w", err)
+		return false, fmt.Errorf("learning store: encode lesson: %w", err)
 	}
 	if err := file.Close(); err != nil {
-		return fmt.Errorf("learning store: close file: %w", err)
+		return false, fmt.Errorf("learning store: close file: %w", err)
 	}
-	return nil
+	return true, nil
 }
 
 func (s *Store) List() ([]Lesson, error) {

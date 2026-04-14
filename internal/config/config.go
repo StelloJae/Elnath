@@ -23,14 +23,15 @@ type Config struct {
 	MaxContextTokens  int     `yaml:"max_context_tokens"`
 	CompressThreshold float64 `yaml:"compress_threshold"`
 
-	Permission PermissionConfig  `yaml:"permission"`
-	Principal  PrincipalConfig   `yaml:"principal"`
-	Daemon     DaemonConfig      `yaml:"daemon"`
-	Telegram   TelegramConfig    `yaml:"telegram"`
-	Research   ResearchConfig    `yaml:"research"`
-	Projects   []ProjectRef      `yaml:"projects"`
-	MCPServers []MCPServerConfig `yaml:"mcp_servers"`
-	Hooks      []HookConfig      `yaml:"hooks"`
+	Permission    PermissionConfig    `yaml:"permission"`
+	Principal     PrincipalConfig     `yaml:"principal"`
+	Daemon        DaemonConfig        `yaml:"daemon"`
+	Telegram      TelegramConfig      `yaml:"telegram"`
+	Research      ResearchConfig      `yaml:"research"`
+	LLMExtraction LLMExtractionConfig `yaml:"llm_extraction"`
+	Projects      []ProjectRef        `yaml:"projects"`
+	MCPServers    []MCPServerConfig   `yaml:"mcp_servers"`
+	Hooks         []HookConfig        `yaml:"hooks"`
 }
 
 // MCPServerConfig defines an external MCP server to connect to.
@@ -101,6 +102,12 @@ type OllamaConfig struct {
 type ResearchConfig struct {
 	MaxRounds  int     `yaml:"max_rounds"`
 	CostCapUSD float64 `yaml:"cost_cap_usd"`
+}
+
+type LLMExtractionConfig struct {
+	Enabled     bool   `yaml:"enabled"`
+	Model       string `yaml:"model"`
+	MinMessages int    `yaml:"min_messages"`
 }
 
 func Load(path string) (*Config, error) {

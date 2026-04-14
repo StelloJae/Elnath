@@ -31,9 +31,17 @@ type WorkflowInput struct {
 }
 
 type LearningDeps struct {
-	Store     *learning.Store
-	SelfState *self.SelfState
-	Logger    *slog.Logger
+	Store          *learning.Store
+	SelfState      *self.SelfState
+	Logger         *slog.Logger
+	LLMExtractor   learning.LLMExtractor
+	CursorStore    *learning.CursorStore
+	ComplexityGate learning.ComplexityGate
+	SessionID      string
+	MessageCount   int
+	ToolCallCount  int
+	CompactSummary func() (text string, lastLine int)
+	FailCounter    *learning.FailCounter
 }
 
 // WorkflowResult is the output of a completed workflow execution.

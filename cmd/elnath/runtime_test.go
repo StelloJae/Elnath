@@ -16,6 +16,7 @@ import (
 	"github.com/stello/elnath/internal/core"
 	"github.com/stello/elnath/internal/daemon"
 	"github.com/stello/elnath/internal/identity"
+	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/orchestrator"
 	"github.com/stello/elnath/internal/self"
@@ -759,6 +760,49 @@ Prefer the requested workflow for question intents.
 				t.Fatalf("workflow %q did not receive learning deps", workflowName)
 			}
 		})
+	}
+}
+
+func TestExecutionRuntimeLearningDepsLLMDisabledByDefault(t *testing.T) {
+	rt := newTestExecutionRuntime(t, &countingProvider{})
+	deps := rt.learningDeps()
+	if deps == nil {
+		t.Fatal("learningDeps() = nil, want deps")
+	}
+	if deps.LLMExtractor != nil {
+		t.Fatalf("LLMExtractor = %#v, want nil", deps.LLMExtractor)
+	}
+	if deps.FailCounter != nil {
+		t.Fatalf("FailCounter = %#v, want nil", deps.FailCounter)
+	}
+	if deps.CursorStore == nil {
+		t.Fatal("CursorStore = nil, want initialized store")
+	}
+	if deps.ComplexityGate.MinMessages != 5 || !deps.ComplexityGate.RequireToolCall {
+		t.Fatalf("ComplexityGate = %#v, want min_messages=5 require_tool_call=true", deps.ComplexityGate)
+	}
+}
+
+func TestExecutionRuntimeLearningDepsLLMEnabled(t *testing.T) {
+	rt := newTestExecutionRuntimeWithConfig(t, &countingProvider{}, false, func(cfg *config.Config) {
+		cfg.LLMExtraction.Enabled = true
+		cfg.LLMExtraction.MinMessages = 7
+	})
+	deps := rt.learningDeps()
+	if deps == nil {
+		t.Fatal("learningDeps() = nil, want deps")
+	}
+	if _, ok := deps.LLMExtractor.(*learning.MockLLMExtractor); !ok {
+		t.Fatalf("LLMExtractor type = %T, want *learning.MockLLMExtractor", deps.LLMExtractor)
+	}
+	if deps.FailCounter == nil {
+		t.Fatal("FailCounter = nil, want initialized counter")
+	}
+	if deps.CursorStore == nil {
+		t.Fatal("CursorStore = nil, want initialized store")
+	}
+	if deps.ComplexityGate.MinMessages != 7 || !deps.ComplexityGate.RequireToolCall {
+		t.Fatalf("ComplexityGate = %#v, want min_messages=7 require_tool_call=true", deps.ComplexityGate)
 	}
 }
 
