@@ -1,0 +1,101 @@
+{
+  "version": "v1",
+  "system": "baseline-runner",
+  "baseline": "claude-code",
+  "context": "month3-gate-baseline",
+  "runtime_policy": "bypass",
+  "repeated_runs": 1,
+  "results": [
+    {
+      "run": 1,
+      "task_id": "GO-BF-001",
+      "track": "brownfield_feature",
+      "language": "go",
+      "success": true,
+      "intervention_count": 0,
+      "intervention_needed": false,
+      "verification_command": "go test ./...",
+      "verification_passed": true,
+      "duration_seconds": 186,
+      "notes": "baseline command timed out, but the produced diff passes repo-native verification"
+    },
+    {
+      "run": 1,
+      "task_id": "TS-BF-001",
+      "track": "brownfield_feature",
+      "language": "typescript",
+      "success": false,
+      "intervention_count": 0,
+      "intervention_needed": false,
+      "verification_command": "npx pnpm -C packages/vitest build \u0026\u0026 npx pnpm -C test/cli exec vitest --run test/worker-retry-telemetry.test.ts",
+      "failure_family": "verification_failed",
+      "duration_seconds": 200,
+      "notes": "baseline command ran but repo-native verification failed"
+    },
+    {
+      "run": 1,
+      "task_id": "GO-BF-002",
+      "track": "brownfield_feature",
+      "language": "go",
+      "success": false,
+      "intervention_count": 0,
+      "intervention_needed": false,
+      "verification_command": "go test ./...",
+      "failure_family": "verification_failed",
+      "duration_seconds": 202,
+      "notes": "baseline command ran but repo-native verification failed"
+    },
+    {
+      "run": 1,
+      "task_id": "TS-BF-002",
+      "track": "brownfield_feature",
+      "language": "typescript",
+      "success": true,
+      "intervention_count": 0,
+      "intervention_needed": false,
+      "verification_command": "./node_modules/.bin/mocha packages/common/test/module-utils/configurable-module.builder.spec.ts --require ts-node/register --require tsconfig-paths/register --require node_modules/reflect-metadata/Reflect.js --require hooks/mocha-init-hook.ts",
+      "verification_passed": true,
+      "duration_seconds": 193,
+      "notes": "baseline command timed out, but the produced diff passes repo-native verification"
+    },
+    {
+      "run": 1,
+      "task_id": "GO-BUG-001",
+      "track": "bugfix",
+      "language": "go",
+      "success": true,
+      "intervention_count": 0,
+      "intervention_needed": false,
+      "verification_command": "go test ./...",
+      "verification_passed": true,
+      "duration_seconds": 185,
+      "notes": "baseline command timed out, but the produced diff passes repo-native verification"
+    },
+    {
+      "run": 1,
+      "task_id": "TS-BUG-001",
+      "track": "bugfix",
+      "language": "typescript",
+      "success": true,
+      "intervention_count": 0,
+      "intervention_needed": false,
+      "verification_command": "pnpm testonly packages/next/src/lib/find-config.test.ts",
+      "verification_passed": true,
+      "duration_seconds": 271,
+      "notes": "baseline command timed out, but the produced diff passes repo-native verification"
+    },
+    {
+      "run": 1,
+      "task_id": "GO-BUG-002",
+      "track": "bugfix",
+      "language": "go",
+      "success": true,
+      "intervention_count": 0,
+      "intervention_needed": false,
+      "verification_command": "go test ./...",
+      "verification_passed": true,
+      "duration_seconds": 185,
+      "notes": "baseline command timed out, but the produced diff passes repo-native verification"
+    }
+  ]
+}
