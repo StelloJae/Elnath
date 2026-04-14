@@ -255,6 +255,50 @@ func TestApplyAgentLearningLLMPathPersonaHintApplied(t *testing.T) {
 	}
 }
 
+func TestApplyAgentLearningLLMPathBreakerOpenSkips(t *testing.T) {
+	t.Parallel()
+
+	store := learning.NewStore(filepath.Join(t.TempDir(), "lessons.jsonl"))
+	extractor := &countingExtractor{}
+	breaker := learning.NewBreaker(nil, learning.BreakerConfig{})
+	for i := 0; i < 5; i++ {
+		breaker.Record(errors.New("boom"))
+	}
+	applyAgentLearning(&LearningDeps{
+		Store:          store,
+		LLMExtractor:   extractor,
+		ComplexityGate: learning.DefaultComplexityGate,
+		MessageCount:   5,
+		ToolCallCount:  1,
+		SessionID:      "session-1",
+		Breaker:        breaker,
+	}, learning.AgentResultInfo{Workflow: "single"})
+
+	if extractor.calls != 0 {
+		t.Fatalf("extractor calls = %d, want 0 when breaker is open", extractor.calls)
+	}
+}
+
+func TestApplyAgentLearningMockFallbackDoesNotUpdateBreaker(t *testing.T) {
+	t.Parallel()
+
+	store := learning.NewStore(filepath.Join(t.TempDir(), "lessons.jsonl"))
+	breaker := learning.NewBreaker(nil, learning.BreakerConfig{})
+	applyAgentLearning(&LearningDeps{
+		Store:          store,
+		LLMExtractor:   &learning.MockLLMExtractor{},
+		ComplexityGate: learning.DefaultComplexityGate,
+		MessageCount:   5,
+		ToolCallCount:  1,
+		SessionID:      "session-1",
+		Breaker:        breaker,
+	}, learning.AgentResultInfo{Workflow: "single"})
+
+	if !breaker.LastRun().IsZero() {
+		t.Fatalf("breaker.LastRun() = %v, want zero for mock fallback", breaker.LastRun())
+	}
+}
+
 func TestApplyPersonaHintSynthesizesPersonaDelta(t *testing.T) {
 	t.Parallel()
 

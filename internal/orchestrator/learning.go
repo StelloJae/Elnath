@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"github.com/stello/elnath/internal/agent"
+	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/learning"
+	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/self"
 )
 
@@ -36,8 +38,9 @@ func applyAgentLearning(deps *LearningDeps, info learning.AgentResultInfo) {
 	if !deps.ComplexityGate.ShouldExtract(deps.MessageCount, deps.ToolCallCount) {
 		return
 	}
-	if deps.FailCounter != nil && !deps.FailCounter.Allow() {
-		log.Debug("llm lesson: fail counter open, skip", "session_id", deps.SessionID)
+	useBreaker := deps.Breaker != nil && shouldRecordBreaker(deps.LLMExtractor)
+	if useBreaker && !deps.Breaker.Allow() {
+		log.Debug("llm lesson: breaker open, skip", "session_id", deps.SessionID)
 		return
 	}
 
@@ -70,8 +73,8 @@ func applyAgentLearning(deps *LearningDeps, info learning.AgentResultInfo) {
 	llmLessons, err := deps.LLMExtractor.Extract(ctx, req)
 	cancel()
 
-	if deps.FailCounter != nil {
-		deps.FailCounter.Record(err)
+	if useBreaker {
+		deps.Breaker.Record(err)
 	}
 	if err != nil {
 		log.Warn("llm lesson: extract failed", "error", err, "session_id", deps.SessionID)
@@ -112,6 +115,25 @@ func appendAndApply(deps *LearningDeps, log *slog.Logger, lessons []learning.Les
 		}
 	}
 	return personaChanged
+}
+
+func prepareLearningDeps(base *LearningDeps, session *agent.Session, messages []llm.Message, previousMessageCount int, toolStats []agent.ToolStat) *LearningDeps {
+	if base == nil {
+		return nil
+	}
+	deps := *base
+	if session != nil {
+		deps.SessionID = session.ID
+	}
+	deps.MessageCount = len(messages) - previousMessageCount
+	if deps.MessageCount < 0 {
+		deps.MessageCount = 0
+	}
+	deps.ToolCallCount = workflowToolCallCount(toolStats)
+	deps.CompactSummary = func() (string, int) {
+		return conversation.CompactLessonSummary(messages, toolStats, deps.Redact)
+	}
+	return &deps
 }
 
 func buildLessonManifest(store *learning.Store, maxEntries int) []learning.LessonManifestEntry {
@@ -205,6 +227,14 @@ func toWorkflowToolStats(src []learning.AgentToolStat) []agent.ToolStat {
 		})
 	}
 	return out
+}
+
+func shouldRecordBreaker(extractor learning.LLMExtractor) bool {
+	if extractor == nil {
+		return false
+	}
+	_, isMock := extractor.(*learning.MockLLMExtractor)
+	return !isMock
 }
 
 func workflowToolCallCount(src []agent.ToolStat) int {

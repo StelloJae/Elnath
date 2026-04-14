@@ -96,7 +96,8 @@ type executionRuntime struct {
 	learningStore      *learning.Store
 	cursorStore        *learning.CursorStore
 	llmExtractor       learning.LLMExtractor
-	failCounter        *learning.FailCounter
+	breaker            *learning.Breaker
+	learningRedactor   func(string) string
 	llmComplexityGate  learning.ComplexityGate
 	usageTracker       *llm.UsageTracker
 	researchMaxRounds  int
@@ -220,9 +221,10 @@ func buildExecutionRuntime(
 	}
 	learningPath := filepath.Join(cfg.DataDir, "lessons.jsonl")
 	learningDetector := secret.NewDetector()
+	learningRedactor := learningDetector.RedactString
 	learningStore := learning.NewStore(
 		learningPath,
-		learning.WithRedactor(learningDetector.RedactString),
+		learning.WithRedactor(learningRedactor),
 	)
 	cursorStore := learning.NewCursorStore(filepath.Join(cfg.DataDir, "lesson_cursors.jsonl"))
 	llmMinMessages := cfg.LLMExtraction.MinMessages
@@ -231,10 +233,18 @@ func buildExecutionRuntime(
 	}
 	llmComplexityGate := learning.ComplexityGate{MinMessages: llmMinMessages, RequireToolCall: true}
 	var llmExtractor learning.LLMExtractor
-	var failCounter *learning.FailCounter
+	var breaker *learning.Breaker
 	if cfg.LLMExtraction.Enabled {
-		llmExtractor = &learning.MockLLMExtractor{}
-		failCounter = learning.NewFailCounter(3)
+		breaker = learning.NewBreaker(app.Logger, learning.BreakerConfig{
+			StatePath: filepath.Join(cfg.DataDir, "llm_extraction_state.json"),
+		})
+		if anthropicProvider := buildAnthropicLessonProvider(cfg); anthropicProvider != nil {
+			llmExtractor = learning.NewAnthropicExtractor(anthropicProvider, cfg.LLMExtraction.Model)
+			app.Logger.Info("llm lesson: anthropic extractor enabled", "model", cfg.LLMExtraction.Model)
+		} else {
+			llmExtractor = &learning.MockLLMExtractor{}
+			app.Logger.Warn("llm lesson: enabled but no anthropic provider, falling back to mock")
+		}
 	}
 	b := prompt.NewBuilder()
 	b.Register(prompt.NewIdentityNode(100))
@@ -263,7 +273,8 @@ func buildExecutionRuntime(
 		learningStore:      learningStore,
 		cursorStore:        cursorStore,
 		llmExtractor:       llmExtractor,
-		failCounter:        failCounter,
+		breaker:            breaker,
+		learningRedactor:   learningRedactor,
 		llmComplexityGate:  llmComplexityGate,
 		usageTracker:       usageTracker,
 		researchMaxRounds:  cfg.Research.MaxRounds,
@@ -279,6 +290,24 @@ func buildExecutionRuntime(
 		principal:          defaultPrincipal,
 		auditTrail:         auditTrail,
 	}, nil
+}
+
+func buildAnthropicLessonProvider(cfg *config.Config) llm.Provider {
+	if cfg == nil || strings.TrimSpace(cfg.Anthropic.APIKey) == "" {
+		return nil
+	}
+	var opts []llm.AnthropicOption
+	if cfg.Anthropic.BaseURL != "" {
+		opts = append(opts, llm.WithAnthropicBaseURL(cfg.Anthropic.BaseURL))
+	}
+	if cfg.Anthropic.Timeout > 0 {
+		opts = append(opts, llm.WithAnthropicTimeout(time.Duration(cfg.Anthropic.Timeout)*time.Second))
+	}
+	model := cfg.LLMExtraction.Model
+	if model == "" {
+		model = llm.ResolveModel("haiku")
+	}
+	return llm.NewAnthropicProvider(cfg.Anthropic.APIKey, llm.ResolveModel(model), opts...)
 }
 
 func buildHookRegistry(cfgHooks []config.HookConfig) *agent.HookRegistry {
@@ -307,8 +336,9 @@ func (rt *executionRuntime) learningDeps() *orchestrator.LearningDeps {
 		Logger:         rt.app.Logger,
 		LLMExtractor:   rt.llmExtractor,
 		CursorStore:    rt.cursorStore,
+		Breaker:        rt.breaker,
 		ComplexityGate: rt.llmComplexityGate,
-		FailCounter:    rt.failCounter,
+		Redact:         rt.learningRedactor,
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 
 	"github.com/stello/elnath/internal/config"
 	"github.com/stello/elnath/internal/learning"
+	"github.com/stello/elnath/internal/llm"
 )
 
 const archiveScanMaxTokenSize = 8 * 1024 * 1024
@@ -50,7 +51,7 @@ func cmdLessons(_ context.Context, args []string) error {
 	case "rotate":
 		return lessonsRotate(store, activePath, args[1:])
 	case "stats":
-		return lessonsStats(store, activePath, args[1:])
+		return lessonsStats(store, activePath, cfg, args[1:])
 	case "help", "-h", "--help":
 		return printLessonsUsage()
 	default:
@@ -310,7 +311,7 @@ func lessonsRotate(store *learning.Store, activePath string, args []string) erro
 	return nil
 }
 
-func lessonsStats(store *learning.Store, activePath string, args []string) error {
+func lessonsStats(store *learning.Store, activePath string, cfg *config.Config, args []string) error {
 	fs := flag.NewFlagSet("lessons-stats", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
@@ -323,6 +324,7 @@ func lessonsStats(store *learning.Store, activePath string, args []string) error
 	if err != nil {
 		return err
 	}
+	stats.LLMExtraction = buildLessonsLLMStats(cfg)
 	archiveLines, archiveBytes, err := archiveMetrics(activePath)
 	if err != nil {
 		return err
@@ -375,6 +377,25 @@ func lessonsStats(store *learning.Store, activePath string, args []string) error
 	})
 	for _, source := range sources {
 		fmt.Printf("  %-18s %d\n", source.Source, source.Count)
+	}
+
+	fmt.Println()
+	fmt.Println("LLM extraction:")
+	if stats.LLMExtraction == nil || !stats.LLMExtraction.Enabled {
+		fmt.Println("  Disabled")
+	} else {
+		fmt.Printf("  Enabled (model=%s)\n", stats.LLMExtraction.Model)
+		if stats.LLMExtraction.Breaker != nil {
+			bs := stats.LLMExtraction.Breaker
+			if bs.Open {
+				fmt.Printf("  Breaker: OPEN (resumes %s)\n", bs.PauseUntil.UTC().Format(time.RFC3339))
+			} else {
+				fmt.Printf("  Breaker: closed (%d/%d fails in window)\n", bs.RecentFails, bs.Threshold)
+			}
+		}
+		if !stats.LLMExtraction.LastRun.IsZero() {
+			fmt.Printf("  Last run: %s\n", stats.LLMExtraction.LastRun.UTC().Format(time.RFC3339))
+		}
 	}
 
 	fmt.Println()
@@ -559,4 +580,22 @@ func formatBytes(size int64) string {
 	default:
 		return fmt.Sprintf("%d B", size)
 	}
+}
+
+func buildLessonsLLMStats(cfg *config.Config) *learning.LLMStatsSnapshot {
+	if cfg == nil {
+		return nil
+	}
+	snapshot := &learning.LLMStatsSnapshot{Enabled: cfg.LLMExtraction.Enabled}
+	if !cfg.LLMExtraction.Enabled {
+		return snapshot
+	}
+	snapshot.Model = llm.ResolveModel(cfg.LLMExtraction.Model)
+	breaker := learning.NewBreaker(nil, learning.BreakerConfig{
+		StatePath: filepath.Join(cfg.DataDir, "llm_extraction_state.json"),
+	})
+	status := breaker.Status()
+	snapshot.Breaker = &status
+	snapshot.LastRun = breaker.LastRun()
+	return snapshot
 }

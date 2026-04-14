@@ -772,8 +772,8 @@ func TestExecutionRuntimeLearningDepsLLMDisabledByDefault(t *testing.T) {
 	if deps.LLMExtractor != nil {
 		t.Fatalf("LLMExtractor = %#v, want nil", deps.LLMExtractor)
 	}
-	if deps.FailCounter != nil {
-		t.Fatalf("FailCounter = %#v, want nil", deps.FailCounter)
+	if deps.Breaker != nil {
+		t.Fatalf("Breaker = %#v, want nil", deps.Breaker)
 	}
 	if deps.CursorStore == nil {
 		t.Fatal("CursorStore = nil, want initialized store")
@@ -795,14 +795,31 @@ func TestExecutionRuntimeLearningDepsLLMEnabled(t *testing.T) {
 	if _, ok := deps.LLMExtractor.(*learning.MockLLMExtractor); !ok {
 		t.Fatalf("LLMExtractor type = %T, want *learning.MockLLMExtractor", deps.LLMExtractor)
 	}
-	if deps.FailCounter == nil {
-		t.Fatal("FailCounter = nil, want initialized counter")
+	if deps.Breaker == nil {
+		t.Fatal("Breaker = nil, want initialized breaker")
 	}
 	if deps.CursorStore == nil {
 		t.Fatal("CursorStore = nil, want initialized store")
 	}
 	if deps.ComplexityGate.MinMessages != 7 || !deps.ComplexityGate.RequireToolCall {
 		t.Fatalf("ComplexityGate = %#v, want min_messages=7 require_tool_call=true", deps.ComplexityGate)
+	}
+}
+
+func TestExecutionRuntimeLearningDepsLLMUsesAnthropicExtractorWhenConfigured(t *testing.T) {
+	rt := newTestExecutionRuntimeWithConfig(t, &countingProvider{}, false, func(cfg *config.Config) {
+		cfg.LLMExtraction.Enabled = true
+		cfg.Anthropic.APIKey = "test-key"
+	})
+	deps := rt.learningDeps()
+	if deps == nil {
+		t.Fatal("learningDeps() = nil, want deps")
+	}
+	if _, ok := deps.LLMExtractor.(*learning.AnthropicExtractor); !ok {
+		t.Fatalf("LLMExtractor type = %T, want *learning.AnthropicExtractor", deps.LLMExtractor)
+	}
+	if deps.Breaker == nil {
+		t.Fatal("Breaker = nil, want initialized breaker")
 	}
 }
 

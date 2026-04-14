@@ -135,6 +135,35 @@ func TestRalphWorkflow_LearningVerifiedFirstAttempt(t *testing.T) {
 	}
 }
 
+func TestRalphWorkflow_LLMExtractionUsesMergedRunContext(t *testing.T) {
+	store := learning.NewStore(filepath.Join(t.TempDir(), "lessons.jsonl"))
+	extractor := &countingExtractor{}
+	provider := &scriptedSingleProvider{messages: []llm.Message{
+		assistantStep("", llm.CompletedToolCall{ID: "bash-1", Name: "bash", Input: `{}`}),
+		assistantStep("Attempt one"),
+		llm.NewAssistantMessage("FAIL: add verification"),
+		assistantStep("", llm.CompletedToolCall{ID: "bash-2", Name: "bash", Input: `{}`}),
+		assistantStep("Attempt two with verification"),
+		llm.NewAssistantMessage("PASS"),
+	}}
+	input := ralphLearningInput("verify this change", provider, store)
+	input.Learning = &LearningDeps{
+		Store:          store,
+		LLMExtractor:   extractor,
+		ComplexityGate: learning.ComplexityGate{MinMessages: 1, RequireToolCall: true},
+	}
+
+	if _, err := NewRalphWorkflow().Run(context.Background(), input); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if extractor.calls != 1 {
+		t.Fatalf("extractor calls = %d, want 1", extractor.calls)
+	}
+	if extractor.reqs[0].Workflow != "ralph" {
+		t.Fatalf("workflow = %q, want ralph", extractor.reqs[0].Workflow)
+	}
+}
+
 func TestRalphWorkflow_LearningBelowThreshold(t *testing.T) {
 	store := learning.NewStore(filepath.Join(t.TempDir(), "lessons.jsonl"))
 	provider := &scriptedSingleProvider{messages: []llm.Message{

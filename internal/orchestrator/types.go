@@ -36,12 +36,13 @@ type LearningDeps struct {
 	Logger         *slog.Logger
 	LLMExtractor   learning.LLMExtractor
 	CursorStore    *learning.CursorStore
+	Breaker        *learning.Breaker
 	ComplexityGate learning.ComplexityGate
 	SessionID      string
 	MessageCount   int
 	ToolCallCount  int
 	CompactSummary func() (text string, lastLine int)
-	FailCounter    *learning.FailCounter
+	Redact         func(string) string
 }
 
 // WorkflowResult is the output of a completed workflow execution.

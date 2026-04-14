@@ -156,6 +156,38 @@ func TestAutopilotWorkflow_LearningAllStagesPass(t *testing.T) {
 	}
 }
 
+func TestAutopilotWorkflow_LLMExtractionUsesMergedRunContext(t *testing.T) {
+	store := learning.NewStore(filepath.Join(t.TempDir(), "lessons.jsonl"))
+	extractor := &countingExtractor{}
+	provider := &scriptedSingleProvider{messages: []llm.Message{
+		assistantStep("", llm.CompletedToolCall{ID: "plan-bash", Name: "bash", Input: `{}`}),
+		assistantStep("Plan complete"),
+		assistantStep("", llm.CompletedToolCall{ID: "code-bash", Name: "bash", Input: `{}`}),
+		assistantStep("Code complete"),
+		assistantStep("", llm.CompletedToolCall{ID: "test-bash", Name: "bash", Input: `{}`}),
+		assistantStep("Tests complete"),
+		assistantStep("", llm.CompletedToolCall{ID: "verify-bash", Name: "bash", Input: `{}`}),
+		assistantStep("Verification complete"),
+		llm.NewAssistantMessage("완료했습니다! 구현과 검증을 마쳤습니다."),
+	}}
+	input := autopilotLearningInput("ship the patch", provider, store)
+	input.Learning = &LearningDeps{
+		Store:          store,
+		LLMExtractor:   extractor,
+		ComplexityGate: learning.ComplexityGate{MinMessages: 1, RequireToolCall: true},
+	}
+
+	if _, err := NewAutopilotWorkflow().Run(context.Background(), input); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if extractor.calls != 1 {
+		t.Fatalf("extractor calls = %d, want 1", extractor.calls)
+	}
+	if extractor.reqs[0].Workflow != "autopilot" {
+		t.Fatalf("workflow = %q, want autopilot", extractor.reqs[0].Workflow)
+	}
+}
+
 func TestAutopilotWorkflow_LearningMidStageFailTriggersLesson(t *testing.T) {
 	store := learning.NewStore(filepath.Join(t.TempDir(), "lessons.jsonl"))
 	provider := &failingScriptedProvider{

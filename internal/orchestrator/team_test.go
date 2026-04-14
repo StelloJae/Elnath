@@ -244,6 +244,52 @@ func TestTeamWorkflow_Learning(t *testing.T) {
 	}
 }
 
+func TestTeamWorkflow_LLMExtractionUsesMergedRunContext(t *testing.T) {
+	ctx := context.Background()
+	store := learning.NewStore(filepath.Join(t.TempDir(), "lessons.jsonl"))
+	extractor := &countingExtractor{}
+	provider := &teamLearningProvider{
+		planner: `[{"id":1,"title":"bash task a","instruction":"successful bash task a"},{"id":2,"title":"bash task b","instruction":"successful bash task b"}]`,
+		synth:   "team synthesis",
+		scripts: map[string][]llm.Message{
+			"successful bash task a": {
+				assistantStep("", llm.CompletedToolCall{ID: "bash-a-1", Name: "bash", Input: `{}`}),
+				assistantStep("subtask done"),
+			},
+			"successful bash task b": {
+				assistantStep("", llm.CompletedToolCall{ID: "bash-b-1", Name: "bash", Input: `{}`}),
+				assistantStep("subtask done again"),
+			},
+		},
+		indexes: map[string]int{},
+	}
+	reg := tools.NewRegistry()
+	reg.Register(&testTool{name: "bash"})
+
+	input := testInput("fix the existing repo safely", provider)
+	input.Tools = reg
+	input.Learning = &LearningDeps{
+		Store:          store,
+		LLMExtractor:   extractor,
+		ComplexityGate: learning.ComplexityGate{MinMessages: 1, RequireToolCall: true},
+	}
+
+	if _, err := NewTeamWorkflow().Run(ctx, input); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if extractor.calls != 1 {
+		t.Fatalf("extractor calls = %d, want 1", extractor.calls)
+	}
+	if extractor.reqs[0].Workflow != "team" {
+		t.Fatalf("workflow = %q, want team", extractor.reqs[0].Workflow)
+	}
+	for _, want := range []string{"subtask done", "subtask done again"} {
+		if !strings.Contains(extractor.reqs[0].CompactSummary, want) {
+			t.Fatalf("compact summary = %q, want substring %q", extractor.reqs[0].CompactSummary, want)
+		}
+	}
+}
+
 func TestAggregateFinishReason(t *testing.T) {
 	tests := []struct {
 		name    string

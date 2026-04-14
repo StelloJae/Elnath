@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -83,6 +84,8 @@ func TestLessonsStats(t *testing.T) {
 		run  func(*testing.T)
 	}{
 		{name: "human", run: runLessonsStatsHuman},
+		{name: "llm enabled", run: runLessonsStatsLLMEnabled},
+		{name: "llm breaker open", run: runLessonsStatsLLMBreakerOpen},
 		{name: "json", run: runLessonsStatsJSON},
 		{name: "includes by source", run: runLessonsStatsIncludesBySource},
 		{name: "json includes by source", run: runLessonsStatsJSONIncludesBySource},
@@ -453,10 +456,48 @@ func runLessonsStatsHuman(t *testing.T) {
 			t.Fatalf("cmdLessons(stats) error = %v", err)
 		}
 	})
-	for _, want := range []string{"Active file:", "Total:", "Range:", "By confidence:", "By topic"} {
+	for _, want := range []string{"Active file:", "Total:", "Range:", "By confidence:", "By topic", "LLM extraction:", "Disabled"} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("stdout = %q, want substring %q", stdout, want)
 		}
+	}
+}
+
+func runLessonsStatsLLMEnabled(t *testing.T) {
+	path, _, _, _ := newLessonsFixture(t)
+	cfgPath := writeLessonsTestConfigWithLLM(t, filepath.Dir(path), true)
+	withArgs(t, []string{"elnath", "--config", cfgPath})
+
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdLessons(context.Background(), []string{"stats"}); err != nil {
+			t.Fatalf("cmdLessons(stats) error = %v", err)
+		}
+	})
+	for _, want := range []string{"LLM extraction:", "Enabled (model=claude-haiku-4-5-20251213)", "Breaker: closed"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout = %q, want substring %q", stdout, want)
+		}
+	}
+}
+
+func runLessonsStatsLLMBreakerOpen(t *testing.T) {
+	path, _, _, _ := newLessonsFixture(t)
+	dataDir := filepath.Dir(path)
+	statePath := filepath.Join(dataDir, "llm_extraction_state.json")
+	breaker := learning.NewBreaker(nil, learning.BreakerConfig{StatePath: statePath})
+	for i := 0; i < 5; i++ {
+		breaker.Record(errors.New("boom"))
+	}
+	cfgPath := writeLessonsTestConfigWithLLM(t, dataDir, true)
+	withArgs(t, []string{"elnath", "--config", cfgPath})
+
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdLessons(context.Background(), []string{"stats"}); err != nil {
+			t.Fatalf("cmdLessons(stats) error = %v", err)
+		}
+	})
+	if !strings.Contains(stdout, "Breaker: OPEN") {
+		t.Fatalf("stdout = %q, want open breaker", stdout)
 	}
 }
 
@@ -672,6 +713,10 @@ func newLessonsFixture(t *testing.T) (string, string, *learning.Store, []learnin
 }
 
 func writeLessonsTestConfig(t *testing.T, dataDir string) string {
+	return writeLessonsTestConfigWithLLM(t, dataDir, false)
+}
+
+func writeLessonsTestConfigWithLLM(t *testing.T, dataDir string, enabled bool) string {
 	t.Helper()
 
 	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
@@ -679,6 +724,9 @@ func writeLessonsTestConfig(t *testing.T, dataDir string) string {
 		"wiki_dir: " + filepath.Join(dataDir, "wiki") + "\n" +
 		"locale: en\n" +
 		"permission:\n  mode: default\n"
+	if enabled {
+		data += "llm_extraction:\n  enabled: true\n"
+	}
 	if err := os.WriteFile(cfgPath, []byte(data), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}

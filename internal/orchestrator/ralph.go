@@ -131,7 +131,11 @@ func (w *RalphWorkflow) Run(ctx context.Context, input WorkflowInput) (*Workflow
 			RetryCount:    attemptsRun - 1,
 			Workflow:      "ralph",
 		}
-		applyAgentLearning(input.Learning, info)
+		var resultMessages []llm.Message
+		if finalResult != nil {
+			resultMessages = finalResult.Messages
+		}
+		applyAgentLearning(prepareLearningDeps(input.Learning, input.Session, resultMessages, len(input.Messages), mergedToolStats), info)
 	}
 
 	if !verified {

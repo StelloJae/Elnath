@@ -121,7 +121,7 @@ func (w *AutopilotWorkflow) Run(ctx context.Context, input WorkflowInput) (*Work
 			ToolStats:     learning.MergeAgentToolStats(accToolStatSlices...),
 			Workflow:      "autopilot",
 		}
-		applyAgentLearning(input.Learning, info)
+		applyAgentLearning(prepareLearningDeps(input.Learning, input.Session, messages, len(input.Messages), toWorkflowToolStats(learning.MergeAgentToolStats(accToolStatSlices...))), info)
 	}
 	defer extract()
 

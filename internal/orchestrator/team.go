@@ -100,8 +100,10 @@ func (w *TeamWorkflow) Run(ctx context.Context, input WorkflowInput) (*WorkflowR
 	}
 	mergedToolStats := learning.MergeAgentToolStats(toolStatSlices...)
 	finishReason := aggregateFinishReason(finishReasons)
+	workflowToolStats := toWorkflowToolStats(mergedToolStats)
 
 	if input.Learning != nil {
+		learningMessages := mergeTeamLearningMessages(results, finalMessages)
 		info := learning.AgentResultInfo{
 			Topic:         firstMessageSnippet(input.Message, 80),
 			FinishReason:  finishReason,
@@ -112,14 +114,14 @@ func (w *TeamWorkflow) Run(ctx context.Context, input WorkflowInput) (*WorkflowR
 			ToolStats:     mergedToolStats,
 			Workflow:      "team",
 		}
-		applyAgentLearning(input.Learning, info)
+		applyAgentLearning(prepareLearningDeps(input.Learning, input.Session, learningMessages, len(input.Messages), workflowToolStats), info)
 	}
 
 	return &WorkflowResult{
 		Messages:     finalMessages,
 		Summary:      summary,
 		Usage:        totalUsage,
-		ToolStats:    toWorkflowToolStats(mergedToolStats),
+		ToolStats:    workflowToolStats,
 		Iterations:   totalIter,
 		FinishReason: finishReason,
 		Workflow:     w.Name(),
@@ -276,6 +278,23 @@ func validSubtasks(tasks []subtask) bool {
 		}
 	}
 	return true
+}
+
+func mergeTeamLearningMessages(results []subtaskResult, finalMessages []llm.Message) []llm.Message {
+	total := len(finalMessages)
+	for _, result := range results {
+		if result.result != nil {
+			total += len(result.result.Messages)
+		}
+	}
+	merged := make([]llm.Message, 0, total)
+	for _, result := range results {
+		if result.result != nil {
+			merged = append(merged, result.result.Messages...)
+		}
+	}
+	merged = append(merged, finalMessages...)
+	return merged
 }
 
 // runSubtasks launches one goroutine per subtask and collects results.

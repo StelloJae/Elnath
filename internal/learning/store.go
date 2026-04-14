@@ -378,13 +378,21 @@ func (s *Store) AutoRotateIfNeeded(opts RotateOpts) (int, error) {
 }
 
 type Stats struct {
-	Total        int
-	ByTopic      map[string]int
-	ByConfidence map[string]int
-	BySource     map[string]int `json:"by_source"`
-	OldestAt     time.Time
-	NewestAt     time.Time
-	FileBytes    int64
+	Total         int
+	ByTopic       map[string]int
+	ByConfidence  map[string]int
+	BySource      map[string]int    `json:"by_source"`
+	LLMExtraction *LLMStatsSnapshot `json:"llm_extraction,omitempty"`
+	OldestAt      time.Time
+	NewestAt      time.Time
+	FileBytes     int64
+}
+
+type LLMStatsSnapshot struct {
+	Enabled bool           `json:"enabled"`
+	Model   string         `json:"model,omitempty"`
+	Breaker *BreakerStatus `json:"breaker,omitempty"`
+	LastRun time.Time      `json:"last_run,omitempty"`
 }
 
 func (s *Store) Summary() (Stats, error) {
