@@ -65,12 +65,25 @@ func (f Filter) match(lesson Lesson) bool {
 }
 
 type Store struct {
-	mu   sync.Mutex
-	path string
+	mu       sync.Mutex
+	path     string
+	redactor Redactor
 }
 
-func NewStore(path string) *Store {
-	return &Store{path: path}
+type Redactor func(string) string
+
+type StoreOption func(*Store)
+
+func WithRedactor(r Redactor) StoreOption {
+	return func(s *Store) { s.redactor = r }
+}
+
+func NewStore(path string, opts ...StoreOption) *Store {
+	s := &Store{path: path}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 func (s *Store) Append(lesson Lesson) error {
@@ -80,6 +93,12 @@ func (s *Store) Append(lesson Lesson) error {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.redactor != nil {
+		lesson.Text = s.redactor(lesson.Text)
+		lesson.Topic = s.redactor(lesson.Topic)
+		lesson.Source = s.redactor(lesson.Source)
+	}
 
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
 		return fmt.Errorf("learning store: create dir: %w", err)

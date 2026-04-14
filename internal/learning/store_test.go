@@ -218,6 +218,166 @@ func TestStoreConcurrentAppend(t *testing.T) {
 	}
 }
 
+func TestStoreAppendWithRedactor(t *testing.T) {
+	t.Parallel()
+
+	t.Run("topic text source all redacted", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "lessons.jsonl")
+		store := NewStore(path, WithRedactor(func(s string) string {
+			return strings.ReplaceAll(s, "SECRET", "[X]")
+		}))
+
+		err := store.Append(Lesson{
+			Text:   "contains SECRET token",
+			Topic:  "SECRET-topic",
+			Source: "SECRET-source",
+		})
+		if err != nil {
+			t.Fatalf("Append() error = %v", err)
+		}
+
+		got, err := store.List()
+		if err != nil {
+			t.Fatalf("List() error = %v", err)
+		}
+		if len(got) != 1 {
+			t.Fatalf("List length = %d, want 1", len(got))
+		}
+		if strings.Contains(got[0].Text, "SECRET") {
+			t.Fatalf("Text not redacted: %q", got[0].Text)
+		}
+		if strings.Contains(got[0].Topic, "SECRET") {
+			t.Fatalf("Topic not redacted: %q", got[0].Topic)
+		}
+		if strings.Contains(got[0].Source, "SECRET") {
+			t.Fatalf("Source not redacted: %q", got[0].Source)
+		}
+		if !strings.Contains(got[0].Text, "[X]") || !strings.Contains(got[0].Topic, "[X]") || !strings.Contains(got[0].Source, "[X]") {
+			t.Fatalf("redacted lesson = %#v, want [X] markers in text/topic/source", got[0])
+		}
+	})
+
+	t.Run("id derived from redacted text", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "lessons.jsonl")
+		store := NewStore(path, WithRedactor(func(s string) string {
+			return strings.ReplaceAll(s, "SECRET", "[X]")
+		}))
+
+		original := Lesson{Text: "contains SECRET token"}
+		if err := store.Append(original); err != nil {
+			t.Fatalf("Append() error = %v", err)
+		}
+
+		got, err := store.List()
+		if err != nil {
+			t.Fatalf("List() error = %v", err)
+		}
+		if len(got) != 1 {
+			t.Fatalf("List length = %d, want 1", len(got))
+		}
+		if got[0].ID != deriveID(got[0].Text) {
+			t.Fatalf("ID = %q, want deriveID(redacted text) = %q", got[0].ID, deriveID(got[0].Text))
+		}
+		if got[0].ID == deriveID(original.Text) {
+			t.Fatalf("ID = %q, want redacted-text-derived hash instead of original", got[0].ID)
+		}
+	})
+}
+
+func TestStoreAppendNilRedactor(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "lessons.jsonl")
+	store := NewStore(path)
+
+	if err := store.Append(Lesson{Text: "keeps SECRET literal"}); err != nil {
+		t.Fatalf("Append() error = %v", err)
+	}
+
+	got, err := store.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("List length = %d, want 1", len(got))
+	}
+	if !strings.Contains(got[0].Text, "SECRET") {
+		t.Fatalf("stored text = %q, want literal retained with no redactor", got[0].Text)
+	}
+}
+
+func TestStoreRotateArchiveDoesNotReRedact(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "lessons.jsonl")
+	calls := 0
+	store := NewStore(path, WithRedactor(func(s string) string {
+		calls++
+		return strings.ReplaceAll(s, "Z", "z")
+	}))
+
+	for i := 0; i < 3; i++ {
+		if err := store.Append(Lesson{
+			Text:    fmt.Sprintf("entry %d with Z", i),
+			Created: time.Now().Add(time.Duration(i) * time.Second),
+		}); err != nil {
+			t.Fatalf("Append() error = %v", err)
+		}
+	}
+	callsAfterAppend := calls
+
+	moved, err := store.Rotate(RotateOpts{KeepLast: 1})
+	if err != nil {
+		t.Fatalf("Rotate() error = %v", err)
+	}
+	if moved != 2 {
+		t.Fatalf("Rotate() moved = %d, want 2", moved)
+	}
+	if calls != callsAfterAppend {
+		t.Fatalf("redactor called during rotate: before=%d after=%d", callsAfterAppend, calls)
+	}
+}
+
+func TestStoreAppendWithRedactorConcurrent(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "lessons.jsonl")
+	store := NewStore(path, WithRedactor(func(s string) string {
+		return strings.ReplaceAll(s, "S", "s")
+	}))
+
+	var wg sync.WaitGroup
+	for g := 0; g < 10; g++ {
+		wg.Add(1)
+		go func(gID int) {
+			defer wg.Done()
+			for i := 0; i < 5; i++ {
+				if err := store.Append(Lesson{Text: fmt.Sprintf("g=%d i=%d S", gID, i)}); err != nil {
+					t.Errorf("Append() error = %v", err)
+				}
+			}
+		}(g)
+	}
+	wg.Wait()
+
+	got, err := store.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(got) != 50 {
+		t.Fatalf("List length = %d, want 50", len(got))
+	}
+	for _, lesson := range got {
+		if strings.ContainsRune(lesson.Text, 'S') {
+			t.Fatalf("stored text = %q, want redacted lowercase s", lesson.Text)
+		}
+	}
+}
+
 func TestStoreListFiltered(t *testing.T) {
 	t.Parallel()
 

@@ -456,7 +456,8 @@ Prefer research for question intents.
 		t.Fatalf("NewSession: %v", err)
 	}
 
-	messages, _, err := rt.runTask(context.Background(), sess, nil, "what changed in Stella?", orchestrationOutput{})
+	input := "what changed in AKIAIOSFODNN7EXAMPLE?"
+	messages, _, err := rt.runTask(context.Background(), sess, nil, input, orchestrationOutput{})
 	if err != nil {
 		t.Fatalf("runTask: %v", err)
 	}
@@ -466,8 +467,25 @@ Prefer research for question intents.
 	if messages[0].Role != llm.RoleUser || messages[1].Role != llm.RoleAssistant {
 		t.Fatalf("message roles = [%s, %s], want [user, assistant]", messages[0].Role, messages[1].Role)
 	}
-	if got := countExactUserTurns(messages, "what changed in Stella?"); got != 1 {
+	if got := countExactUserTurns(messages, input); got != 1 {
 		t.Fatalf("exact user turn count = %d, want 1", got)
+	}
+	data, err := os.ReadFile(filepath.Join(rt.workDir, "data", "lessons.jsonl"))
+	if err != nil {
+		t.Fatalf("ReadFile lessons.jsonl: %v", err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "Found something") {
+		t.Fatalf("lessons.jsonl = %q, want persisted research lesson", got)
+	}
+	if strings.Contains(got, "AKIAIOSFODNN7EXAMPLE") {
+		t.Fatalf("lessons.jsonl = %q, want secret redacted on research path", got)
+	}
+	if !strings.Contains(got, "[REDACTED:aws-access-key]") {
+		t.Fatalf("lessons.jsonl = %q, want aws redaction marker on research path", got)
+	}
+	if strings.Contains(got, `"source":"agent"`) {
+		t.Fatalf("lessons.jsonl = %q, want no agent lesson on research path", got)
 	}
 }
 
@@ -498,6 +516,34 @@ func TestExecutionRuntimeSingleWorkflowPersistsAgentLessons(t *testing.T) {
 	}
 }
 
+
+func TestExecutionRuntimeSingleWorkflowRedactsTopic(t *testing.T) {
+	provider := &learningRuntimeProvider{}
+	rt := newTestExecutionRuntime(t, provider)
+
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	input := "what changed in AKIAIOSFODNN7EXAMPLE?"
+	_, _, err = rt.runTask(context.Background(), sess, nil, input, orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(rt.workDir, "data", "lessons.jsonl"))
+	if err != nil {
+		t.Fatalf("ReadFile lessons.jsonl: %v", err)
+	}
+	got := string(data)
+	if strings.Contains(got, "AKIAIOSFODNN7EXAMPLE") {
+		t.Fatalf("lessons.jsonl = %q, want secret redacted on agent path", got)
+	}
+	if !strings.Contains(got, "[REDACTED:aws-access-key]") {
+		t.Fatalf("lessons.jsonl = %q, want aws redaction marker on agent path", got)
+	}
+}
 func TestDaemonTaskRunnerCreatesSessionAndUsesClassifier(t *testing.T) {
 	provider := &countingProvider{streamText: "daemon answer"}
 	rt := newTestExecutionRuntime(t, provider)

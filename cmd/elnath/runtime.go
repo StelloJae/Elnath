@@ -19,6 +19,7 @@ import (
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/orchestrator"
 	"github.com/stello/elnath/internal/prompt"
+	"github.com/stello/elnath/internal/secret"
 	"github.com/stello/elnath/internal/self"
 	"github.com/stello/elnath/internal/tools"
 	"github.com/stello/elnath/internal/wiki"
@@ -181,7 +182,11 @@ func buildExecutionRuntime(
 		Permission:    perm,
 	}
 	learningPath := filepath.Join(cfg.DataDir, "lessons.jsonl")
-	learningStore := learning.NewStore(learningPath)
+	learningDetector := secret.NewDetector()
+	learningStore := learning.NewStore(
+		learningPath,
+		learning.WithRedactor(learningDetector.RedactString),
+	)
 	b := prompt.NewBuilder()
 	b.Register(prompt.NewIdentityNode(100))
 	b.Register(prompt.NewPersonaNode(90))
@@ -333,6 +338,7 @@ func (rt *executionRuntime) runTask(
 			WikiIndex:  rt.wikiIdx,
 			WikiStore:  rt.wikiStore,
 			MaxRounds:  5,
+			LearningStore: rt.learningStore,
 			CostCapUSD: 1.0,
 		}
 	}

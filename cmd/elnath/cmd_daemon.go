@@ -19,6 +19,7 @@ import (
 	"github.com/stello/elnath/internal/daemon"
 	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/identity"
+	"github.com/stello/elnath/internal/secret"
 	"github.com/stello/elnath/internal/self"
 	"github.com/stello/elnath/internal/telegram"
 	"github.com/stello/elnath/internal/wiki"
@@ -112,7 +113,11 @@ func cmdDaemonStart(ctx context.Context) error {
 	app.Logger.Info("daemon workspace", "dir", workDir)
 
 	learningPath := filepath.Join(cfg.DataDir, "lessons.jsonl")
-	learningStore := learning.NewStore(learningPath)
+	learningDetector := secret.NewDetector()
+	learningStore := learning.NewStore(
+		learningPath,
+		learning.WithRedactor(learningDetector.RedactString),
+	)
 	autoRotateLessons(app.Logger, learningStore, learning.RotateOpts{
 		KeepLast: 5000,
 		MaxBytes: 1 << 20,
