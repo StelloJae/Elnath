@@ -39,6 +39,7 @@ func commandRegistry() map[string]commandRunner {
 		"search":   cmdSearch,
 		"eval":     cmdEval,
 		"task":     cmdTask,
+		"lessons":  cmdLessons,
 	}
 }
 

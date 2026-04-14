@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/core"
 	"github.com/stello/elnath/internal/daemon"
+	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/identity"
 	"github.com/stello/elnath/internal/self"
 	"github.com/stello/elnath/internal/telegram"
@@ -109,6 +111,13 @@ func cmdDaemonStart(ctx context.Context) error {
 	fallbackPrincipal.ProjectID = identity.ResolveProjectID(workDir, extractFlagValue(os.Args, "--project-id"))
 	app.Logger.Info("daemon workspace", "dir", workDir)
 
+	learningPath := filepath.Join(cfg.DataDir, "lessons.jsonl")
+	learningStore := learning.NewStore(learningPath)
+	autoRotateLessons(app.Logger, learningStore, learning.RotateOpts{
+		KeepLast: 5000,
+		MaxBytes: 1 << 20,
+	})
+
 	rt, err := buildExecutionRuntime(
 		ctx,
 		cfg,
@@ -187,6 +196,21 @@ func cmdDaemonStart(ctx context.Context) error {
 	}
 
 	return d.Start(ctx)
+}
+
+func autoRotateLessons(logger *slog.Logger, store *learning.Store, opts learning.RotateOpts) {
+	if store == nil {
+		return
+	}
+	n, err := store.AutoRotateIfNeeded(opts)
+	if logger == nil {
+		return
+	}
+	if err != nil {
+		logger.Warn("learning: auto-rotate failed", "error", err)
+	} else if n > 0 {
+		logger.Info("learning: auto-rotated lessons", "moved", n)
+	}
 }
 
 func cmdDaemonSubmit(ctx context.Context, args []string) error {
