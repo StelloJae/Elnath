@@ -92,7 +92,10 @@ func (w *ResearchWorkflow) Run(ctx context.Context, input WorkflowInput) (*Workf
 	}
 	research.ApplyLearning(result, deps.LearningStore, deps.SelfState, w.logger)
 
-	messages := append(input.Messages, llm.NewAssistantMessage(result.Summary))
+	messages := append(input.Messages,
+		llm.NewUserMessage(input.Message),
+		llm.NewAssistantMessage(result.Summary),
+	)
 
 	return &WorkflowResult{
 		Messages: messages,

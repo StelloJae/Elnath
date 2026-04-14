@@ -36,9 +36,9 @@ type TaskResult struct {
 	SessionID string `json:"session_id,omitempty"`
 }
 
-// TaskRunner executes one queued task and returns structured task output.
+// AgentTaskRunner executes one queued task and returns structured task output.
 // Callers may forward streamed text through onText during execution.
-type TaskRunner func(ctx context.Context, payload string, onText func(string)) (TaskResult, error)
+type AgentTaskRunner func(ctx context.Context, payload string, onText func(string)) (TaskResult, error)
 
 // ProgressObserver receives real-time progress updates for running tasks.
 type ProgressObserver interface {
@@ -51,7 +51,7 @@ type Daemon struct {
 	listener          net.Listener
 	socketPath        string
 	maxWorkers        int
-	taskRunner        TaskRunner
+	taskRunner        AgentTaskRunner
 	fallbackPrincipal identity.Principal
 	logger            *slog.Logger
 	deliveryRouter    *DeliveryRouter
@@ -64,7 +64,7 @@ type Daemon struct {
 }
 
 // New creates a Daemon. Call Start to begin listening and processing.
-func New(queue *Queue, socketPath string, maxWorkers int, runner TaskRunner, logger *slog.Logger) *Daemon {
+func New(queue *Queue, socketPath string, maxWorkers int, runner AgentTaskRunner, logger *slog.Logger) *Daemon {
 	if maxWorkers < 1 {
 		maxWorkers = 1
 	}

@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/stello/elnath/internal/core"
@@ -101,8 +103,34 @@ func (a *Agent) ResetReadTrackerDedup() {
 
 // RunResult is returned after the agent loop completes.
 type RunResult struct {
-	Messages []llm.Message
-	Usage    llm.UsageStats
+	Messages     []llm.Message
+	Usage        llm.UsageStats
+	ToolStats    []ToolStat
+	Iterations   int
+	FinishReason FinishReason
+}
+
+// ToolStat aggregates execution outcomes for a single tool across one Run.
+type ToolStat struct {
+	Name      string
+	Calls     int
+	Errors    int
+	TotalTime time.Duration
+}
+
+type FinishReason string
+
+const (
+	FinishReasonStop           FinishReason = "stop"
+	FinishReasonBudgetExceeded FinishReason = "budget_exceeded"
+	FinishReasonAckLoop        FinishReason = "ack_loop"
+	FinishReasonError          FinishReason = "error"
+)
+
+type toolStatAcc struct {
+	calls  int
+	errors int
+	total  time.Duration
 }
 
 // Run executes the agent loop starting with the provided messages.
@@ -114,8 +142,14 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, onText func(str
 
 	totalUsage := llm.UsageStats{}
 	ackRetries := 0
+	iterations := 0
+	finishReason := FinishReasonBudgetExceeded
+	toolStats := map[string]*toolStatAcc{}
+	var toolStatsMu sync.Mutex
 
 	for iter := 0; iter < a.maxIterations; iter++ {
+		iterations++
+
 		// Budget pressure injection.
 		if pct := float64(iter) / float64(a.maxIterations); pct >= 0.9 {
 			messages = append(messages, llm.NewUserMessage(fmt.Sprintf(
@@ -152,18 +186,23 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, onText func(str
 		toolCalls := llm.ExtractToolUseBlocks(assistantMsg)
 		if len(toolCalls) == 0 {
 			// Ack-continuation: force execution when model only states intent.
-			if isAckOnly(assistantMsg.Text()) && ackRetries < 2 {
-				ackRetries++
-				messages = append(messages, llm.NewUserMessage(
-					"[System: Continue now. Execute the required tool calls. Do not describe what you plan to do — do it.]"))
-				continue
+			if isAckOnly(assistantMsg.Text()) {
+				if ackRetries < 2 {
+					ackRetries++
+					messages = append(messages, llm.NewUserMessage(
+						"[System: Continue now. Execute the required tool calls. Do not describe what you plan to do — do it.]"))
+					continue
+				}
+				finishReason = FinishReasonAckLoop
+				break
 			}
+			finishReason = FinishReasonStop
 			break
 		}
 		ackRetries = 0
 
 		// Execute each tool call and collect results.
-		messages, err = a.executeTools(ctx, messages, toolCalls, onText)
+		messages, err = a.executeToolsWithStats(ctx, messages, toolCalls, onText, toolStats, &toolStatsMu)
 		if err != nil {
 			return nil, err
 		}
@@ -187,7 +226,13 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, onText func(str
 		}
 	}
 
-	return &RunResult{Messages: messages, Usage: totalUsage}, nil
+	return &RunResult{
+		Messages:     messages,
+		Usage:        totalUsage,
+		ToolStats:    finalizeToolStats(toolStats),
+		Iterations:   iterations,
+		FinishReason: finishReason,
+	}, nil
 }
 
 // streamWithRetry calls the provider with exponential backoff on 429/5xx errors.
@@ -340,17 +385,52 @@ func (a *Agent) stream(ctx context.Context, req llm.Request, onText func(string)
 
 // toolExecResult holds the result of a single tool execution for ordered collection.
 type toolExecResult struct {
-	id      string
-	output  string
-	isError bool
+	id       string
+	name     string
+	output   string
+	isError  bool
+	duration time.Duration
+}
+
+func mergeToolStat(m map[string]*toolStatAcc, mu *sync.Mutex, name string, dur time.Duration, hadErr bool) {
+	mu.Lock()
+	defer mu.Unlock()
+	acc := m[name]
+	if acc == nil {
+		acc = &toolStatAcc{}
+		m[name] = acc
+	}
+	acc.calls++
+	if hadErr {
+		acc.errors++
+	}
+	acc.total += dur
+}
+
+func finalizeToolStats(m map[string]*toolStatAcc) []ToolStat {
+	out := make([]ToolStat, 0, len(m))
+	for name, acc := range m {
+		out = append(out, ToolStat{
+			Name:      name,
+			Calls:     acc.calls,
+			Errors:    acc.errors,
+			TotalTime: acc.total,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 func (a *Agent) executeTools(ctx context.Context, messages []llm.Message, calls []llm.ToolUseBlock, onText func(string)) ([]llm.Message, error) {
+	return a.executeToolsWithStats(ctx, messages, calls, onText, nil, nil)
+}
+
+func (a *Agent) executeToolsWithStats(ctx context.Context, messages []llm.Message, calls []llm.ToolUseBlock, onText func(string), toolStats map[string]*toolStatAcc, toolStatsMu *sync.Mutex) ([]llm.Message, error) {
 	results, approved, err := a.collectApprovedToolCalls(ctx, calls, onText)
 	if err != nil {
 		return nil, err
 	}
-	if err := a.executeApprovedToolCalls(ctx, approved, results); err != nil {
+	if err := a.executeApprovedToolCalls(ctx, approved, results, toolStats, toolStatsMu); err != nil {
 		return nil, err
 	}
 	return a.appendToolResults(messages, results), nil

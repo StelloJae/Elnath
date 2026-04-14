@@ -75,7 +75,7 @@ func sendIPC(t *testing.T, socketPath string, req IPCRequest) IPCResponse {
 
 // startDaemon spins up a Daemon in a background goroutine and waits until the
 // Unix socket is ready. It registers a t.Cleanup to stop the daemon.
-func startDaemon(t *testing.T, q *Queue, socketPath string, runner TaskRunner, workers int) *Daemon {
+func startDaemon(t *testing.T, q *Queue, socketPath string, runner AgentTaskRunner, workers int) *Daemon {
 	t.Helper()
 
 	d := New(q, socketPath, workers, runner, nil)

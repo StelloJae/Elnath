@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stello/elnath/internal/core"
 	"github.com/stello/elnath/internal/llm"
@@ -41,16 +42,25 @@ type mockTool struct {
 	name        string
 	description string
 	schema      json.RawMessage
+	safe        bool
+	reversible  bool
+	scope       tools.ToolScope
+	cancelOnErr bool
 	executeFn   func(ctx context.Context, params json.RawMessage) (*tools.Result, error)
 }
 
 func (t *mockTool) Name() string                           { return t.name }
 func (t *mockTool) Description() string                    { return t.description }
 func (t *mockTool) Schema() json.RawMessage                { return t.schema }
-func (t *mockTool) IsConcurrencySafe(json.RawMessage) bool { return false }
-func (t *mockTool) Reversible() bool                       { return false }
-func (t *mockTool) Scope(json.RawMessage) tools.ToolScope  { return tools.ConservativeScope() }
-func (t *mockTool) ShouldCancelSiblingsOnError() bool      { return false }
+func (t *mockTool) IsConcurrencySafe(json.RawMessage) bool { return t.safe }
+func (t *mockTool) Reversible() bool                       { return t.reversible }
+func (t *mockTool) Scope(json.RawMessage) tools.ToolScope {
+	if len(t.scope.ReadPaths) == 0 && len(t.scope.WritePaths) == 0 && !t.scope.Network && !t.scope.Persistent {
+		return tools.ConservativeScope()
+	}
+	return t.scope
+}
+func (t *mockTool) ShouldCancelSiblingsOnError() bool { return t.cancelOnErr }
 func (t *mockTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
 	if t.executeFn != nil {
 		return t.executeFn(ctx, params)
@@ -189,6 +199,56 @@ func textOnlyStreamFn(text string) func(ctx context.Context, req llm.ChatRequest
 	}
 }
 
+func streamMessages(messages ...llm.Message) func(ctx context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
+	call := 0
+	return func(ctx context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
+		if call >= len(messages) {
+			return fmt.Errorf("unexpected stream call %d", call+1)
+		}
+		msg := messages[call]
+		call++
+
+		for _, block := range msg.Content {
+			switch b := block.(type) {
+			case llm.TextBlock:
+				if b.Text != "" {
+					cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: b.Text})
+				}
+			case llm.ToolUseBlock:
+				cb(llm.StreamEvent{Type: llm.EventToolUseStart, ToolCall: &llm.ToolUseEvent{ID: b.ID, Name: b.Name}})
+				cb(llm.StreamEvent{Type: llm.EventToolUseDone, ToolCall: &llm.ToolUseEvent{ID: b.ID, Name: b.Name, Input: string(b.Input)}})
+			}
+		}
+
+		usage := llm.UsageStats{InputTokens: 1, OutputTokens: 1}
+		cb(llm.StreamEvent{Type: llm.EventDone, Usage: &usage})
+		return nil
+	}
+}
+
+func assistantMessage(text string, toolCalls ...llm.CompletedToolCall) llm.Message {
+	return llm.BuildAssistantMessage([]string{text}, toolCalls)
+}
+
+func assertToolStats(t *testing.T, got []ToolStat, want []ToolStat) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("len(ToolStats) = %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i].Name != want[i].Name || got[i].Calls != want[i].Calls || got[i].Errors != want[i].Errors {
+			t.Fatalf("ToolStats[%d] = %#v, want %#v", i, got[i], want[i])
+		}
+	}
+}
+
+func assertToolTimeAtLeast(t *testing.T, stat ToolStat, wantMin time.Duration) {
+	t.Helper()
+	if stat.TotalTime < wantMin {
+		t.Fatalf("ToolStat(%s).TotalTime = %s, want >= %s", stat.Name, stat.TotalTime, wantMin)
+	}
+}
+
 func TestRunNoToolCalls(t *testing.T) {
 	reg := tools.NewRegistry()
 	p := &mockProvider{
@@ -220,6 +280,148 @@ func TestRunNoToolCalls(t *testing.T) {
 	if last.Text() != "Hello, world!" {
 		t.Errorf("last message text = %q, want %q", last.Text(), "Hello, world!")
 	}
+}
+
+func TestRunResult(t *testing.T) {
+	t.Run("ToolStats", func(t *testing.T) {
+		reg := tools.NewRegistry()
+		bashCalls := 0
+		reg.Register(&mockTool{
+			name:        "bash",
+			description: "shell",
+			schema:      json.RawMessage(`{"type":"object"}`),
+			executeFn: func(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
+				time.Sleep(5 * time.Millisecond)
+				bashCalls++
+				if bashCalls == 2 {
+					return nil, errors.New("boom")
+				}
+				return tools.SuccessResult("bash ok"), nil
+			},
+		})
+		reg.Register(&mockTool{
+			name:        "file",
+			description: "file",
+			schema:      json.RawMessage(`{"type":"object"}`),
+			executeFn: func(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
+				time.Sleep(5 * time.Millisecond)
+				return tools.SuccessResult("file ok"), nil
+			},
+		})
+
+		p := &mockProvider{streamFn: streamMessages(
+			assistantMessage("",
+				llm.CompletedToolCall{ID: "bash-1", Name: "bash", Input: `{}`},
+				llm.CompletedToolCall{ID: "file-1", Name: "file", Input: `{}`},
+			),
+			assistantMessage("", llm.CompletedToolCall{ID: "bash-2", Name: "bash", Input: `{}`}),
+			assistantMessage("done"),
+		)}
+
+		result, err := New(p, reg).Run(context.Background(), []llm.Message{llm.NewUserMessage("run")}, nil)
+		if err != nil {
+			t.Fatalf("Run returned error: %v", err)
+		}
+
+		assertToolStats(t, result.ToolStats, []ToolStat{
+			{Name: "bash", Calls: 2, Errors: 1},
+			{Name: "file", Calls: 1, Errors: 0},
+		})
+		assertToolTimeAtLeast(t, result.ToolStats[0], 10*time.Millisecond)
+		assertToolTimeAtLeast(t, result.ToolStats[1], 5*time.Millisecond)
+	})
+
+	t.Run("FinishReason Stop", func(t *testing.T) {
+		result, err := New(&mockProvider{streamFn: streamMessages(assistantMessage("all done"))}, tools.NewRegistry()).Run(
+			context.Background(),
+			[]llm.Message{llm.NewUserMessage("hi")},
+			nil,
+		)
+		if err != nil {
+			t.Fatalf("Run returned error: %v", err)
+		}
+		if result.FinishReason != FinishReasonStop {
+			t.Fatalf("FinishReason = %q, want %q", result.FinishReason, FinishReasonStop)
+		}
+		if result.Iterations != 1 {
+			t.Fatalf("Iterations = %d, want 1", result.Iterations)
+		}
+	})
+
+	t.Run("FinishReason BudgetExceeded", func(t *testing.T) {
+		reg := tools.NewRegistry()
+		reg.Register(&mockTool{name: "loop_tool", description: "loop", schema: json.RawMessage(`{"type":"object"}`)})
+		p := &mockProvider{streamFn: streamMessages(
+			assistantMessage("", llm.CompletedToolCall{ID: "tool-1", Name: "loop_tool", Input: `{}`}),
+			assistantMessage("", llm.CompletedToolCall{ID: "tool-2", Name: "loop_tool", Input: `{}`}),
+		)}
+
+		result, err := New(p, reg, WithMaxIterations(2)).Run(context.Background(), []llm.Message{llm.NewUserMessage("go")}, nil)
+		if err != nil {
+			t.Fatalf("Run returned error: %v", err)
+		}
+		if result.FinishReason != FinishReasonBudgetExceeded {
+			t.Fatalf("FinishReason = %q, want %q", result.FinishReason, FinishReasonBudgetExceeded)
+		}
+		if result.Iterations != 2 {
+			t.Fatalf("Iterations = %d, want 2", result.Iterations)
+		}
+	})
+
+	t.Run("FinishReason AckLoop", func(t *testing.T) {
+		p := &mockProvider{streamFn: streamMessages(
+			assistantMessage("I'll inspect the files."),
+			assistantMessage("I'll inspect the files."),
+			assistantMessage("I'll inspect the files."),
+		)}
+
+		result, err := New(p, tools.NewRegistry()).Run(context.Background(), []llm.Message{llm.NewUserMessage("hi")}, nil)
+		if err != nil {
+			t.Fatalf("Run returned error: %v", err)
+		}
+		if result.FinishReason != FinishReasonAckLoop {
+			t.Fatalf("FinishReason = %q, want %q", result.FinishReason, FinishReasonAckLoop)
+		}
+		if result.Iterations != 3 {
+			t.Fatalf("Iterations = %d, want 3", result.Iterations)
+		}
+	})
+
+	t.Run("ToolStats Parallel", func(t *testing.T) {
+		reg := tools.NewRegistry()
+		reg.Register(&mockTool{
+			name:        "parallel",
+			description: "parallel tool",
+			schema:      json.RawMessage(`{"type":"object"}`),
+			safe:        true,
+			executeFn: func(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
+				time.Sleep(10 * time.Millisecond)
+				return tools.SuccessResult("ok"), nil
+			},
+		})
+
+		calls := make([]llm.CompletedToolCall, 0, 8)
+		for i := 0; i < 8; i++ {
+			calls = append(calls, llm.CompletedToolCall{
+				ID:    fmt.Sprintf("parallel-%d", i),
+				Name:  "parallel",
+				Input: `{}`,
+			})
+		}
+
+		p := &mockProvider{streamFn: streamMessages(
+			assistantMessage("", calls...),
+			assistantMessage("done"),
+		)}
+
+		result, err := New(p, reg).Run(context.Background(), []llm.Message{llm.NewUserMessage("parallel")}, nil)
+		if err != nil {
+			t.Fatalf("Run returned error: %v", err)
+		}
+
+		assertToolStats(t, result.ToolStats, []ToolStat{{Name: "parallel", Calls: 8, Errors: 0}})
+		assertToolTimeAtLeast(t, result.ToolStats[0], 60*time.Millisecond)
+	})
 }
 
 func TestRunFallsBackToChatOnEmptyStream(t *testing.T) {

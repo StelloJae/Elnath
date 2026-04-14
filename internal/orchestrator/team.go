@@ -51,6 +51,9 @@ func (w *TeamWorkflow) Run(ctx context.Context, input WorkflowInput) (*WorkflowR
 	if input.OnText != nil {
 		input.OnText("[team] planning subtasks\n")
 	}
+	workflowInput := input
+	workflowInput.Messages = append(workflowInput.Messages, llm.NewUserMessage(input.Message))
+
 	subtasks, err := w.planSubtasks(ctx, input)
 	if err != nil {
 		w.logger.Warn("team workflow: planner failed, falling back to single workflow", "error", err)
@@ -71,12 +74,12 @@ func (w *TeamWorkflow) Run(ctx context.Context, input WorkflowInput) (*WorkflowR
 		input.OnText(fmt.Sprintf("[team] planned %d subtasks\n", len(subtasks)))
 	}
 
-	results, totalUsage, err := w.runSubtasks(ctx, input, subtasks)
+	results, totalUsage, err := w.runSubtasks(ctx, workflowInput, subtasks)
 	if err != nil {
 		return nil, fmt.Errorf("team workflow: execute: %w", err)
 	}
 
-	finalMessages, summary, synthUsage, err := w.synthesise(ctx, input, results)
+	finalMessages, summary, synthUsage, err := w.synthesise(ctx, workflowInput, results)
 	if err != nil {
 		return nil, fmt.Errorf("team workflow: synthesise: %w", err)
 	}

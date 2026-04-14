@@ -15,6 +15,7 @@ import (
 	"github.com/stello/elnath/internal/core"
 	"github.com/stello/elnath/internal/daemon"
 	"github.com/stello/elnath/internal/identity"
+	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/orchestrator"
 	"github.com/stello/elnath/internal/prompt"
@@ -88,6 +89,7 @@ type executionRuntime struct {
 	reg           *tools.Registry
 	wfCfg         orchestrator.WorkflowConfig
 	promptBuilder *prompt.Builder
+	learningStore *learning.Store
 	selfState     *self.SelfState
 	personaExtra  string
 	wikiIdx       *wiki.Index
@@ -178,6 +180,8 @@ func buildExecutionRuntime(
 		Hooks:         hooks,
 		Permission:    perm,
 	}
+	learningPath := filepath.Join(cfg.DataDir, "lessons.jsonl")
+	learningStore := learning.NewStore(learningPath)
 	b := prompt.NewBuilder()
 	b.Register(prompt.NewIdentityNode(100))
 	b.Register(prompt.NewPersonaNode(90))
@@ -197,6 +201,7 @@ func buildExecutionRuntime(
 		reg:           reg,
 		wfCfg:         wfCfg,
 		promptBuilder: b,
+		learningStore: learningStore,
 		selfState:     selfState,
 		personaExtra:  personaExtra,
 		wikiIdx:       wikiIdx,
@@ -221,6 +226,17 @@ func buildHookRegistry(cfgHooks []config.HookConfig) *agent.HookRegistry {
 		})
 	}
 	return hooks
+}
+
+func (rt *executionRuntime) learningDeps() *orchestrator.LearningDeps {
+	if rt.learningStore == nil || benchmarkModeEnabled() {
+		return nil
+	}
+	return &orchestrator.LearningDeps{
+		Store:     rt.learningStore,
+		SelfState: rt.selfState,
+		Logger:    rt.app.Logger,
+	}
 }
 
 func (rt *executionRuntime) runTask(
@@ -302,12 +318,15 @@ func (rt *executionRuntime) runTask(
 
 	input := orchestrator.WorkflowInput{
 		Message:  userInput,
-		Messages: prepared,
+		Messages: promptMessages,
 		Session:  sess,
 		Tools:    rt.reg,
 		Provider: rt.provider,
 		Config:   cfg,
 		OnText:   output.emitText,
+	}
+	if wf.Name() == "single" {
+		input.Learning = rt.learningDeps()
 	}
 	if wf.Name() == "research" && rt.wikiIdx != nil && rt.wikiStore != nil {
 		input.Extra = &orchestrator.ResearchDeps{
@@ -345,16 +364,16 @@ func taskLanguageFromEnv() string {
 func maxIterationsFromEnv() int {
 	raw := os.Getenv("ELNATH_MAX_ITERATIONS")
 	if raw == "" {
-		return 0
+		return 50
 	}
 	n, err := strconv.Atoi(raw)
 	if err != nil || n <= 0 {
-		return 0
+		return 50
 	}
 	return n
 }
 
-func (rt *executionRuntime) newDaemonTaskRunner() daemon.TaskRunner {
+func (rt *executionRuntime) newDaemonTaskRunner() daemon.AgentTaskRunner {
 	return func(ctx context.Context, payload string, onText func(string)) (daemon.TaskResult, error) {
 		taskPayload := daemon.ParseTaskPayload(payload)
 		userInput := taskPayload.Prompt

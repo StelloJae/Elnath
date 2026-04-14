@@ -27,6 +27,24 @@ type countingProvider struct {
 	lastSystem  string
 }
 
+type sequenceStreamProvider struct {
+	chatCalls int
+	responses []string
+	idx       int
+}
+
+type researchRuntimeProvider struct {
+	responses  []string
+	idx        int
+	lastSystem string
+	usage      llm.UsageStats
+}
+
+type learningRuntimeProvider struct {
+	chatCalls   int
+	streamCalls int
+}
+
 type stubWorkflow struct{ name string }
 
 func (w *stubWorkflow) Name() string { return w.name }
@@ -64,6 +82,97 @@ func (p *countingProvider) Stream(_ context.Context, req llm.ChatRequest, cb fun
 		Usage: &llm.UsageStats{InputTokens: 11, OutputTokens: 7},
 	})
 	return nil
+}
+
+func (p *sequenceStreamProvider) Name() string { return "mock" }
+
+func (p *sequenceStreamProvider) Models() []llm.ModelInfo { return nil }
+
+func (p *sequenceStreamProvider) Chat(_ context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	p.chatCalls++
+	if strings.Contains(req.System, "intent classifier") {
+		return &llm.ChatResponse{Content: `{"intent":"question","confidence":0.95}`}, nil
+	}
+	return &llm.ChatResponse{}, nil
+}
+
+func (p *sequenceStreamProvider) Stream(_ context.Context, _ llm.ChatRequest, cb func(llm.StreamEvent)) error {
+	text := ""
+	if len(p.responses) > 0 {
+		if p.idx < len(p.responses) {
+			text = p.responses[p.idx]
+		} else {
+			text = p.responses[len(p.responses)-1]
+		}
+		p.idx++
+	}
+	if text != "" {
+		cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: text})
+	}
+	cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{InputTokens: 11, OutputTokens: 7}})
+	return nil
+}
+
+func (p *researchRuntimeProvider) Name() string { return "mock" }
+
+func (p *researchRuntimeProvider) Models() []llm.ModelInfo { return nil }
+
+func (p *researchRuntimeProvider) Chat(_ context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	if strings.Contains(req.System, "intent classifier") {
+		return &llm.ChatResponse{Content: `{"intent":"question","confidence":0.95}`}, nil
+	}
+	p.lastSystem = req.System
+	content := p.responses[p.idx]
+	p.idx++
+	return &llm.ChatResponse{Content: content}, nil
+}
+
+func (p *researchRuntimeProvider) Stream(_ context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
+	p.lastSystem = req.System
+	content := p.responses[p.idx]
+	p.idx++
+	usage := p.usage
+	if usage == (llm.UsageStats{}) {
+		usage = llm.UsageStats{InputTokens: 10, OutputTokens: 5}
+	}
+	cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: content})
+	cb(llm.StreamEvent{Type: llm.EventDone, Usage: &usage})
+	return nil
+}
+
+func (p *learningRuntimeProvider) Name() string { return "mock" }
+
+func (p *learningRuntimeProvider) Models() []llm.ModelInfo { return nil }
+
+func (p *learningRuntimeProvider) Chat(_ context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	p.chatCalls++
+	if strings.Contains(req.System, "intent classifier") {
+		return &llm.ChatResponse{Content: `{"intent":"question","confidence":0.95}`}, nil
+	}
+	return &llm.ChatResponse{}, nil
+}
+
+func (p *learningRuntimeProvider) Stream(_ context.Context, _ llm.ChatRequest, cb func(llm.StreamEvent)) error {
+	p.streamCalls++
+	if p.streamCalls == 1 {
+		cb(llm.StreamEvent{Type: llm.EventToolUseStart, ToolCall: &llm.ToolUseEvent{ID: "bash-1", Name: "bash"}})
+		cb(llm.StreamEvent{Type: llm.EventToolUseDone, ToolCall: &llm.ToolUseEvent{ID: "bash-1", Name: "bash", Input: `{"command":"pwd"}`}})
+		cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{InputTokens: 10, OutputTokens: 5}})
+		return nil
+	}
+	cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: "done"})
+	cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{InputTokens: 5, OutputTokens: 3}})
+	return nil
+}
+
+func countExactUserTurns(messages []llm.Message, want string) int {
+	count := 0
+	for _, msg := range messages {
+		if msg.Role == llm.RoleUser && msg.Text() == want {
+			count++
+		}
+	}
+	return count
 }
 
 func newTestExecutionRuntime(t *testing.T, provider llm.Provider) *executionRuntime {
@@ -313,6 +422,82 @@ preferred_workflows: [question
 	}
 }
 
+func TestExecutionRuntimeRunTaskDoesNotDuplicateCurrentUserTurn_Research(t *testing.T) {
+	provider := &researchRuntimeProvider{responses: []string{
+		`[{"id":"H1","statement":"Useful hypothesis","rationale":"Because","test_plan":"Do X","priority":1}]`,
+		`I investigated. {"findings":"Found something","evidence":"Data","confidence":"high","supported":true}`,
+		`[{"id":"H2","statement":"Useful hypothesis 2","rationale":"Because","test_plan":"Do Y","priority":1}]`,
+		`I investigated. {"findings":"Found something else","evidence":"More data","confidence":"high","supported":true}`,
+		`Research summary`,
+	}}
+	rt := newTestExecutionRuntime(t, provider)
+	rt.principal = identity.Principal{UserID: "legacy", ProjectID: "elnath", Surface: "cli"}
+
+	relPath := filepath.Join("projects", "elnath", "routing-preferences.md")
+	absPath := filepath.Join(rt.wikiStore.WikiDir(), relPath)
+	if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	raw := `---
+title: Project Routing Preferences
+type: concept
+preferred_workflows:
+  question: research
+---
+
+Prefer research for question intents.
+`
+	if err := os.WriteFile(absPath, []byte(raw), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	messages, _, err := rt.runTask(context.Background(), sess, nil, "what changed in Stella?", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask: %v", err)
+	}
+	if len(messages) != 2 {
+		t.Fatalf("message count = %d, want 2", len(messages))
+	}
+	if messages[0].Role != llm.RoleUser || messages[1].Role != llm.RoleAssistant {
+		t.Fatalf("message roles = [%s, %s], want [user, assistant]", messages[0].Role, messages[1].Role)
+	}
+	if got := countExactUserTurns(messages, "what changed in Stella?"); got != 1 {
+		t.Fatalf("exact user turn count = %d, want 1", got)
+	}
+}
+
+func TestExecutionRuntimeSingleWorkflowPersistsAgentLessons(t *testing.T) {
+	provider := &learningRuntimeProvider{}
+	rt := newTestExecutionRuntime(t, provider)
+
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	_, _, err = rt.runTask(context.Background(), sess, nil, "what changed in Stella?", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(rt.workDir, "data", "lessons.jsonl"))
+	if err != nil {
+		t.Fatalf("ReadFile lessons.jsonl: %v", err)
+	}
+	got := string(data)
+	if !strings.Contains(got, `"source":"agent"`) {
+		t.Fatalf("lessons.jsonl = %q, want agent lesson", got)
+	}
+	if !strings.Contains(got, "Efficient completion") {
+		t.Fatalf("lessons.jsonl = %q, want efficient completion lesson", got)
+	}
+}
+
 func TestDaemonTaskRunnerCreatesSessionAndUsesClassifier(t *testing.T) {
 	provider := &countingProvider{streamText: "daemon answer"}
 	rt := newTestExecutionRuntime(t, provider)
@@ -372,6 +557,28 @@ func TestDaemonTaskRunnerCreatesSessionAndUsesClassifier(t *testing.T) {
 	}
 	if streamed.Len() == 0 {
 		t.Fatal("expected streamed daemon output")
+	}
+}
+
+func TestDaemonTaskRunnerPersistsAgentLessons(t *testing.T) {
+	provider := &learningRuntimeProvider{}
+	rt := newTestExecutionRuntime(t, provider)
+
+	result, err := rt.newDaemonTaskRunner()(context.Background(), "tell me current directory", nil)
+	if err != nil {
+		t.Fatalf("daemon task runner: %v", err)
+	}
+	if result.SessionID == "" {
+		t.Fatal("expected daemon task runner session ID")
+	}
+
+	data, err := os.ReadFile(filepath.Join(rt.workDir, "data", "lessons.jsonl"))
+	if err != nil {
+		t.Fatalf("ReadFile lessons.jsonl: %v", err)
+	}
+	got := string(data)
+	if !strings.Contains(got, `"source":"agent"`) {
+		t.Fatalf("lessons.jsonl = %q, want agent lesson", got)
 	}
 }
 
@@ -699,5 +906,68 @@ func TestExecutionRuntimePromptSessionSummaryUsesPriorPreparedHistory(t *testing
 	}
 	if strings.Contains(provider.lastSystem, "second user request") {
 		t.Fatalf("system prompt should not duplicate current user input\n%s", provider.lastSystem)
+	}
+}
+
+func TestExecutionRuntimeRunTaskDoesNotDuplicateCurrentUserTurn(t *testing.T) {
+	provider := &countingProvider{streamText: "runtime answer"}
+	rt := newTestExecutionRuntime(t, provider)
+
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	messages, _, err := rt.runTask(context.Background(), sess, nil, "first user request", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask: %v", err)
+	}
+	if len(messages) != 2 {
+		t.Fatalf("messages len = %d, want 2", len(messages))
+	}
+	if got := messages[0].Text(); got != "first user request" {
+		t.Fatalf("messages[0] = %q, want original user request", got)
+	}
+}
+
+func TestExecutionRuntimeRunTaskDoesNotDuplicateCurrentUserTurn_Autopilot(t *testing.T) {
+	provider := &countingProvider{streamText: "runtime answer"}
+	rt := newTestExecutionRuntime(t, provider)
+	rt.router = orchestrator.NewRouter(map[string]orchestrator.Workflow{
+		"single": orchestrator.NewAutopilotWorkflow(),
+	})
+
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	messages, _, err := rt.runTask(context.Background(), sess, nil, "build a new feature", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask: %v", err)
+	}
+	if got := countExactUserTurns(messages, "build a new feature"); got != 1 {
+		t.Fatalf("exact user turn count = %d, want 1", got)
+	}
+}
+
+func TestExecutionRuntimeRunTaskDoesNotDuplicateCurrentUserTurn_Ralph(t *testing.T) {
+	provider := &sequenceStreamProvider{responses: []string{"runtime answer", "PASS"}}
+	rt := newTestExecutionRuntime(t, provider)
+	rt.router = orchestrator.NewRouter(map[string]orchestrator.Workflow{
+		"single": orchestrator.NewRalphWorkflow(),
+	})
+
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	messages, _, err := rt.runTask(context.Background(), sess, nil, "fix regression and add tests", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask: %v", err)
+	}
+	if got := countExactUserTurns(messages, "fix regression and add tests"); got != 1 {
+		t.Fatalf("exact user turn count = %d, want 1", got)
 	}
 }

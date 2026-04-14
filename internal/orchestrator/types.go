@@ -2,9 +2,12 @@ package orchestrator
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/stello/elnath/internal/agent"
+	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
+	"github.com/stello/elnath/internal/self"
 	"github.com/stello/elnath/internal/tools"
 )
 
@@ -23,7 +26,14 @@ type WorkflowInput struct {
 	Provider llm.Provider
 	Config   WorkflowConfig
 	OnText   func(string) // streaming text callback (nil = silent)
-	Extra    interface{}   // workflow-specific dependencies (e.g. *ResearchDeps)
+	Extra    interface{}  // workflow-specific dependencies (e.g. *ResearchDeps)
+	Learning *LearningDeps
+}
+
+type LearningDeps struct {
+	Store     *learning.Store
+	SelfState *self.SelfState
+	Logger    *slog.Logger
 }
 
 // WorkflowResult is the output of a completed workflow execution.

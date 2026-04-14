@@ -16,6 +16,8 @@ import (
 	"github.com/stello/elnath/internal/wiki"
 )
 
+var _ daemon.TaskRunner = (*TaskRunner)(nil)
+
 type TaskRunner struct {
 	provider      llm.Provider
 	model         string
@@ -96,16 +98,16 @@ func NewTaskRunner(
 	return r
 }
 
-func (r *TaskRunner) Run(ctx context.Context, payload daemon.TaskPayload, onText func(string)) (daemon.TaskResult, error) {
+func (r *TaskRunner) Run(ctx context.Context, payload daemon.TaskPayload, onText func(string)) (daemon.TaskRunnerResult, error) {
 	topic := strings.TrimSpace(payload.Prompt)
 	if topic == "" {
-		return daemon.TaskResult{}, fmt.Errorf("research topic is required")
+		return daemon.TaskRunnerResult{}, fmt.Errorf("research topic is required")
 	}
 	if r.provider == nil {
-		return daemon.TaskResult{}, fmt.Errorf("research provider not configured")
+		return daemon.TaskRunnerResult{}, fmt.Errorf("research provider not configured")
 	}
 	if r.wikiIdx == nil || r.wikiStore == nil {
-		return daemon.TaskResult{}, fmt.Errorf("research wiki not configured")
+		return daemon.TaskRunnerResult{}, fmt.Errorf("research wiki not configured")
 	}
 	sessionID := payload.SessionID
 	if sessionID == "" {
@@ -135,11 +137,11 @@ func (r *TaskRunner) Run(ctx context.Context, payload daemon.TaskPayload, onText
 
 	result, err := loop.Run(ctx, topic)
 	if err != nil {
-		return daemon.TaskResult{}, err
+		return daemon.TaskRunnerResult{}, err
 	}
 	r.applyLearning(result)
 	raw, _ := json.Marshal(result)
-	return daemon.TaskResult{
+	return daemon.TaskRunnerResult{
 		Summary:   result.Summary,
 		Result:    string(raw),
 		SessionID: sessionID,

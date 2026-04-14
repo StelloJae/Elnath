@@ -55,6 +55,9 @@ func TestTeamWorkflow_E2E(t *testing.T) {
 	if !strings.Contains(streamed.String(), "Combined") {
 		t.Errorf("expected synthesized stream output, got %q", streamed.String())
 	}
+	if got := countExactUserRoleText(result.Messages, "Design a blog API"); got != 1 {
+		t.Fatalf("exact user turn count = %d, want 1", got)
+	}
 }
 
 func TestTeamWorkflow_FallbackToSingle(t *testing.T) {
@@ -204,4 +207,14 @@ func TestTeamPlannerPromptIncludesBrownfieldRules(t *testing.T) {
 			t.Fatalf("planner prompt missing %q:\n%s", needle, provider.prompt)
 		}
 	}
+}
+
+func countExactUserRoleText(messages []llm.Message, want string) int {
+	count := 0
+	for _, msg := range messages {
+		if msg.Role == llm.RoleUser && msg.Text() == want {
+			count++
+		}
+	}
+	return count
 }

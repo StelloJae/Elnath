@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/stello/elnath/internal/core"
 	"github.com/stello/elnath/internal/llm"
@@ -24,9 +25,9 @@ type scheduledToolCall struct {
 	cancelOnErr bool
 }
 
-func (a *Agent) executeApprovedToolCalls(ctx context.Context, approved []approvedToolCall, results []toolExecResult) error {
+func (a *Agent) executeApprovedToolCalls(ctx context.Context, approved []approvedToolCall, results []toolExecResult, toolStats map[string]*toolStatAcc, toolStatsMu *sync.Mutex) error {
 	for _, batch := range partitionToolCalls(a.tools, approved) {
-		if err := a.executeToolBatch(ctx, batch, results); err != nil {
+		if err := a.executeToolBatch(ctx, batch, results, toolStats, toolStatsMu); err != nil {
 			return err
 		}
 	}
@@ -129,7 +130,7 @@ func hasPathPrefix(path, prefix string) bool {
 	return !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-func (a *Agent) executeToolBatch(ctx context.Context, batch []scheduledToolCall, results []toolExecResult) error {
+func (a *Agent) executeToolBatch(ctx context.Context, batch []scheduledToolCall, results []toolExecResult, toolStats map[string]*toolStatAcc, toolStatsMu *sync.Mutex) error {
 	childCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -145,22 +146,31 @@ func (a *Agent) executeToolBatch(ctx context.Context, batch []scheduledToolCall,
 		go func() {
 			defer wg.Done()
 
+			start := time.Now()
 			result, err := a.tools.Execute(childCtx, call.call.Name, call.call.Input)
+			duration := time.Since(start)
 			if a.readTracker != nil {
 				a.readTracker.NotifyTool(call.call.Name)
 			}
+
 			if err != nil {
-				if call.cancelOnErr {
-					once.Do(func() {
-						fatalErr = fmt.Errorf("%w: %s: %w", core.ErrToolExecution, call.call.Name, err)
-						cancel()
-					})
-					return
-				}
 				result = tools.ErrorResult(err.Error())
 			}
 			if result == nil {
 				result = tools.ErrorResult("tool returned nil result")
+			}
+
+			hadErr := err != nil || result.IsError
+			if toolStats != nil && toolStatsMu != nil {
+				mergeToolStat(toolStats, toolStatsMu, call.call.Name, duration, hadErr)
+			}
+
+			if err != nil && call.cancelOnErr {
+				once.Do(func() {
+					fatalErr = fmt.Errorf("%w: %s: %w", core.ErrToolExecution, call.call.Name, err)
+					cancel()
+				})
+				return
 			}
 			if result.IsError && call.cancelOnErr {
 				once.Do(func() {
@@ -174,12 +184,12 @@ func (a *Agent) executeToolBatch(ctx context.Context, batch []scheduledToolCall,
 				return
 			}
 
-			results[call.index] = toolExecResult{id: call.call.ID, output: result.Output, isError: result.IsError}
 			if a.hooks != nil {
 				if hookErr := a.hooks.RunPostToolUse(childCtx, call.call.Name, call.call.Input, result); hookErr != nil {
 					a.logger.Warn("post-tool hook error", "tool", call.call.Name, "error", hookErr)
 				}
 			}
+			results[call.index] = toolExecResult{id: call.call.ID, name: call.call.Name, output: result.Output, isError: result.IsError, duration: duration}
 		}()
 	}
 
