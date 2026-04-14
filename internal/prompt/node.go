@@ -26,6 +26,8 @@ type RenderState struct {
 	VerifyHint    bool
 	BenchmarkMode bool
 	TaskLanguage  string
+	DaemonMode    bool
+	MessageCount  int
 }
 
 // Node is a single prompt contribution rendered into the builder output.
