@@ -2,10 +2,13 @@ package orchestrator
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
+	"github.com/stello/elnath/internal/tools"
 )
 
 func TestRalphWorkflow_PassOnFirst(t *testing.T) {
@@ -101,6 +104,169 @@ func TestRalphWorkflow_ExhaustedAttempts(t *testing.T) {
 	}
 }
 
+func TestRalphWorkflow_LearningVerifiedFirstAttempt(t *testing.T) {
+	store := learning.NewStore(filepath.Join(t.TempDir(), "lessons.jsonl"))
+	provider := &scriptedSingleProvider{messages: []llm.Message{
+		assistantStep("", llm.CompletedToolCall{ID: "bash-1", Name: "bash", Input: `{}`}),
+		assistantStep("Complete answer with verification"),
+		llm.NewAssistantMessage("PASS"),
+	}}
+
+	result, err := NewRalphWorkflow().Run(context.Background(), ralphLearningInput("verify this change", provider, store))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Workflow != "ralph" {
+		t.Fatalf("workflow = %q, want ralph", result.Workflow)
+	}
+
+	lessons, err := store.List()
+	if err != nil {
+		t.Fatalf("store.List: %v", err)
+	}
+	if len(lessons) != 1 {
+		t.Fatalf("len(lessons) = %d, want 1", len(lessons))
+	}
+	if lessons[0].Source != "agent:ralph" {
+		t.Fatalf("source = %q, want agent:ralph", lessons[0].Source)
+	}
+	if strings.Contains(lessons[0].Text, "retried") {
+		t.Fatalf("lesson text = %q, want no retry lesson", lessons[0].Text)
+	}
+}
+
+func TestRalphWorkflow_LearningBelowThreshold(t *testing.T) {
+	store := learning.NewStore(filepath.Join(t.TempDir(), "lessons.jsonl"))
+	provider := &scriptedSingleProvider{messages: []llm.Message{
+		assistantStep("", llm.CompletedToolCall{ID: "bash-1", Name: "bash", Input: `{}`}),
+		assistantStep("Attempt one"),
+		llm.NewAssistantMessage("FAIL: missing verification"),
+		assistantStep("", llm.CompletedToolCall{ID: "bash-2", Name: "bash", Input: `{}`}),
+		assistantStep("Attempt two"),
+		llm.NewAssistantMessage("FAIL: still incomplete"),
+		assistantStep("", llm.CompletedToolCall{ID: "bash-3", Name: "bash", Input: `{}`}),
+		assistantStep("Attempt three"),
+		llm.NewAssistantMessage("PASS"),
+	}}
+
+	_, err := NewRalphWorkflow().Run(context.Background(), ralphLearningInput("verify this change", provider, store))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	lessons, err := store.List()
+	if err != nil {
+		t.Fatalf("store.List: %v", err)
+	}
+	if len(lessons) != 1 {
+		t.Fatalf("len(lessons) = %d, want 1", len(lessons))
+	}
+	if lessons[0].Source != "agent:ralph" {
+		t.Fatalf("source = %q, want agent:ralph", lessons[0].Source)
+	}
+	if strings.Contains(lessons[0].Text, "retried") {
+		t.Fatalf("lesson text = %q, want no retry lesson", lessons[0].Text)
+	}
+}
+
+func TestRalphWorkflow_LearningRetryTriggersRuleE(t *testing.T) {
+	store := learning.NewStore(filepath.Join(t.TempDir(), "lessons.jsonl"))
+	provider := &scriptedSingleProvider{messages: []llm.Message{
+		assistantStep("", llm.CompletedToolCall{ID: "bash-1", Name: "bash", Input: `{}`}),
+		assistantStep("Attempt one"),
+		llm.NewAssistantMessage("FAIL: missing verification"),
+		assistantStep("", llm.CompletedToolCall{ID: "bash-2", Name: "bash", Input: `{}`}),
+		assistantStep("Attempt two"),
+		llm.NewAssistantMessage("FAIL: still incomplete"),
+		assistantStep("", llm.CompletedToolCall{ID: "bash-3", Name: "bash", Input: `{}`}),
+		assistantStep("Attempt three"),
+		llm.NewAssistantMessage("FAIL: one more issue"),
+		assistantStep("", llm.CompletedToolCall{ID: "bash-4", Name: "bash", Input: `{}`}),
+		assistantStep("Attempt four"),
+		llm.NewAssistantMessage("PASS"),
+	}}
+
+	_, err := NewRalphWorkflow().Run(context.Background(), ralphLearningInput("verify this change", provider, store))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	assertRetryLesson(t, store, "retried 3 times", true)
+}
+
+func TestRalphWorkflow_LearningCapExceededFinishReason(t *testing.T) {
+	store := learning.NewStore(filepath.Join(t.TempDir(), "lessons.jsonl"))
+	provider := &scriptedSingleProvider{messages: []llm.Message{
+		assistantStep("", llm.CompletedToolCall{ID: "bash-1", Name: "bash", Input: `{}`}),
+		assistantStep("Attempt one"),
+		llm.NewAssistantMessage("FAIL: missing verification"),
+		assistantStep("", llm.CompletedToolCall{ID: "bash-2", Name: "bash", Input: `{}`}),
+		assistantStep("Attempt two"),
+		llm.NewAssistantMessage("FAIL: still incomplete"),
+		assistantStep("", llm.CompletedToolCall{ID: "bash-3", Name: "bash", Input: `{}`}),
+		assistantStep("Attempt three"),
+		llm.NewAssistantMessage("FAIL: one more issue"),
+		assistantStep("", llm.CompletedToolCall{ID: "bash-4", Name: "bash", Input: `{}`}),
+		assistantStep("Attempt four"),
+		llm.NewAssistantMessage("FAIL: not done"),
+		assistantStep("", llm.CompletedToolCall{ID: "bash-5", Name: "bash", Input: `{}`}),
+		assistantStep("Attempt five"),
+		llm.NewAssistantMessage("FAIL: still broken"),
+	}}
+
+	wf := NewRalphWorkflow()
+	wf.MaxAttempts = 5
+	_, err := wf.Run(context.Background(), ralphLearningInput("verify this change", provider, store))
+	if err == nil {
+		t.Fatal("expected exhausted-attempts error")
+	}
+
+	lessons, err := store.List()
+	if err != nil {
+		t.Fatalf("store.List: %v", err)
+	}
+	if len(lessons) != 1 {
+		t.Fatalf("len(lessons) = %d, want 1", len(lessons))
+	}
+	if lessons[0].Source != "agent:ralph" {
+		t.Fatalf("source = %q, want agent:ralph", lessons[0].Source)
+	}
+	if !strings.Contains(lessons[0].Text, "retried 4 times") {
+		t.Fatalf("lesson text = %q, want cap-exceeded retry lesson", lessons[0].Text)
+	}
+	if strings.Contains(lessons[0].Text, "Efficient completion") {
+		t.Fatalf("lesson text = %q, want no efficient-completion lesson after cap exceeded", lessons[0].Text)
+	}
+}
+
+func TestRalphWorkflow_NoPerIterLearning(t *testing.T) {
+	store := learning.NewStore(filepath.Join(t.TempDir(), "lessons.jsonl"))
+	provider := &scriptedSingleProvider{messages: []llm.Message{
+		assistantStep("", llm.CompletedToolCall{ID: "bash-1", Name: "bash", Input: `{}`}),
+		assistantStep("Attempt one"),
+		llm.NewAssistantMessage("FAIL: missing verification"),
+		assistantStep("", llm.CompletedToolCall{ID: "bash-2", Name: "bash", Input: `{}`}),
+		assistantStep("Attempt two"),
+		llm.NewAssistantMessage("FAIL: still incomplete"),
+		assistantStep("", llm.CompletedToolCall{ID: "bash-3", Name: "bash", Input: `{}`}),
+		assistantStep("Attempt three"),
+		llm.NewAssistantMessage("PASS"),
+	}}
+
+	_, err := NewRalphWorkflow().Run(context.Background(), ralphLearningInput("verify this change", provider, store))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	lessons, err := store.List()
+	if err != nil {
+		t.Fatalf("store.List: %v", err)
+	}
+	if len(lessons) != 1 {
+		t.Fatalf("len(lessons) = %d, want 1", len(lessons))
+	}
+}
+
 func TestRalphWorkflow_VerifyParsing(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -162,6 +328,35 @@ func TestBuildRecoveryPrompt(t *testing.T) {
 		if !strings.Contains(prompt, needle) {
 			t.Fatalf("prompt missing %q:\n%s", needle, prompt)
 		}
+	}
+}
+
+func ralphLearningInput(msg string, provider llm.Provider, store *learning.Store) WorkflowInput {
+	input := testInput(msg, provider)
+	reg := tools.NewRegistry()
+	reg.Register(&testTool{name: "bash"})
+	input.Tools = reg
+	input.Learning = &LearningDeps{Store: store}
+	return input
+}
+
+func assertRetryLesson(t *testing.T, store *learning.Store, wantSubstring string, wantRetry bool) {
+	t.Helper()
+	lessons, err := store.List()
+	if err != nil {
+		t.Fatalf("store.List: %v", err)
+	}
+	foundRetry := false
+	for _, lesson := range lessons {
+		if strings.Contains(lesson.Text, wantSubstring) {
+			foundRetry = true
+			if lesson.Source != "agent:ralph" {
+				t.Fatalf("source = %q, want agent:ralph", lesson.Source)
+			}
+		}
+	}
+	if foundRetry != wantRetry {
+		t.Fatalf("found retry lesson = %v, want %v; lessons=%+v", foundRetry, wantRetry, lessons)
 	}
 }
 

@@ -2,10 +2,16 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
+	"github.com/stello/elnath/internal/tools"
 )
 
 func TestTeamWorkflow_E2E(t *testing.T) {
@@ -172,6 +178,93 @@ func TestTeamWorkflow_PlannerFailureFallsBackToSingle(t *testing.T) {
 	}
 }
 
+func TestTeamWorkflow_Learning(t *testing.T) {
+	ctx := context.Background()
+	store := learning.NewStore(filepath.Join(t.TempDir(), "lessons.jsonl"))
+	provider := &teamLearningProvider{
+		planner: `[
+			{"id":1,"title":"Fail A","instruction":"failing bash loop A"},
+			{"id":2,"title":"Fail B","instruction":"failing bash loop B"},
+			{"id":3,"title":"Read","instruction":"successful read task"}
+		]`,
+		synth: "Combined result",
+		scripts: map[string][]llm.Message{
+			"failing bash loop A": {
+				assistantStep("", llm.CompletedToolCall{ID: "bash-a-1", Name: "bash", Input: `{}`}),
+				assistantStep("", llm.CompletedToolCall{ID: "bash-a-2", Name: "bash", Input: `{}`}),
+				assistantStep("", llm.CompletedToolCall{ID: "bash-a-3", Name: "bash", Input: `{}`}),
+				assistantStep("subtask A done"),
+			},
+			"failing bash loop B": {
+				assistantStep("", llm.CompletedToolCall{ID: "bash-b-1", Name: "bash", Input: `{}`}),
+				assistantStep("", llm.CompletedToolCall{ID: "bash-b-2", Name: "bash", Input: `{}`}),
+				assistantStep("", llm.CompletedToolCall{ID: "bash-b-3", Name: "bash", Input: `{}`}),
+				assistantStep("subtask B done"),
+			},
+			"successful read task": {
+				assistantStep("", llm.CompletedToolCall{ID: "read-1", Name: "read", Input: `{}`}),
+				assistantStep("subtask C done"),
+			},
+		},
+		indexes: map[string]int{},
+	}
+	reg := tools.NewRegistry()
+	reg.Register(&testTool{
+		name: "bash",
+		executeFn: func(context.Context, json.RawMessage) (*tools.Result, error) {
+			return nil, errors.New("boom")
+		},
+	})
+	reg.Register(&testTool{name: "read"})
+
+	input := testInput("fix the existing repo safely", provider)
+	input.Tools = reg
+	input.Learning = &LearningDeps{Store: store}
+
+	result, err := NewTeamWorkflow().Run(ctx, input)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Workflow != "team" {
+		t.Fatalf("workflow = %q, want team", result.Workflow)
+	}
+
+	lessons, err := store.List()
+	if err != nil {
+		t.Fatalf("store.List: %v", err)
+	}
+	if len(lessons) != 1 {
+		t.Fatalf("len(lessons) = %d, want 1", len(lessons))
+	}
+	if lessons[0].Source != "agent:team" {
+		t.Fatalf("source = %q, want agent:team", lessons[0].Source)
+	}
+	if !strings.Contains(lessons[0].Text, "bash") {
+		t.Fatalf("lesson text = %q, want bash failure lesson", lessons[0].Text)
+	}
+}
+
+func TestAggregateFinishReason(t *testing.T) {
+	tests := []struct {
+		name    string
+		reasons []string
+		want    string
+	}{
+		{name: "prefers budget exceeded", reasons: []string{"stop", "error", "budget_exceeded"}, want: "budget_exceeded"},
+		{name: "prefers error over ack loop", reasons: []string{"ack_loop", "error", "stop"}, want: "error"},
+		{name: "prefers ack loop over stop", reasons: []string{"stop", "ack_loop"}, want: "ack_loop"},
+		{name: "falls back to stop", reasons: []string{"", "stop"}, want: "stop"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := aggregateFinishReason(tt.reasons); got != tt.want {
+				t.Fatalf("aggregateFinishReason(%v) = %q, want %q", tt.reasons, got, tt.want)
+			}
+		})
+	}
+}
+
 type promptCaptureProvider struct {
 	prompt string
 }
@@ -217,4 +310,74 @@ func countExactUserRoleText(messages []llm.Message, want string) int {
 		}
 	}
 	return count
+}
+
+type teamLearningProvider struct {
+	mu      sync.Mutex
+	planner string
+	synth   string
+	scripts map[string][]llm.Message
+	indexes map[string]int
+	calls   int
+}
+
+func (p *teamLearningProvider) Name() string            { return "test" }
+func (p *teamLearningProvider) Models() []llm.ModelInfo { return nil }
+func (p *teamLearningProvider) Chat(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+	return &llm.ChatResponse{}, nil
+}
+
+func (p *teamLearningProvider) Stream(_ context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
+	p.mu.Lock()
+	p.calls++
+	firstUser := firstUserText(req.Messages)
+	lastText := ""
+	if len(req.Messages) > 0 {
+		lastText = req.Messages[len(req.Messages)-1].Text()
+	}
+	switch {
+	case strings.HasPrefix(firstUser, "You are a task planner."):
+		p.mu.Unlock()
+		cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: p.planner})
+		cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{InputTokens: 10, OutputTokens: 5}})
+		return nil
+	case strings.HasPrefix(lastText, "You have been given the results of parallel subtasks."):
+		p.mu.Unlock()
+		cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: p.synth})
+		cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{InputTokens: 10, OutputTokens: 5}})
+		return nil
+	}
+	script := p.scripts[firstUser]
+	idx := p.indexes[firstUser]
+	p.indexes[firstUser] = idx + 1
+	p.mu.Unlock()
+	if idx >= len(script) {
+		return errors.New("unexpected subtask stream call")
+	}
+	emitScriptedMessage(cb, script[idx])
+	cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{InputTokens: 10, OutputTokens: 5}})
+	return nil
+}
+
+func firstUserText(messages []llm.Message) string {
+	for _, msg := range messages {
+		if msg.Role == llm.RoleUser {
+			return msg.Text()
+		}
+	}
+	return ""
+}
+
+func emitScriptedMessage(cb func(llm.StreamEvent), msg llm.Message) {
+	for _, block := range msg.Content {
+		switch b := block.(type) {
+		case llm.TextBlock:
+			if b.Text != "" {
+				cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: b.Text})
+			}
+		case llm.ToolUseBlock:
+			cb(llm.StreamEvent{Type: llm.EventToolUseStart, ToolCall: &llm.ToolUseEvent{ID: b.ID, Name: b.Name}})
+			cb(llm.StreamEvent{Type: llm.EventToolUseDone, ToolCall: &llm.ToolUseEvent{ID: b.ID, Name: b.Name, Input: string(b.Input)}})
+		}
+	}
 }

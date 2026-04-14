@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/stello/elnath/internal/agent"
+	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
 )
 
@@ -47,23 +48,36 @@ func (w *RalphWorkflow) Run(ctx context.Context, input WorkflowInput) (*Workflow
 	}
 
 	current := input
+	current.Learning = nil
 
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		w.logger.Info("ralph workflow: attempt", "attempt", attempt, "max", maxAttempts)
+	var accToolStatSlices [][]learning.AgentToolStat
+	var lastFinishReason string
+	totalIter := 0
+	attemptsRun := 0
+	verified := false
+	var finalResult *WorkflowResult
+
+	for a := 1; a <= maxAttempts; a++ {
+		attemptsRun = a
+		w.logger.Info("ralph workflow: attempt", "attempt", a, "max", maxAttempts)
 
 		result, err := single.Run(ctx, current)
 		if err != nil {
-			return nil, fmt.Errorf("ralph workflow attempt %d: %w", attempt, err)
+			return nil, fmt.Errorf("ralph workflow attempt %d: %w", a, err)
 		}
 
 		totalUsage.InputTokens += result.Usage.InputTokens
 		totalUsage.OutputTokens += result.Usage.OutputTokens
 		totalUsage.CacheRead += result.Usage.CacheRead
 		totalUsage.CacheWrite += result.Usage.CacheWrite
+		accToolStatSlices = append(accToolStatSlices, toAgentToolStats(result.ToolStats))
+		totalIter += result.Iterations
+		lastFinishReason = result.FinishReason
+		finalResult = result
 
 		ok, feedback, verifyUsage, err := w.verify(ctx, input, result)
 		if err != nil {
-			return nil, fmt.Errorf("ralph workflow verify attempt %d: %w", attempt, err)
+			return nil, fmt.Errorf("ralph workflow verify attempt %d: %w", a, err)
 		}
 
 		totalUsage.InputTokens += verifyUsage.InputTokens
@@ -72,13 +86,12 @@ func (w *RalphWorkflow) Run(ctx context.Context, input WorkflowInput) (*Workflow
 		totalUsage.CacheWrite += verifyUsage.CacheWrite
 
 		if ok {
-			w.logger.Info("ralph workflow: verified", "attempt", attempt)
-			result.Usage = totalUsage
-			result.Workflow = w.Name()
-			return result, nil
+			w.logger.Info("ralph workflow: verified", "attempt", a)
+			verified = true
+			break
 		}
 
-		w.logger.Info("ralph workflow: not verified, retrying", "attempt", attempt, "feedback", feedback)
+		w.logger.Info("ralph workflow: not verified, retrying", "attempt", a, "feedback", feedback)
 
 		// Append verification feedback so the next attempt has full context.
 		feedbackMsg := buildRecoveryPrompt(input.Message, feedback)
@@ -89,10 +102,42 @@ func (w *RalphWorkflow) Run(ctx context.Context, input WorkflowInput) (*Workflow
 			Tools:    input.Tools,
 			Provider: input.Provider,
 			Config:   input.Config,
+			Learning: nil,
 		}
 	}
 
-	return nil, fmt.Errorf("ralph workflow: task not verified after %d attempts", maxAttempts)
+	mergedToolStats := toWorkflowToolStats(learning.MergeAgentToolStats(accToolStatSlices...))
+	if finalResult != nil {
+		finalResult.Usage = totalUsage
+		finalResult.ToolStats = mergedToolStats
+		finalResult.Iterations = totalIter
+		finalResult.FinishReason = lastFinishReason
+		finalResult.Workflow = w.Name()
+	}
+
+	if input.Learning != nil {
+		finishReason := lastFinishReason
+		if !verified {
+			finishReason = "ralph_cap_exceeded"
+		}
+		info := learning.AgentResultInfo{
+			Topic:         firstMessageSnippet(input.Message, 80),
+			FinishReason:  finishReason,
+			Iterations:    totalIter,
+			MaxIterations: input.Config.MaxIterations * attemptsRun,
+			OutputTokens:  totalUsage.OutputTokens,
+			InputTokens:   totalUsage.InputTokens,
+			ToolStats:     learning.MergeAgentToolStats(accToolStatSlices...),
+			RetryCount:    attemptsRun - 1,
+			Workflow:      "ralph",
+		}
+		applyAgentLearning(input.Learning, info)
+	}
+
+	if !verified {
+		return nil, fmt.Errorf("ralph workflow: task not verified after %d attempts", maxAttempts)
+	}
+	return finalResult, nil
 }
 
 // verify asks the LLM to evaluate whether the workflow result satisfactorily

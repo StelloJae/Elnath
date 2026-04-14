@@ -38,10 +38,13 @@ type LearningDeps struct {
 
 // WorkflowResult is the output of a completed workflow execution.
 type WorkflowResult struct {
-	Messages []llm.Message // updated message array
-	Summary  string        // human-readable summary of what was done
-	Usage    llm.UsageStats
-	Workflow string // which workflow was used
+	Messages     []llm.Message // updated message array
+	Summary      string        // human-readable summary of what was done
+	Usage        llm.UsageStats
+	ToolStats    []agent.ToolStat
+	Iterations   int
+	FinishReason string
+	Workflow     string // which workflow was used
 }
 
 // WorkflowConfig holds tuning parameters passed to every workflow.

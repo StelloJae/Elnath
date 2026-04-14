@@ -7,9 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/stello/elnath/internal/agent"
+	"github.com/stello/elnath/internal/audit"
 	"github.com/stello/elnath/internal/config"
 	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/core"
@@ -21,6 +23,7 @@ import (
 	"github.com/stello/elnath/internal/prompt"
 	"github.com/stello/elnath/internal/secret"
 	"github.com/stello/elnath/internal/self"
+	"github.com/stello/elnath/internal/skill"
 	"github.com/stello/elnath/internal/tools"
 	"github.com/stello/elnath/internal/wiki"
 )
@@ -83,21 +86,27 @@ func (o orchestrationOutput) emitUsage(summary string) {
 }
 
 type executionRuntime struct {
-	app           *core.App
-	provider      llm.Provider
-	mgr           *conversation.Manager
-	router        *orchestrator.Router
-	reg           *tools.Registry
-	wfCfg         orchestrator.WorkflowConfig
-	promptBuilder *prompt.Builder
-	learningStore *learning.Store
-	selfState     *self.SelfState
-	personaExtra  string
-	wikiIdx       *wiki.Index
-	wikiStore     *wiki.Store
-	gitSync       *wiki.GitSync
-	workDir       string
-	principal     identity.Principal
+	app                *core.App
+	provider           llm.Provider
+	mgr                *conversation.Manager
+	router             *orchestrator.Router
+	reg                *tools.Registry
+	wfCfg              orchestrator.WorkflowConfig
+	promptBuilder      *prompt.Builder
+	learningStore      *learning.Store
+	usageTracker       *llm.UsageTracker
+	researchMaxRounds  int
+	researchCostCapUSD float64
+	selfState          *self.SelfState
+	personaExtra       string
+	wikiIdx            *wiki.Index
+	wikiStore          *wiki.Store
+	skillReg           *skill.Registry
+	gitSync            *wiki.GitSync
+	workDir            string
+	daemonMode         bool
+	principal          identity.Principal
+	auditTrail         *audit.Trail
 }
 
 type routeAuditRecord struct {
@@ -124,6 +133,7 @@ func buildExecutionRuntime(
 	workDir string,
 	protectedPaths []string,
 	defaultPrincipal identity.Principal,
+	daemonMode bool,
 ) (*executionRuntime, error) {
 	if err := conversation.InitSchema(db.Main); err != nil {
 		return nil, fmt.Errorf("init conversation schema: %w", err)
@@ -169,11 +179,34 @@ func buildExecutionRuntime(
 			wikiStore = ws
 		}
 	}
+	skillReg := skill.NewRegistry()
+	if wikiStore != nil {
+		if err := skillReg.Load(wikiStore); err != nil {
+			app.Logger.Warn("skill registry load failed", "error", err)
+		}
+	}
 	if selfState == nil {
 		selfState = self.New(cfg.DataDir)
 	}
+	usageTracker, err := llm.NewUsageTracker(db.Main)
+	if err != nil {
+		return nil, fmt.Errorf("create usage tracker: %w", err)
+	}
 
 	hooks := buildHookRegistry(cfg.Hooks)
+	if hooks == nil {
+		hooks = agent.NewHookRegistry()
+	}
+
+	auditPath := filepath.Join(cfg.DataDir, "audit.jsonl")
+	auditTrail, err := audit.NewTrail(auditPath)
+	if err != nil {
+		app.Logger.Warn("audit trail unavailable", "error", err)
+	} else {
+		app.RegisterCloser("audit trail", auditTrail)
+	}
+	hooks.Add(secret.NewSecretScanHook(secret.NewDetector(), auditTrail))
+
 	wfCfg := orchestrator.WorkflowConfig{
 		Model:         model,
 		MaxIterations: maxIterationsFromEnv(),
@@ -189,31 +222,42 @@ func buildExecutionRuntime(
 	)
 	b := prompt.NewBuilder()
 	b.Register(prompt.NewIdentityNode(100))
+	b.Register(prompt.NewContextFilesNode(95))
 	b.Register(prompt.NewPersonaNode(90))
+	b.Register(prompt.NewLessonsNode(87, learningStore, 10, 1000))
+	b.Register(prompt.NewSelfStateNode(85))
 	b.Register(prompt.NewToolCatalogNode(80))
 	b.Register(prompt.NewModelGuidanceNode(70))
+	b.Register(prompt.NewSkillCatalogNode(65, skillReg))
 	b.Register(prompt.NewDynamicBoundaryNode())
 	b.Register(prompt.NewWikiRAGNode(60, 3))
+	b.Register(prompt.NewMemoryContextNode(55, 5, 1200))
 	b.Register(prompt.NewProjectContextNode(50))
 	b.Register(prompt.NewBrownfieldNode(40))
 	b.Register(prompt.NewSessionSummaryNode(30, 5, 800))
 
 	return &executionRuntime{
-		app:           app,
-		provider:      provider,
-		mgr:           mgr,
-		router:        buildRouter(wfCfg),
-		reg:           reg,
-		wfCfg:         wfCfg,
-		promptBuilder: b,
-		learningStore: learningStore,
-		selfState:     selfState,
-		personaExtra:  personaExtra,
-		wikiIdx:       wikiIdx,
-		wikiStore:     wikiStore,
-		gitSync:       gitSync,
-		workDir:       effectiveWorkDir,
-		principal:     defaultPrincipal,
+		app:                app,
+		provider:           provider,
+		mgr:                mgr,
+		router:             buildRouter(wfCfg),
+		reg:                reg,
+		wfCfg:              wfCfg,
+		promptBuilder:      b,
+		learningStore:      learningStore,
+		usageTracker:       usageTracker,
+		researchMaxRounds:  cfg.Research.MaxRounds,
+		researchCostCapUSD: cfg.Research.CostCapUSD,
+		selfState:          selfState,
+		personaExtra:       personaExtra,
+		wikiIdx:            wikiIdx,
+		wikiStore:          wikiStore,
+		skillReg:           skillReg,
+		gitSync:            gitSync,
+		workDir:            effectiveWorkDir,
+		daemonMode:         daemonMode,
+		principal:          defaultPrincipal,
+		auditTrail:         auditTrail,
 	}, nil
 }
 
@@ -251,6 +295,14 @@ func (rt *executionRuntime) runTask(
 	userInput string,
 	output orchestrationOutput,
 ) ([]llm.Message, string, error) {
+	userInput = normalizeSkillInput(userInput)
+	if rt.skillReg != nil && strings.HasPrefix(userInput, "/") {
+		result, summary, handled, err := rt.trySkillExecution(ctx, sess, messages, userInput, output)
+		if handled {
+			return result, summary, err
+		}
+	}
+
 	prepared, intent, err := rt.mgr.SendMessage(ctx, sess.ID, userInput)
 	if err != nil {
 		rt.app.Logger.Warn("conversation manager fallback", "error", err)
@@ -313,6 +365,8 @@ func (rt *executionRuntime) runTask(
 		VerifyHint:    routeCtx.VerificationHint,
 		BenchmarkMode: routeCtx.BenchmarkMode,
 		TaskLanguage:  taskLanguageFromEnv(),
+		DaemonMode:    rt.daemonMode,
+		MessageCount:  len(prepared),
 	}
 	systemPrompt, err := rt.promptBuilder.Build(ctx, renderState)
 	if err != nil {
@@ -330,16 +384,19 @@ func (rt *executionRuntime) runTask(
 		Config:   cfg,
 		OnText:   output.emitText,
 	}
-	if wf.Name() == "single" {
+	switch wf.Name() {
+	case "single", "team", "ralph", "autopilot":
 		input.Learning = rt.learningDeps()
 	}
 	if wf.Name() == "research" && rt.wikiIdx != nil && rt.wikiStore != nil {
 		input.Extra = &orchestrator.ResearchDeps{
-			WikiIndex:  rt.wikiIdx,
-			WikiStore:  rt.wikiStore,
-			MaxRounds:  5,
+			WikiIndex:     rt.wikiIdx,
+			WikiStore:     rt.wikiStore,
+			UsageTracker:  rt.usageTracker,
 			LearningStore: rt.learningStore,
-			CostCapUSD: 1.0,
+			SelfState:     rt.selfState,
+			MaxRounds:     rt.researchMaxRounds,
+			CostCapUSD:    rt.researchCostCapUSD,
 		}
 	}
 
@@ -357,6 +414,107 @@ func (rt *executionRuntime) runTask(
 	}
 
 	return result.Messages, result.Summary, nil
+}
+
+func (rt *executionRuntime) trySkillExecution(
+	ctx context.Context,
+	sess *agent.Session,
+	messages []llm.Message,
+	input string,
+	output orchestrationOutput,
+) ([]llm.Message, string, bool, error) {
+	fields := strings.Fields(input)
+	if len(fields) == 0 {
+		return nil, "", false, nil
+	}
+	skillName := strings.TrimPrefix(fields[0], "/")
+	sk, ok := rt.skillReg.Get(skillName)
+	if !ok {
+		return nil, "", false, nil
+	}
+
+	args := parseSkillArgs(sk.Trigger, fields[1:])
+
+	rt.app.Logger.Info("executing skill", "name", skillName, "args", args)
+	output.emitText(fmt.Sprintf("Executing skill: %s\n", skillName))
+
+	result, err := rt.skillReg.Execute(ctx, skill.ExecuteParams{
+		SkillName:  skillName,
+		Args:       args,
+		Provider:   rt.provider,
+		ToolReg:    rt.reg,
+		Model:      rt.wfCfg.Model,
+		OnText:     output.emitText,
+		Permission: rt.wfCfg.Permission,
+		Hooks:      rt.wfCfg.Hooks,
+	})
+	if err != nil {
+		return nil, "", true, fmt.Errorf("skill %q: %w", skillName, err)
+	}
+	if usage := llm.FormatUsageSummary(rt.wfCfg.Model, result.Usage); usage != "" {
+		output.emitUsage(usage)
+	}
+
+	delta := make([]llm.Message, 0, len(result.Messages)+1)
+	delta = append(delta, llm.NewUserMessage(input))
+	if len(result.Messages) > 0 {
+		transcript := result.Messages
+		if transcript[0].Role == llm.RoleUser && transcript[0].Text() == "Execute this skill." {
+			transcript = transcript[1:]
+		}
+		delta = append(delta, transcript...)
+	}
+	if len(delta) == 1 {
+		delta = append(delta, llm.NewAssistantMessage(result.Output))
+	}
+	if err := sess.AppendMessages(delta); err != nil {
+		rt.app.Logger.Warn("session persist failed", "error", err)
+	}
+	updated := append(messages, delta...)
+	sess.Messages = updated
+	return updated, result.Output, true, nil
+}
+
+func parseSkillArgs(trigger string, values []string) map[string]string {
+	args := make(map[string]string)
+	placeholders := make([]string, 0)
+	for _, part := range strings.Fields(trigger) {
+		if strings.HasPrefix(part, "<") && strings.HasSuffix(part, ">") {
+			placeholders = append(placeholders, strings.TrimPrefix(strings.TrimSuffix(part, ">"), "<"))
+		}
+	}
+
+	idx := 0
+	for i, name := range placeholders {
+		if idx >= len(values) {
+			args[name] = ""
+			continue
+		}
+		if i == len(placeholders)-1 {
+			args[name] = strings.Join(values[idx:], " ")
+			idx = len(values)
+			continue
+		}
+		args[name] = values[idx]
+		idx++
+	}
+	return args
+}
+
+func normalizeSkillInput(input string) string {
+	trimmed := strings.TrimSpace(input)
+	if !strings.HasPrefix(trimmed, "[Skill:") {
+		return trimmed
+	}
+	end := strings.Index(trimmed, "]")
+	if end == -1 {
+		return trimmed
+	}
+	remainder := strings.TrimSpace(trimmed[end+1:])
+	if strings.HasPrefix(remainder, "/") {
+		return remainder
+	}
+	return trimmed
 }
 
 func benchmarkModeEnabled() bool {

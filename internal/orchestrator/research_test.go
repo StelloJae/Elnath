@@ -3,10 +3,13 @@ package orchestrator
 import (
 	"context"
 	"database/sql"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
+	"github.com/stello/elnath/internal/self"
 	"github.com/stello/elnath/internal/wiki"
 
 	_ "modernc.org/sqlite"
@@ -120,5 +123,65 @@ func TestResearchWorkflow_FallbackWithoutDeps(t *testing.T) {
 
 	if provider.CallCount() != 1 {
 		t.Errorf("provider calls = %d, want 1 (single fallback)", provider.CallCount())
+	}
+}
+
+func TestResearchWorkflowRejectsWhitespaceTopic(t *testing.T) {
+	ctx := context.Background()
+	deps := &ResearchDeps{
+		WikiIndex:    &testWikiSearcher{},
+		WikiStore:    newTestWikiStore(t),
+		UsageTracker: newTestUsageTracker(t),
+	}
+	input := testInput("   ", newTestProvider())
+	input.Extra = deps
+
+	_, err := NewResearchWorkflow().Run(ctx, input)
+	if err == nil {
+		t.Fatal("expected error for whitespace topic")
+	}
+	if !strings.Contains(err.Error(), "topic is required") {
+		t.Fatalf("error = %v, want topic validation error", err)
+	}
+}
+
+func TestResearchWorkflowAppliesLearning(t *testing.T) {
+	ctx := context.Background()
+	provider := newTestProvider(
+		`[{"id":"H1","statement":"Useful hypothesis","rationale":"Because","test_plan":"Do X","priority":1}]`,
+		`I investigated. {"findings":"Found something","evidence":"Data","confidence":"high","supported":true}`,
+		`Research summary`,
+	)
+	dataDir := t.TempDir()
+	store := learning.NewStore(filepath.Join(dataDir, "lessons.jsonl"))
+	selfState := self.New(dataDir)
+
+	deps := &ResearchDeps{
+		WikiIndex:     &testWikiSearcher{},
+		WikiStore:     newTestWikiStore(t),
+		UsageTracker:  newTestUsageTracker(t),
+		LearningStore: store,
+		SelfState:     selfState,
+		MaxRounds:     1,
+		CostCapUSD:    10.0,
+	}
+
+	before := selfState.GetPersona()
+	input := testInput("Go concurrency patterns performance", provider)
+	input.Extra = deps
+
+	if _, err := NewResearchWorkflow().Run(ctx, input); err != nil {
+		t.Fatalf("ResearchWorkflow.Run: %v", err)
+	}
+
+	lessons, err := store.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(lessons) == 0 {
+		t.Fatal("lessons = 0, want persisted lessons")
+	}
+	if selfState.GetPersona().Persistence <= before.Persistence {
+		t.Fatalf("Persistence = %v, want > %v", selfState.GetPersona().Persistence, before.Persistence)
 	}
 }

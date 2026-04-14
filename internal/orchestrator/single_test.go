@@ -235,6 +235,9 @@ func TestSingleWorkflow_Learning_RuleATrigger(t *testing.T) {
 	if len(lessons) != 1 {
 		t.Fatalf("len(lessons) = %d, want 1", len(lessons))
 	}
+	if lessons[0].Source != "agent:single" {
+		t.Fatalf("lesson source = %q, want agent:single", lessons[0].Source)
+	}
 	if !strings.Contains(lessons[0].Text, "bash") {
 		t.Fatalf("lesson text = %q, want bash mention", lessons[0].Text)
 	}

@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/stello/elnath/internal/agent"
+	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
 )
 
@@ -89,11 +90,39 @@ func (w *TeamWorkflow) Run(ctx context.Context, input WorkflowInput) (*WorkflowR
 	totalUsage.CacheRead += synthUsage.CacheRead
 	totalUsage.CacheWrite += synthUsage.CacheWrite
 
+	var toolStatSlices [][]learning.AgentToolStat
+	finishReasons := make([]string, 0, len(results))
+	totalIter := 0
+	for _, r := range results {
+		toolStatSlices = append(toolStatSlices, toAgentToolStats(r.result.ToolStats))
+		finishReasons = append(finishReasons, string(r.result.FinishReason))
+		totalIter += r.result.Iterations
+	}
+	mergedToolStats := learning.MergeAgentToolStats(toolStatSlices...)
+	finishReason := aggregateFinishReason(finishReasons)
+
+	if input.Learning != nil {
+		info := learning.AgentResultInfo{
+			Topic:         firstMessageSnippet(input.Message, 80),
+			FinishReason:  finishReason,
+			Iterations:    totalIter,
+			MaxIterations: input.Config.MaxIterations * len(results),
+			OutputTokens:  totalUsage.OutputTokens,
+			InputTokens:   totalUsage.InputTokens,
+			ToolStats:     mergedToolStats,
+			Workflow:      "team",
+		}
+		applyAgentLearning(input.Learning, info)
+	}
+
 	return &WorkflowResult{
-		Messages: finalMessages,
-		Summary:  summary,
-		Usage:    totalUsage,
-		Workflow: w.Name(),
+		Messages:     finalMessages,
+		Summary:      summary,
+		Usage:        totalUsage,
+		ToolStats:    toWorkflowToolStats(mergedToolStats),
+		Iterations:   totalIter,
+		FinishReason: finishReason,
+		Workflow:     w.Name(),
 	}, nil
 }
 

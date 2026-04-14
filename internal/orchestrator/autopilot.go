@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
 )
 
@@ -100,6 +101,30 @@ func (w *AutopilotWorkflow) Run(ctx context.Context, input WorkflowInput) (*Work
 	// Seed the history with the original user request.
 	messages := append(input.Messages, llm.NewUserMessage(input.Message))
 
+	var accToolStatSlices [][]learning.AgentToolStat
+	var lastFinishReason string
+	totalIter := 0
+	lessonScheduled := false
+
+	extract := func() {
+		if lessonScheduled || input.Learning == nil {
+			return
+		}
+		lessonScheduled = true
+		info := learning.AgentResultInfo{
+			Topic:         firstMessageSnippet(input.Message, 80),
+			FinishReason:  lastFinishReason,
+			Iterations:    totalIter,
+			MaxIterations: input.Config.MaxIterations * len(autopilotStages),
+			OutputTokens:  totalUsage.OutputTokens,
+			InputTokens:   totalUsage.InputTokens,
+			ToolStats:     learning.MergeAgentToolStats(accToolStatSlices...),
+			Workflow:      "autopilot",
+		}
+		applyAgentLearning(input.Learning, info)
+	}
+	defer extract()
+
 	for _, s := range autopilotStages {
 		w.logger.Info("autopilot: running stage", "stage", s.name)
 		if input.OnText != nil {
@@ -115,21 +140,26 @@ func (w *AutopilotWorkflow) Run(ctx context.Context, input WorkflowInput) (*Work
 			Provider: input.Provider,
 			Config:   input.Config,
 			OnText:   input.OnText,
+			Learning: nil,
 		}
 
 		result, err := single.Run(ctx, stageInput)
 		if err != nil {
 			w.logger.Warn("autopilot: stage failed", "stage", s.name, "error", err)
+			lastFinishReason = "error"
 			errSummary := fmt.Sprintf("Autopilot stage %q failed: %v", s.name, err)
 			if input.OnText != nil {
 				input.OnText(fmt.Sprintf("[autopilot] %s\n", errSummary))
 			}
 			messages = append(messages, llm.NewAssistantMessage(errSummary))
 			return &WorkflowResult{
-				Messages: messages,
-				Summary:  errSummary,
-				Usage:    totalUsage,
-				Workflow: w.Name(),
+				Messages:     messages,
+				Summary:      errSummary,
+				Usage:        totalUsage,
+				ToolStats:    toWorkflowToolStats(learning.MergeAgentToolStats(accToolStatSlices...)),
+				Iterations:   totalIter,
+				FinishReason: lastFinishReason,
+				Workflow:     w.Name(),
 			}, fmt.Errorf("autopilot stage %q failed: %w", s.name, err)
 		}
 
@@ -137,6 +167,9 @@ func (w *AutopilotWorkflow) Run(ctx context.Context, input WorkflowInput) (*Work
 		totalUsage.OutputTokens += result.Usage.OutputTokens
 		totalUsage.CacheRead += result.Usage.CacheRead
 		totalUsage.CacheWrite += result.Usage.CacheWrite
+		accToolStatSlices = append(accToolStatSlices, toAgentToolStats(result.ToolStats))
+		totalIter += result.Iterations
+		lastFinishReason = result.FinishReason
 
 		messages = result.Messages
 	}
@@ -144,12 +177,16 @@ func (w *AutopilotWorkflow) Run(ctx context.Context, input WorkflowInput) (*Work
 	summary, summaryUsage := synthesizeAssistantSummary(ctx, input.Provider, input.Message, messages, input.OnText)
 	totalUsage.InputTokens += summaryUsage.InputTokens
 	totalUsage.OutputTokens += summaryUsage.OutputTokens
+	mergedToolStats := toWorkflowToolStats(learning.MergeAgentToolStats(accToolStatSlices...))
 
 	return &WorkflowResult{
-		Messages: messages,
-		Summary:  summary,
-		Usage:    totalUsage,
-		Workflow: w.Name(),
+		Messages:     messages,
+		Summary:      summary,
+		Usage:        totalUsage,
+		ToolStats:    mergedToolStats,
+		Iterations:   totalIter,
+		FinishReason: lastFinishReason,
+		Workflow:     w.Name(),
 	}, nil
 }
 
