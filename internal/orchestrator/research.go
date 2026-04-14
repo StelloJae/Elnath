@@ -4,9 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
+	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/research"
+	"github.com/stello/elnath/internal/self"
 	"github.com/stello/elnath/internal/wiki"
 )
 
@@ -27,11 +30,13 @@ func (w *ResearchWorkflow) Name() string { return "research" }
 // needs beyond the standard WorkflowInput. Callers attach it to
 // WorkflowInput.Extra.
 type ResearchDeps struct {
-	WikiIndex    research.WikiSearcher
-	WikiStore    *wiki.Store
-	UsageTracker *llm.UsageTracker
-	MaxRounds    int
-	CostCapUSD   float64
+	WikiIndex     research.WikiSearcher
+	WikiStore     *wiki.Store
+	UsageTracker  *llm.UsageTracker
+	LearningStore *learning.Store
+	SelfState     *self.SelfState
+	MaxRounds     int
+	CostCapUSD    float64
 }
 
 // Run implements Workflow.
@@ -39,7 +44,7 @@ type ResearchDeps struct {
 // and executes it. The result is returned as a WorkflowResult with the
 // research summary as an assistant message.
 func (w *ResearchWorkflow) Run(ctx context.Context, input WorkflowInput) (*WorkflowResult, error) {
-	topic := input.Message
+	topic := strings.TrimSpace(input.Message)
 	if topic == "" {
 		return nil, fmt.Errorf("research workflow: topic is required")
 	}
@@ -85,9 +90,9 @@ func (w *ResearchWorkflow) Run(ctx context.Context, input WorkflowInput) (*Workf
 	if err != nil {
 		return nil, fmt.Errorf("research workflow: %w", err)
 	}
+	research.ApplyLearning(result, deps.LearningStore, deps.SelfState, w.logger)
 
-	messages := append(input.Messages, llm.NewUserMessage(topic))
-	messages = append(messages, llm.NewAssistantMessage(result.Summary))
+	messages := append(input.Messages, llm.NewAssistantMessage(result.Summary))
 
 	return &WorkflowResult{
 		Messages: messages,
