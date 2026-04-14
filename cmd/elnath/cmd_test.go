@@ -1059,8 +1059,47 @@ func TestSendIPCRequestMalformedResponse(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for malformed response")
 	}
-	if !strings.Contains(err.Error(), "unmarshal response") {
-		t.Fatalf("error = %q, want unmarshal error", err.Error())
+	if !strings.Contains(err.Error(), "read response") {
+		t.Fatalf("error = %q, want read response error", err.Error())
+	}
+	<-done
+}
+
+func TestSendIPCRequestLargeResponse(t *testing.T) {
+	socketPath := testSocketPath(t, "large-response")
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	large := strings.Repeat("x", 70*1024)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		var req daemon.IPCRequest
+		if err := json.NewDecoder(conn).Decode(&req); err != nil {
+			return
+		}
+		_ = json.NewEncoder(conn).Encode(daemon.IPCResponse{
+			OK:   true,
+			Data: map[string]any{"result": large},
+		})
+	}()
+
+	resp, err := sendIPCRequest(socketPath, daemon.IPCRequest{Command: "status"})
+	if err != nil {
+		t.Fatalf("sendIPCRequest: %v", err)
+	}
+	data, _ := json.Marshal(resp.Data)
+	if !strings.Contains(string(data), large[:128]) {
+		t.Fatal("response missing large payload")
 	}
 	<-done
 }

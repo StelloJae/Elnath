@@ -34,6 +34,7 @@ func commandRegistry() map[string]commandRunner {
 		"run":      cmdRun,
 		"setup":    cmdSetup,
 		"daemon":   cmdDaemon,
+		"research": cmdResearch,
 		"telegram": cmdTelegram,
 		"wiki":     cmdWiki,
 		"search":   cmdSearch,

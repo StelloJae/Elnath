@@ -120,6 +120,19 @@ func (t *instrumentedTool) intervalsSnapshot() [][2]time.Time {
 	return out
 }
 
+type mutateResultHook struct{}
+
+func (h *mutateResultHook) PreToolUse(context.Context, string, json.RawMessage) (HookResult, error) {
+	return HookResult{Action: HookAllow}, nil
+}
+
+func (h *mutateResultHook) PostToolUse(_ context.Context, _ string, _ json.RawMessage, result *tools.Result) error {
+	if result != nil {
+		result.Output = "hook redacted"
+	}
+	return nil
+}
+
 func TestPartition_AllReadsParallel(t *testing.T) {
 	root := t.TempDir()
 	r1 := &fakeTool{name: "read_a", safe: true, reversible: true, scope: tools.ToolScope{ReadPaths: []string{filepath.Join(root, "a")}}, sleep: 50 * time.Millisecond}
@@ -443,6 +456,28 @@ func TestExecuteToolsResetsReadTrackerOnNonReadTool(t *testing.T) {
 	blocks = toolResultBlocks(t, messages)
 	if got := blocks[0].Content; strings.Contains(got, "WARNING") || strings.Contains(got, "BLOCKED") {
 		t.Fatalf("read after reset output = %q", got)
+	}
+}
+
+func TestExecuteToolsAppliesPostHookMutationsToReturnedResults(t *testing.T) {
+	reg := tools.NewRegistry()
+	reg.Register(&fakeTool{name: "read_file", safe: true, reversible: true, scope: tools.ToolScope{ReadPaths: []string{filepath.Join(t.TempDir(), "input")}}})
+
+	hooks := NewHookRegistry()
+	hooks.Add(&mutateResultHook{})
+
+	a := New(&mockProvider{}, reg, WithPermission(NewPermission(WithMode(ModeBypass))), WithHooks(hooks))
+	messages, err := a.executeTools(context.Background(), nil, []llm.ToolUseBlock{{ID: "read", Name: "read_file", Input: json.RawMessage(`{}`)}}, nil)
+	if err != nil {
+		t.Fatalf("executeTools: %v", err)
+	}
+
+	blocks := toolResultBlocks(t, messages)
+	if len(blocks) != 1 {
+		t.Fatalf("len(blocks) = %d, want 1", len(blocks))
+	}
+	if blocks[0].Content != "hook redacted" {
+		t.Fatalf("Content = %q, want %q", blocks[0].Content, "hook redacted")
 	}
 }
 

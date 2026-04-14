@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -17,8 +16,10 @@ import (
 	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/core"
 	"github.com/stello/elnath/internal/daemon"
-	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/identity"
+	"github.com/stello/elnath/internal/learning"
+	"github.com/stello/elnath/internal/research"
+	"github.com/stello/elnath/internal/scheduler"
 	"github.com/stello/elnath/internal/secret"
 	"github.com/stello/elnath/internal/self"
 	"github.com/stello/elnath/internal/telegram"
@@ -136,6 +137,7 @@ func cmdDaemonStart(ctx context.Context) error {
 		workDir,
 		cfg.Daemon.ProtectedPaths,
 		fallbackPrincipal,
+		true,
 	)
 	if err != nil {
 		return err
@@ -145,7 +147,6 @@ func cmdDaemonStart(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("create queue: %w", err)
 	}
-
 	router, err := daemon.NewDeliveryRouter(db.Main, app.Logger)
 	if err != nil {
 		return fmt.Errorf("create delivery router: %w", err)
@@ -162,6 +163,34 @@ func cmdDaemonStart(ctx context.Context) error {
 		time.Duration(cfg.Daemon.InactivityTimeout)*time.Second,
 		time.Duration(cfg.Daemon.WallClockTimeout)*time.Second,
 	)
+	if rt.wikiIdx != nil && rt.wikiStore != nil {
+		d.SetResearchRunner(research.NewTaskRunner(
+			provider,
+			model,
+			rt.wikiIdx,
+			rt.wikiStore,
+			rt.usageTracker,
+			app.Logger,
+			research.WithRunnerMaxRounds(cfg.Research.MaxRounds),
+			research.WithRunnerCostCap(cfg.Research.CostCapUSD),
+			research.WithToolRegistry(rt.reg),
+			research.WithRunnerLearning(rt.learningStore),
+			research.WithRunnerSelfState(selfState),
+		))
+	}
+	sch, scheduledPath, taskCount, err := loadScheduler(cfg, queue, app.Logger)
+	if err != nil {
+		app.Logger.Error("scheduler config load failed", "path", scheduledPath, "error", err)
+		return err
+	}
+	if scheduledPath != "" {
+		if sch != nil {
+			d.WithScheduler(sch)
+			app.Logger.Info("scheduler enabled", "path", scheduledPath, "tasks", taskCount)
+		} else {
+			app.Logger.Info("scheduler config empty or all disabled", "path", scheduledPath)
+		}
+	}
 
 	if cfg.Telegram.Enabled && cfg.Telegram.BotToken != "" && cfg.Telegram.ChatID != "" {
 		approvalStore, approvalErr := daemon.NewApprovalStore(db.Main)
@@ -178,7 +207,7 @@ func cmdDaemonStart(ctx context.Context) error {
 		tgSink := telegram.NewTelegramSink(bot, cfg.Telegram.ChatID, app.Logger, telegram.WithSinkBinder(binder))
 		chatResponder := telegram.NewChatResponder(provider, bot, cfg.Telegram.ChatID, app.Logger)
 		classifier := conversation.NewLLMClassifier()
-		shell, shellErr := telegram.NewShell(queue, approvalStore, bot, cfg.Telegram.ChatID, statePath,
+		shell, shellErr := telegram.NewShell(queue, approvalStore, bot, cfg.Telegram.ChatID, statePath, rt.skillReg,
 			telegram.WithChatResponder(chatResponder),
 			telegram.WithChatSessionBinder(binder),
 			telegram.WithClassifier(classifier, provider),
@@ -216,6 +245,27 @@ func autoRotateLessons(logger *slog.Logger, store *learning.Store, opts learning
 	} else if n > 0 {
 		logger.Info("learning: auto-rotated lessons", "moved", n)
 	}
+}
+
+func loadScheduler(cfg *config.Config, queue scheduler.Enqueuer, logger *slog.Logger) (daemon.Scheduler, string, int, error) {
+	if cfg.Daemon.ScheduledTasksPath == "" {
+		return nil, "", 0, nil
+	}
+
+	path := cfg.Daemon.ScheduledTasksPath
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(cfg.DataDir, path)
+	}
+
+	tasks, err := scheduler.LoadConfig(path)
+	if err != nil {
+		return nil, path, 0, fmt.Errorf("scheduler: %w", err)
+	}
+	if len(tasks) == 0 {
+		return nil, path, 0, nil
+	}
+
+	return scheduler.New(tasks, queue, logger), path, len(tasks), nil
 }
 
 func cmdDaemonSubmit(ctx context.Context, args []string) error {
@@ -430,17 +480,9 @@ func sendIPCRequest(socketPath string, req daemon.IPCRequest) (*daemon.IPCRespon
 		return nil, fmt.Errorf("write request: %w", err)
 	}
 
-	scanner := bufio.NewScanner(conn)
-	if !scanner.Scan() {
-		if err := scanner.Err(); err != nil {
-			return nil, fmt.Errorf("read response: %w", err)
-		}
-		return nil, fmt.Errorf("daemon closed connection without response")
-	}
-
 	var resp daemon.IPCResponse
-	if err := json.Unmarshal(scanner.Bytes(), &resp); err != nil {
-		return nil, fmt.Errorf("unmarshal response: %w", err)
+	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
 	}
 	return &resp, nil
 }

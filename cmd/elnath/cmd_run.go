@@ -123,6 +123,7 @@ func cmdRun(ctx context.Context, args []string) error {
 		"",
 		nil,
 		principal,
+		false,
 	)
 	if err != nil {
 		return err

@@ -268,7 +268,7 @@ func openTelegramCommandTestShell(t *testing.T, bot telegram.BotClient) (*telegr
 	if err != nil {
 		t.Fatalf("NewApprovalStore: %v", err)
 	}
-	shell, err := telegram.NewShell(queue, approvals, bot, "12345", filepath.Join(t.TempDir(), "telegram-shell-state.json"))
+	shell, err := telegram.NewShell(queue, approvals, bot, "12345", filepath.Join(t.TempDir(), "telegram-shell-state.json"), nil)
 	if err != nil {
 		t.Fatalf("NewShell: %v", err)
 	}
@@ -277,7 +277,7 @@ func openTelegramCommandTestShell(t *testing.T, bot telegram.BotClient) (*telegr
 
 func TestCommandRegistryContainsExpectedCommands(t *testing.T) {
 	reg := commandRegistry()
-	for _, name := range []string{"version", "help", "run", "setup", "daemon", "telegram", "wiki", "search", "eval"} {
+	for _, name := range []string{"version", "help", "run", "setup", "daemon", "telegram", "wiki", "search", "eval", "lessons"} {
 		if _, ok := reg[name]; !ok {
 			t.Fatalf("missing command %q", name)
 		}
