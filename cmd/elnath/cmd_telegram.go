@@ -11,7 +11,9 @@ import (
 	"github.com/stello/elnath/internal/config"
 	"github.com/stello/elnath/internal/core"
 	"github.com/stello/elnath/internal/daemon"
+	"github.com/stello/elnath/internal/skill"
 	"github.com/stello/elnath/internal/telegram"
+	"github.com/stello/elnath/internal/wiki"
 )
 
 func cmdTelegram(ctx context.Context, args []string) error {
@@ -75,7 +77,17 @@ func cmdTelegramShell(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("get cwd: %w", err)
 	}
-	shell, err := telegram.NewShell(queue, approvals, bot, cfg.Telegram.ChatID, statePath,
+	skillReg := skill.NewRegistry()
+	if cfg.WikiDir != "" {
+		if store, err := wiki.NewStore(cfg.WikiDir); err == nil {
+			if err := skillReg.Load(store); err != nil {
+				app.Logger.Warn("telegram: skill registry load failed", "error", err)
+			}
+		} else {
+			app.Logger.Warn("telegram: wiki store unavailable for skills", "error", err)
+		}
+	}
+	shell, err := telegram.NewShell(queue, approvals, bot, cfg.Telegram.ChatID, statePath, skillReg,
 		telegram.WithWorkDir(cwd),
 		telegram.WithChatSessionBinder(binder),
 	)

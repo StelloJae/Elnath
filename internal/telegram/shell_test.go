@@ -13,15 +13,23 @@ import (
 	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/daemon"
 	"github.com/stello/elnath/internal/llm"
+	"github.com/stello/elnath/internal/skill"
 )
 
 type fakeBotClient struct {
-	sent []sentMessage
+	sent      []sentMessage
+	reactions []sentReaction
 }
 
 type sentMessage struct {
 	chatID string
 	text   string
+}
+
+type sentReaction struct {
+	chatID    string
+	messageID int64
+	emoji     string
 }
 
 type trackedUserMessage struct {
@@ -61,7 +69,8 @@ func (f *fakeBotClient) EditMessage(_ context.Context, _ string, _ int64, _ stri
 	return nil
 }
 
-func (f *fakeBotClient) SetReaction(_ context.Context, _ string, _ int64, _ string) error {
+func (f *fakeBotClient) SetReaction(_ context.Context, chatID string, messageID int64, emoji string) error {
+	f.reactions = append(f.reactions, sentReaction{chatID: chatID, messageID: messageID, emoji: emoji})
 	return nil
 }
 
@@ -82,10 +91,10 @@ func openTelegramTestDB(t *testing.T) *sql.DB {
 
 func newTestShell(t *testing.T) (*Shell, *daemon.Queue, *daemon.ApprovalStore, *fakeBotClient) {
 	t.Helper()
-	return newTestShellWithOptions(t)
+	return newTestShellWithOptions(t, nil)
 }
 
-func newTestShellWithOptions(t *testing.T, opts ...ShellOption) (*Shell, *daemon.Queue, *daemon.ApprovalStore, *fakeBotClient) {
+func newTestShellWithOptions(t *testing.T, skillReg *skill.Registry, opts ...ShellOption) (*Shell, *daemon.Queue, *daemon.ApprovalStore, *fakeBotClient) {
 	t.Helper()
 	db := openTelegramTestDB(t)
 	queue, err := daemon.NewQueue(db)
@@ -97,7 +106,7 @@ func newTestShellWithOptions(t *testing.T, opts ...ShellOption) (*Shell, *daemon
 		t.Fatalf("NewApprovalStore: %v", err)
 	}
 	bot := &fakeBotClient{}
-	shell, err := NewShell(queue, approvals, bot, "chat-1", filepath.Join(t.TempDir(), "telegram-state.json"), opts...)
+	shell, err := NewShell(queue, approvals, bot, "chat-1", filepath.Join(t.TempDir(), "telegram-state.json"), skillReg, opts...)
 	if err != nil {
 		t.Fatalf("NewShell: %v", err)
 	}
@@ -344,7 +353,7 @@ func TestShellEnqueueWithBindingInjectsSessionID(t *testing.T) {
 	if err := binder.Remember("chat-1", "77", "sess-bound"); err != nil {
 		t.Fatalf("Remember: %v", err)
 	}
-	shell, queue, _, _ := newTestShellWithOptions(t, WithChatSessionBinder(binder))
+	shell, queue, _, _ := newTestShellWithOptions(t, nil, WithChatSessionBinder(binder))
 	principal := shell.principalForMessage(Message{UserID: "77"})
 
 	taskID, existed, err := shell.enqueueTaskReturningID(context.Background(), "continue this", principal)
@@ -389,7 +398,7 @@ func TestShellEnqueueNoBinderLeavesSessionEmpty(t *testing.T) {
 
 func TestShellEnqueueBindingMissLeavesSessionEmpty(t *testing.T) {
 	binder, _ := newShellBinder(t)
-	shell, queue, _, _ := newTestShellWithOptions(t, WithChatSessionBinder(binder))
+	shell, queue, _, _ := newTestShellWithOptions(t, nil, WithChatSessionBinder(binder))
 	principal := shell.principalForMessage(Message{UserID: "77"})
 
 	taskID, existed, err := shell.enqueueTaskReturningID(context.Background(), "continue this", principal)
@@ -417,7 +426,7 @@ func TestShellEnqueueIdempotencyKeyIgnoresBoundSession(t *testing.T) {
 	if err := binder.Remember("chat-1", "77", "sess-1"); err != nil {
 		t.Fatalf("Remember(first): %v", err)
 	}
-	shell, queue, _, _ := newTestShellWithOptions(t, WithChatSessionBinder(binder))
+	shell, queue, _, _ := newTestShellWithOptions(t, nil, WithChatSessionBinder(binder))
 	principal := shell.principalForMessage(Message{UserID: "77"})
 
 	firstTaskID, existed, err := shell.enqueueTaskReturningID(context.Background(), "same prompt", principal)
@@ -456,7 +465,7 @@ func TestShellEnqueueIdempotencyKeyIgnoresBoundSession(t *testing.T) {
 
 func TestShellTrackChatBindingCalledAfterEnqueue(t *testing.T) {
 	tracker := &fakeBindingTracker{}
-	shell, _, _, _ := newTestShellWithOptions(t, WithTaskTracker(tracker))
+	shell, _, _, _ := newTestShellWithOptions(t, nil, WithTaskTracker(tracker))
 
 	err := shell.HandleUpdate(context.Background(), Update{
 		ID: 1,
@@ -484,7 +493,7 @@ func TestShellTrackChatBindingCalledAfterEnqueue(t *testing.T) {
 func TestShellNotifyCompletionsUpdatesBinder(t *testing.T) {
 	binder, validator := newShellBinder(t)
 	validator.set("sess-complete", true)
-	shell, queue, _, bot := newTestShellWithOptions(t, WithChatSessionBinder(binder))
+	shell, queue, _, bot := newTestShellWithOptions(t, nil, WithChatSessionBinder(binder))
 	principal := shell.principalForMessage(Message{UserID: "77"})
 	payload := daemon.EncodeTaskPayload(daemon.TaskPayload{
 		Prompt:    "follow this up",
@@ -523,7 +532,7 @@ func TestShellNotifyCompletionsUpdatesBinder(t *testing.T) {
 
 func TestShellNotifyCompletionsSkipsNonTelegramSurface(t *testing.T) {
 	binder, _ := newShellBinder(t)
-	shell, queue, _, _ := newTestShellWithOptions(t, WithChatSessionBinder(binder))
+	shell, queue, _, _ := newTestShellWithOptions(t, nil, WithChatSessionBinder(binder))
 	principal := shell.principalForMessage(Message{UserID: "77"})
 	payload := daemon.EncodeTaskPayload(daemon.TaskPayload{
 		Prompt:    "follow this up",
@@ -559,7 +568,7 @@ func TestShellNotifyCompletionsSkipsNonTelegramSurface(t *testing.T) {
 
 func TestShellNotifyCompletionsSkipsEmptyTelegramUserID(t *testing.T) {
 	binder, _ := newShellBinder(t)
-	shell, queue, _, _ := newTestShellWithOptions(t, WithChatSessionBinder(binder))
+	shell, queue, _, _ := newTestShellWithOptions(t, nil, WithChatSessionBinder(binder))
 	payload := daemon.EncodeTaskPayload(daemon.TaskPayload{
 		Prompt:  "follow this up",
 		Surface: "telegram",
@@ -603,6 +612,75 @@ func TestShellUnknownCommandStillErrors(t *testing.T) {
 
 	if len(bot.sent) != 1 || !strings.Contains(bot.sent[0].text, "Unknown command") {
 		t.Fatalf("reply = %#v, want unknown command error", bot.sent)
+	}
+}
+
+func TestShellHelpListsSkills(t *testing.T) {
+	reg := skill.NewRegistry()
+	reg.Add(&skill.Skill{Name: "pr-review", Description: "Review PR with security focus"})
+	reg.Add(&skill.Skill{Name: "audit-security", Description: "Audit codebase"})
+	shell, _, _, bot := newTestShellWithOptions(t, reg)
+
+	if err := shell.HandleUpdate(context.Background(), Update{
+		ID:      1,
+		Message: Message{ChatID: "chat-1", Text: "/help"},
+	}); err != nil {
+		t.Fatalf("HandleUpdate: %v", err)
+	}
+
+	if len(bot.sent) != 1 {
+		t.Fatalf("sent messages = %d, want 1", len(bot.sent))
+	}
+	checks := []string{
+		"🛠 <b>Skills</b>",
+		"/pr-review",
+		"/audit-security",
+	}
+	for _, want := range checks {
+		if !strings.Contains(bot.sent[0].text, want) {
+			t.Fatalf("help reply missing %q\n%s", want, bot.sent[0].text)
+		}
+	}
+}
+
+func TestShellSkillCommandQueuesTask(t *testing.T) {
+	reg := skill.NewRegistry()
+	reg.Add(&skill.Skill{Name: "pr-review", Description: "Review PR", Trigger: "/pr-review <pr_number>"})
+	tracker := &fakeBindingTracker{}
+	shell, queue, _, bot := newTestShellWithOptions(t, reg, WithTaskTracker(tracker))
+
+	if err := shell.HandleUpdate(context.Background(), Update{
+		ID:      1,
+		Message: Message{ChatID: "chat-1", UserID: "88", MessageID: 12, Text: "/pr-review 42"},
+	}); err != nil {
+		t.Fatalf("HandleUpdate: %v", err)
+	}
+
+	tasks, err := queue.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("tasks = %d, want 1", len(tasks))
+	}
+	payload := daemon.ParseTaskPayload(tasks[0].Payload)
+	if payload.Prompt != "[Skill: pr-review] /pr-review 42" {
+		t.Fatalf("payload prompt = %q, want prefixed skill prompt", payload.Prompt)
+	}
+	if payload.Principal.UserID != "88" || payload.Principal.Surface != "telegram" {
+		t.Fatalf("principal = %+v, want telegram principal for user 88", payload.Principal)
+	}
+	if len(bot.reactions) != 1 || bot.reactions[0].emoji != "👀" || bot.reactions[0].messageID != 12 {
+		t.Fatalf("reactions = %#v, want one 👀 reaction for message 12", bot.reactions)
+	}
+	if len(tracker.userMessages) != 1 || tracker.userMessages[0].messageID != 12 {
+		t.Fatalf("tracked user messages = %#v, want message 12 tracked", tracker.userMessages)
+	}
+	if len(tracker.bindings) != 1 || tracker.bindings[0].userID != "88" {
+		t.Fatalf("tracked bindings = %#v, want user 88 tracked", tracker.bindings)
+	}
+	if len(bot.sent) != 1 || !strings.Contains(bot.sent[0].text, "queued") {
+		t.Fatalf("reply = %#v, want queued confirmation", bot.sent)
 	}
 }
 
@@ -650,6 +728,7 @@ func newTestShellWithClassifier(t *testing.T, intent conversation.Intent, classi
 
 	shell, err := NewShell(queue, approvals, bot, "chat-1",
 		filepath.Join(t.TempDir(), "telegram-state.json"),
+		nil,
 		WithChatResponder(responder),
 		WithClassifier(classifier, provider),
 	)

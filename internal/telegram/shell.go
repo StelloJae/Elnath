@@ -15,6 +15,7 @@ import (
 	"github.com/stello/elnath/internal/daemon"
 	"github.com/stello/elnath/internal/identity"
 	"github.com/stello/elnath/internal/llm"
+	"github.com/stello/elnath/internal/skill"
 )
 
 type Update struct {
@@ -94,6 +95,7 @@ type Shell struct {
 	taskTracker        TaskTracker
 	workDir            string
 	binder             *ChatSessionBinder
+	skillReg           *skill.Registry
 }
 
 type shellState struct {
@@ -101,7 +103,7 @@ type shellState struct {
 	NextUpdateOffset      int64   `json:"next_update_offset,omitempty"`
 }
 
-func NewShell(queue *daemon.Queue, approvals *daemon.ApprovalStore, bot BotClient, chatID, statePath string, opts ...ShellOption) (*Shell, error) {
+func NewShell(queue *daemon.Queue, approvals *daemon.ApprovalStore, bot BotClient, chatID, statePath string, skillReg *skill.Registry, opts ...ShellOption) (*Shell, error) {
 	if queue == nil {
 		return nil, fmt.Errorf("telegram shell: queue is required")
 	}
@@ -124,6 +126,7 @@ func NewShell(queue *daemon.Queue, approvals *daemon.ApprovalStore, bot BotClien
 		chatID:    strings.TrimSpace(chatID),
 		statePath: statePath,
 		logger:    slog.Default(),
+		skillReg:  skillReg,
 	}
 	if cwd, err := os.Getwd(); err == nil {
 		s.workDir = cwd
@@ -330,16 +333,44 @@ func (s *Shell) handleCommand(ctx context.Context, text string, principal identi
 	case "/submit":
 		return s.enqueueNewTask(ctx, text, principal)
 	case "/help":
-		return "📖 <b>Commands</b>\n" +
+		help := "📖 <b>Commands</b>\n" +
 			"• <code>/status</code> — task status\n" +
 			"• <code>/submit &lt;msg&gt;</code> — new task\n" +
 			"• <code>/approvals</code> — pending approvals\n" +
 			"• <code>/approve &lt;id&gt;</code> — approve\n" +
 			"• <code>/deny &lt;id&gt;</code> — deny\n" +
 			"• <code>/followup &lt;sid&gt; &lt;msg&gt;</code> — follow-up\n" +
-			"• <i>or just type a message</i>", nil
+			"• <i>or just type a message</i>"
+		if s.skillReg != nil {
+			skills := s.skillReg.List()
+			if len(skills) > 0 {
+				help += "\n\n🛠 <b>Skills</b>"
+				for _, sk := range skills {
+					help += fmt.Sprintf("\n• <code>/%s</code> — %s", sk.Name, sk.Description)
+				}
+			}
+		}
+		return help, nil
 	default:
 		if strings.HasPrefix(fields[0], "/") {
+			if s.skillReg != nil {
+				skillName := strings.TrimPrefix(fields[0], "/")
+				if _, ok := s.skillReg.Get(skillName); ok {
+					if userMsgID > 0 {
+						_ = s.bot.SetReaction(ctx, s.chatID, userMsgID, "👀")
+					}
+					skillPrompt := fmt.Sprintf("[Skill: %s] %s", skillName, text)
+					taskID, existed, err := s.enqueueTaskReturningID(ctx, skillPrompt, principal)
+					if err != nil {
+						return "", err
+					}
+					if existed {
+						return dedupMessage(taskID), nil
+					}
+					s.trackEnqueuedTask(taskID, userMsgID, principal.UserID)
+					return fmt.Sprintf("🚀 Task <code>#%d</code> queued", taskID), nil
+				}
+			}
 			return "Unknown command. Use /help.", nil
 		}
 		return s.enqueueNewTask(ctx, text, principal)

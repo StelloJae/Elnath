@@ -34,11 +34,11 @@ var translations = map[Locale]map[string]string{
 		"apikey.skip":        "Press enter to skip (can set later via ELNATH_ANTHROPIC_API_KEY)",
 		"apikey.navigate":    "enter to confirm • esc to go back",
 
-		"dir.title":       "Directory Setup",
-		"dir.data":        "Data directory:",
-		"dir.wiki":        "Wiki directory:",
-		"dir.default":     "(default: %s)",
-		"dir.navigate":    "enter to confirm • tab to next field • esc to go back",
+		"dir.title":    "Directory Setup",
+		"dir.data":     "Data directory:",
+		"dir.wiki":     "Wiki directory:",
+		"dir.default":  "(default: %s)",
+		"dir.navigate": "enter to confirm • tab to next field • esc to go back",
 
 		"perm.title":             "Permission Mode",
 		"perm.subtitle":          "Choose how Elnath handles tool execution permissions",
@@ -53,17 +53,17 @@ var translations = map[Locale]map[string]string{
 		"perm.recommended":       "★ Recommended",
 		"perm.navigate":          "↑/↓ to select • enter to confirm • esc to go back",
 
-		"mcp.title":         "MCP Server Catalog",
-		"mcp.subtitle":      "Select MCP servers to integrate (space to toggle, enter to confirm)",
-		"mcp.cat.dev":       "Development",
-		"mcp.cat.research":  "Research",
-		"mcp.cat.media":     "Media",
-		"mcp.cat.testing":   "Testing",
-		"mcp.cat.data":      "Data",
-		"mcp.npm.warning":   "⚠ npm/npx not found. MCP servers require Node.js. Install from https://nodejs.org",
-		"mcp.npm.ok":        "✓ npm/npx detected",
-		"mcp.none":          "No servers selected — you can add them later in config.yaml",
-		"mcp.navigate":      "↑/↓ move • space toggle • enter confirm • esc back",
+		"mcp.title":        "MCP Server Catalog",
+		"mcp.subtitle":     "Select MCP servers to integrate (space to toggle, enter to confirm)",
+		"mcp.cat.dev":      "Development",
+		"mcp.cat.research": "Research",
+		"mcp.cat.media":    "Media",
+		"mcp.cat.testing":  "Testing",
+		"mcp.cat.data":     "Data",
+		"mcp.npm.warning":  "⚠ npm/npx not found. MCP servers require Node.js. Install from https://nodejs.org",
+		"mcp.npm.ok":       "✓ npm/npx detected",
+		"mcp.none":         "No servers selected — you can add them later in config.yaml",
+		"mcp.navigate":     "↑/↓ move • space toggle • enter confirm • esc back",
 
 		"done.title":   "Setup Complete!",
 		"done.message": "Run 'elnath run' to start chatting.",
@@ -93,8 +93,8 @@ var translations = map[Locale]map[string]string{
 
 		"progress.step": "Step %d of %d",
 
-		"setup.backup":  "Existing config backed up to %s",
-		"setup.rerun":   "Re-running setup wizard...",
+		"setup.backup":      "Existing config backed up to %s",
+		"setup.rerun":       "Re-running setup wizard...",
 		"setup.reconfigure": "Reconfiguration Mode",
 
 		"cli.help": `Usage: elnath <command> [args]
@@ -103,10 +103,12 @@ Commands:
   run       Interactive chat mode
   setup     Re-run the setup wizard
   daemon    Background daemon mode
+  research  Research task utilities
+  lessons   Lessons management utilities
   eval      Benchmark/eval utilities
-  wiki      Wiki management (search, lint, ingest)
-  search    Search past conversations
-  version   Show version
+	 wiki      Wiki management (search, lint, ingest)
+	 search    Search past conversations
+	 version   Show version
   help      Show this help
 
 Daemon subcommands:
@@ -115,12 +117,12 @@ Daemon subcommands:
   daemon status             List queued and running tasks
   daemon stop               Gracefully stop the running daemon
   daemon install            Install launchd plist for auto-start`,
-		"cli.unknown_command":   "unknown command: %s",
-		"cli.onboarding_error":  "onboarding: %s",
-		"cli.setup_error":       "setup wizard: %s",
-		"cli.config_load_error": "load config: %s",
+		"cli.unknown_command":    "unknown command: %s",
+		"cli.onboarding_error":   "onboarding: %s",
+		"cli.setup_error":        "setup wizard: %s",
+		"cli.config_load_error":  "load config: %s",
 		"cli.write_config_error": "write config: %s",
-		"cli.no_provider":       "No LLM provider configured. Set ELNATH_ANTHROPIC_API_KEY or add anthropic.api_key to config.yaml",
+		"cli.no_provider":        "No LLM provider configured. Set ELNATH_ANTHROPIC_API_KEY or add anthropic.api_key to config.yaml",
 	},
 	Ko: {
 		"welcome.title":      "Elnath에 오신 것을 환영합니다",
@@ -147,11 +149,11 @@ Daemon subcommands:
 		"apikey.skip":        "Enter로 건너뛰기 (나중에 ELNATH_ANTHROPIC_API_KEY로 설정 가능)",
 		"apikey.navigate":    "Enter 확인 • Esc 뒤로",
 
-		"dir.title":       "디렉토리 설정",
-		"dir.data":        "데이터 디렉토리:",
-		"dir.wiki":        "위키 디렉토리:",
-		"dir.default":     "(기본값: %s)",
-		"dir.navigate":    "Enter 확인 • Tab 다음 필드 • Esc 뒤로",
+		"dir.title":    "디렉토리 설정",
+		"dir.data":     "데이터 디렉토리:",
+		"dir.wiki":     "위키 디렉토리:",
+		"dir.default":  "(기본값: %s)",
+		"dir.navigate": "Enter 확인 • Tab 다음 필드 • Esc 뒤로",
 
 		"perm.title":             "권한 모드",
 		"perm.subtitle":          "Elnath의 도구 실행 권한 방식을 선택하세요",
@@ -166,17 +168,17 @@ Daemon subcommands:
 		"perm.recommended":       "★ 추천",
 		"perm.navigate":          "↑/↓ 선택 • Enter 확인 • Esc 뒤로",
 
-		"mcp.title":         "MCP 서버 카탈로그",
-		"mcp.subtitle":      "통합할 MCP 서버를 선택하세요 (Space 토글, Enter 확인)",
-		"mcp.cat.dev":       "개발",
-		"mcp.cat.research":  "연구",
-		"mcp.cat.media":     "미디어",
-		"mcp.cat.testing":   "테스팅",
-		"mcp.cat.data":      "데이터",
-		"mcp.npm.warning":   "⚠ npm/npx를 찾을 수 없습니다. MCP 서버는 Node.js가 필요합니다. https://nodejs.org 에서 설치하세요",
-		"mcp.npm.ok":        "✓ npm/npx 감지됨",
-		"mcp.none":          "선택된 서버 없음 — config.yaml에서 나중에 추가할 수 있습니다",
-		"mcp.navigate":      "↑/↓ 이동 • Space 토글 • Enter 확인 • Esc 뒤로",
+		"mcp.title":        "MCP 서버 카탈로그",
+		"mcp.subtitle":     "통합할 MCP 서버를 선택하세요 (Space 토글, Enter 확인)",
+		"mcp.cat.dev":      "개발",
+		"mcp.cat.research": "연구",
+		"mcp.cat.media":    "미디어",
+		"mcp.cat.testing":  "테스팅",
+		"mcp.cat.data":     "데이터",
+		"mcp.npm.warning":  "⚠ npm/npx를 찾을 수 없습니다. MCP 서버는 Node.js가 필요합니다. https://nodejs.org 에서 설치하세요",
+		"mcp.npm.ok":       "✓ npm/npx 감지됨",
+		"mcp.none":         "선택된 서버 없음 — config.yaml에서 나중에 추가할 수 있습니다",
+		"mcp.navigate":     "↑/↓ 이동 • Space 토글 • Enter 확인 • Esc 뒤로",
 
 		"done.title":   "설정 완료!",
 		"done.message": "'elnath run'을 실행하여 대화를 시작하세요.",
@@ -206,8 +208,8 @@ Daemon subcommands:
 
 		"progress.step": "%d / %d 단계",
 
-		"setup.backup":  "기존 설정이 %s에 백업되었습니다",
-		"setup.rerun":   "설정 마법사를 다시 실행합니다...",
+		"setup.backup":      "기존 설정이 %s에 백업되었습니다",
+		"setup.rerun":       "설정 마법사를 다시 실행합니다...",
 		"setup.reconfigure": "재설정 모드",
 
 		"cli.help": `사용법: elnath <명령> [인자]
@@ -216,10 +218,12 @@ Daemon subcommands:
   run       대화형 채팅 모드
   setup     설정 마법사 다시 실행
   daemon    백그라운드 데몬 모드
+  research  리서치 작업 유틸리티
+  lessons   lesson 관리 유틸리티
   eval      벤치마크/평가 유틸리티
-  wiki      위키 관리 (검색, 린트, 수집)
-  search    이전 대화 검색
-  version   버전 표시
+	 wiki      위키 관리 (검색, 린트, 수집)
+	 search    이전 대화 검색
+	 version   버전 표시
   help      이 도움말 표시
 
 데몬 하위 명령:
@@ -228,12 +232,12 @@ Daemon subcommands:
   daemon status             대기 및 실행 중인 작업 목록
   daemon stop               데몬 정상 종료
   daemon install            자동 시작 launchd plist 설치`,
-		"cli.unknown_command":   "알 수 없는 명령: %s",
-		"cli.onboarding_error":  "온보딩: %s",
-		"cli.setup_error":       "설정 마법사: %s",
-		"cli.config_load_error": "설정 로드: %s",
+		"cli.unknown_command":    "알 수 없는 명령: %s",
+		"cli.onboarding_error":   "온보딩: %s",
+		"cli.setup_error":        "설정 마법사: %s",
+		"cli.config_load_error":  "설정 로드: %s",
 		"cli.write_config_error": "설정 쓰기: %s",
-		"cli.no_provider":       "LLM 프로바이더가 설정되지 않았습니다. ELNATH_ANTHROPIC_API_KEY를 설정하거나 config.yaml에 anthropic.api_key를 추가하세요",
+		"cli.no_provider":        "LLM 프로바이더가 설정되지 않았습니다. ELNATH_ANTHROPIC_API_KEY를 설정하거나 config.yaml에 anthropic.api_key를 추가하세요",
 	},
 }
 
