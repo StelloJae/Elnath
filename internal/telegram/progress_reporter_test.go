@@ -95,8 +95,8 @@ func TestProgressReporterBatchesTools(t *testing.T) {
 	pr.Run()
 
 	pr.ReportTool("bash", "ls -la")
-	pr.ReportTool("file_read", "main.go")
-	pr.ReportTool("file_edit", "config.go")
+	pr.ReportTool("read_file", "main.go")
+	pr.ReportTool("edit_file", "config.go")
 
 	// Wait for the flush (first event triggers immediate flush since lastFlush is zero).
 	time.Sleep(500 * time.Millisecond)
@@ -113,11 +113,11 @@ func TestProgressReporterBatchesTools(t *testing.T) {
 	if !strings.Contains(text, "bash") {
 		t.Fatalf("expected 'bash' in output, got %q", text)
 	}
-	if !strings.Contains(text, "file_read") {
-		t.Fatalf("expected 'file_read' in output, got %q", text)
+	if !strings.Contains(text, "read_file") {
+		t.Fatalf("expected 'read_file' in output, got %q", text)
 	}
-	if !strings.Contains(text, "file_edit") {
-		t.Fatalf("expected 'file_edit' in output, got %q", text)
+	if !strings.Contains(text, "edit_file") {
+		t.Fatalf("expected 'edit_file' in output, got %q", text)
 	}
 	if !strings.Contains(text, "🔧") {
 		t.Fatalf("expected bash emoji in output, got %q", text)
@@ -191,7 +191,7 @@ func TestProgressReporterEditsExisting(t *testing.T) {
 	// Second tool — should edit, not send a new message.
 	// Need to wait past the throttle interval so the edit actually fires.
 	time.Sleep(progressEditInterval)
-	pr.ReportTool("file_read", "readme.md")
+	pr.ReportTool("read_file", "readme.md")
 	time.Sleep(500 * time.Millisecond)
 
 	pr.Finish()
@@ -213,8 +213,8 @@ func TestProgressReporterEditsExisting(t *testing.T) {
 	if !strings.Contains(lastEdit, "bash") {
 		t.Fatalf("edit should contain first tool 'bash', got %q", lastEdit)
 	}
-	if !strings.Contains(lastEdit, "file_read") {
-		t.Fatalf("edit should contain second tool 'file_read', got %q", lastEdit)
+	if !strings.Contains(lastEdit, "read_file") {
+		t.Fatalf("edit should contain second tool 'read_file', got %q", lastEdit)
 	}
 }
 
@@ -224,7 +224,7 @@ func TestProgressReporterFinishFlushes(t *testing.T) {
 	pr.Run()
 
 	pr.ReportTool("bash", "go build")
-	pr.ReportTool("file_write", "output.txt")
+	pr.ReportTool("write_file", "output.txt")
 
 	// Finish immediately — should still flush pending tools.
 	pr.Finish()
@@ -237,7 +237,7 @@ func TestProgressReporterFinishFlushes(t *testing.T) {
 	if !strings.Contains(last, "bash") {
 		t.Fatalf("expected 'bash' in flushed output, got %q", last)
 	}
-	if !strings.Contains(last, "file_write") {
-		t.Fatalf("expected 'file_write' in flushed output, got %q", last)
+	if !strings.Contains(last, "write_file") {
+		t.Fatalf("expected 'write_file' in flushed output, got %q", last)
 	}
 }

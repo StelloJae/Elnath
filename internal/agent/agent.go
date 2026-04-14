@@ -532,20 +532,32 @@ func extractToolPreview(toolName, input string) string {
 		if v, ok := fields["command"].(string); ok {
 			preview = v
 		}
-	case "file_read", "file_write", "file_edit":
-		if v, ok := fields["path"].(string); ok {
+	case "read_file", "write_file", "edit_file":
+		if v, ok := fields["file_path"].(string); ok {
 			preview = v
 		}
-	case "web_search":
+	case "glob", "grep":
+		if v, ok := fields["pattern"].(string); ok {
+			preview = v
+		}
+	case "web_fetch":
+		if v, ok := fields["url"].(string); ok {
+			preview = v
+		}
+	case "wiki_search", "conversation_search":
 		if v, ok := fields["query"].(string); ok {
 			preview = v
 		}
+	case "wiki_read", "wiki_write":
+		if v, ok := fields["path"].(string); ok {
+			preview = v
+		}
 	case "git":
-		if v, ok := fields["args"].(string); ok {
+		if v, ok := fields["subcommand"].(string); ok {
 			preview = v
 		}
 	default:
-		for _, key := range []string{"path", "command", "query", "name", "url"} {
+		for _, key := range []string{"file_path", "path", "command", "query", "pattern", "url", "name", "subcommand"} {
 			if v, ok := fields[key].(string); ok && v != "" {
 				preview = v
 				break

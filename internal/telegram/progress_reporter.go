@@ -12,13 +12,18 @@ import (
 const progressEditInterval = 500 * time.Millisecond
 
 var toolEmojis = map[string]string{
-	"bash":       "🔧",
-	"file_write": "📝",
-	"file_read":  "📖",
-	"file_edit":  "✏️",
-	"git":        "📦",
-	"web_search": "🔍",
-	"wiki":       "📚",
+	"bash":                "🔧",
+	"read_file":           "📖",
+	"write_file":          "📝",
+	"edit_file":           "✏️",
+	"glob":                "🔎",
+	"grep":                "🔎",
+	"web_fetch":           "🌐",
+	"wiki_search":         "📚",
+	"wiki_read":           "📚",
+	"wiki_write":          "📚",
+	"conversation_search": "💬",
+	"git":                 "📦",
 }
 
 var prStageIcons = map[string]string{
