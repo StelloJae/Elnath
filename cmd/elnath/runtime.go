@@ -160,6 +160,7 @@ func buildExecutionRuntime(
 		WithContextWindow(ctxWindow).
 		WithMaxContextTokens(cfg.MaxContextTokens).
 		WithHistoryStore(historyStore).
+		WithConfig(cfg).
 		WithLogger(app.Logger)
 
 	effectiveWorkDir := workDir
@@ -272,6 +273,7 @@ func buildExecutionRuntime(
 	b.Register(prompt.NewProjectContextNode(50))
 	b.Register(prompt.NewBrownfieldNode(40))
 	b.Register(prompt.NewSessionSummaryNode(30, 5, 800))
+	b.Register(&prompt.LocaleInstructionNode{})
 
 	return &executionRuntime{
 		app:                app,
@@ -438,6 +440,7 @@ func (rt *executionRuntime) runTask(
 		Messages:      promptMessages,
 		WikiIdx:       rt.wikiIdx,
 		TokenBudget:   0,
+		Locale:        rt.mgr.LastLocale(sess.ID),
 		PersonaExtra:  rt.personaExtra,
 		Model:         rt.wfCfg.Model,
 		Provider:      rt.provider.Name(),

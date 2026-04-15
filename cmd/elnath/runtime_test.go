@@ -1348,6 +1348,46 @@ func TestExecutionRuntimeBuildsDaemonModeSystemPrompt(t *testing.T) {
 	}
 }
 
+func TestExecutionRuntimeAddsLocaleInstructionForKoreanInput(t *testing.T) {
+	provider := &countingProvider{streamText: "runtime answer"}
+	rt := newTestExecutionRuntime(t, provider)
+
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	_, _, err = rt.runTask(context.Background(), sess, nil, "안녕, 오늘 날짜 알려줘", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask: %v", err)
+	}
+	if !strings.Contains(provider.lastSystem, "Respond in Korean.") {
+		t.Fatalf("system prompt missing locale instruction\n%s", provider.lastSystem)
+	}
+}
+
+func TestExecutionRuntimeInheritsLocaleForShortFollowUp(t *testing.T) {
+	provider := &countingProvider{streamText: "runtime answer"}
+	rt := newTestExecutionRuntime(t, provider)
+
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	messages, _, err := rt.runTask(context.Background(), sess, nil, "안녕, 지금 뭐해?", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("first runTask: %v", err)
+	}
+	_, _, err = rt.runTask(context.Background(), sess, messages, "네", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("second runTask: %v", err)
+	}
+	if !strings.Contains(provider.lastSystem, "Respond in Korean.") {
+		t.Fatalf("system prompt missing inherited locale instruction\n%s", provider.lastSystem)
+	}
+}
+
 func TestExecutionRuntimePromptSessionSummaryUsesPriorPreparedHistory(t *testing.T) {
 	provider := &countingProvider{streamText: "runtime answer"}
 	rt := newTestExecutionRuntime(t, provider)

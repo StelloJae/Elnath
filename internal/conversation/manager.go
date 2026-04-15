@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/stello/elnath/internal/agent"
+	"github.com/stello/elnath/internal/config"
 	"github.com/stello/elnath/internal/identity"
 	"github.com/stello/elnath/internal/llm"
+	"github.com/stello/elnath/internal/locale"
 )
 
 // IntentClassifier classifies the user's intent from a message.
@@ -43,6 +46,9 @@ type Manager struct {
 	context          ContextWindowManager
 	history          HistoryStore
 	maxContextTokens int
+	cfg              *config.Config
+	localeMu         sync.RWMutex
+	lastLocale       map[string]string
 }
 
 // SessionMeta is the resumable-session index entry derived from JSONL files.
@@ -59,9 +65,10 @@ type SessionMeta struct {
 // can be set via the With* methods after construction.
 func NewManager(db *sql.DB, dataDir string) *Manager {
 	return &Manager{
-		db:      db,
-		dataDir: dataDir,
-		logger:  slog.Default(),
+		db:         db,
+		dataDir:    dataDir,
+		logger:     slog.Default(),
+		lastLocale: make(map[string]string),
 	}
 }
 
@@ -100,6 +107,20 @@ func (m *Manager) WithMaxContextTokens(n int) *Manager {
 func (m *Manager) WithLogger(l *slog.Logger) *Manager {
 	m.logger = l
 	return m
+}
+
+func (m *Manager) WithConfig(cfg *config.Config) *Manager {
+	m.cfg = cfg
+	return m
+}
+
+func (m *Manager) LastLocale(sessionID string) string {
+	if m == nil || sessionID == "" {
+		return ""
+	}
+	m.localeMu.RLock()
+	defer m.localeMu.RUnlock()
+	return m.lastLocale[sessionID]
 }
 
 // NewSession creates a new conversation session persisted as a JSONL file.
@@ -249,6 +270,9 @@ func (m *Manager) SendMessage(ctx context.Context, sessionID, userMsg string) ([
 	}
 
 	messages := s.Messages
+	sessionLast := m.sessionLastLocale(sessionID, messages)
+	resolvedLocale := m.resolveLocale(userMsg, sessionLast)
+	m.setLastLocale(sessionID, resolvedLocale)
 
 	// Classify intent if classifier is available.
 	intent := IntentUnclear
@@ -307,6 +331,53 @@ func (m *Manager) SendMessage(ctx context.Context, sessionID, userMsg string) ([
 	)
 
 	return messages, intent, nil
+}
+
+func (m *Manager) resolveLocale(userMsg, sessionLast string) string {
+	lang, conf := locale.DetectLanguage(userMsg)
+	return locale.Resolve(locale.DetectResult{Lang: lang, Confidence: conf}, sessionLast, m.configuredLocale())
+}
+
+func (m *Manager) sessionLastLocale(sessionID string, messages []llm.Message) string {
+	if cached := m.LastLocale(sessionID); cached != "" {
+		return cached
+	}
+	resolved := m.reconstructLocale(messages)
+	if resolved != "" {
+		m.setLastLocale(sessionID, resolved)
+	}
+	return resolved
+}
+
+func (m *Manager) reconstructLocale(messages []llm.Message) string {
+	last := ""
+	for _, msg := range messages {
+		if msg.Role != llm.RoleUser {
+			continue
+		}
+		lang, conf := locale.DetectLanguage(msg.Text())
+		last = locale.Resolve(locale.DetectResult{Lang: lang, Confidence: conf}, last, m.configuredLocale())
+	}
+	return last
+}
+
+func (m *Manager) configuredLocale() string {
+	if m == nil || m.cfg == nil {
+		return ""
+	}
+	return locale.NormalizeConfig(m.cfg.Locale)
+}
+
+func (m *Manager) setLastLocale(sessionID, resolved string) {
+	if m == nil || sessionID == "" {
+		return
+	}
+	m.localeMu.Lock()
+	defer m.localeMu.Unlock()
+	if m.lastLocale == nil {
+		m.lastLocale = make(map[string]string)
+	}
+	m.lastLocale[sessionID] = resolved
 }
 
 func (m *Manager) prepareSession(s *agent.Session) {

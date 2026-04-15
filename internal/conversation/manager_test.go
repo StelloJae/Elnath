@@ -847,3 +847,42 @@ func TestManagerWithMethods_ReturnsSelf(t *testing.T) {
 		t.Error("With* methods should return the same *Manager")
 	}
 }
+
+func TestManagerSendMessage_ReconstructsLocaleOnResume(t *testing.T) {
+	sess, dir := newTestSession(t)
+	mgr := NewManager(nil, dir)
+
+	if _, _, err := mgr.SendMessage(context.Background(), sess.ID, "안녕하세요"); err != nil {
+		t.Fatalf("first SendMessage: %v", err)
+	}
+
+	resumed := NewManager(nil, dir)
+	if _, _, err := resumed.SendMessage(context.Background(), sess.ID, "네"); err != nil {
+		t.Fatalf("resumed SendMessage: %v", err)
+	}
+	if got := resumed.LastLocale(sess.ID); got != "ko" {
+		t.Fatalf("LastLocale(resumed) = %q, want ko", got)
+	}
+}
+
+func TestManagerSendMessage_IsolatesLocalePerSession(t *testing.T) {
+	first, dir := newTestSession(t)
+	second, err := agent.NewSession(dir)
+	if err != nil {
+		t.Fatalf("agent.NewSession: %v", err)
+	}
+
+	mgr := NewManager(nil, dir)
+	if _, _, err := mgr.SendMessage(context.Background(), first.ID, "안녕하세요"); err != nil {
+		t.Fatalf("first session SendMessage: %v", err)
+	}
+	if _, _, err := mgr.SendMessage(context.Background(), second.ID, "ok"); err != nil {
+		t.Fatalf("second session SendMessage: %v", err)
+	}
+	if got := mgr.LastLocale(first.ID); got != "ko" {
+		t.Fatalf("LastLocale(first) = %q, want ko", got)
+	}
+	if got := mgr.LastLocale(second.ID); got != "en" {
+		t.Fatalf("LastLocale(second) = %q, want en", got)
+	}
+}

@@ -17,6 +17,7 @@ type RenderState struct {
 	Messages      []llm.Message
 	WikiIdx       *wiki.Index
 	TokenBudget   int
+	Locale        string
 	PersonaExtra  string
 	Model         string
 	Provider      string
