@@ -59,6 +59,9 @@ func (w *ResearchWorkflow) Run(ctx context.Context, input WorkflowInput) (*Workf
 	hypGen := research.NewHypothesisGenerator(input.Provider, input.Config.Model, w.logger)
 	expRunner := research.NewExperimentRunner(input.Provider, input.Tools, input.Config.Model, w.logger).
 		WithOnText(input.OnText)
+	if input.Config.ToolExecutor != nil {
+		expRunner.WithToolExecutor(input.Config.ToolExecutor)
+	}
 
 	var opts []research.LoopOption
 	if deps.MaxRounds > 0 {

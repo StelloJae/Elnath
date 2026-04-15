@@ -381,6 +381,7 @@ Execution rules:
 		SystemPrompt:  subtaskSystemPrompt,
 		Hooks:         input.Config.Hooks,
 		Permission:    input.Config.Permission,
+		ToolExecutor:  input.Config.ToolExecutor,
 	})
 	a := agent.New(input.Provider, input.Tools, opts...)
 

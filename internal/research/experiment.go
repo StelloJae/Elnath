@@ -26,6 +26,7 @@ type ExperimentResult struct {
 type ExperimentRunner struct {
 	provider llm.Provider
 	tools    *tools.Registry
+	executor tools.Executor
 	model    string
 	logger   *slog.Logger
 	onText   func(string)
@@ -44,6 +45,11 @@ func NewExperimentRunner(provider llm.Provider, toolReg *tools.Registry, model s
 // WithOnText forwards streamed experiment output to the provided callback.
 func (r *ExperimentRunner) WithOnText(cb func(string)) *ExperimentRunner {
 	r.onText = cb
+	return r
+}
+
+func (r *ExperimentRunner) WithToolExecutor(exec tools.Executor) *ExperimentRunner {
+	r.executor = exec
 	return r
 }
 
@@ -74,6 +80,17 @@ func (r *ExperimentRunner) Run(ctx context.Context, hyp Hypothesis) (*Experiment
 		agent.WithMaxIterations(20),
 		agent.WithLogger(r.logger),
 	)
+	if r.executor != nil {
+		a = agent.New(
+			r.provider,
+			r.tools,
+			agent.WithModel(r.model),
+			agent.WithSystemPrompt(experimentSystemPrompt),
+			agent.WithMaxIterations(20),
+			agent.WithLogger(r.logger),
+			agent.WithToolExecutor(r.executor),
+		)
+	}
 
 	userMsg := fmt.Sprintf("Hypothesis: %s\n\nTest Plan: %s\n\nExecute this test plan and report results.", hyp.Statement, hyp.TestPlan)
 	messages := []llm.Message{llm.NewUserMessage(userMsg)}

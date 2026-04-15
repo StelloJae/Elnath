@@ -428,6 +428,31 @@ func TestValidate(t *testing.T) {
 			wantErr: "wiki_dir is required",
 		},
 		{
+			name:    "locale auto",
+			mutate:  func(c *Config) { c.Locale = "auto" },
+			wantErr: "",
+		},
+		{
+			name:    "locale ja",
+			mutate:  func(c *Config) { c.Locale = "ja" },
+			wantErr: "",
+		},
+		{
+			name:    "locale zh",
+			mutate:  func(c *Config) { c.Locale = "zh" },
+			wantErr: "",
+		},
+		{
+			name:    "locale uppercase and padded",
+			mutate:  func(c *Config) { c.Locale = " KO " },
+			wantErr: "",
+		},
+		{
+			name:    "unsupported locale",
+			mutate:  func(c *Config) { c.Locale = "fr" },
+			wantErr: "supported: en, ko, ja, zh, auto",
+		},
+		{
 			name: "wiki_dir is a file not a dir",
 			mutate: func(c *Config) {
 				f := filepath.Join(dir, "not-a-dir.txt")

@@ -16,12 +16,15 @@ import (
 	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/core"
 	"github.com/stello/elnath/internal/daemon"
+	"github.com/stello/elnath/internal/fault"
+	"github.com/stello/elnath/internal/fault/scenarios"
 	"github.com/stello/elnath/internal/identity"
 	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/research"
 	"github.com/stello/elnath/internal/scheduler"
 	"github.com/stello/elnath/internal/self"
 	"github.com/stello/elnath/internal/telegram"
+	"github.com/stello/elnath/internal/userfacingerr"
 	"github.com/stello/elnath/internal/wiki"
 )
 
@@ -62,6 +65,10 @@ func cmdDaemonStart(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+	scenarioName, err := fault.CheckGuards(fault.GuardConfig{Enabled: cfg.FaultInjection.Enabled})
+	if err != nil {
+		return err
+	}
 
 	app, err := core.New(cfg)
 	if err != nil {
@@ -78,6 +85,21 @@ func cmdDaemonStart(ctx context.Context) error {
 	provider, model, err := buildProvider(cfg)
 	if err != nil {
 		return fmt.Errorf("build provider: %w", err)
+	}
+	registry := fault.NewRegistry(scenarios.All())
+	inj := fault.Injector(fault.NoopInjector{})
+	var activeScenario *fault.Scenario
+	if scenarioName != "" {
+		scenario, ok := registry.Get(scenarioName)
+		if !ok {
+			return fmt.Errorf("unknown fault scenario %q", scenarioName)
+		}
+		activeScenario = scenario
+		inj = fault.NewScenarioInjector(scenario, time.Now().UnixNano())
+		app.Logger.Warn("fault injection ACTIVE", "scenario", scenarioName)
+		if scenario.Category == fault.CategoryLLM {
+			provider = fault.NewLLMFaultHook(provider, inj, scenario)
+		}
 	}
 
 	mode := parsePermissionMode(cfg.Permission.Mode)
@@ -130,6 +152,9 @@ func cmdDaemonStart(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if activeScenario != nil && activeScenario.Category == fault.CategoryTool {
+		rt.wfCfg.ToolExecutor = fault.NewToolFaultHook(rt.reg, inj, activeScenario)
+	}
 	autoRotateLessons(app.Logger, rt.learningStore, learning.RotateOpts{
 		KeepLast: 5000,
 		MaxBytes: 1 << 20,
@@ -149,6 +174,9 @@ func cmdDaemonStart(ctx context.Context) error {
 	}
 
 	d := daemon.New(queue, cfg.Daemon.SocketPath, cfg.Daemon.MaxWorkers, rt.newDaemonTaskRunner(), app.Logger)
+	d.WithFaultGuardConfig(fault.GuardConfig{Enabled: cfg.FaultInjection.Enabled})
+	d.MarkFaultGuardChecked()
+	d.WithFaultInjection(inj, activeScenario)
 	d.WithDeliveryRouter(router)
 	d.WithFallbackPrincipal(fallbackPrincipal)
 	d.WithTimeouts(
@@ -156,6 +184,16 @@ func cmdDaemonStart(ctx context.Context) error {
 		time.Duration(cfg.Daemon.WallClockTimeout)*time.Second,
 	)
 	if rt.wikiIdx != nil && rt.wikiStore != nil {
+		researchOpts := []research.TaskRunnerOption{
+			research.WithRunnerMaxRounds(cfg.Research.MaxRounds),
+			research.WithRunnerCostCap(cfg.Research.CostCapUSD),
+			research.WithToolRegistry(rt.reg),
+			research.WithRunnerLearning(rt.learningStore),
+			research.WithRunnerSelfState(selfState),
+		}
+		if activeScenario != nil && activeScenario.Category == fault.CategoryTool {
+			researchOpts = append(researchOpts, research.WithToolExecutor(fault.NewToolFaultHook(rt.reg, inj, activeScenario)))
+		}
 		d.SetResearchRunner(research.NewTaskRunner(
 			provider,
 			model,
@@ -163,11 +201,7 @@ func cmdDaemonStart(ctx context.Context) error {
 			rt.wikiStore,
 			rt.usageTracker,
 			app.Logger,
-			research.WithRunnerMaxRounds(cfg.Research.MaxRounds),
-			research.WithRunnerCostCap(cfg.Research.CostCapUSD),
-			research.WithToolRegistry(rt.reg),
-			research.WithRunnerLearning(rt.learningStore),
-			research.WithRunnerSelfState(selfState),
+			researchOpts...,
 		))
 	}
 	sch, scheduledPath, taskCount, err := loadScheduler(cfg, queue, app.Logger)
@@ -458,7 +492,8 @@ func cmdDaemonInstall(_ context.Context) error {
 func sendIPCRequest(socketPath string, req daemon.IPCRequest) (*daemon.IPCResponse, error) {
 	conn, err := net.Dial("unix", socketPath)
 	if err != nil {
-		return nil, fmt.Errorf("connect to daemon at %s: %w", socketPath, err)
+		inner := fmt.Errorf("connect to daemon at %s: %w", socketPath, err)
+		return nil, userfacingerr.Wrap(userfacingerr.ELN030, inner, "daemon ipc")
 	}
 	defer conn.Close()
 

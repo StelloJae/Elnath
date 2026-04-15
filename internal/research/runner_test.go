@@ -11,6 +11,7 @@ import (
 	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/self"
+	"github.com/stello/elnath/internal/tools"
 )
 
 func TestNewTaskRunnerDefaults(t *testing.T) {
@@ -30,6 +31,14 @@ func TestNewTaskRunnerWithRunnerMaxRounds(t *testing.T) {
 	r := NewTaskRunner(nil, "test-model", nil, nil, nil, slog.Default(), WithRunnerMaxRounds(3))
 	if r.maxRounds != 3 {
 		t.Fatalf("maxRounds = %d, want 3", r.maxRounds)
+	}
+}
+
+func TestNewTaskRunnerWithToolExecutor(t *testing.T) {
+	reg := tools.NewRegistry()
+	r := NewTaskRunner(nil, "test-model", nil, nil, nil, slog.Default(), WithToolExecutor(reg))
+	if r.toolExec != reg {
+		t.Fatalf("toolExec = %#v, want registry executor", r.toolExec)
 	}
 }
 

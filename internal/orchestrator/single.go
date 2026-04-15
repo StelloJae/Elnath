@@ -83,6 +83,9 @@ func agentOptions(cfg WorkflowConfig) []agent.Option {
 	if cfg.Permission != nil {
 		opts = append(opts, agent.WithPermission(cfg.Permission))
 	}
+	if cfg.ToolExecutor != nil {
+		opts = append(opts, agent.WithToolExecutor(cfg.ToolExecutor))
+	}
 	return opts
 }
 

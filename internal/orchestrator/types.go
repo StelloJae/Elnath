@@ -64,4 +64,5 @@ type WorkflowConfig struct {
 	SystemPrompt  string
 	Hooks         *agent.HookRegistry
 	Permission    *agent.Permission
+	ToolExecutor  tools.Executor
 }

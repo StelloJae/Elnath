@@ -35,6 +35,7 @@ func DefaultConfig() *Config {
 			WallClockTimeout:  1800,
 			WorkDir:           filepath.Join(base, "workspace"),
 		},
+		FaultInjection: FaultInjectionConfig{Enabled: false},
 		Research: ResearchConfig{
 			MaxRounds:  5,
 			CostCapUSD: 5.0,

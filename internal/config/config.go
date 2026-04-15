@@ -23,15 +23,16 @@ type Config struct {
 	MaxContextTokens  int     `yaml:"max_context_tokens"`
 	CompressThreshold float64 `yaml:"compress_threshold"`
 
-	Permission    PermissionConfig    `yaml:"permission"`
-	Principal     PrincipalConfig     `yaml:"principal"`
-	Daemon        DaemonConfig        `yaml:"daemon"`
-	Telegram      TelegramConfig      `yaml:"telegram"`
-	Research      ResearchConfig      `yaml:"research"`
-	LLMExtraction LLMExtractionConfig `yaml:"llm_extraction"`
-	Projects      []ProjectRef        `yaml:"projects"`
-	MCPServers    []MCPServerConfig   `yaml:"mcp_servers"`
-	Hooks         []HookConfig        `yaml:"hooks"`
+	Permission     PermissionConfig     `yaml:"permission"`
+	Principal      PrincipalConfig      `yaml:"principal"`
+	Daemon         DaemonConfig         `yaml:"daemon"`
+	FaultInjection FaultInjectionConfig `yaml:"fault_injection"`
+	Telegram       TelegramConfig       `yaml:"telegram"`
+	Research       ResearchConfig       `yaml:"research"`
+	LLMExtraction  LLMExtractionConfig  `yaml:"llm_extraction"`
+	Projects       []ProjectRef         `yaml:"projects"`
+	MCPServers     []MCPServerConfig    `yaml:"mcp_servers"`
+	Hooks          []HookConfig         `yaml:"hooks"`
 }
 
 // MCPServerConfig defines an external MCP server to connect to.
@@ -83,6 +84,11 @@ type DaemonConfig struct {
 	ScheduledTasksPath string   `yaml:"scheduled_tasks_path"`
 	WorkDir            string   `yaml:"work_dir"`
 	ProtectedPaths     []string `yaml:"protected_paths"`
+}
+
+type FaultInjectionConfig struct {
+	Enabled   bool   `yaml:"enabled"`
+	OutputDir string `yaml:"output_dir"`
 }
 
 type TelegramConfig struct {
@@ -147,6 +153,11 @@ func Load(path string) (*Config, error) {
 func DefaultConfigPath() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".elnath", "config.yaml")
+}
+
+func DefaultDataDir() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".elnath", "data")
 }
 
 func applyEnvOverrides(cfg *Config) {
@@ -218,10 +229,10 @@ func validate(cfg *Config) error {
 		return fmt.Errorf("wiki_dir %q is not a directory", cfg.WikiDir)
 	}
 
-	switch cfg.Locale {
-	case "", "en", "ko":
+	switch strings.ToLower(strings.TrimSpace(cfg.Locale)) {
+	case "", "auto", "en", "ko", "ja", "zh":
 	default:
-		return fmt.Errorf("unsupported locale: %q (supported: en, ko)", cfg.Locale)
+		return fmt.Errorf("unsupported locale: %q (supported: en, ko, ja, zh, auto)", cfg.Locale)
 	}
 
 	switch cfg.Permission.Mode {

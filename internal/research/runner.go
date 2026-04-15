@@ -25,6 +25,7 @@ type TaskRunner struct {
 	wikiStore     *wiki.Store
 	usageTracker  *llm.UsageTracker
 	toolReg       *tools.Registry
+	toolExec      tools.Executor
 	logger        *slog.Logger
 	maxRounds     int
 	costCapUSD    float64
@@ -54,6 +55,14 @@ func WithToolRegistry(toolReg *tools.Registry) TaskRunnerOption {
 	return func(r *TaskRunner) {
 		if toolReg != nil {
 			r.toolReg = toolReg
+		}
+	}
+}
+
+func WithToolExecutor(exec tools.Executor) TaskRunnerOption {
+	return func(r *TaskRunner) {
+		if exec != nil {
+			r.toolExec = exec
 		}
 	}
 }
@@ -120,6 +129,9 @@ func (r *TaskRunner) Run(ctx context.Context, payload daemon.TaskPayload, onText
 
 	hg := NewHypothesisGenerator(r.provider, r.model, r.logger)
 	er := NewExperimentRunner(r.provider, toolReg, r.model, r.logger).WithOnText(onText)
+	if r.toolExec != nil {
+		er.WithToolExecutor(r.toolExec)
+	}
 	loop := NewLoop(
 		hg,
 		er,

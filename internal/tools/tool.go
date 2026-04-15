@@ -40,6 +40,11 @@ type Tool interface {
 	ShouldCancelSiblingsOnError() bool
 }
 
+// Executor is the narrow interface the agent uses to execute tools.
+type Executor interface {
+	Execute(ctx context.Context, name string, params json.RawMessage) (*Result, error)
+}
+
 // Result holds the output of a tool execution.
 type Result struct {
 	Output  string

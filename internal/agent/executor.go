@@ -147,7 +147,7 @@ func (a *Agent) executeToolBatch(ctx context.Context, batch []scheduledToolCall,
 			defer wg.Done()
 
 			start := time.Now()
-			result, err := a.tools.Execute(childCtx, call.call.Name, call.call.Input)
+			result, err := a.executor.Execute(childCtx, call.call.Name, call.call.Input)
 			duration := time.Since(start)
 			if a.readTracker != nil {
 				a.readTracker.NotifyTool(call.call.Name)

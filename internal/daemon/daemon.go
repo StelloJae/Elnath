@@ -13,7 +13,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/stello/elnath/internal/fault"
 	"github.com/stello/elnath/internal/identity"
+	"github.com/stello/elnath/internal/userfacingerr"
 )
 
 // IPCRequest is a JSON-line command sent over the Unix socket.
@@ -65,6 +67,10 @@ type Daemon struct {
 	watchdogInterval  time.Duration
 	progressObserver  ProgressObserver
 	scheduler         Scheduler
+	faultInjector     fault.Injector
+	faultScenario     *fault.Scenario
+	faultGuard        fault.GuardConfig
+	faultGuardChecked bool
 	cancel            context.CancelFunc
 	wg                sync.WaitGroup
 }
@@ -78,12 +84,29 @@ func New(queue *Queue, socketPath string, maxWorkers int, runner AgentTaskRunner
 		logger = slog.Default()
 	}
 	return &Daemon{
-		queue:       queue,
-		socketPath:  socketPath,
-		maxWorkers:  maxWorkers,
-		agentRunner: runner,
-		logger:      logger,
+		queue:         queue,
+		socketPath:    socketPath,
+		maxWorkers:    maxWorkers,
+		agentRunner:   runner,
+		logger:        logger,
+		faultInjector: fault.NoopInjector{},
 	}
+}
+
+func (d *Daemon) WithFaultInjection(inj fault.Injector, scenario *fault.Scenario) {
+	if inj == nil {
+		inj = fault.NoopInjector{}
+	}
+	d.faultInjector = inj
+	d.faultScenario = scenario
+}
+
+func (d *Daemon) WithFaultGuardConfig(cfg fault.GuardConfig) {
+	d.faultGuard = cfg
+}
+
+func (d *Daemon) MarkFaultGuardChecked() {
+	d.faultGuardChecked = true
 }
 
 // WithDeliveryRouter attaches a DeliveryRouter to the daemon. Completions are
@@ -130,6 +153,11 @@ func (d *Daemon) watchdogTick() time.Duration {
 // Start begins listening on the Unix socket and launches worker goroutines.
 // It blocks until ctx is cancelled or Stop is called.
 func (d *Daemon) Start(ctx context.Context) error {
+	if !d.faultGuardChecked {
+		if _, err := fault.CheckGuards(d.faultGuard); err != nil {
+			return fmt.Errorf("daemon: %w", err)
+		}
+	}
 	ctx, d.cancel = context.WithCancel(ctx)
 
 	if err := os.Remove(d.socketPath); err != nil && !os.IsNotExist(err) {
@@ -211,6 +239,9 @@ func (d *Daemon) acceptLoop(ctx context.Context) {
 }
 
 func (d *Daemon) handleConn(ctx context.Context, conn net.Conn) {
+	if d.faultInjector.Active() && d.faultScenario != nil && d.faultScenario.Category == fault.CategoryIPC {
+		conn = fault.NewIPCFaultConn(conn, d.faultInjector, d.faultScenario)
+	}
 	defer conn.Close()
 
 	scanner := bufio.NewScanner(conn)
@@ -388,7 +419,7 @@ func (d *Daemon) worker(ctx context.Context, id int) {
 			"principal_surface", principal.Surface,
 		)
 
-		result, err := d.runTask(ctx, task)
+		result, err := d.runTaskSafely(ctx, task)
 		if err != nil {
 			d.logger.Error("worker: task failed",
 				"worker_id", id,
@@ -417,6 +448,35 @@ func (d *Daemon) worker(ctx context.Context, id int) {
 		}
 		d.deliver(ctx, task.ID)
 	}
+}
+
+func (d *Daemon) runTaskSafely(ctx context.Context, task *Task) (result TaskResult, err error) {
+	d.resetFaultRunState()
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("daemon: recovered worker panic: %v", r)
+		}
+	}()
+	if d.shouldInjectWorkerPanic() {
+		panic("fault: injected worker panic")
+	}
+	return d.runTask(ctx, task)
+}
+
+func (d *Daemon) resetFaultRunState() {
+	if resetter, ok := d.faultInjector.(interface{ ResetForRun() }); ok {
+		resetter.ResetForRun()
+	}
+}
+
+func (d *Daemon) shouldInjectWorkerPanic() bool {
+	if !d.faultInjector.Active() || d.faultScenario == nil {
+		return false
+	}
+	if d.faultScenario.Category != fault.CategoryIPC || d.faultScenario.FaultType != fault.FaultWorkerPanic {
+		return false
+	}
+	return d.faultInjector.ShouldFault(d.faultScenario)
 }
 
 // deliver reads the completed task from the queue and fans out to registered sinks.
@@ -526,7 +586,8 @@ func (d *Daemon) runTask(ctx context.Context, task *Task) (TaskResult, error) {
 	})
 	if err != nil {
 		if taskCtx.Err() != nil && ctx.Err() == nil {
-			return TaskResult{}, fmt.Errorf("daemon: task timed out: %w", taskCtx.Err())
+			inner := fmt.Errorf("daemon: task timed out: %w", taskCtx.Err())
+			return TaskResult{}, userfacingerr.Wrap(userfacingerr.ELN110, inner, "daemon task")
 		}
 		return TaskResult{}, fmt.Errorf("daemon: run task: %w", err)
 	}

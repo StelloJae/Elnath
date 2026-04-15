@@ -29,6 +29,7 @@ const (
 type Agent struct {
 	provider      llm.Provider
 	tools         *tools.Registry
+	executor      tools.Executor
 	readTracker   *tools.ReadTracker
 	permission    *Permission
 	hooks         *HookRegistry
@@ -75,6 +76,12 @@ func WithReadTracker(tracker *tools.ReadTracker) Option {
 	return func(a *Agent) { a.readTracker = tracker }
 }
 
+func WithToolExecutor(exec tools.Executor) Option {
+	return func(a *Agent) {
+		a.executor = exec
+	}
+}
+
 // New creates an Agent with the given provider and tool registry.
 func New(provider llm.Provider, reg *tools.Registry, opts ...Option) *Agent {
 	a := &Agent{
@@ -88,6 +95,9 @@ func New(provider llm.Provider, reg *tools.Registry, opts ...Option) *Agent {
 	}
 	if a.permission == nil {
 		a.permission = NewPermission()
+	}
+	if a.executor == nil {
+		a.executor = reg
 	}
 	if a.readTracker == nil && reg != nil {
 		a.readTracker = reg.ReadTracker()

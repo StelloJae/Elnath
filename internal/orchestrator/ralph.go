@@ -171,6 +171,7 @@ Your response must start with either PASS or FAIL.`, input.Message, evidence)
 		MaxIterations: 3,
 		Hooks:         input.Config.Hooks,
 		Permission:    input.Config.Permission,
+		ToolExecutor:  input.Config.ToolExecutor,
 	})
 	a := agent.New(input.Provider, input.Tools, opts...)
 
