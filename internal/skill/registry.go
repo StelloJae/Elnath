@@ -8,6 +8,7 @@ import (
 
 	"github.com/stello/elnath/internal/agent"
 	"github.com/stello/elnath/internal/llm"
+	"github.com/stello/elnath/internal/locale"
 	"github.com/stello/elnath/internal/tools"
 	"github.com/stello/elnath/internal/wiki"
 )
@@ -120,6 +121,11 @@ type ExecuteParams struct {
 	OnText     func(string)
 	Permission *agent.Permission
 	Hooks      *agent.HookRegistry
+	// Locale is the resolved response locale (e.g. "ko", "ja", "zh").
+	// Empty or "en" leaves the skill system prompt unchanged. Non-English
+	// locales append locale.ResponseDirective so skill output honors the
+	// user's language preference without re-running the prompt builder.
+	Locale string
 }
 
 type ExecuteResult struct {
@@ -135,6 +141,9 @@ func (r *Registry) Execute(ctx context.Context, params ExecuteParams) (*ExecuteR
 	}
 
 	rendered := skill.RenderPrompt(params.Args)
+	if directive := locale.ResponseDirective(params.Locale); directive != "" {
+		rendered = rendered + "\n\n" + directive
+	}
 	filteredReg := FilterRegistry(params.ToolReg, skill.RequiredTools)
 	model := params.Model
 	if skill.Model != "" {

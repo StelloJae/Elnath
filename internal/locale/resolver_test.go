@@ -58,6 +58,28 @@ func TestNormalizeConfig(t *testing.T) {
 	}
 }
 
+func TestResponseDirective(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		lang string
+		want string
+	}{
+		{lang: "", want: ""},
+		{lang: "en", want: ""},
+		{lang: "ko", want: "Respond in Korean."},
+		{lang: "ja", want: "Respond in Japanese."},
+		{lang: "zh", want: "Respond in Chinese."},
+		{lang: "fr", want: ""},
+	}
+
+	for _, tc := range tests {
+		if got := ResponseDirective(tc.lang); got != tc.want {
+			t.Fatalf("ResponseDirective(%q) = %q, want %q", tc.lang, got, tc.want)
+		}
+	}
+}
+
 func TestLangToEnglishName(t *testing.T) {
 	t.Parallel()
 

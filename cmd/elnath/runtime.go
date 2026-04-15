@@ -532,6 +532,7 @@ func (rt *executionRuntime) trySkillExecution(
 		OnText:     output.emitText,
 		Permission: rt.wfCfg.Permission,
 		Hooks:      rt.wfCfg.Hooks,
+		Locale:     rt.mgr.LastLocale(sess.ID),
 	})
 	if err != nil {
 		return nil, "", true, fmt.Errorf("skill %q: %w", skillName, err)

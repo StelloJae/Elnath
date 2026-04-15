@@ -345,6 +345,54 @@ func TestExecuteHonorsPermissionAndHooks(t *testing.T) {
 	})
 }
 
+func TestExecuteAppendsLocaleDirective(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		locale     string
+		wantSuffix string
+	}{
+		{name: "korean locale appends directive", locale: "ko", wantSuffix: "\n\nRespond in Korean."},
+		{name: "japanese locale appends directive", locale: "ja", wantSuffix: "\n\nRespond in Japanese."},
+		{name: "english locale leaves prompt unchanged", locale: "en", wantSuffix: ""},
+		{name: "empty locale leaves prompt unchanged", locale: "", wantSuffix: ""},
+		{name: "unknown locale leaves prompt unchanged", locale: "fr", wantSuffix: ""},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var capturedSystem string
+			provider := &mockProvider{streamFn: func(_ context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
+				capturedSystem = req.System
+				cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: "ok"})
+				cb(llm.StreamEvent{Type: llm.EventDone})
+				return nil
+			}}
+
+			reg := NewRegistry()
+			reg.Add(&Skill{Name: "locale-skill", Prompt: "Base prompt body."})
+
+			_, err := reg.Execute(context.Background(), ExecuteParams{
+				SkillName: "locale-skill",
+				Provider:  provider,
+				ToolReg:   tools.NewRegistry(),
+				Locale:    tc.locale,
+			})
+			if err != nil {
+				t.Fatalf("Execute() error = %v", err)
+			}
+			wantPrompt := "Base prompt body." + tc.wantSuffix
+			if capturedSystem != wantPrompt {
+				t.Fatalf("system prompt = %q, want %q", capturedSystem, wantPrompt)
+			}
+		})
+	}
+}
+
 func equalStrings(got, want []string) bool {
 	if len(got) != len(want) {
 		return false

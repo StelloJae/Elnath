@@ -1,6 +1,9 @@
 package locale
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 const DefaultConfidenceThreshold = 0.6
 
@@ -30,6 +33,21 @@ func NormalizeConfig(cfgLocale string) string {
 		return ""
 	}
 	return locale
+}
+
+// ResponseDirective returns the system prompt suffix that instructs the LLM
+// to answer in the resolved locale's native language. Empty string for "",
+// "en", or any language without an English display name — callers may append
+// the result unconditionally without adding their own guards.
+func ResponseDirective(lang string) string {
+	if lang == "" || lang == "en" {
+		return ""
+	}
+	name := LangToEnglishName(lang)
+	if name == "" {
+		return ""
+	}
+	return fmt.Sprintf("Respond in %s.", name)
 }
 
 func LangToEnglishName(lang string) string {

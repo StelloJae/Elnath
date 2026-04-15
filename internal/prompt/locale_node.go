@@ -2,7 +2,6 @@ package prompt
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/stello/elnath/internal/locale"
 )
@@ -18,12 +17,8 @@ func (n *LocaleInstructionNode) Priority() int {
 }
 
 func (n *LocaleInstructionNode) Render(_ context.Context, state *RenderState) (string, error) {
-	if state == nil || state.Locale == "" || state.Locale == "en" {
+	if state == nil {
 		return "", nil
 	}
-	name := locale.LangToEnglishName(state.Locale)
-	if name == "" {
-		return "", nil
-	}
-	return fmt.Sprintf("Respond in %s.", name), nil
+	return locale.ResponseDirective(state.Locale), nil
 }
