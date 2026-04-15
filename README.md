@@ -104,6 +104,14 @@ Recent hardening also closed two structural follow-ups behind this operator flow
 | `wiki rebuild` | Rebuild FTS5 index | `elnath wiki rebuild` |
 | `wiki list` | List all wiki pages | `elnath wiki list` |
 | `search` | Search past conversations | `elnath search "deployment issue"` |
+| `portability export` | Write encrypted backup bundle | `elnath portability export --out backup.eln` |
+| `portability verify` | Decrypt and integrity-check a bundle | `elnath portability verify backup.eln` |
+| `portability import` | Restore bundle into a data directory | `elnath portability import backup.eln --dry-run` |
+| `portability list` | Show local export history | `elnath portability list` |
+| `chaos list` | List fault-injection scenarios | `elnath chaos list` |
+| `chaos run` | Execute a fault-injection scenario | `elnath chaos run tool-bash-transient-fail` |
+| `chaos report` | Render a chaos run as Markdown | `elnath chaos report latest` |
+| `errors` | Look up an ELN-XXX error code | `elnath errors ELN-001` or `elnath errors list` |
 | `version` | Show version | `elnath version` |
 | `help` | Show command help | `elnath help` |
 
@@ -261,6 +269,48 @@ projects:
     data_dir: ~/projects/frontend/.elnath/data
     wiki_dir: ~/projects/frontend/.elnath/wiki
 ```
+
+## Portability (Backup & Restore)
+
+`elnath portability export` writes an AES-256-GCM encrypted bundle (`.eln`) that
+can be verified, inspected, and restored later. Bundles stream in 16 MiB chunks
+so multi-hundred-MB data directories do not require loading the whole payload
+into memory. Passphrases shorter than 8 characters are rejected; 8-11 character
+passphrases prompt for confirmation on a TTY (or emit a warning on stderr in
+non-interactive use); 12+ characters pass silently.
+
+### Selecting what to include with `--scope`
+
+By default a bundle includes every category: `config`, `db`, `wiki`, `lessons`,
+and `sessions`. Pass `--scope` with a comma-separated subset to limit it. This
+matters most when the sessions directory grows large — hundreds of JSONL
+transcripts can dominate bundle size and export time.
+
+```bash
+# Full bundle (everything)
+elnath portability export --out ~/backups/full.eln
+
+# Lean bundle without sessions (useful when sessions dir is hundreds of MB)
+elnath portability export --scope config,db,wiki,lessons --out ~/backups/lean.eln
+
+# Sessions-only archive before pruning old transcripts
+elnath portability export --scope sessions --out ~/backups/sessions-$(date +%F).eln
+```
+
+Unknown scope names produce `unknown portability scope: <name>` so typos fail
+fast instead of silently excluding data.
+
+### Verify and restore
+
+```bash
+elnath portability verify bundle.eln                         # integrity check
+elnath portability import bundle.eln --dry-run               # preview file plan
+elnath portability import bundle.eln --target ~/restored     # actual restore
+```
+
+`list` prints local export history from `<data-dir>/portability/history/` (one
+JSON record per export) so you can track when and where recent bundles were
+written.
 
 ## Workflows
 
