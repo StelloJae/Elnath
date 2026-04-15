@@ -367,6 +367,30 @@ func TestRunHelp(t *testing.T) {
 	}
 }
 
+func TestRunTopLevelHelpFlags(t *testing.T) {
+	cfgPath := writeTestConfig(t, onboarding.En)
+
+	for _, flag := range []string{"--help", "-h"} {
+		flag := flag
+		t.Run(flag, func(t *testing.T) {
+			withArgs(t, []string{"elnath", "--config", cfgPath, flag})
+			resetLoadLocaleCache()
+
+			stdout, stderr := captureOutput(t, func() {
+				if err := run(context.Background(), []string{"elnath", flag}); err != nil {
+					t.Fatalf("run(%s): %v", flag, err)
+				}
+			})
+			if !strings.Contains(stdout, "Usage: elnath") {
+				t.Fatalf("stdout = %q, want help output", stdout)
+			}
+			if strings.Contains(stderr, "unknown command") {
+				t.Fatalf("stderr should not contain 'unknown command' for %s, got: %q", flag, stderr)
+			}
+		})
+	}
+}
+
 func TestRunVersion(t *testing.T) {
 	cfgPath := writeTestConfig(t, onboarding.En)
 	withArgs(t, []string{"elnath", "--config", cfgPath})

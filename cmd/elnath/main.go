@@ -31,8 +31,8 @@ func main() {
 
 func run(ctx context.Context, args []string) error {
 	cmd, cmdArgs := splitCommandArgs(args)
-	if cmd == "" {
-		return executeCommand(ctx, "help", args)
+	if cmd == "" || cmd == "--help" || cmd == "-h" {
+		return executeCommand(ctx, "help", nil)
 	}
 	return executeCommand(ctx, cmd, cmdArgs)
 }
