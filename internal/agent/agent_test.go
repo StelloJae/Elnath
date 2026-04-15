@@ -12,6 +12,7 @@ import (
 	"github.com/stello/elnath/internal/core"
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/tools"
+	"github.com/stello/elnath/internal/userfacingerr"
 )
 
 // mockProvider implements llm.Provider for testing.
@@ -618,5 +619,34 @@ func TestRunErrMaxIterationsDirectCheck(t *testing.T) {
 	}
 	if !errors.Is(err, core.ErrMaxIterations) {
 		t.Errorf("error = %v, want wrapping core.ErrMaxIterations", err)
+	}
+}
+
+func TestRunEmptyResponseExhaustionEmitsELN120(t *testing.T) {
+	reg := tools.NewRegistry()
+	p := &mockProvider{
+		streamFn: func(_ context.Context, _ llm.ChatRequest, cb func(llm.StreamEvent)) error {
+			cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{InputTokens: 1}})
+			return nil
+		},
+		chatFn: func(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+			return &llm.ChatResponse{}, nil
+		},
+	}
+
+	a := New(p, reg)
+	_, err := a.Run(context.Background(), []llm.Message{llm.NewUserMessage("hello")}, nil)
+	if err == nil {
+		t.Fatal("expected error after retry exhaustion, got nil")
+	}
+	if !errors.Is(err, core.ErrProviderError) {
+		t.Errorf("error chain must include core.ErrProviderError, got: %v", err)
+	}
+	var ufe *userfacingerr.UserFacingError
+	if !errors.As(err, &ufe) {
+		t.Fatalf("expected UserFacingError in chain, got %T: %v", err, err)
+	}
+	if ufe.Code() != userfacingerr.ELN120 {
+		t.Fatalf("expected code %q, got %q (err: %v)", userfacingerr.ELN120, ufe.Code(), err)
 	}
 }

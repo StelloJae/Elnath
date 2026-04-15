@@ -17,7 +17,15 @@ import (
 	"github.com/google/uuid"
 	"github.com/stello/elnath/internal/identity"
 	"github.com/stello/elnath/internal/llm"
+	"github.com/stello/elnath/internal/userfacingerr"
 )
+
+// wrapSessionParse tags JSONL parse and scan failures with the ELN-070
+// user-facing code so callers can distinguish "session file corrupted"
+// from "session not found" (an os.Open error, which is left unwrapped).
+func wrapSessionParse(err error, op string) error {
+	return userfacingerr.Wrap(userfacingerr.ELN070, err, op)
+}
 
 // SessionPersister is an optional secondary persistence backend for sessions.
 // Implementations (e.g., SQLite history store) mirror the canonical JSONL
@@ -117,11 +125,11 @@ func LoadSession(dataDir, id string) (*Session, error) {
 
 	// First line: header.
 	if !scanner.Scan() {
-		return nil, fmt.Errorf("session: empty file")
+		return nil, wrapSessionParse(fmt.Errorf("session: empty file"), "load empty file")
 	}
 	hdr, err := decodeSessionHeader(scanner.Bytes())
 	if err != nil {
-		return nil, err
+		return nil, wrapSessionParse(err, "load decode header")
 	}
 	s.ID = hdr.ID
 	s.Principal = hdr.Principal
@@ -134,14 +142,14 @@ func LoadSession(dataDir, id string) (*Session, error) {
 		}
 		lineType, err := sessionLineType(line)
 		if err != nil {
-			return nil, fmt.Errorf("session: inspect line: %w", err)
+			return nil, wrapSessionParse(fmt.Errorf("session: inspect line: %w", err), "load inspect line")
 		}
 		if lineType != "" {
 			continue
 		}
 		var msg llm.Message
 		if err := json.Unmarshal(line, &msg); err != nil {
-			return nil, fmt.Errorf("session: parse message: %w", err)
+			return nil, wrapSessionParse(fmt.Errorf("session: parse message: %w", err), "load parse message")
 		}
 		s.Messages = append(s.Messages, msg)
 		if shouldDedupMessage(msg) {
@@ -150,7 +158,7 @@ func LoadSession(dataDir, id string) (*Session, error) {
 	}
 
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("session: read: %w", err)
+		return nil, wrapSessionParse(fmt.Errorf("session: read: %w", err), "load scan")
 	}
 
 	return s, nil
@@ -167,11 +175,15 @@ func ReadSessionHeader(path string) (*SessionHeader, error) {
 	scanner := bufio.NewScanner(f)
 	if !scanner.Scan() {
 		if err := scanner.Err(); err != nil {
-			return nil, fmt.Errorf("session: read header: %w", err)
+			return nil, wrapSessionParse(fmt.Errorf("session: read header: %w", err), "read header scan")
 		}
-		return nil, fmt.Errorf("session: empty file")
+		return nil, wrapSessionParse(fmt.Errorf("session: empty file"), "read header empty")
 	}
-	return decodeSessionHeader(scanner.Bytes())
+	hdr, err := decodeSessionHeader(scanner.Bytes())
+	if err != nil {
+		return nil, wrapSessionParse(err, "read header decode")
+	}
+	return hdr, nil
 }
 
 // LoadSessionResumeEvents reads resume metadata lines from a persisted session.
@@ -478,9 +490,9 @@ func readSessionResumeEvents(path string) ([]SessionResumeEvent, error) {
 	scanner := bufio.NewScanner(f)
 	if !scanner.Scan() {
 		if err := scanner.Err(); err != nil {
-			return nil, fmt.Errorf("session: read resumes header: %w", err)
+			return nil, wrapSessionParse(fmt.Errorf("session: read resumes header: %w", err), "resumes header scan")
 		}
-		return nil, fmt.Errorf("session: empty file")
+		return nil, wrapSessionParse(fmt.Errorf("session: empty file"), "resumes empty")
 	}
 
 	var resumes []SessionResumeEvent
@@ -491,19 +503,19 @@ func readSessionResumeEvents(path string) ([]SessionResumeEvent, error) {
 		}
 		lineType, err := sessionLineType(line)
 		if err != nil {
-			return nil, fmt.Errorf("session: inspect resume line: %w", err)
+			return nil, wrapSessionParse(fmt.Errorf("session: inspect resume line: %w", err), "resumes inspect line")
 		}
 		if lineType != "resume" {
 			continue
 		}
 		var resume SessionResumeEvent
 		if err := json.Unmarshal(line, &resume); err != nil {
-			return nil, fmt.Errorf("session: parse resume: %w", err)
+			return nil, wrapSessionParse(fmt.Errorf("session: parse resume: %w", err), "resumes parse")
 		}
 		resumes = append(resumes, resume)
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("session: scan resumes: %w", err)
+		return nil, wrapSessionParse(fmt.Errorf("session: scan resumes: %w", err), "resumes scan")
 	}
 	return resumes, nil
 }

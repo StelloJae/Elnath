@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/stello/elnath/internal/identity"
 	"github.com/stello/elnath/internal/llm"
+	"github.com/stello/elnath/internal/userfacingerr"
 )
 
 type legacySessionHeader struct {
@@ -499,4 +501,78 @@ func TestLoadSessionLegacyHeaderGetsDefaultPrincipal(t *testing.T) {
 	if loaded.Principal != identity.LegacyPrincipal() {
 		t.Fatalf("loaded legacy principal = %+v, want %+v", loaded.Principal, identity.LegacyPrincipal())
 	}
+}
+
+func assertELN070(t *testing.T, err error) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("expected ELN-070 error, got nil")
+	}
+	var ufe *userfacingerr.UserFacingError
+	if !errors.As(err, &ufe) {
+		t.Fatalf("expected UserFacingError, got %T: %v", err, err)
+	}
+	if ufe.Code() != userfacingerr.ELN070 {
+		t.Fatalf("expected code %q, got %q (err: %v)", userfacingerr.ELN070, ufe.Code(), err)
+	}
+}
+
+func TestLoadSessionCorruptEmitsELN070(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	corruptCases := []struct {
+		name    string
+		content string
+	}{
+		{name: "empty file", content: ""},
+		{name: "malformed header json", content: "{not valid json\n"},
+		{name: "valid header then malformed message", content: `{"id":"sess-1","version":1}` + "\n" + "not-json\n"},
+	}
+
+	for _, tc := range corruptCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			id := "corrupt-" + strings.ReplaceAll(tc.name, " ", "-")
+			path := sessionPath(dir, id)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatalf("MkdirAll: %v", err)
+			}
+			if err := os.WriteFile(path, []byte(tc.content), 0o644); err != nil {
+				t.Fatalf("WriteFile: %v", err)
+			}
+
+			_, err := LoadSession(dir, id)
+			assertELN070(t, err)
+		})
+	}
+}
+
+func TestLoadSessionMissingFileNotELN070(t *testing.T) {
+	t.Parallel()
+
+	_, err := LoadSession(t.TempDir(), "nonexistent-sess")
+	if err == nil {
+		t.Fatal("expected error loading missing session")
+	}
+	var ufe *userfacingerr.UserFacingError
+	if errors.As(err, &ufe) && ufe.Code() == userfacingerr.ELN070 {
+		t.Fatalf("missing file must not emit ELN-070 (corrupt), got: %v", err)
+	}
+}
+
+func TestReadSessionHeaderCorruptEmitsELN070(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "broken.jsonl")
+	if err := os.WriteFile(path, []byte("{not valid\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	_, err := ReadSessionHeader(path)
+	assertELN070(t, err)
 }

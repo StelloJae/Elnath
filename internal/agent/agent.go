@@ -14,6 +14,7 @@ import (
 	"github.com/stello/elnath/internal/daemon"
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/tools"
+	"github.com/stello/elnath/internal/userfacingerr"
 )
 
 const (
@@ -280,7 +281,7 @@ func (a *Agent) streamWithRetry(ctx context.Context, req llm.Request, onText fun
 				currentReq.Messages = append(reqForAttempt.Messages, llm.NewUserMessage(
 					"The previous attempt returned an empty response. You must either provide a concrete answer or call tools. Do not return empty content.",
 				))
-				lastErr = fbErr
+				lastErr = userfacingerr.Wrap(userfacingerr.ELN120, fbErr, "empty llm response")
 				continue
 			}
 			return msg, usage, nil
