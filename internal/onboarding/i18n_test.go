@@ -34,6 +34,15 @@ func TestT_MissingKeyReturnsKey(t *testing.T) {
 	}
 }
 
+func TestTOptional_ReturnsEmptyForMissingKeys(t *testing.T) {
+	if got := TOptional(En, "nonexistent.key"); got != "" {
+		t.Fatalf("TOptional(En, missing) = %q, want empty string", got)
+	}
+	if got := TOptional(Ko, "cmd.run.help"); got != "" {
+		t.Fatalf("TOptional(Ko, cmd.run.help) = %q, want empty placeholder", got)
+	}
+}
+
 func TestLocales(t *testing.T) {
 	locales := Locales()
 	if len(locales) != 2 {

@@ -16,6 +16,7 @@ import (
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/onboarding"
 	"github.com/stello/elnath/internal/self"
+	"github.com/stello/elnath/internal/userfacingerr"
 	"github.com/stello/elnath/internal/wiki"
 )
 
@@ -53,7 +54,7 @@ func cmdRun(ctx context.Context, args []string) error {
 
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
-		return fmt.Errorf("load config: %w", err)
+		return userfacingerr.Wrap(userfacingerr.ELN060, err, "load config")
 	}
 	cwd, err := os.Getwd()
 	if err != nil {

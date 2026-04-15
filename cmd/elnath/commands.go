@@ -22,6 +22,7 @@ import (
 	"github.com/stello/elnath/internal/onboarding"
 	"github.com/stello/elnath/internal/orchestrator"
 	"github.com/stello/elnath/internal/tools"
+	"github.com/stello/elnath/internal/userfacingerr"
 	"github.com/stello/elnath/internal/wiki"
 )
 
@@ -29,22 +30,28 @@ type commandRunner func(ctx context.Context, args []string) error
 
 func commandRegistry() map[string]commandRunner {
 	return map[string]commandRunner{
-		"version":  cmdVersion,
-		"help":     cmdHelp,
-		"run":      cmdRun,
-		"setup":    cmdSetup,
-		"daemon":   cmdDaemon,
-		"research": cmdResearch,
-		"telegram": cmdTelegram,
-		"wiki":     cmdWiki,
-		"search":   cmdSearch,
-		"eval":     cmdEval,
-		"task":     cmdTask,
-		"lessons":  cmdLessons,
+		"version":     cmdVersion,
+		"help":        cmdHelp,
+		"chaos":       cmdChaos,
+		"run":         cmdRun,
+		"setup":       cmdSetup,
+		"errors":      cmdErrors,
+		"daemon":      cmdDaemon,
+		"portability": cmdPortability,
+		"research":    cmdResearch,
+		"telegram":    cmdTelegram,
+		"wiki":        cmdWiki,
+		"search":      cmdSearch,
+		"eval":        cmdEval,
+		"task":        cmdTask,
+		"lessons":     cmdLessons,
 	}
 }
 
 func executeCommand(ctx context.Context, name string, args []string) error {
+	if hasFlag(args, "--help") || hasFlag(args, "-h") {
+		return printCommandHelp(name)
+	}
 	registry := commandRegistry()
 	cmd, ok := registry[name]
 	if !ok {
@@ -52,6 +59,18 @@ func executeCommand(ctx context.Context, name string, args []string) error {
 		return cmdHelp(ctx, args)
 	}
 	return cmd(ctx, args)
+}
+
+func printCommandHelp(name string) error {
+	if name == "errors" {
+		return printErrorsHelp()
+	}
+	text := onboarding.TOptional(loadLocale(), "cmd."+name+".help")
+	if text == "" {
+		return cmdHelp(nil, nil)
+	}
+	fmt.Println(text)
+	return nil
 }
 
 func cmdVersion(_ context.Context, _ []string) error {
@@ -158,7 +177,8 @@ func buildProvider(cfg *config.Config) (llm.Provider, string, error) {
 	}
 
 	if len(reg.List()) == 0 {
-		return nil, "", fmt.Errorf("no LLM provider configured: set ELNATH_ANTHROPIC_API_KEY or ELNATH_OPENAI_API_KEY")
+		inner := fmt.Errorf("no LLM provider configured: set ELNATH_ANTHROPIC_API_KEY or ELNATH_OPENAI_API_KEY")
+		return nil, "", userfacingerr.Wrap(userfacingerr.ELN001, inner, "build provider")
 	}
 
 	canonical := llm.ResolveModel(model)

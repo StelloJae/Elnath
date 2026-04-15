@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/stello/elnath/internal/userfacingerr"
 )
 
 // PathGuard resolves tool paths and enforces write-deny rules.
@@ -61,7 +63,8 @@ func (g *PathGuard) CheckWrite(absPath string) error {
 	cleaned := filepath.Clean(absPath)
 	for _, pp := range g.protectedPaths {
 		if cleaned == pp || strings.HasPrefix(cleaned, pp+string(filepath.Separator)) {
-			return fmt.Errorf("write denied: %q is under protected path %q", absPath, pp)
+			inner := fmt.Errorf("write denied: %q is under protected path %q", absPath, pp)
+			return userfacingerr.Wrap(userfacingerr.ELN020, inner, "path guard")
 		}
 	}
 	return nil

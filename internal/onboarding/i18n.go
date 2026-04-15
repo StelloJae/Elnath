@@ -102,7 +102,9 @@ var translations = map[Locale]map[string]string{
 Commands:
   run       Interactive chat mode
   setup     Re-run the setup wizard
+  errors    Error catalog lookup
   daemon    Background daemon mode
+  portability Export/import encrypted portability bundles
   research  Research task utilities
   lessons   Lessons management utilities
   eval      Benchmark/eval utilities
@@ -123,6 +125,174 @@ Daemon subcommands:
 		"cli.config_load_error":  "load config: %s",
 		"cli.write_config_error": "write config: %s",
 		"cli.no_provider":        "No LLM provider configured. Set ELNATH_ANTHROPIC_API_KEY or add anthropic.api_key to config.yaml",
+		"cmd.run.help": `USAGE
+  elnath run [flags]
+
+DESCRIPTION
+  Start an interactive chat session with your configured LLM provider.
+  Elnath maintains a persistent message history and can use tools (bash,
+  file read/write, wiki, web fetch) to complete tasks autonomously.
+
+  If no config exists, setup runs automatically on first launch.
+
+FLAGS
+  --non-interactive    Skip TUI onboarding; use env vars and defaults
+  --principal <id>     Override the principal identity for this session
+  --project-id <id>    Tag this session with a project identifier
+  --config <path>      Use an alternative config file
+
+EXAMPLES
+  # Start interactive chat
+  $ elnath run
+
+  # Non-interactive (CI / scripted)
+  $ ELNATH_ANTHROPIC_API_KEY=sk-ant-... elnath run --non-interactive
+
+  # Use a project-scoped config
+  $ elnath run --config ~/projects/myapp/.elnath/config.yaml
+
+  # Run with explicit principal
+  $ elnath run --principal alice
+
+SEE ALSO
+  elnath setup, elnath daemon, elnath wiki`,
+		"cmd.setup.help": `USAGE
+  elnath setup [--quickstart]
+
+DESCRIPTION
+  Launch the interactive setup wizard to configure your LLM provider,
+  data directories, permission mode, and MCP servers. Running setup
+  again reconfigures an existing installation (current values shown
+  as defaults). Your existing config is backed up before overwriting.
+
+FLAGS
+  --quickstart    Minimal fast path: auto-detects Codex OAuth, applies
+                  defaults, and runs a demo task. No TUI. (~1 min)
+  --config <path> Use an alternative config file
+
+EXAMPLES
+  # Full interactive wizard
+  $ elnath setup
+
+  # Minimal 1-minute path (recommended for first-time users)
+  $ elnath setup --quickstart
+
+  # Reconfigure with a specific config file
+  $ elnath setup --config ~/projects/myapp/.elnath/config.yaml
+
+SEE ALSO
+  elnath run, elnath errors list`,
+		"cmd.wiki.help": `USAGE
+  elnath wiki <subcommand> [args]
+
+DESCRIPTION
+  Manage Elnath's local knowledge base (wiki). The wiki stores
+  Markdown pages with YAML frontmatter and is searchable via SQLite FTS5.
+  Pages are linked to agent sessions for automatic context injection.
+
+SUBCOMMANDS
+  search <term>     Full-text search across all wiki pages
+  get <path>        Show a specific page by path
+  list              List all pages (title, path, updated)
+  add <path>        Create a new page interactively
+  delete <path>     Delete a page
+
+EXAMPLES
+  # Search for pages about authentication
+  $ elnath wiki search authentication
+
+  # View a specific page
+  $ elnath wiki get /architecture/auth
+
+  # List all pages
+  $ elnath wiki list
+
+  # Create a new page
+  $ elnath wiki add /notes/my-note
+
+SEE ALSO
+  elnath run, elnath lessons`,
+		"cmd.lessons.help": `USAGE
+  elnath lessons <subcommand>
+
+DESCRIPTION
+  View and manage lessons Elnath has learned from past agent runs.
+  Lessons influence future agent behaviour via persona parameters.
+  LLM-extracted lessons (when enabled) are stored separately from
+  manually curated ones.
+
+SUBCOMMANDS
+  list              List recent lessons (default: 20)
+  stats             Show lesson store statistics and LLM extraction status
+  delete <id>       Delete a lesson by ID
+
+EXAMPLES
+  # List recent lessons
+  $ elnath lessons list
+
+  # Show LLM extraction status and breaker state
+  $ elnath lessons stats
+
+  # Delete a specific lesson
+  $ elnath lessons delete abc123
+
+SEE ALSO
+  elnath run, elnath wiki`,
+		"cmd.portability.help": `USAGE
+  elnath portability <subcommand>
+
+DESCRIPTION
+  Export, verify, and restore encrypted Elnath portability bundles.
+
+SUBCOMMANDS
+  export            Write a new encrypted bundle
+  import            Restore a bundle into a target directory
+  list              Show local export history
+  verify            Decrypt and verify a bundle
+
+EXAMPLES
+  $ elnath --data-dir ~/.elnath portability export --out backup.eln
+  $ elnath portability verify backup.eln --passphrase-file pass.txt
+  $ elnath portability import backup.eln --dry-run --passphrase-file pass.txt`,
+		"cmd.daemon.help": `USAGE
+  elnath daemon <subcommand> [flags]
+
+DESCRIPTION
+  Manage the Elnath background daemon. The daemon accepts task requests
+  via a Unix socket and runs agent sessions asynchronously. Use it for
+  long-running tasks or integration with external automation.
+
+SUBCOMMANDS
+  start             Start the daemon in the background
+  stop              Stop a running daemon
+  status            Show daemon status and active task count
+  logs              Stream daemon logs to stdout
+  task submit       Submit a task to the running daemon
+  task list         List submitted tasks and their statuses
+  task cancel <id>  Cancel a pending or running task
+
+FLAGS
+  --config <path>   Use an alternative config file
+  --socket <path>   Override the Unix socket path
+
+EXAMPLES
+  # Start the daemon
+  $ elnath daemon start
+
+  # Check daemon status
+  $ elnath daemon status
+
+  # Submit a task
+  $ elnath daemon task submit "summarise the latest PRs"
+
+  # Stream daemon logs
+  $ elnath daemon logs
+
+  # Stop the daemon
+  $ elnath daemon stop
+
+SEE ALSO
+  elnath run, elnath errors ELN-030`,
 	},
 	Ko: {
 		"welcome.title":      "Elnath에 오신 것을 환영합니다",
@@ -238,6 +408,11 @@ Daemon subcommands:
 		"cli.config_load_error":  "설정 로드: %s",
 		"cli.write_config_error": "설정 쓰기: %s",
 		"cli.no_provider":        "LLM 프로바이더가 설정되지 않았습니다. ELNATH_ANTHROPIC_API_KEY를 설정하거나 config.yaml에 anthropic.api_key를 추가하세요",
+		"cmd.run.help":           "",
+		"cmd.setup.help":         "",
+		"cmd.wiki.help":          "",
+		"cmd.lessons.help":       "",
+		"cmd.daemon.help":        "",
 	},
 }
 
@@ -256,6 +431,16 @@ func T(locale Locale, key string) string {
 		}
 	}
 	return key
+}
+
+// TOptional returns an untranslated empty string for unknown keys.
+func TOptional(locale Locale, key string) string {
+	if msgs, ok := translations[locale]; ok {
+		if val, ok := msgs[key]; ok {
+			return val
+		}
+	}
+	return ""
 }
 
 // Locales returns all supported locales.

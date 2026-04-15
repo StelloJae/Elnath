@@ -9,6 +9,7 @@ import (
 	"github.com/stello/elnath/internal/config"
 	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/core"
+	"github.com/stello/elnath/internal/userfacingerr"
 	"github.com/stello/elnath/internal/wiki"
 )
 
@@ -20,6 +21,9 @@ func cmdWiki(ctx context.Context, args []string) error {
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
+	}
+	if _, err := os.Stat(cfg.WikiDir); err != nil {
+		return userfacingerr.Wrap(userfacingerr.ELN010, err, "wiki dir")
 	}
 
 	store, err := wiki.NewStore(cfg.WikiDir)

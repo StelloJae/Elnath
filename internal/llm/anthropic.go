@@ -5,12 +5,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/stello/elnath/internal/userfacingerr"
 )
 
 const (
@@ -106,6 +110,11 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req Request, cb func(Str
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			inner := fmt.Errorf("anthropic: http: %w", err)
+			return userfacingerr.Wrap(userfacingerr.ELN040, inner, "anthropic http")
+		}
 		return fmt.Errorf("anthropic: http: %w", err)
 	}
 	defer resp.Body.Close()
@@ -117,7 +126,8 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req Request, cb func(Str
 		}
 		switch resp.StatusCode {
 		case 429:
-			return fmt.Errorf("anthropic: rate limit (429): %s", errBody)
+			inner := fmt.Errorf("anthropic: rate limit (429): %s", errBody)
+			return userfacingerr.Wrap(userfacingerr.ELN080, inner, "anthropic 429")
 		case 529:
 			return fmt.Errorf("anthropic: overloaded (529): %s", errBody)
 		default:
@@ -131,13 +141,13 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req Request, cb func(Str
 // --- request building ---
 
 type anthropicRequest struct {
-	Model     string              `json:"model"`
-	MaxTokens int                 `json:"max_tokens"`
-	System    json.RawMessage     `json:"system,omitempty"`
-	Messages  []anthropicMessage  `json:"messages"`
-	Tools     []anthropicTool     `json:"tools,omitempty"`
-	Stream    bool                `json:"stream"`
-	Thinking  *anthropicThinking  `json:"thinking,omitempty"`
+	Model     string             `json:"model"`
+	MaxTokens int                `json:"max_tokens"`
+	System    json.RawMessage    `json:"system,omitempty"`
+	Messages  []anthropicMessage `json:"messages"`
+	Tools     []anthropicTool    `json:"tools,omitempty"`
+	Stream    bool               `json:"stream"`
+	Thinking  *anthropicThinking `json:"thinking,omitempty"`
 }
 
 type anthropicThinking struct {
@@ -295,8 +305,8 @@ func parseAnthropicSSE(r io.Reader, cb func(StreamEvent)) error {
 			var ms struct {
 				Message struct {
 					Usage struct {
-						InputTokens        int `json:"input_tokens"`
-						CacheReadTokens    int `json:"cache_read_input_tokens"`
+						InputTokens         int `json:"input_tokens"`
+						CacheReadTokens     int `json:"cache_read_input_tokens"`
 						CacheCreationTokens int `json:"cache_creation_input_tokens"`
 					} `json:"usage"`
 				} `json:"message"`

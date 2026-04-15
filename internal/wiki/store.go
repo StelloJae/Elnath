@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/stello/elnath/internal/userfacingerr"
 )
 
 // Store manages wiki pages as markdown files on disk.
@@ -76,7 +78,8 @@ func (s *Store) Read(path string) (*Page, error) {
 	data, err := os.ReadFile(abs)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("wiki store: page not found: %q", path)
+			inner := fmt.Errorf("wiki store: page not found: %q", path)
+			return nil, userfacingerr.Wrap(userfacingerr.ELN100, inner, "wiki read")
 		}
 		return nil, fmt.Errorf("wiki store: read %q: %w", path, err)
 	}
@@ -100,7 +103,8 @@ func (s *Store) Update(page *Page) error {
 		return err
 	}
 	if _, err := os.Stat(abs); os.IsNotExist(err) {
-		return fmt.Errorf("wiki store: page not found: %q", page.Path)
+		inner := fmt.Errorf("wiki store: page not found: %q", page.Path)
+		return userfacingerr.Wrap(userfacingerr.ELN100, inner, "wiki update")
 	}
 
 	page.Updated = time.Now().UTC()
@@ -124,7 +128,8 @@ func (s *Store) Delete(path string) error {
 	}
 	if err := os.Remove(abs); err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("wiki store: page not found: %q", path)
+			inner := fmt.Errorf("wiki store: page not found: %q", path)
+			return userfacingerr.Wrap(userfacingerr.ELN100, inner, "wiki delete")
 		}
 		return fmt.Errorf("wiki store: delete %q: %w", path, err)
 	}
