@@ -12,6 +12,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/stello/elnath/internal/userfacingerr"
 )
 
 const (
@@ -150,9 +152,10 @@ func (p *CodexOAuthProvider) streamWithRefresh(ctx context.Context, auth codexOA
 
 	var statusErr codexOAuthStatusError
 	if errors.As(err, &statusErr) && statusErr.code == http.StatusUnauthorized {
-		refreshed, refreshErr := p.refresh(ctx, auth)
+		refreshed, refreshErr := p.refreshAuth(ctx, auth)
 		if refreshErr != nil {
-			return fmt.Errorf("codex: refresh failed (re-run `codex auth` to re-authenticate): %w", refreshErr)
+			inner := fmt.Errorf("codex: refresh failed (re-run `codex auth` to re-authenticate): %w", refreshErr)
+			return userfacingerr.Wrap(userfacingerr.ELN002, inner, "codex refresh")
 		}
 		return p.streamOnce(ctx, refreshed, req, cb)
 	}
@@ -229,9 +232,9 @@ func buildCodexRequest(req ChatRequest, defaultModel string) ([]byte, error) {
 					textParts = nil
 				}
 				input = append(input, map[string]any{
-					"type":         "function_call_output",
-					"call_id":      b.ToolUseID,
-					"output":       b.Content,
+					"type":    "function_call_output",
+					"call_id": b.ToolUseID,
+					"output":  b.Content,
 				})
 			case ToolUseBlock:
 				if len(textParts) > 0 {
@@ -280,6 +283,7 @@ func buildCodexRequest(req ChatRequest, defaultModel string) ([]byte, error) {
 // parseCodexSSE reads the Codex Responses API SSE stream.
 func parseCodexSSE(r io.Reader, cb func(StreamEvent)) error {
 	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 	dumpPath := os.Getenv("ELNATH_CODEX_SSE_DUMP")
 	var dumpFile *os.File
 	if dumpPath != "" {
@@ -318,7 +322,7 @@ func parseCodexSSE(r io.Reader, cb func(StreamEvent)) error {
 			ItemID   string `json:"item_id"`
 			CallID   string `json:"call_id"`
 			Name     string `json:"name"`
-		Response struct {
+			Response struct {
 				Usage struct {
 					InputTokens  int `json:"input_tokens"`
 					OutputTokens int `json:"output_tokens"`
@@ -334,15 +338,15 @@ func parseCodexSSE(r io.Reader, cb func(StreamEvent)) error {
 					} `json:"content"`
 					Arguments string `json:"arguments"`
 				} `json:"output"`
-		} `json:"response"`
-		Item *struct {
-			Type      string `json:"type"`
-			ID        string `json:"id"`
-			Name      string `json:"name"`
-			CallID    string `json:"call_id"`
-			Arguments string `json:"arguments"`
-		} `json:"item,omitempty"`
-	}
+			} `json:"response"`
+			Item *struct {
+				Type      string `json:"type"`
+				ID        string `json:"id"`
+				Name      string `json:"name"`
+				CallID    string `json:"call_id"`
+				Arguments string `json:"arguments"`
+			} `json:"item,omitempty"`
+		}
 		if err := json.Unmarshal([]byte(data), &event); err != nil {
 			continue
 		}
@@ -457,9 +461,19 @@ func parseCodexSSE(r io.Reader, cb func(StreamEvent)) error {
 	return nil
 }
 
-// refresh exchanges the refresh token for a new access token.
+// Refresh implements RefreshableProvider.
+func (p *CodexOAuthProvider) Refresh(ctx context.Context) error {
+	auth, err := p.loadAuth()
+	if err != nil {
+		return err
+	}
+	_, err = p.refreshAuth(ctx, auth)
+	return err
+}
+
+// refreshAuth exchanges the refresh token for a new access token.
 // Uses a 10-second timeout to avoid blocking the daemon when the auth server is unresponsive.
-func (p *CodexOAuthProvider) refresh(ctx context.Context, auth codexOAuthAuthFile) (codexOAuthAuthFile, error) {
+func (p *CodexOAuthProvider) refreshAuth(ctx context.Context, auth codexOAuthAuthFile) (codexOAuthAuthFile, error) {
 	refreshCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 

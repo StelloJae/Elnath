@@ -88,3 +88,24 @@ func TestBuildCodexRequestUsesCallIDForFunctionHistory(t *testing.T) {
 		t.Fatalf("did not expect legacy id field for function call: %s", raw)
 	}
 }
+
+func TestParseCodexSSE_AllowsLargeLines(t *testing.T) {
+	longDelta := strings.Repeat("a", 70_000)
+	stream := strings.NewReader(
+		"data: {\"type\":\"response.output_text.delta\",\"delta\":\"" + longDelta + "\"}\n\n" +
+			"data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n",
+	)
+
+	var gotText string
+	err := parseCodexSSE(stream, func(ev StreamEvent) {
+		if ev.Type == EventTextDelta {
+			gotText += ev.Content
+		}
+	})
+	if err != nil {
+		t.Fatalf("parseCodexSSE: %v", err)
+	}
+	if gotText != longDelta {
+		t.Fatalf("got text length = %d, want %d", len(gotText), len(longDelta))
+	}
+}

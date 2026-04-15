@@ -30,15 +30,11 @@ func main() {
 }
 
 func run(ctx context.Context, args []string) error {
-	if len(args) < 2 {
+	cmd, cmdArgs := splitCommandArgs(args)
+	if cmd == "" {
 		return executeCommand(ctx, "help", args)
 	}
-
-	configPath := extractConfigFlag(args)
-	cmd := args[1]
-
-	_ = configPath // passed to commands that need it
-	return executeCommand(ctx, cmd, args[2:])
+	return executeCommand(ctx, cmd, cmdArgs)
 }
 
 func extractConfigFlag(args []string) string {
@@ -57,6 +53,10 @@ func extractPersonaFlag(args []string) string {
 		}
 	}
 	return ""
+}
+
+func extractDataDirFlag(args []string) string {
+	return extractFlagValue(args, "--data-dir")
 }
 
 func extractSessionFlag(args []string) string {
@@ -84,6 +84,35 @@ func hasFlag(args []string, flag string) bool {
 		}
 	}
 	return false
+}
+
+func splitCommandArgs(args []string) (string, []string) {
+	if len(args) < 2 {
+		return "", nil
+	}
+	flagsWithValue := map[string]struct{}{
+		"--config":     {},
+		"--data-dir":   {},
+		"--persona":    {},
+		"--session":    {},
+		"--principal":  {},
+		"--project-id": {},
+	}
+	booleanFlags := map[string]struct{}{
+		"--continue":        {},
+		"--non-interactive": {},
+	}
+	for i := 1; i < len(args); i++ {
+		if _, ok := flagsWithValue[args[i]]; ok {
+			i++
+			continue
+		}
+		if _, ok := booleanFlags[args[i]]; ok {
+			continue
+		}
+		return args[i], args[i+1:]
+	}
+	return "", nil
 }
 
 func recoverPanic() {
