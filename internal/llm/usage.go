@@ -132,6 +132,20 @@ func estimateCost(provider, model string, stats UsageStats) float64 {
 		// OpenAI GPT-4o
 		"gpt-4o":      {2.5, 10.0},
 		"gpt-4o-mini": {0.15, 0.60},
+		// OpenAI GPT-5 series. Rates per 1M tokens from
+		// https://openai.com/api/pricing (short-context, Standard tier).
+		// Codex OAuth additionally exposes *-Codex variants (5.2-Codex,
+		// 5.3-Codex, 5.1-Codex-Max, 5.1-Codex-Mini, 5.3-Codex-Spark) that
+		// are covered by the Codex subscription rather than per-token
+		// billing, so they are intentionally omitted from this table.
+		"gpt-5":        {1.25, 10.00},
+		"gpt-5-mini":   {0.25, 2.00},
+		"gpt-5-nano":   {0.05, 0.40},
+		"gpt-5.1":      {1.25, 10.00},
+		"gpt-5.2":      {1.75, 14.00},
+		"gpt-5.2-pro":  {21.00, 168.00},
+		"gpt-5.4":      {2.50, 15.00},
+		"gpt-5.4-mini": {0.75, 4.50},
 	}
 
 	p, ok := prices[model]

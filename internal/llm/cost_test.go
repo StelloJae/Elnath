@@ -7,11 +7,11 @@ import (
 
 func TestFormatUsageSummary(t *testing.T) {
 	tests := []struct {
-		name     string
-		model    string
-		stats    UsageStats
-		wantIn   []string // substrings that must appear
-		wantNot  []string // substrings that must NOT appear
+		name    string
+		model   string
+		stats   UsageStats
+		wantIn  []string // substrings that must appear
+		wantNot []string // substrings that must NOT appear
 	}{
 		{
 			name:  "basic sonnet usage",
@@ -24,9 +24,9 @@ func TestFormatUsageSummary(t *testing.T) {
 			},
 		},
 		{
-			name:  "zero usage returns empty",
-			model: "claude-sonnet-4-6",
-			stats: UsageStats{},
+			name:   "zero usage returns empty",
+			model:  "claude-sonnet-4-6",
+			stats:  UsageStats{},
 			wantIn: []string{""},
 		},
 		{
@@ -99,6 +99,33 @@ func TestFormatUsageSummary_CostAccuracy(t *testing.T) {
 	// Expected: $3 input + $15 output = $18.00
 	if !strings.Contains(got, "$18.00") {
 		t.Errorf("expected cost $18.00 for 1M in/out sonnet, got %q", got)
+	}
+}
+
+func TestEstimateCostGPT5Models(t *testing.T) {
+	// 1M input + 1M output, no cache.
+	stats := UsageStats{InputTokens: 1_000_000, OutputTokens: 1_000_000}
+
+	tests := []struct {
+		model   string
+		wantUSD float64
+	}{
+		{model: "gpt-5", wantUSD: 1.25 + 10.00},
+		{model: "gpt-5-mini", wantUSD: 0.25 + 2.00},
+		{model: "gpt-5-nano", wantUSD: 0.05 + 0.40},
+		{model: "gpt-5.1", wantUSD: 1.25 + 10.00},
+		{model: "gpt-5.2", wantUSD: 1.75 + 14.00},
+		{model: "gpt-5.2-pro", wantUSD: 21.00 + 168.00},
+		{model: "gpt-5.4", wantUSD: 2.50 + 15.00},
+		{model: "gpt-5.4-mini", wantUSD: 0.75 + 4.50},
+	}
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			got := estimateCost("", tt.model, stats)
+			if got != tt.wantUSD {
+				t.Errorf("estimateCost(%q, 1M/1M) = %.4f, want %.4f", tt.model, got, tt.wantUSD)
+			}
+		})
 	}
 }
 
