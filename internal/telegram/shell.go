@@ -203,7 +203,7 @@ func (s *Shell) HandleUpdate(ctx context.Context, update Update) error {
 		intent, err := s.classifier.Classify(ctx, s.classifyProvider, text, nil)
 		if err != nil {
 			s.logger.Warn("intent classification failed, falling back to queue", "error", err)
-		} else if isChatIntent(intent) {
+		} else if isChatIntent(intent) && !s.hasPinnedWorkflow(intent, principal.ProjectID) {
 			_ = s.bot.SetReaction(ctx, s.chatID, update.Message.MessageID, "👀")
 			return s.chatResponder.Respond(ctx, principal, text, update.Message.MessageID)
 		}
@@ -245,6 +245,25 @@ const taskAckPrompt = `You are a personal AI assistant. The user just gave you a
 Generate a brief, warm acknowledgment (1 sentence, under 12 words).
 Match the user's language. Sound like a real person, not a system.
 No task numbers, no technical jargon, no markdown, no HTML, no quotes.`
+
+// hasPinnedWorkflow returns true when the project has a preferred workflow
+// mapped for this intent. Chat-intent messages defer to the queue+router when
+// true so pinned (via /override) or learned (via RoutingAdvisor) preferences
+// apply to chat-like intents too, not only workflow-typed ones.
+func (s *Shell) hasPinnedWorkflow(intent conversation.Intent, projectID string) bool {
+	if s.wikiStore == nil || strings.TrimSpace(projectID) == "" {
+		return false
+	}
+	pref, err := wiki.LoadWorkflowPreference(s.wikiStore, projectID)
+	if err != nil {
+		s.logger.Warn("telegram: routing preference lookup failed, staying on chat path", "error", err)
+		return false
+	}
+	if pref == nil {
+		return false
+	}
+	return pref.PreferredWorkflow(string(intent)) != ""
+}
 
 func isChatIntent(intent conversation.Intent) bool {
 	switch intent {

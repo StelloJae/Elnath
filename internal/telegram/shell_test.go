@@ -12,8 +12,10 @@ import (
 
 	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/daemon"
+	"github.com/stello/elnath/internal/identity"
 	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
+	"github.com/stello/elnath/internal/routing"
 	"github.com/stello/elnath/internal/skill"
 	"github.com/stello/elnath/internal/wiki"
 )
@@ -764,7 +766,7 @@ func (m *shellMockProvider) Stream(_ context.Context, _ llm.ChatRequest, cb func
 func (m *shellMockProvider) Name() string            { return "mock" }
 func (m *shellMockProvider) Models() []llm.ModelInfo { return nil }
 
-func newTestShellWithClassifier(t *testing.T, intent conversation.Intent, classifyErr error) (*Shell, *daemon.Queue, *fakeBotClient) {
+func newTestShellWithClassifier(t *testing.T, intent conversation.Intent, classifyErr error, extraOpts ...ShellOption) (*Shell, *daemon.Queue, *fakeBotClient) {
 	t.Helper()
 	db := openTelegramTestDB(t)
 	queue, err := daemon.NewQueue(db)
@@ -780,11 +782,15 @@ func newTestShellWithClassifier(t *testing.T, intent conversation.Intent, classi
 	responder := NewChatResponder(provider, bot, "chat-1", nil)
 	classifier := &mockClassifier{intent: intent, err: classifyErr}
 
+	opts := []ShellOption{
+		WithChatResponder(responder),
+		WithClassifier(classifier, provider),
+	}
+	opts = append(opts, extraOpts...)
 	shell, err := NewShell(queue, approvals, bot, "chat-1",
 		filepath.Join(t.TempDir(), "telegram-state.json"),
 		nil,
-		WithChatResponder(responder),
-		WithClassifier(classifier, provider),
+		opts...,
 	)
 	if err != nil {
 		t.Fatalf("NewShell: %v", err)
@@ -875,6 +881,127 @@ func TestShellClassifyErrorFallsBackToQueue(t *testing.T) {
 
 	if len(bot.sent) == 0 {
 		t.Fatal("expected ack message on classify error fallback")
+	}
+}
+
+// TestShellChatIntentWithPinnedPreferenceGoesToQueue guards FU-CR: when a user
+// has pinned a workflow for a chat-classified intent (via /override or derived
+// by the routing advisor), the shell must defer to the queue+router instead of
+// answering directly through ChatResponder. Without this, telegram users get
+// zero benefit from learned routing preferences on chat-like intents.
+func TestShellChatIntentWithPinnedPreferenceGoesToQueue(t *testing.T) {
+	wikiStore := newTestWikiStoreForShell(t)
+	workDir := t.TempDir()
+	projectID := identity.ResolveProjectID(workDir, "")
+	if projectID == "" {
+		t.Fatal("failed to derive projectID from workDir")
+	}
+	pref := &routing.WorkflowPreference{
+		PreferredWorkflows: map[string]string{string(conversation.IntentQuestion): "research"},
+	}
+	if err := wiki.SaveUserWorkflowPreference(wikiStore, projectID, pref); err != nil {
+		t.Fatalf("SaveUserWorkflowPreference: %v", err)
+	}
+
+	shell, queue, bot := newTestShellWithClassifier(t, conversation.IntentQuestion, nil,
+		WithWikiStore(wikiStore),
+		WithWorkDir(workDir),
+	)
+
+	err := shell.HandleUpdate(context.Background(), Update{
+		ID:      1,
+		Message: Message{ChatID: "chat-1", UserID: "60", MessageID: 20, Text: "what's the status?"},
+	})
+	if err != nil {
+		t.Fatalf("HandleUpdate: %v", err)
+	}
+
+	tasks, err := queue.List(context.Background())
+	if err != nil {
+		t.Fatalf("queue.List: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("tasks = %d, want 1 (pinned pref must divert chat intent to queue)", len(tasks))
+	}
+	payload := daemon.ParseTaskPayload(tasks[0].Payload)
+	if payload.Principal.UserID != "60" {
+		t.Errorf("payload userID = %q, want 60", payload.Principal.UserID)
+	}
+	if payload.Principal.ProjectID != projectID {
+		t.Errorf("payload projectID = %q, want %q", payload.Principal.ProjectID, projectID)
+	}
+	for _, msg := range bot.sent {
+		if strings.Contains(msg.text, "hi") {
+			t.Errorf("chat stream output leaked; pinned preference should have bypassed chat: %q", msg.text)
+		}
+	}
+}
+
+// TestShellChatIntentWithoutPinShortCircuitsToChat is the regression guard for
+// the default chat path: when no routing preference is pinned for the intent,
+// the shell must still respond directly via ChatResponder.
+func TestShellChatIntentWithoutPinShortCircuitsToChat(t *testing.T) {
+	wikiStore := newTestWikiStoreForShell(t)
+	shell, queue, bot := newTestShellWithClassifier(t, conversation.IntentQuestion, nil,
+		WithWikiStore(wikiStore),
+	)
+
+	err := shell.HandleUpdate(context.Background(), Update{
+		ID:      1,
+		Message: Message{ChatID: "chat-1", UserID: "61", MessageID: 21, Text: "what's the status?"},
+	})
+	if err != nil {
+		t.Fatalf("HandleUpdate: %v", err)
+	}
+
+	tasks, err := queue.List(context.Background())
+	if err != nil {
+		t.Fatalf("queue.List: %v", err)
+	}
+	if len(tasks) != 0 {
+		t.Fatalf("tasks = %d, want 0 (no pin; chat path must run)", len(tasks))
+	}
+	if len(bot.sent) == 0 {
+		t.Fatal("expected chat stream output via bot.sent")
+	}
+}
+
+// TestShellChatIntentPinForOtherIntentStillChats guards the intent-scope of
+// pinning: a preference for a different intent must not divert a chat-classified
+// intent away from ChatResponder.
+func TestShellChatIntentPinForOtherIntentStillChats(t *testing.T) {
+	wikiStore := newTestWikiStoreForShell(t)
+	workDir := t.TempDir()
+	projectID := identity.ResolveProjectID(workDir, "")
+	if projectID == "" {
+		t.Fatal("failed to derive projectID from workDir")
+	}
+	pref := &routing.WorkflowPreference{
+		PreferredWorkflows: map[string]string{string(conversation.IntentComplexTask): "team"},
+	}
+	if err := wiki.SaveUserWorkflowPreference(wikiStore, projectID, pref); err != nil {
+		t.Fatalf("SaveUserWorkflowPreference: %v", err)
+	}
+
+	shell, queue, bot := newTestShellWithClassifier(t, conversation.IntentQuestion, nil,
+		WithWikiStore(wikiStore),
+		WithWorkDir(workDir),
+	)
+
+	err := shell.HandleUpdate(context.Background(), Update{
+		ID:      1,
+		Message: Message{ChatID: "chat-1", UserID: "62", MessageID: 22, Text: "what's the status?"},
+	})
+	if err != nil {
+		t.Fatalf("HandleUpdate: %v", err)
+	}
+
+	tasks, _ := queue.List(context.Background())
+	if len(tasks) != 0 {
+		t.Fatalf("tasks = %d, want 0 (pin is for unrelated intent; chat path must run)", len(tasks))
+	}
+	if len(bot.sent) == 0 {
+		t.Fatal("expected chat stream output via bot.sent")
 	}
 }
 
