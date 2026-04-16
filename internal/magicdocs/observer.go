@@ -3,7 +3,6 @@ package magicdocs
 import (
 	"log/slog"
 	"sync"
-	"time"
 
 	"github.com/stello/elnath/internal/event"
 )
@@ -40,7 +39,7 @@ func (a *AccumulatorObserver) OnEvent(e event.Event) {
 			Events:    snapshot,
 			SessionID: a.sessionID,
 			Trigger:   e.EventType(),
-			Timestamp: time.Now(),
+			Timestamp: e.Timestamp(),
 		}:
 		default:
 			a.logger.Warn("magic-docs extraction channel full, dropping request",

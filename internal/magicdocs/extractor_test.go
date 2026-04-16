@@ -55,6 +55,14 @@ func TestParseExtractionResult_InvalidJSON(t *testing.T) {
 	}
 }
 
+func TestParseExtractionResult_FencedInvalidJSON(t *testing.T) {
+	raw := "```json\n{broken json\n```"
+	_, err := parseExtractionResult(raw)
+	if err == nil {
+		t.Error("expected error for fenced invalid JSON")
+	}
+}
+
 func TestValidatePageAction(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -67,6 +75,8 @@ func TestValidatePageAction(t *testing.T) {
 		{"bad type", PageAction{Action: "create", Path: "a/b.md", Type: "unknown", Confidence: "low"}, true},
 		{"bad confidence", PageAction{Action: "create", Path: "a/b.md", Type: "analysis", Confidence: "ultra"}, true},
 		{"path traversal", PageAction{Action: "create", Path: "../../etc/passwd", Type: "analysis", Confidence: "low"}, true},
+		{"absolute path", PageAction{Action: "create", Path: "/etc/passwd", Type: "analysis", Confidence: "low"}, true},
+		{"null byte", PageAction{Action: "create", Path: "a/b\x00.md", Type: "analysis", Confidence: "low"}, true},
 		{"empty path", PageAction{Action: "create", Path: "", Type: "analysis", Confidence: "low"}, true},
 	}
 	for _, tt := range tests {

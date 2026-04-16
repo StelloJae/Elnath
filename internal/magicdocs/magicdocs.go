@@ -88,6 +88,7 @@ func (m *MagicDocs) Close(ctx context.Context) error {
 
 	select {
 	case <-done:
+		m.cancel()
 		m.logger.Info("magic-docs stopped gracefully")
 		return nil
 	case <-ctx.Done():

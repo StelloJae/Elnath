@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -183,6 +184,12 @@ func validatePageAction(a PageAction) error {
 	}
 	if strings.Contains(a.Path, "..") {
 		return fmt.Errorf("path traversal detected: %q", a.Path)
+	}
+	if filepath.IsAbs(a.Path) {
+		return fmt.Errorf("absolute path not allowed: %q", a.Path)
+	}
+	if strings.ContainsAny(a.Path, "\x00") {
+		return fmt.Errorf("path contains null byte: %q", a.Path)
 	}
 	if !validTypes[a.Type] {
 		return fmt.Errorf("invalid type %q", a.Type)
