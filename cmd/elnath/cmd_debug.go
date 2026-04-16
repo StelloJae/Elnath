@@ -25,6 +25,8 @@ func cmdDebug(_ context.Context, args []string) error {
 		return debugInfo()
 	case "cost":
 		return debugCost(args[1:])
+	case "consolidation":
+		return debugConsolidation(context.Background(), args[1:])
 	default:
 		return fmt.Errorf("debug: unknown subcommand %q (try: elnath debug help)", args[0])
 	}
@@ -34,9 +36,10 @@ func printDebugUsage() error {
 	fmt.Fprintf(os.Stdout, `Usage: elnath debug <subcommand>
 
 Subcommands:
-  info            System diagnostics and data counts
-  cost [--days N] Cost summary (default: last 30 days)
-  help            Show this help
+  info                    System diagnostics and data counts
+  cost [--days N]         Cost summary (default: last 30 days)
+  consolidation <action>  Lesson consolidation controls (run [--force], help)
+  help                    Show this help
 `)
 	return nil
 }
