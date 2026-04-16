@@ -12,6 +12,7 @@ import (
 
 	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/daemon"
+	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/skill"
 	"github.com/stello/elnath/internal/wiki"
@@ -875,4 +876,358 @@ func TestShellClassifyErrorFallsBackToQueue(t *testing.T) {
 	if len(bot.sent) == 0 {
 		t.Fatal("expected ack message on classify error fallback")
 	}
+}
+
+func newTestLearningStore(t *testing.T) *learning.Store {
+	t.Helper()
+	return learning.NewStore(filepath.Join(t.TempDir(), "lessons.jsonl"))
+}
+
+func newTestWikiStoreForShell(t *testing.T) *wiki.Store {
+	t.Helper()
+	store, err := wiki.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("wiki.NewStore: %v", err)
+	}
+	return store
+}
+
+func lastSentText(bot *fakeBotClient) string {
+	if len(bot.sent) == 0 {
+		return ""
+	}
+	return bot.sent[len(bot.sent)-1].text
+}
+
+func TestShellRememberCommand(t *testing.T) {
+	tests := []struct {
+		name       string
+		text       string
+		withStore  bool
+		wantSub    string
+		wantStored int
+	}{
+		{
+			name:       "happy path stores lesson",
+			text:       "/remember prefer ralph for flaky tests",
+			withStore:  true,
+			wantSub:    "Remembered",
+			wantStored: 1,
+		},
+		{
+			name:       "empty argument returns usage",
+			text:       "/remember",
+			withStore:  true,
+			wantSub:    "Usage:",
+			wantStored: 0,
+		},
+		{
+			name:      "nil store reports unavailable",
+			text:      "/remember anything",
+			withStore: false,
+			wantSub:   "Learning store unavailable",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var store *learning.Store
+			var opts []ShellOption
+			if tc.withStore {
+				store = newTestLearningStore(t)
+				opts = append(opts, WithLearningStore(store))
+			}
+			shell, _, _, bot := newTestShellWithOptions(t, nil, opts...)
+
+			if err := shell.HandleUpdate(context.Background(), Update{
+				Message: Message{ChatID: "chat-1", UserID: "42", Text: tc.text},
+			}); err != nil {
+				t.Fatalf("HandleUpdate: %v", err)
+			}
+
+			got := lastSentText(bot)
+			if !strings.Contains(got, tc.wantSub) {
+				t.Errorf("response = %q, want substring %q", got, tc.wantSub)
+			}
+			if tc.withStore {
+				lessons, err := store.List()
+				if err != nil {
+					t.Fatalf("store.List: %v", err)
+				}
+				if len(lessons) != tc.wantStored {
+					t.Errorf("stored lessons = %d, want %d", len(lessons), tc.wantStored)
+				}
+			}
+		})
+	}
+}
+
+func TestShellForgetCommand(t *testing.T) {
+	tests := []struct {
+		name        string
+		text        string
+		withStore   bool
+		seed        []string
+		wantSub     string
+		wantRemains int
+	}{
+		{
+			name:        "deletes by id prefix",
+			text:        "",
+			withStore:   true,
+			seed:        []string{"one", "two"},
+			wantSub:     "Forgot 1 lesson",
+			wantRemains: 1,
+		},
+		{
+			name:      "empty argument returns usage",
+			text:      "/forget",
+			withStore: true,
+			wantSub:   "Usage:",
+		},
+		{
+			name:      "nil store reports unavailable",
+			text:      "/forget abcd1234",
+			withStore: false,
+			wantSub:   "Learning store unavailable",
+		},
+		{
+			name:        "unknown prefix reports zero deletion",
+			text:        "/forget zzzzzzzz",
+			withStore:   true,
+			seed:        []string{"anchor"},
+			wantSub:     "Forgot 0 lesson",
+			wantRemains: 1,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var store *learning.Store
+			var opts []ShellOption
+			if tc.withStore {
+				store = newTestLearningStore(t)
+				opts = append(opts, WithLearningStore(store))
+			}
+			shell, _, _, bot := newTestShellWithOptions(t, nil, opts...)
+
+			var targetID string
+			for _, seedText := range tc.seed {
+				lesson := learning.Lesson{Text: seedText, Source: "test"}
+				if err := store.Append(lesson); err != nil {
+					t.Fatalf("seed append: %v", err)
+				}
+				if targetID == "" {
+					lessons, err := store.List()
+					if err != nil {
+						t.Fatalf("seed list: %v", err)
+					}
+					if len(lessons) > 0 {
+						targetID = lessons[0].ID
+					}
+				}
+			}
+
+			text := tc.text
+			if text == "" {
+				if targetID == "" {
+					t.Fatal("test setup error: empty text requires seeded lesson to derive id")
+				}
+				text = "/forget " + targetID
+			}
+
+			if err := shell.HandleUpdate(context.Background(), Update{
+				Message: Message{ChatID: "chat-1", UserID: "42", Text: text},
+			}); err != nil {
+				t.Fatalf("HandleUpdate: %v", err)
+			}
+
+			got := lastSentText(bot)
+			if !strings.Contains(got, tc.wantSub) {
+				t.Errorf("response = %q, want substring %q", got, tc.wantSub)
+			}
+			if tc.withStore {
+				remaining, err := store.List()
+				if err != nil {
+					t.Fatalf("store.List: %v", err)
+				}
+				if len(remaining) != tc.wantRemains {
+					t.Errorf("remaining lessons = %d, want %d", len(remaining), tc.wantRemains)
+				}
+			}
+		})
+	}
+}
+
+func TestShellOverrideCommand(t *testing.T) {
+	tests := []struct {
+		name      string
+		text      string
+		withWiki  bool
+		wantSub   string
+		wantAvoid bool
+	}{
+		{
+			name:     "sets preferred workflow",
+			text:     "/override complex_task ralph",
+			withWiki: true,
+			wantSub:  "Override set: complex_task -> ralph",
+		},
+		{
+			name:     "rejects unknown workflow",
+			text:     "/override complex_task cosmic",
+			withWiki: true,
+			wantSub:  "Unknown workflow",
+		},
+		{
+			name:     "too few arguments returns usage",
+			text:     "/override",
+			withWiki: true,
+			wantSub:  "Usage:",
+		},
+		{
+			name:     "missing workflow argument returns usage",
+			text:     "/override complex_task",
+			withWiki: true,
+			wantSub:  "Usage:",
+		},
+		{
+			name:     "nil wiki store reports unavailable",
+			text:     "/override complex_task ralph",
+			withWiki: false,
+			wantSub:  "Wiki store unavailable",
+		},
+		{
+			name:      "clear removes pinned preference",
+			text:      "/override clear",
+			withWiki:  true,
+			wantSub:   "Override cleared",
+			wantAvoid: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var store *wiki.Store
+			var opts []ShellOption
+			if tc.withWiki {
+				store = newTestWikiStoreForShell(t)
+				opts = append(opts, WithWikiStore(store))
+			}
+			shell, _, _, bot := newTestShellWithOptions(t, nil, opts...)
+
+			if err := shell.HandleUpdate(context.Background(), Update{
+				Message: Message{ChatID: "chat-1", UserID: "42", Text: tc.text},
+			}); err != nil {
+				t.Fatalf("HandleUpdate: %v", err)
+			}
+
+			got := lastSentText(bot)
+			if !strings.Contains(got, tc.wantSub) {
+				t.Errorf("response = %q, want substring %q", got, tc.wantSub)
+			}
+
+			if tc.name == "sets preferred workflow" {
+				// The project ID used by the shell is derived from shell.workDir.
+				// Just confirm a routing-preferences page exists somewhere under projects/.
+				pages, err := store.List()
+				if err != nil {
+					t.Fatalf("store.List: %v", err)
+				}
+				var found bool
+				for _, p := range pages {
+					if strings.HasSuffix(p.Path, "routing-preferences.md") {
+						found = true
+						if p.PageSource() != wiki.SourceUser {
+							t.Errorf("routing-preferences source = %q, want %q", p.PageSource(), wiki.SourceUser)
+						}
+						break
+					}
+				}
+				if !found {
+					t.Errorf("expected routing-preferences page, got %d pages", len(pages))
+				}
+			}
+		})
+	}
+}
+
+// TestShellEnqueueStampsRealProjectID guards the A.1 outcome-recording fix:
+// Telegram-ingested tasks must carry a real ProjectID on their Principal so
+// the runtime routes outcomes under the caller's project, not the daemon
+// fallback. Specifically, ProjectID must not be empty and must not be the
+// legacy "unknown" sentinel.
+func TestShellEnqueueStampsRealProjectID(t *testing.T) {
+	shell, queue, _, _ := newTestShell(t)
+	// Set workDir explicitly so the derived ProjectID is deterministic for
+	// the test environment (doesn't depend on TestMain cwd).
+	workDir := t.TempDir()
+	shell.workDir = workDir
+
+	if err := shell.HandleUpdate(context.Background(), Update{
+		Message: Message{ChatID: "chat-1", UserID: "42", Text: "do something useful"},
+	}); err != nil {
+		t.Fatalf("HandleUpdate: %v", err)
+	}
+
+	tasks, err := queue.List(context.Background())
+	if err != nil {
+		t.Fatalf("queue.List: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("tasks = %d, want 1", len(tasks))
+	}
+	payload := daemon.ParseTaskPayload(tasks[0].Payload)
+	if payload.Principal.ProjectID == "" {
+		t.Fatal("Principal.ProjectID is empty; outcome recording would be skipped")
+	}
+	if payload.Principal.ProjectID == "unknown" {
+		t.Fatalf(`Principal.ProjectID = "unknown"; A.1 sentinel guard would drop this to the daemon fallback`)
+	}
+}
+
+func TestShellUndoCommand(t *testing.T) {
+	t.Run("cancels most recent pending task", func(t *testing.T) {
+		shell, queue, _, bot := newTestShell(t)
+
+		taskID, _, err := queue.Enqueue(context.Background(), "a pending task", "")
+		if err != nil {
+			t.Fatalf("Enqueue: %v", err)
+		}
+
+		if err := shell.HandleUpdate(context.Background(), Update{
+			Message: Message{ChatID: "chat-1", UserID: "42", Text: "/undo"},
+		}); err != nil {
+			t.Fatalf("HandleUpdate: %v", err)
+		}
+		got := lastSentText(bot)
+		wantSub := fmt.Sprintf("Task #%d cancelled", taskID)
+		if !strings.Contains(got, wantSub) {
+			t.Errorf("response = %q, want substring %q", got, wantSub)
+		}
+
+		tasks, err := queue.List(context.Background())
+		if err != nil {
+			t.Fatalf("queue.List: %v", err)
+		}
+		for _, task := range tasks {
+			if task.ID == taskID && task.Status != daemon.StatusFailed {
+				t.Errorf("task %d status = %q, want %q after undo", taskID, task.Status, daemon.StatusFailed)
+			}
+		}
+	})
+
+	t.Run("reports empty when no pending tasks", func(t *testing.T) {
+		shell, _, _, bot := newTestShell(t)
+
+		if err := shell.HandleUpdate(context.Background(), Update{
+			Message: Message{ChatID: "chat-1", UserID: "42", Text: "/undo"},
+		}); err != nil {
+			t.Fatalf("HandleUpdate: %v", err)
+		}
+		got := lastSentText(bot)
+		if !strings.Contains(got, "No pending task") {
+			t.Errorf("response = %q, want substring %q", got, "No pending task")
+		}
+	})
 }
