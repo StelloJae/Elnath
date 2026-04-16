@@ -644,6 +644,52 @@ func TestExecutionRuntimeRunTaskRecordsOutcomeOnWorkflowError(t *testing.T) {
 	}
 }
 
+func TestDaemonTaskRunnerRecordsOutcomeOnLoadSessionFailure(t *testing.T) {
+	provider := &countingProvider{}
+	rt := newTestExecutionRuntime(t, provider)
+
+	ownerPrincipal := identity.Principal{UserID: "owner", ProjectID: "proj-a", Surface: "cli"}
+	sess, err := rt.mgr.NewSessionWithPrincipal(ownerPrincipal)
+	if err != nil {
+		t.Fatalf("NewSessionWithPrincipal: %v", err)
+	}
+
+	otherPrincipal := identity.Principal{UserID: "intruder", ProjectID: "proj-b", Surface: "telegram"}
+	payload := daemon.EncodeTaskPayload(daemon.TaskPayload{
+		Prompt:    "steal this session",
+		SessionID: sess.ID,
+		Surface:   "telegram",
+		Principal: otherPrincipal,
+	})
+	if _, err := rt.newDaemonTaskRunner()(context.Background(), payload, nil); err == nil {
+		t.Fatal("expected load session failure, got nil")
+	}
+
+	outcomePath := filepath.Join(rt.app.Config.DataDir, "outcomes.jsonl")
+	data, readErr := os.ReadFile(outcomePath)
+	if readErr != nil {
+		t.Fatalf("read outcomes: %v", readErr)
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	if len(lines) != 1 || lines[0] == "" {
+		t.Fatalf("outcomes.jsonl lines = %d, want 1 non-empty; got %q", len(lines), string(data))
+	}
+
+	var rec learning.OutcomeRecord
+	if err := json.Unmarshal([]byte(lines[0]), &rec); err != nil {
+		t.Fatalf("decode outcome: %v", err)
+	}
+	if rec.Success {
+		t.Errorf("Success = true, want false")
+	}
+	if rec.FinishReason != "load_session_failed" {
+		t.Errorf("FinishReason = %q, want load_session_failed", rec.FinishReason)
+	}
+	if rec.ProjectID != "proj-b" {
+		t.Errorf("ProjectID = %q, want proj-b", rec.ProjectID)
+	}
+}
+
 func TestExecutionRuntimeResearchWorkflowAppliesLearning(t *testing.T) {
 	provider := &researchRuntimeProvider{responses: []string{
 		`[{"id":"H1","statement":"Useful hypothesis","rationale":"Because","test_plan":"Do X","priority":1}]`,

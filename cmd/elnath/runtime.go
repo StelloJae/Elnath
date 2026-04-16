@@ -791,6 +791,31 @@ func (rt *executionRuntime) recordOutcome(
 	}
 }
 
+// recordSetupOutcome logs a failure outcome for daemon-task setup errors
+// (session load rejection, resume record failure, session creation failure)
+// that abort before a routing decision is made. Without this, such failures
+// would be invisible to the routing advisor and to `elnath explain last`.
+func (rt *executionRuntime) recordSetupOutcome(
+	p identity.Principal,
+	userInput string,
+	finishReason string,
+	elapsed time.Duration,
+) {
+	if rt.outcomeStore == nil || p.ProjectID == "" {
+		return
+	}
+	record := learning.OutcomeRecord{
+		ProjectID:    p.ProjectID,
+		FinishReason: finishReason,
+		Success:      false,
+		Duration:     elapsed.Seconds(),
+		InputSnippet: runeSnippet(userInput, 100),
+	}
+	if err := rt.outcomeStore.Append(record); err != nil {
+		rt.app.Logger.Warn("outcome store: setup append failed", "error", err)
+	}
+}
+
 func (rt *executionRuntime) trySkillExecution(
 	ctx context.Context,
 	sess *agent.Session,
@@ -931,6 +956,7 @@ func maxIterationsFromEnv() int {
 
 func (rt *executionRuntime) newDaemonTaskRunner() daemon.AgentTaskRunner {
 	return func(ctx context.Context, payload string, sink event.Sink) (daemon.TaskResult, error) {
+		start := time.Now()
 		taskPayload := daemon.ParseTaskPayload(payload)
 		userInput := taskPayload.Prompt
 		if userInput == "" {
@@ -961,12 +987,14 @@ func (rt *executionRuntime) newDaemonTaskRunner() daemon.AgentTaskRunner {
 		if taskPayload.SessionID != "" {
 			sess, err = rt.mgr.LoadSessionForPrincipal(taskPayload.SessionID, principal)
 			if err != nil {
+				rt.recordSetupOutcome(principal, userInput, "load_session_failed", time.Since(start))
 				return daemon.TaskResult{}, fmt.Errorf("load session %s: %w", taskPayload.SessionID, err)
 			}
 			if principal.IsZero() {
 				principal = sess.Principal
 			}
 			if err := sess.RecordResume(principal); err != nil {
+				rt.recordSetupOutcome(principal, userInput, "record_resume_failed", time.Since(start))
 				return daemon.TaskResult{}, fmt.Errorf("record resume %s: %w", taskPayload.SessionID, err)
 			}
 			messages = sess.Messages
@@ -976,6 +1004,7 @@ func (rt *executionRuntime) newDaemonTaskRunner() daemon.AgentTaskRunner {
 			}
 			sess, err = rt.mgr.NewSessionWithPrincipal(principal)
 			if err != nil {
+				rt.recordSetupOutcome(principal, userInput, "create_session_failed", time.Since(start))
 				return daemon.TaskResult{}, fmt.Errorf("create session: %w", err)
 			}
 		}
