@@ -18,6 +18,7 @@ const (
 	PageTypeSource   PageType = "source"
 	PageTypeAnalysis PageType = "analysis"
 	PageTypeMap      PageType = "map"
+	PageTypeBootTask PageType = "boot-task"
 )
 
 // Page represents a single wiki page parsed from a markdown file with YAML frontmatter.
