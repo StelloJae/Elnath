@@ -24,6 +24,7 @@ import (
 	"github.com/stello/elnath/internal/prompt"
 	"github.com/stello/elnath/internal/secret"
 	"github.com/stello/elnath/internal/self"
+	"github.com/stello/elnath/internal/profile"
 	"github.com/stello/elnath/internal/skill"
 	"github.com/stello/elnath/internal/tools"
 	"github.com/stello/elnath/internal/wiki"
@@ -107,6 +108,7 @@ type executionRuntime struct {
 	personaExtra       string
 	wikiIdx            *wiki.Index
 	wikiStore          *wiki.Store
+	profiles           map[string]*profile.Profile
 	skillReg           *skill.Registry
 	skillCreator       *skill.Creator
 	skillTracker       *skill.Tracker
@@ -277,6 +279,15 @@ func buildExecutionRuntime(
 			app.Logger.Warn("skill registry load failed", "error", err)
 		}
 	}
+	profiles := make(map[string]*profile.Profile)
+	if wikiStore != nil {
+		var err error
+		profiles, err = profile.LoadAll(wikiStore)
+		if err != nil {
+			app.Logger.Warn("profile load failed", "error", err)
+		}
+	}
+
 	skillTracker := skill.NewTracker(cfg.DataDir)
 	var skillCreator *skill.Creator
 	if wikiStore != nil {
@@ -396,6 +407,7 @@ func buildExecutionRuntime(
 		personaExtra:       personaExtra,
 		wikiIdx:            wikiIdx,
 		wikiStore:          wikiStore,
+		profiles:           profiles,
 		skillReg:           skillReg,
 		skillCreator:       skillCreator,
 		skillTracker:       skillTracker,

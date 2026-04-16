@@ -46,6 +46,7 @@ func commandRegistry() map[string]commandRunner {
 		"task":        cmdTask,
 		"lessons":     cmdLessons,
 		"skill":       cmdSkill,
+		"profile":     cmdProfile,
 	}
 }
 
