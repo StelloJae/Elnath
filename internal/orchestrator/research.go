@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/stello/elnath/internal/event"
 	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/research"
@@ -44,6 +45,9 @@ type ResearchDeps struct {
 // and executes it. The result is returned as a WorkflowResult with the
 // research summary as an assistant message.
 func (w *ResearchWorkflow) Run(ctx context.Context, input WorkflowInput) (*WorkflowResult, error) {
+	if input.Sink == nil {
+		input.Sink = event.NopSink{}
+	}
 	topic := strings.TrimSpace(input.Message)
 	if topic == "" {
 		return nil, fmt.Errorf("research workflow: topic is required")
@@ -58,7 +62,7 @@ func (w *ResearchWorkflow) Run(ctx context.Context, input WorkflowInput) (*Workf
 
 	hypGen := research.NewHypothesisGenerator(input.Provider, input.Config.Model, w.logger)
 	expRunner := research.NewExperimentRunner(input.Provider, input.Tools, input.Config.Model, w.logger).
-		WithOnText(input.OnText)
+		WithSink(input.Sink)
 	if input.Config.ToolExecutor != nil {
 		expRunner.WithToolExecutor(input.Config.ToolExecutor)
 	}
@@ -73,9 +77,7 @@ func (w *ResearchWorkflow) Run(ctx context.Context, input WorkflowInput) (*Workf
 	if input.Session != nil {
 		opts = append(opts, research.WithSessionID(input.Session.ID))
 	}
-	if input.OnText != nil {
-		opts = append(opts, research.WithOnText(input.OnText))
-	}
+	opts = append(opts, research.WithSink(input.Sink))
 
 	loop := research.NewLoop(
 		hypGen,

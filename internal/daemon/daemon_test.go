@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stello/elnath/internal/event"
 	"github.com/stello/elnath/internal/identity"
 	_ "modernc.org/sqlite"
 )
@@ -24,12 +25,12 @@ type mockTaskRunner struct {
 	err  error
 }
 
-func (r mockTaskRunner) run(_ context.Context, _ string, onText func(string)) (TaskResult, error) {
+func (r mockTaskRunner) run(_ context.Context, _ string, sink event.Sink) (TaskResult, error) {
 	if r.err != nil {
 		return TaskResult{}, r.err
 	}
-	if onText != nil && r.text != "" {
-		onText(r.text)
+	if sink != nil && r.text != "" {
+		sink.Emit(event.TextDeltaEvent{Base: event.NewBase(), Content: r.text})
 	}
 	return TaskResult{Result: r.text, Summary: r.text, SessionID: "sess-test"}, nil
 }
@@ -42,7 +43,7 @@ type mockPayloadTaskRunner struct {
 	payload TaskPayload
 }
 
-func (r *mockPayloadTaskRunner) Run(_ context.Context, payload TaskPayload, _ func(string)) (TaskRunnerResult, error) {
+func (r *mockPayloadTaskRunner) Run(_ context.Context, payload TaskPayload, _ event.Sink) (TaskRunnerResult, error) {
 	r.mu.Lock()
 	r.payload = payload
 	r.mu.Unlock()
@@ -244,7 +245,7 @@ func TestDaemonSubmitDeduplicatesByPrincipalAndPrompt(t *testing.T) {
 	}
 
 	release := make(chan struct{})
-	runner := func(_ context.Context, _ string, _ func(string)) (TaskResult, error) {
+	runner := func(_ context.Context, _ string, _ event.Sink) (TaskResult, error) {
 		<-release
 		return TaskResult{Result: "ok", Summary: "ok"}, nil
 	}
@@ -673,7 +674,7 @@ func TestDaemonResearchTaskUsesConfiguredRunner(t *testing.T) {
 	}
 
 	socketPath := filepath.Join("/tmp", "elnath-research-runner-"+strconv.FormatInt(time.Now().UnixNano(), 10)+".sock")
-	d := startDaemon(t, q, socketPath, func(_ context.Context, _ string, _ func(string)) (TaskResult, error) {
+	d := startDaemon(t, q, socketPath, func(_ context.Context, _ string, _ event.Sink) (TaskResult, error) {
 		return TaskResult{}, errors.New("agent runner should not run for research tasks")
 	}, 1)
 	researchRunner := &mockPayloadTaskRunner{result: TaskRunnerResult{Summary: "research summary", Result: "research result"}}
@@ -709,7 +710,7 @@ func TestDaemonResearchTaskUsesRunnerSessionID(t *testing.T) {
 	}
 
 	socketPath := filepath.Join("/tmp", "elnath-research-session-"+strconv.FormatInt(time.Now().UnixNano(), 10)+".sock")
-	d := startDaemon(t, q, socketPath, func(_ context.Context, _ string, _ func(string)) (TaskResult, error) {
+	d := startDaemon(t, q, socketPath, func(_ context.Context, _ string, _ event.Sink) (TaskResult, error) {
 		return TaskResult{}, errors.New("agent runner should not run for research tasks")
 	}, 1)
 	d.SetResearchRunner(&mockPayloadTaskRunner{result: TaskRunnerResult{Summary: "research summary", Result: "research result", SessionID: "research-sess"}})
@@ -735,7 +736,7 @@ func TestDaemonSubmitDoesNotDeduplicateAcrossTaskTypes(t *testing.T) {
 	}
 
 	release := make(chan struct{})
-	agentRunner := func(_ context.Context, _ string, _ func(string)) (TaskResult, error) {
+	agentRunner := func(_ context.Context, _ string, _ event.Sink) (TaskResult, error) {
 		<-release
 		return TaskResult{Result: "agent result", Summary: "agent result"}, nil
 	}
@@ -787,7 +788,7 @@ func TestDaemonSubmitDoesNotDeduplicateAcrossSessions(t *testing.T) {
 	}
 
 	release := make(chan struct{})
-	agentRunner := func(_ context.Context, _ string, _ func(string)) (TaskResult, error) {
+	agentRunner := func(_ context.Context, _ string, _ event.Sink) (TaskResult, error) {
 		<-release
 		return TaskResult{Result: "agent result", Summary: "agent result"}, nil
 	}
@@ -838,7 +839,7 @@ func TestDaemonSubmitDoesNotDeduplicateCollidingEncodedFields(t *testing.T) {
 	}
 
 	release := make(chan struct{})
-	agentRunner := func(_ context.Context, _ string, _ func(string)) (TaskResult, error) {
+	agentRunner := func(_ context.Context, _ string, _ event.Sink) (TaskResult, error) {
 		<-release
 		return TaskResult{Result: "agent result", Summary: "agent result"}, nil
 	}
@@ -921,7 +922,7 @@ func TestDaemonInactivityTimeout(t *testing.T) {
 		t.Fatalf("NewQueue: %v", err)
 	}
 
-	hangingRunner := func(ctx context.Context, _ string, _ func(string)) (TaskResult, error) {
+	hangingRunner := func(ctx context.Context, _ string, _ event.Sink) (TaskResult, error) {
 		<-ctx.Done()
 		return TaskResult{}, ctx.Err()
 	}
@@ -955,14 +956,14 @@ func TestDaemonWallClockTimeout(t *testing.T) {
 		t.Fatalf("NewQueue: %v", err)
 	}
 
-	activeButSlowRunner := func(ctx context.Context, _ string, onText func(string)) (TaskResult, error) {
+	activeButSlowRunner := func(ctx context.Context, _ string, sink event.Sink) (TaskResult, error) {
 		for {
 			select {
 			case <-ctx.Done():
 				return TaskResult{}, ctx.Err()
 			case <-time.After(100 * time.Millisecond):
-				if onText != nil {
-					onText("still working")
+				if sink != nil {
+					sink.Emit(event.TextDeltaEvent{Base: event.NewBase(), Content: "still working"})
 				}
 			}
 		}

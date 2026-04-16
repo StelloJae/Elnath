@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/stello/elnath/internal/event"
 	"github.com/stello/elnath/internal/fault"
 	"github.com/stello/elnath/internal/identity"
 	"github.com/stello/elnath/internal/userfacingerr"
@@ -39,8 +40,8 @@ type TaskResult struct {
 }
 
 // AgentTaskRunner executes one legacy agent task payload.
-// Callers may forward streamed text through onText during execution.
-type AgentTaskRunner func(ctx context.Context, payload string, onText func(string)) (TaskResult, error)
+// Callers may forward streamed events through the sink during execution.
+type AgentTaskRunner func(ctx context.Context, payload string, sink event.Sink) (TaskResult, error)
 
 // ProgressObserver receives real-time progress updates for running tasks.
 type ProgressObserver interface {
@@ -517,19 +518,19 @@ func (d *Daemon) deliverExistingCompletions(ctx context.Context) {
 func (d *Daemon) runTask(ctx context.Context, task *Task) (TaskResult, error) {
 	payload := ParseTaskPayload(task.Payload)
 	captureOutput := true
-	exec := func(taskCtx context.Context, onText func(string)) (TaskResult, error) {
+	exec := func(taskCtx context.Context, sink event.Sink) (TaskResult, error) {
 		if d.agentRunner == nil {
 			return TaskResult{}, fmt.Errorf("daemon: task runner is nil")
 		}
-		return d.agentRunner(taskCtx, task.Payload, onText)
+		return d.agentRunner(taskCtx, task.Payload, sink)
 	}
 	if payload.Type == TaskTypeResearch {
 		if d.researchRunner == nil {
 			return TaskResult{}, fmt.Errorf("research runner not configured")
 		}
 		captureOutput = false
-		exec = func(taskCtx context.Context, onText func(string)) (TaskResult, error) {
-			result, err := d.researchRunner.Run(taskCtx, payload, onText)
+		exec = func(taskCtx context.Context, sink event.Sink) (TaskResult, error) {
+			result, err := d.researchRunner.Run(taskCtx, payload, sink)
 			if err != nil {
 				return TaskResult{}, err
 			}
@@ -562,7 +563,7 @@ func (d *Daemon) runTask(ctx context.Context, task *Task) (TaskResult, error) {
 	}
 
 	var output strings.Builder
-	result, err := exec(taskCtx, func(text string) {
+	onTextFn := func(text string) {
 		lastActivity.Store(time.Now().UnixMilli())
 
 		progress := text
@@ -583,7 +584,8 @@ func (d *Daemon) runTask(ctx context.Context, task *Task) (TaskResult, error) {
 		if d.progressObserver != nil {
 			d.progressObserver.OnProgress(task.ID, progress)
 		}
-	})
+	}
+	result, err := exec(taskCtx, event.OnTextToSink(onTextFn))
 	if err != nil {
 		if taskCtx.Err() != nil && ctx.Err() == nil {
 			inner := fmt.Errorf("daemon: task timed out: %w", taskCtx.Err())

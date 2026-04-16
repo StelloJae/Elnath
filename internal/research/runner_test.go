@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/stello/elnath/internal/daemon"
+	"github.com/stello/elnath/internal/event"
 	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/self"
@@ -76,9 +77,9 @@ func TestTaskRunnerRunReturnsResearchResult(t *testing.T) {
 	)
 
 	var streamed string
-	result, err := r.Run(context.Background(), daemon.TaskPayload{Prompt: "test topic", SessionID: "sess-123"}, func(text string) {
+	result, err := r.Run(context.Background(), daemon.TaskPayload{Prompt: "test topic", SessionID: "sess-123"}, event.OnTextToSink(func(text string) {
 		streamed += text
-	})
+	}))
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}

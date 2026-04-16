@@ -24,6 +24,7 @@ import (
 	"github.com/stello/elnath/internal/config"
 	"github.com/stello/elnath/internal/core"
 	"github.com/stello/elnath/internal/daemon"
+	"github.com/stello/elnath/internal/event"
 	"github.com/stello/elnath/internal/fault"
 	"github.com/stello/elnath/internal/fault/scenarios"
 	"github.com/stello/elnath/internal/llm"
@@ -397,7 +398,7 @@ func runIPCScenario(ctx context.Context, logger *slog.Logger, scenario *fault.Sc
 }
 
 func chaosDaemonRunner(scenario *fault.Scenario) daemon.AgentTaskRunner {
-	return func(ctx context.Context, payload string, _ func(string)) (daemon.TaskResult, error) {
+	return func(ctx context.Context, payload string, _ event.Sink) (daemon.TaskResult, error) {
 		_ = payload
 		reg := buildToolRegistry(tools.NewPathGuard(os.TempDir(), nil))
 		provider := &chaosProvider{scenario: scenario, providerName: "anthropic"}

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/stello/elnath/internal/agent"
+	"github.com/stello/elnath/internal/event"
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/tools"
 )
@@ -29,7 +30,7 @@ type ExperimentRunner struct {
 	executor tools.Executor
 	model    string
 	logger   *slog.Logger
-	onText   func(string)
+	sink     event.Sink
 }
 
 // NewExperimentRunner creates an ExperimentRunner.
@@ -39,12 +40,13 @@ func NewExperimentRunner(provider llm.Provider, toolReg *tools.Registry, model s
 		tools:    toolReg,
 		model:    model,
 		logger:   logger,
+		sink:     event.NopSink{},
 	}
 }
 
-// WithOnText forwards streamed experiment output to the provided callback.
-func (r *ExperimentRunner) WithOnText(cb func(string)) *ExperimentRunner {
-	r.onText = cb
+// WithSink sets the event sink for streaming experiment output.
+func (r *ExperimentRunner) WithSink(s event.Sink) *ExperimentRunner {
+	r.sink = s
 	return r
 }
 
@@ -95,7 +97,7 @@ func (r *ExperimentRunner) Run(ctx context.Context, hyp Hypothesis) (*Experiment
 	userMsg := fmt.Sprintf("Hypothesis: %s\n\nTest Plan: %s\n\nExecute this test plan and report results.", hyp.Statement, hyp.TestPlan)
 	messages := []llm.Message{llm.NewUserMessage(userMsg)}
 
-	result, err := a.Run(ctx, messages, r.onText)
+	result, err := a.Run(ctx, messages, r.sink)
 	if err != nil {
 		return nil, fmt.Errorf("experiment: run agent: %w", err)
 	}

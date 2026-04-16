@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/stello/elnath/internal/event"
 	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/tools"
@@ -32,7 +33,7 @@ func TestTeamWorkflow_E2E(t *testing.T) {
 	wf := NewTeamWorkflow()
 	input := testInput("Design a blog API", provider)
 	var streamed strings.Builder
-	input.OnText = func(s string) { streamed.WriteString(s) }
+	input.Sink = event.OnTextToSink(func(s string) { streamed.WriteString(s) })
 
 	result, err := wf.Run(ctx, input)
 	if err != nil {

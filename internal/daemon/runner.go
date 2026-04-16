@@ -1,6 +1,10 @@
 package daemon
 
-import "context"
+import (
+	"context"
+
+	"github.com/stello/elnath/internal/event"
+)
 
 // TaskRunnerResult carries the output of a single parsed-payload task execution.
 type TaskRunnerResult struct {
@@ -11,5 +15,5 @@ type TaskRunnerResult struct {
 
 // TaskRunner executes a parsed task payload.
 type TaskRunner interface {
-	Run(ctx context.Context, payload TaskPayload, onText func(string)) (TaskRunnerResult, error)
+	Run(ctx context.Context, payload TaskPayload, sink event.Sink) (TaskRunnerResult, error)
 }

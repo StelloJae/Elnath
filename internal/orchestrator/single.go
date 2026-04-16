@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"github.com/stello/elnath/internal/agent"
+	"github.com/stello/elnath/internal/event"
 	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
 )
@@ -29,12 +30,15 @@ func (w *SingleWorkflow) Name() string { return "single" }
 // with the provided config, runs the agent loop, and returns the updated
 // message array together with usage stats.
 func (w *SingleWorkflow) Run(ctx context.Context, input WorkflowInput) (*WorkflowResult, error) {
+	if input.Sink == nil {
+		input.Sink = event.NopSink{}
+	}
 	messages := append(input.Messages, llm.NewUserMessage(input.Message))
 
 	opts := agentOptions(input.Config)
 	a := agent.New(input.Provider, input.Tools, opts...)
 
-	result, err := a.Run(ctx, messages, input.OnText)
+	result, err := a.Run(ctx, messages, input.Sink)
 	if err != nil {
 		return nil, fmt.Errorf("single workflow: %w", err)
 	}

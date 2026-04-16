@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stello/elnath/internal/daemon"
+	"github.com/stello/elnath/internal/event"
 	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/self"
@@ -107,7 +108,7 @@ func NewTaskRunner(
 	return r
 }
 
-func (r *TaskRunner) Run(ctx context.Context, payload daemon.TaskPayload, onText func(string)) (daemon.TaskRunnerResult, error) {
+func (r *TaskRunner) Run(ctx context.Context, payload daemon.TaskPayload, sink event.Sink) (daemon.TaskRunnerResult, error) {
 	topic := strings.TrimSpace(payload.Prompt)
 	if topic == "" {
 		return daemon.TaskRunnerResult{}, fmt.Errorf("research topic is required")
@@ -128,7 +129,7 @@ func (r *TaskRunner) Run(ctx context.Context, payload daemon.TaskPayload, onText
 	}
 
 	hg := NewHypothesisGenerator(r.provider, r.model, r.logger)
-	er := NewExperimentRunner(r.provider, toolReg, r.model, r.logger).WithOnText(onText)
+	er := NewExperimentRunner(r.provider, toolReg, r.model, r.logger).WithSink(sink)
 	if r.toolExec != nil {
 		er.WithToolExecutor(r.toolExec)
 	}
@@ -143,7 +144,7 @@ func (r *TaskRunner) Run(ctx context.Context, payload daemon.TaskPayload, onText
 		r.logger,
 		WithMaxRounds(r.maxRounds),
 		WithCostCap(r.costCapUSD),
-		WithOnText(onText),
+		WithSink(sink),
 		WithSessionID(sessionID),
 	)
 

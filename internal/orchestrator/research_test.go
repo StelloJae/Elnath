@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stello/elnath/internal/event"
 	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/self"
@@ -63,7 +64,7 @@ func TestResearchWorkflow_E2E(t *testing.T) {
 	input := testInput("Go concurrency patterns performance", provider)
 	input.Extra = deps
 	var streamed strings.Builder
-	input.OnText = func(s string) { streamed.WriteString(s) }
+	input.Sink = event.OnTextToSink(func(s string) { streamed.WriteString(s) })
 
 	wf := NewResearchWorkflow()
 	result, err := wf.Run(ctx, input)
@@ -92,7 +93,7 @@ func TestResearchWorkflow_E2E(t *testing.T) {
 	if len(pages) == 0 {
 		t.Error("expected research results written to wiki")
 	}
-	if !strings.Contains(streamed.String(), "[research]") {
+	if !strings.Contains(streamed.String(), "topic:") {
 		t.Errorf("expected research progress output, got %q", streamed.String())
 	}
 	if !strings.Contains(streamed.String(), "I ran the benchmarks") {

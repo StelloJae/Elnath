@@ -15,6 +15,7 @@ import (
 	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/core"
 	"github.com/stello/elnath/internal/daemon"
+	"github.com/stello/elnath/internal/event"
 	"github.com/stello/elnath/internal/identity"
 	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
@@ -897,9 +898,9 @@ func TestDaemonTaskRunnerCreatesSessionAndUsesClassifier(t *testing.T) {
 	rt := newTestExecutionRuntime(t, provider)
 
 	var streamed strings.Builder
-	result, err := rt.newDaemonTaskRunner()(context.Background(), "tell me a joke", func(s string) {
+	result, err := rt.newDaemonTaskRunner()(context.Background(), "tell me a joke", event.OnTextToSink(func(s string) {
 		streamed.WriteString(s)
-	})
+	}))
 	if err != nil {
 		t.Fatalf("daemon task runner: %v", err)
 	}

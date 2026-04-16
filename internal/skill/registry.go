@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"github.com/stello/elnath/internal/agent"
+	"github.com/stello/elnath/internal/event"
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/locale"
 	"github.com/stello/elnath/internal/tools"
@@ -121,7 +122,7 @@ type ExecuteParams struct {
 	Provider   llm.Provider
 	ToolReg    *tools.Registry
 	Model      string
-	OnText     func(string)
+	Sink       event.Sink
 	Permission *agent.Permission
 	Hooks      *agent.HookRegistry
 	// Locale is the resolved response locale (e.g. "ko", "ja", "zh").
@@ -166,7 +167,7 @@ func (r *Registry) Execute(ctx context.Context, params ExecuteParams) (*ExecuteR
 	}
 
 	ag := agent.New(params.Provider, filteredReg, options...)
-	result, err := ag.Run(ctx, []llm.Message{llm.NewUserMessage("Execute this skill.")}, params.OnText)
+	result, err := ag.Run(ctx, []llm.Message{llm.NewUserMessage("Execute this skill.")}, params.Sink)
 	if err != nil {
 		return nil, err
 	}

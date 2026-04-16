@@ -5,6 +5,7 @@ import (
 	"log/slog"
 
 	"github.com/stello/elnath/internal/agent"
+	"github.com/stello/elnath/internal/event"
 	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/self"
@@ -25,7 +26,7 @@ type WorkflowInput struct {
 	Tools    *tools.Registry
 	Provider llm.Provider
 	Config   WorkflowConfig
-	OnText   func(string) // streaming text callback (nil = silent)
+	Sink     event.Sink   // typed event sink (use event.NopSink{} for silent)
 	Extra    interface{}  // workflow-specific dependencies (e.g. *ResearchDeps)
 	Learning *LearningDeps
 }

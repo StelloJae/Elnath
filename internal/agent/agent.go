@@ -15,7 +15,7 @@ import (
 
 	"github.com/stello/elnath/internal/agent/errorclass"
 	"github.com/stello/elnath/internal/core"
-	"github.com/stello/elnath/internal/daemon"
+	"github.com/stello/elnath/internal/event"
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/tools"
 	"github.com/stello/elnath/internal/userfacingerr"
@@ -188,9 +188,12 @@ type toolStatAcc struct {
 }
 
 // Run executes the agent loop starting with the provided messages.
-// It streams output via the onText callback and returns when the model
+// It streams events via the sink and returns when the model
 // stops requesting tool calls or maxIterations is reached.
-func (a *Agent) Run(ctx context.Context, messages []llm.Message, onText func(string)) (*RunResult, error) {
+func (a *Agent) Run(ctx context.Context, messages []llm.Message, sink event.Sink) (*RunResult, error) {
+	if sink == nil {
+		sink = event.NopSink{}
+	}
 	// Build tool definitions from the registry.
 	toolDefs := buildToolDefs(a.tools)
 
@@ -234,7 +237,7 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, onText func(str
 			}
 		}
 
-		assistantMsg, finalReq, usage, err := a.streamWithRetry(ctx, req, onText)
+		assistantMsg, finalReq, usage, err := a.streamWithRetry(ctx, req, sink)
 		if err != nil {
 			var classified *errorclass.ClassifiedError
 			if errors.As(err, &classified) && classified.Recovery.ShouldCompress && a.compressFunc != nil {
@@ -251,7 +254,7 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, onText func(str
 				}
 				messages = compressed
 				req.Messages = compressed
-				assistantMsg, finalReq, usage, err = a.streamWithRetry(ctx, req, onText)
+				assistantMsg, finalReq, usage, err = a.streamWithRetry(ctx, req, sink)
 				if err != nil {
 					return nil, err
 				}
@@ -292,7 +295,7 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, onText func(str
 		ackRetries = 0
 
 		// Execute each tool call and collect results.
-		messages, err = a.executeToolsWithStats(ctx, messages, toolCalls, onText, toolStats, &toolStatsMu)
+		messages, err = a.executeToolsWithStats(ctx, messages, toolCalls, sink, toolStats, &toolStatsMu)
 		if err != nil {
 			return nil, err
 		}
@@ -327,7 +330,7 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, onText func(str
 }
 
 // streamWithRetry calls the provider with exponential backoff on classified retryable errors.
-func (a *Agent) streamWithRetry(ctx context.Context, req llm.Request, onText func(string)) (llm.Message, llm.Request, llm.UsageStats, error) {
+func (a *Agent) streamWithRetry(ctx context.Context, req llm.Request, sink event.Sink) (llm.Message, llm.Request, llm.UsageStats, error) {
 	var lastErr error
 	delay := retryBaseDelay
 	currentReq := req
@@ -348,10 +351,10 @@ func (a *Agent) streamWithRetry(ctx context.Context, req llm.Request, onText fun
 			}
 		}
 
-		msg, usage, err := a.stream(ctx, reqForAttempt, onText)
+		msg, usage, err := a.stream(ctx, reqForAttempt, sink)
 		if err == nil {
 			if isEmptyAssistantMessage(msg) {
-				fallbackMsg, fallbackUsage, fbErr := a.chatFallback(ctx, reqForAttempt, onText)
+				fallbackMsg, fallbackUsage, fbErr := a.chatFallback(ctx, reqForAttempt, sink)
 				if fbErr == nil && !isEmptyAssistantMessage(fallbackMsg) {
 					return fallbackMsg, reqForAttempt, fallbackUsage, nil
 				}
@@ -390,14 +393,14 @@ func (a *Agent) streamWithRetry(ctx context.Context, req llm.Request, onText fun
 	return llm.Message{}, llm.Request{}, llm.UsageStats{}, fmt.Errorf("%w: %w", core.ErrProviderError, lastErr)
 }
 
-func (a *Agent) chatFallback(ctx context.Context, req llm.Request, onText func(string)) (llm.Message, llm.UsageStats, error) {
+func (a *Agent) chatFallback(ctx context.Context, req llm.Request, sink event.Sink) (llm.Message, llm.UsageStats, error) {
 	resp, err := a.provider.Chat(ctx, llm.ChatRequest(req))
 	if err != nil {
 		return llm.Message{}, llm.UsageStats{}, fmt.Errorf("chat fallback: %w", err)
 	}
 
-	if onText != nil && resp.Content != "" {
-		onText(resp.Content)
+	if resp.Content != "" {
+		sink.Emit(event.TextDeltaEvent{Base: event.NewBase(), Content: resp.Content})
 	}
 
 	toolCalls := make([]llm.CompletedToolCall, 0, len(resp.ToolCalls))
@@ -439,7 +442,10 @@ func responseFromAssistantMessage(msg llm.Message) llm.ChatResponse {
 }
 
 // stream calls the provider once and accumulates the response into a Message.
-func (a *Agent) stream(ctx context.Context, req llm.Request, onText func(string)) (llm.Message, llm.UsageStats, error) {
+func (a *Agent) stream(ctx context.Context, req llm.Request, sink event.Sink) (llm.Message, llm.UsageStats, error) {
+	if sink == nil {
+		sink = event.NopSink{}
+	}
 	var (
 		textParts []string
 		toolCalls []llm.CompletedToolCall
@@ -454,9 +460,7 @@ func (a *Agent) stream(ctx context.Context, req llm.Request, onText func(string)
 		case llm.EventTextDelta:
 			if ev.Content != "" {
 				textParts = append(textParts, ev.Content)
-				if onText != nil {
-					onText(ev.Content)
-				}
+				sink.Emit(event.TextDeltaEvent{Base: event.NewBase(), Content: ev.Content})
 			}
 
 		case llm.EventToolUseStart:
@@ -465,6 +469,7 @@ func (a *Agent) stream(ctx context.Context, req llm.Request, onText func(string)
 					ID:   ev.ToolCall.ID,
 					Name: ev.ToolCall.Name,
 				}
+				sink.Emit(event.ToolUseStartEvent{Base: event.NewBase(), ID: ev.ToolCall.ID, Name: ev.ToolCall.Name})
 			}
 
 		case llm.EventToolUseDelta:
@@ -472,6 +477,7 @@ func (a *Agent) stream(ctx context.Context, req llm.Request, onText func(string)
 				if tc, ok := pendingTools[ev.ToolCall.ID]; ok {
 					tc.Input += ev.ToolCall.Input
 				}
+				sink.Emit(event.ToolUseDeltaEvent{Base: event.NewBase(), ID: ev.ToolCall.ID, Input: ev.ToolCall.Input})
 			}
 
 		case llm.EventToolUseDone:
@@ -486,12 +492,17 @@ func (a *Agent) stream(ctx context.Context, req llm.Request, onText func(string)
 					toolCalls = append(toolCalls, *tc)
 					delete(pendingTools, ev.ToolCall.ID)
 				}
+				sink.Emit(event.ToolUseDoneEvent{Base: event.NewBase(), ID: ev.ToolCall.ID, Name: ev.ToolCall.Name, Input: ev.ToolCall.Input})
 			}
 
 		case llm.EventDone:
 			if ev.Usage != nil {
 				usage = *ev.Usage
+				sink.Emit(event.StreamDoneEvent{Base: event.NewBase(), Usage: *ev.Usage})
 			}
+
+		case llm.EventError:
+			sink.Emit(event.StreamErrorEvent{Base: event.NewBase(), Err: ev.Error})
 		}
 	})
 
@@ -541,12 +552,15 @@ func finalizeToolStats(m map[string]*toolStatAcc) []ToolStat {
 	return out
 }
 
-func (a *Agent) executeTools(ctx context.Context, messages []llm.Message, calls []llm.ToolUseBlock, onText func(string)) ([]llm.Message, error) {
-	return a.executeToolsWithStats(ctx, messages, calls, onText, nil, nil)
+func (a *Agent) executeTools(ctx context.Context, messages []llm.Message, calls []llm.ToolUseBlock, sink event.Sink) ([]llm.Message, error) {
+	if sink == nil {
+		sink = event.NopSink{}
+	}
+	return a.executeToolsWithStats(ctx, messages, calls, sink, nil, nil)
 }
 
-func (a *Agent) executeToolsWithStats(ctx context.Context, messages []llm.Message, calls []llm.ToolUseBlock, onText func(string), toolStats map[string]*toolStatAcc, toolStatsMu *sync.Mutex) ([]llm.Message, error) {
-	results, approved, err := a.collectApprovedToolCalls(ctx, calls, onText)
+func (a *Agent) executeToolsWithStats(ctx context.Context, messages []llm.Message, calls []llm.ToolUseBlock, sink event.Sink, toolStats map[string]*toolStatAcc, toolStatsMu *sync.Mutex) ([]llm.Message, error) {
+	results, approved, err := a.collectApprovedToolCalls(ctx, calls, sink)
 	if err != nil {
 		return nil, err
 	}
@@ -556,17 +570,18 @@ func (a *Agent) executeToolsWithStats(ctx context.Context, messages []llm.Messag
 	return a.appendToolResults(messages, results), nil
 }
 
-func (a *Agent) collectApprovedToolCalls(ctx context.Context, calls []llm.ToolUseBlock, onText func(string)) ([]toolExecResult, []approvedToolCall, error) {
+func (a *Agent) collectApprovedToolCalls(ctx context.Context, calls []llm.ToolUseBlock, sink event.Sink) ([]toolExecResult, []approvedToolCall, error) {
 	results := make([]toolExecResult, len(calls))
 	approved := make([]approvedToolCall, 0, len(calls))
 
 	for i, call := range calls {
 		a.logger.Debug("checking tool", "name", call.Name, "id", call.ID)
-		if onText != nil {
-			preview := extractToolPreview(call.Name, string(call.Input))
-			ev := daemon.ToolProgressEvent(call.Name, preview)
-			onText(daemon.EncodeProgressEvent(ev))
-		}
+		preview := extractToolPreview(call.Name, string(call.Input))
+		sink.Emit(event.ToolProgressEvent{
+			Base:     event.NewBase(),
+			ToolName: call.Name,
+			Preview:  preview,
+		})
 
 		allowed, err := a.permission.Check(ctx, call.Name, call.Input)
 		if err != nil {
