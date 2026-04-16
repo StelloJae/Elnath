@@ -58,7 +58,7 @@ func (w *ResearchWorkflow) Run(ctx context.Context, input WorkflowInput) (*Workf
 
 	hypGen := research.NewHypothesisGenerator(input.Provider, input.Config.Model, w.logger)
 	expRunner := research.NewExperimentRunner(input.Provider, input.Tools, input.Config.Model, w.logger).
-		WithOnText(input.OnText)
+		WithSink(input.Sink)
 	if input.Config.ToolExecutor != nil {
 		expRunner.WithToolExecutor(input.Config.ToolExecutor)
 	}
@@ -73,9 +73,7 @@ func (w *ResearchWorkflow) Run(ctx context.Context, input WorkflowInput) (*Workf
 	if input.Session != nil {
 		opts = append(opts, research.WithSessionID(input.Session.ID))
 	}
-	if input.OnText != nil {
-		opts = append(opts, research.WithOnText(input.OnText))
-	}
+	opts = append(opts, research.WithSink(input.Sink))
 
 	loop := research.NewLoop(
 		hypGen,

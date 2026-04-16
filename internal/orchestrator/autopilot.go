@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/stello/elnath/internal/event"
 	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
 )
@@ -127,9 +128,7 @@ func (w *AutopilotWorkflow) Run(ctx context.Context, input WorkflowInput) (*Work
 
 	for _, s := range autopilotStages {
 		w.logger.Info("autopilot: running stage", "stage", s.name)
-		if input.OnText != nil {
-			input.OnText(fmt.Sprintf("[autopilot] stage: %s\n", s.name))
-		}
+		input.Sink.Emit(event.TextDeltaEvent{Base: event.NewBase(), Content: fmt.Sprintf("[autopilot] stage: %s\n", s.name)})
 
 		instruction := s.instruction(input.Message)
 		stageInput := WorkflowInput{
@@ -139,7 +138,7 @@ func (w *AutopilotWorkflow) Run(ctx context.Context, input WorkflowInput) (*Work
 			Tools:    input.Tools,
 			Provider: input.Provider,
 			Config:   input.Config,
-			OnText:   input.OnText,
+			Sink:     input.Sink,
 			Learning: nil,
 		}
 
@@ -148,9 +147,7 @@ func (w *AutopilotWorkflow) Run(ctx context.Context, input WorkflowInput) (*Work
 			w.logger.Warn("autopilot: stage failed", "stage", s.name, "error", err)
 			lastFinishReason = "error"
 			errSummary := fmt.Sprintf("Autopilot stage %q failed: %v", s.name, err)
-			if input.OnText != nil {
-				input.OnText(fmt.Sprintf("[autopilot] %s\n", errSummary))
-			}
+			input.Sink.Emit(event.TextDeltaEvent{Base: event.NewBase(), Content: fmt.Sprintf("[autopilot] %s\n", errSummary)})
 			messages = append(messages, llm.NewAssistantMessage(errSummary))
 			return &WorkflowResult{
 				Messages:     messages,
@@ -174,7 +171,7 @@ func (w *AutopilotWorkflow) Run(ctx context.Context, input WorkflowInput) (*Work
 		messages = result.Messages
 	}
 
-	summary, summaryUsage := synthesizeAssistantSummary(ctx, input.Provider, input.Message, messages, input.OnText)
+	summary, summaryUsage := synthesizeAssistantSummary(ctx, input.Provider, input.Message, messages, input.Sink)
 	totalUsage.InputTokens += summaryUsage.InputTokens
 	totalUsage.OutputTokens += summaryUsage.OutputTokens
 	mergedToolStats := toWorkflowToolStats(learning.MergeAgentToolStats(accToolStatSlices...))
@@ -193,7 +190,7 @@ func (w *AutopilotWorkflow) Run(ctx context.Context, input WorkflowInput) (*Work
 // synthesizeAssistantSummary streams a user-friendly completion message in
 // assistant tone. Tokens are flushed through onText as [summary] events so
 // the Telegram sink can display them progressively.
-func synthesizeAssistantSummary(ctx context.Context, provider llm.Provider, originalTask string, messages []llm.Message, onText func(string)) (string, llm.UsageStats) {
+func synthesizeAssistantSummary(ctx context.Context, provider llm.Provider, originalTask string, messages []llm.Message, sink event.Sink) (string, llm.UsageStats) {
 	fallback := extractSummary(messages)
 
 	taskSnippet := originalTask
@@ -218,9 +215,7 @@ Rules:
 - No review language ("검토 결과", "확인 완료", "문제 없음", "COMPLETE")
 - 1-3 sentences, under 80 words`, taskSnippet, verifySnippet)
 
-	if onText != nil {
-		onText("[autopilot] stage: summary\n")
-	}
+	sink.Emit(event.TextDeltaEvent{Base: event.NewBase(), Content: "[autopilot] stage: summary\n"})
 	slog.Info("autopilot: summary synthesis starting")
 	var result strings.Builder
 	var usage llm.UsageStats
@@ -231,9 +226,7 @@ Rules:
 		switch ev.Type {
 		case llm.EventTextDelta:
 			result.WriteString(ev.Content)
-			if onText != nil {
-				onText("[summary] " + ev.Content)
-			}
+			sink.Emit(event.TextDeltaEvent{Base: event.NewBase(), Content: "[summary] " + ev.Content})
 		case llm.EventDone:
 			if ev.Usage != nil {
 				usage = llm.UsageStats{

@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/stello/elnath/internal/agent"
+	"github.com/stello/elnath/internal/event"
 	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
 )
@@ -49,19 +50,15 @@ type subtaskResult struct {
 // 3. Collect results via a channel; propagate any context cancellation.
 // 4. synthesise — ask LLM to combine the subtask results into a final answer.
 func (w *TeamWorkflow) Run(ctx context.Context, input WorkflowInput) (*WorkflowResult, error) {
-	if input.OnText != nil {
-		input.OnText("[team] planning subtasks\n")
-	}
+	input.Sink.Emit(event.TextDeltaEvent{Base: event.NewBase(), Content: "[team] planning subtasks\n"})
 	workflowInput := input
 	workflowInput.Messages = append(workflowInput.Messages, llm.NewUserMessage(input.Message))
 
 	subtasks, err := w.planSubtasks(ctx, input)
 	if err != nil {
 		w.logger.Warn("team workflow: planner failed, falling back to single workflow", "error", err)
-		if input.OnText != nil {
-			input.OnText(fmt.Sprintf("[team] planner recovery failed: %v\n", err))
-			input.OnText("[team] falling back to single workflow\n")
-		}
+		input.Sink.Emit(event.TextDeltaEvent{Base: event.NewBase(), Content: fmt.Sprintf("[team] planner recovery failed: %v\n", err)})
+		input.Sink.Emit(event.TextDeltaEvent{Base: event.NewBase(), Content: "[team] falling back to single workflow\n"})
 		return NewSingleWorkflow().Run(ctx, input)
 	}
 
@@ -71,9 +68,7 @@ func (w *TeamWorkflow) Run(ctx context.Context, input WorkflowInput) (*WorkflowR
 	}
 
 	w.logger.Info("team workflow: subtasks planned", "count", len(subtasks))
-	if input.OnText != nil {
-		input.OnText(fmt.Sprintf("[team] planned %d subtasks\n", len(subtasks)))
-	}
+	input.Sink.Emit(event.TextDeltaEvent{Base: event.NewBase(), Content: fmt.Sprintf("[team] planned %d subtasks\n", len(subtasks))})
 
 	results, totalUsage, err := w.runSubtasks(ctx, workflowInput, subtasks)
 	if err != nil {
@@ -302,16 +297,6 @@ func mergeTeamLearningMessages(results []subtaskResult, finalMessages []llm.Mess
 func (w *TeamWorkflow) runSubtasks(ctx context.Context, input WorkflowInput, subtasks []subtask) ([]subtaskResult, llm.UsageStats, error) {
 	resultCh := make(chan subtaskResult, len(subtasks))
 
-	var onTextMu sync.Mutex
-	safeInput := input
-	if input.OnText != nil {
-		safeInput.OnText = func(text string) {
-			onTextMu.Lock()
-			defer onTextMu.Unlock()
-			input.OnText(text)
-		}
-	}
-
 	// Limit concurrent LLM calls to avoid overwhelming the provider with
 	// parallel requests that all hit rate limits simultaneously.
 	const maxConcurrent = 2
@@ -324,7 +309,7 @@ func (w *TeamWorkflow) runSubtasks(ctx context.Context, input WorkflowInput, sub
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			res := w.runOne(ctx, safeInput, st)
+			res := w.runOne(ctx, input, st)
 			resultCh <- res
 		}(st)
 	}
@@ -340,13 +325,11 @@ func (w *TeamWorkflow) runSubtasks(ctx context.Context, input WorkflowInput, sub
 		if r.err != nil {
 			return nil, llm.UsageStats{}, fmt.Errorf("subtask %d %q: %w", r.subtask.ID, r.subtask.Title, r.err)
 		}
-		if safeInput.OnText != nil {
-			safeInput.OnText(fmt.Sprintf("[team] completed subtask %d: %s\n", r.subtask.ID, r.subtask.Title))
-			if r.stream != "" {
-				safeInput.OnText(r.stream)
-				if !strings.HasSuffix(r.stream, "\n") {
-					safeInput.OnText("\n")
-				}
+		input.Sink.Emit(event.TextDeltaEvent{Base: event.NewBase(), Content: fmt.Sprintf("[team] completed subtask %d: %s\n", r.subtask.ID, r.subtask.Title)})
+		if r.stream != "" {
+			input.Sink.Emit(event.TextDeltaEvent{Base: event.NewBase(), Content: r.stream})
+			if !strings.HasSuffix(r.stream, "\n") {
+				input.Sink.Emit(event.TextDeltaEvent{Base: event.NewBase(), Content: "\n"})
 			}
 		}
 		totalUsage.InputTokens += r.result.Usage.InputTokens
@@ -387,13 +370,22 @@ Execution rules:
 
 	messages := []llm.Message{llm.NewUserMessage(st.Instruction)}
 	var stream strings.Builder
-	result, err := a.Run(ctx, messages, func(text string) {
+	captureSink := event.OnTextToSink(func(text string) {
 		stream.WriteString(text)
-		if input.OnText != nil {
-			input.OnText(text)
-		}
 	})
+	tee := &teeSink{a: captureSink, b: input.Sink}
+	result, err := a.Run(ctx, messages, tee)
 	return subtaskResult{subtask: st, result: result, stream: stream.String(), err: err}
+}
+
+// teeSink forwards each event to two sinks.
+type teeSink struct {
+	a, b event.Sink
+}
+
+func (t *teeSink) Emit(e event.Event) {
+	t.a.Emit(e)
+	t.b.Emit(e)
 }
 
 // synthesise asks the LLM to combine all subtask outputs into a coherent final answer.
@@ -418,7 +410,7 @@ func (w *TeamWorkflow) synthesise(ctx context.Context, input WorkflowInput, resu
 	opts := agentOptions(input.Config)
 	a := agent.New(input.Provider, input.Tools, opts...)
 
-	result, err := a.Run(ctx, synthMessages, input.OnText)
+	result, err := a.Run(ctx, synthMessages, input.Sink)
 	if err != nil {
 		return nil, "", llm.UsageStats{}, fmt.Errorf("synthesiser agent: %w", err)
 	}
