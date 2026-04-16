@@ -20,6 +20,7 @@ type Lesson struct {
 	PersonaParam     string        `json:"persona_param,omitempty"`
 	PersonaDirection string        `json:"persona_direction,omitempty"`
 	PersonaMagnitude string        `json:"persona_magnitude,omitempty"`
+	SupersededBy     string        `json:"superseded_by,omitempty"`
 	Created          time.Time     `json:"created"`
 }
 

@@ -263,6 +263,66 @@ func (s *Store) DeleteMatching(f Filter) (int, error) {
 	return removed, nil
 }
 
+// MarkSuperseded stamps SupersededBy = synthesisID on every lesson whose ID
+// appears in ids and is not already superseded. Returns the number updated.
+// The rewrite is atomic (temp-file + rename). IDs not present in the store
+// are silently ignored — the orchestrator is responsible for ID validity.
+func (s *Store) MarkSuperseded(ids []string, synthesisID string) (int, error) {
+	if s == nil || s.path == "" {
+		return 0, nil
+	}
+	if strings.TrimSpace(synthesisID) == "" {
+		return 0, errors.New("learning store: MarkSuperseded requires synthesisID")
+	}
+
+	wanted := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if id = strings.TrimSpace(id); id != "" {
+			wanted[id] = true
+		}
+	}
+	if len(wanted) == 0 {
+		return 0, nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	lessons, err := s.readAllLocked()
+	if err != nil {
+		return 0, err
+	}
+	if len(lessons) == 0 {
+		return 0, nil
+	}
+
+	updated := 0
+	for i := range lessons {
+		if !wanted[lessons[i].ID] {
+			continue
+		}
+		if lessons[i].SupersededBy != "" {
+			continue
+		}
+		lessons[i].SupersededBy = synthesisID
+		updated++
+	}
+	if updated == 0 {
+		return 0, nil
+	}
+	if err := s.writeAllLocked(lessons); err != nil {
+		return 0, err
+	}
+	return updated, nil
+}
+
+// KeepSuperseded is a convenience RotateOpts.KeepFn that preserves lessons
+// which have been superseded by a synthesis. Compose with a wiki-existence
+// check to preserve only lessons backing a still-live synthesis page.
+func KeepSuperseded(lesson Lesson) bool {
+	return lesson.SupersededBy != ""
+}
+
 func (s *Store) Clear() (int, error) {
 	if s == nil || s.path == "" {
 		return 0, nil
@@ -287,6 +347,11 @@ func (s *Store) Clear() (int, error) {
 type RotateOpts struct {
 	KeepLast int
 	MaxBytes int64
+	// KeepFn, if non-nil, forces a lesson to be kept (not archived) even when
+	// it would otherwise fall outside the KeepLast / MaxBytes window. Used by
+	// consolidation to preserve raw lessons that still back a live synthesis
+	// page.
+	KeepFn func(Lesson) bool
 }
 
 func (o RotateOpts) hasBound() bool {
@@ -332,8 +397,25 @@ func (s *Store) Rotate(opts RotateOpts) (int, error) {
 		return 0, nil
 	}
 
-	toArchive := lessons[:keepFromIdx]
-	toKeep := lessons[keepFromIdx:]
+	var toArchive, toKeep []Lesson
+	if opts.KeepFn != nil {
+		toArchive = make([]Lesson, 0, keepFromIdx)
+		toKeep = make([]Lesson, 0, len(lessons))
+		for i, lesson := range lessons {
+			if i < keepFromIdx && !opts.KeepFn(lesson) {
+				toArchive = append(toArchive, lesson)
+				continue
+			}
+			toKeep = append(toKeep, lesson)
+		}
+	} else {
+		toArchive = lessons[:keepFromIdx]
+		toKeep = lessons[keepFromIdx:]
+	}
+
+	if len(toArchive) == 0 {
+		return 0, nil
+	}
 
 	if err := s.appendArchiveLocked(toArchive); err != nil {
 		return 0, err
