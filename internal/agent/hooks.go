@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/stello/elnath/internal/agent/errorclass"
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/tools"
 )
@@ -51,6 +52,11 @@ type IterationHook interface {
 	OnIterationStart(ctx context.Context, iteration, maxIterations int) error
 }
 
+// ErrorObserver observes provider errors after they have been classified.
+type ErrorObserver interface {
+	OnClassifiedError(ctx context.Context, classified errorclass.ClassifiedError) error
+}
+
 // HookRegistry holds ordered hooks and runs them sequentially.
 type HookRegistry struct {
 	hooks  []any
@@ -63,14 +69,15 @@ func NewHookRegistry() *HookRegistry {
 }
 
 // Add appends a hook or optional lifecycle extension to the registry.
-// Panics if h does not implement at least one of Hook, LLMHook, CompressionHook, or IterationHook.
+// Panics if h does not implement at least one supported hook interface.
 func (r *HookRegistry) Add(h any) {
 	_, isHook := h.(Hook)
 	_, isLLM := h.(LLMHook)
 	_, isCompression := h.(CompressionHook)
 	_, isIteration := h.(IterationHook)
-	if !isHook && !isLLM && !isCompression && !isIteration {
-		panic(fmt.Sprintf("HookRegistry.Add: %T implements none of Hook, LLMHook, CompressionHook, IterationHook", h))
+	_, isErrorObserver := h.(ErrorObserver)
+	if !isHook && !isLLM && !isCompression && !isIteration && !isErrorObserver {
+		panic(fmt.Sprintf("HookRegistry.Add: %T implements none of Hook, LLMHook, CompressionHook, IterationHook, ErrorObserver", h))
 	}
 	r.hooks = append(r.hooks, h)
 }
@@ -162,6 +169,20 @@ func (r *HookRegistry) RunOnIterationStart(ctx context.Context, iteration, maxIt
 			continue
 		}
 		if err := ih.OnIterationStart(ctx, iteration, maxIterations); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// RunOnClassifiedError runs all supported classified-error observers.
+func (r *HookRegistry) RunOnClassifiedError(ctx context.Context, classified errorclass.ClassifiedError) error {
+	for _, h := range r.hooks {
+		eo, ok := h.(ErrorObserver)
+		if !ok {
+			continue
+		}
+		if err := eo.OnClassifiedError(ctx, classified); err != nil {
 			return err
 		}
 	}

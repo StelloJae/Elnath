@@ -3,14 +3,17 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	randv2 "math/rand/v2"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/stello/elnath/internal/agent/errorclass"
 	"github.com/stello/elnath/internal/core"
 	"github.com/stello/elnath/internal/daemon"
 	"github.com/stello/elnath/internal/llm"
@@ -30,6 +33,11 @@ const (
 var (
 	jitterRandMu sync.Mutex
 	jitterRand   = randv2.New(randv2.NewPCG(uint64(time.Now().UnixNano()), 0))
+
+	statusCodeKeywordRE = regexp.MustCompile(`(?i)\b(?:http|status|code)\s*[:=]?\s*(4\d\d|5\d\d)\b`)
+	statusCodeParenRE   = regexp.MustCompile(`(?i)\((4\d\d|5\d\d)\)`)
+	statusCodePrefixRE  = regexp.MustCompile(`(?i)\b(?:anthropic|openai|ollama|responses|codex)\s*:\s*(4\d\d|5\d\d)\b`)
+	statusCodeTextRE    = regexp.MustCompile(`(?i)\b(4\d\d|5\d\d)\s+(too many requests|payment required|bad gateway|service unavailable|gateway timeout|forbidden|unauthorized|not found|request too large|payload too large)\b`)
 )
 
 // Agent runs the message→LLM→tools→repeat loop.
@@ -200,6 +208,15 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, onText func(str
 
 		assistantMsg, finalReq, usage, err := a.streamWithRetry(ctx, req, onText)
 		if err != nil {
+			var classified *errorclass.ClassifiedError
+			if errors.As(err, &classified) && classified.Recovery.ShouldCompress {
+				a.logger.Warn("classified provider error requires compression",
+					"category", classified.Category,
+					"provider", a.provider.Name(),
+					"tokens", estimateRequestTokens(req.Messages),
+					"messages", len(req.Messages),
+				)
+			}
 			return nil, err
 		}
 		if a.hooks != nil {
@@ -269,7 +286,7 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, onText func(str
 	}, nil
 }
 
-// streamWithRetry calls the provider with exponential backoff on 429/5xx errors.
+// streamWithRetry calls the provider with exponential backoff on classified retryable errors.
 func (a *Agent) streamWithRetry(ctx context.Context, req llm.Request, onText func(string)) (llm.Message, llm.Request, llm.UsageStats, error) {
 	var lastErr error
 	delay := retryBaseDelay
@@ -310,11 +327,24 @@ func (a *Agent) streamWithRetry(ctx context.Context, req llm.Request, onText fun
 			return msg, reqForAttempt, usage, nil
 		}
 
-		if isRetryable(err) {
-			lastErr = err
+		// Without a reliable context-window source here, keep disconnect heuristics conservative.
+		classified := errorclass.Classify(err, errorclass.Context{
+			Provider:     a.provider.Name(),
+			StatusCode:   extractStatusCode(err),
+			TokensUsed:   estimateRequestTokens(reqForAttempt.Messages),
+			MessageCount: len(reqForAttempt.Messages),
+		})
+		if a.hooks != nil {
+			if err := a.hooks.RunOnClassifiedError(ctx, classified); err != nil {
+				return llm.Message{}, llm.Request{}, llm.UsageStats{}, fmt.Errorf("classified-error hook: %w", err)
+			}
+		}
+
+		if classified.Recovery.Retryable {
+			lastErr = &classified
 			continue
 		}
-		return llm.Message{}, llm.Request{}, llm.UsageStats{}, err
+		return llm.Message{}, llm.Request{}, llm.UsageStats{}, &classified
 	}
 
 	return llm.Message{}, llm.Request{}, llm.UsageStats{}, fmt.Errorf("%w: %w", core.ErrProviderError, lastErr)
@@ -549,6 +579,77 @@ func buildToolDefs(reg *tools.Registry) []llm.ToolDef {
 	return defs
 }
 
+type statusCoder interface {
+	StatusCode() int
+}
+
+func extractStatusCode(err error) int {
+	if err == nil {
+		return 0
+	}
+
+	var sc statusCoder
+	if errors.As(err, &sc) {
+		if code := sc.StatusCode(); code >= 400 && code <= 599 {
+			return code
+		}
+	}
+
+	message := err.Error()
+	for _, re := range []*regexp.Regexp{statusCodeKeywordRE, statusCodeParenRE, statusCodePrefixRE, statusCodeTextRE} {
+		match := re.FindStringSubmatch(message)
+		if len(match) < 2 {
+			continue
+		}
+		code := 0
+		if _, scanErr := fmt.Sscanf(match[1], "%d", &code); scanErr == nil && code >= 400 && code <= 599 {
+			return code
+		}
+	}
+
+	return 0
+}
+
+func estimateRequestTokens(messages []llm.Message) int {
+	total := 0
+	for _, msg := range messages {
+		total += 4
+		for _, block := range msg.Content {
+			switch b := block.(type) {
+			case llm.TextBlock:
+				total += estimateTextTokens(b.Text)
+			case llm.ToolUseBlock:
+				total += len(b.Name)/4 + len(b.Input)*2/7
+			case llm.ToolResultBlock:
+				total += estimateTextTokens(b.Content)
+			case llm.ThinkingBlock:
+				total += estimateTextTokens(b.Thinking)
+			case llm.ImageBlock:
+				total += 1600
+			}
+		}
+	}
+	return total
+}
+
+func estimateTextTokens(text string) int {
+	if len(text) == 0 {
+		return 0
+	}
+
+	jsonChars := 0
+	for _, r := range text {
+		if r == '{' || r == '}' || r == '[' || r == ']' || r == '"' {
+			jsonChars++
+		}
+	}
+	if float64(jsonChars)/float64(len(text)) > 0.05 {
+		return len(text) * 2 / 7
+	}
+	return len(text) / 4
+}
+
+// Deprecated: use errorclass.Classify in new retry paths.
 // isRetryable returns true for errors that warrant an automatic retry.
 // We treat provider errors conservatively: retry only when the error
 // message suggests a rate-limit (429) or transient server error (5xx).
