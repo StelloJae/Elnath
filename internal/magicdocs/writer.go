@@ -61,12 +61,8 @@ func (w *WikiWriter) createPage(a PageAction, sessionID, trigger string) error {
 		Content:    a.Content,
 		Confidence: a.Confidence,
 		Tags:       a.Tags,
-		Extra: map[string]any{
-			"source":         "magic-docs",
-			"source_session": sessionID,
-			"source_event":   trigger,
-		},
 	}
+	page.SetSource(wiki.SourceMagicDocs, sessionID, trigger)
 	return w.store.Create(page)
 }
 
@@ -76,7 +72,7 @@ func (w *WikiWriter) updateOwnedPage(a PageAction, sessionID, trigger string) (w
 		return false, w.createPage(a, sessionID, trigger)
 	}
 
-	if !isOwnedByMagicDocs(existing) {
+	if !existing.IsOwnedBy(wiki.SourceMagicDocs) {
 		return false, w.createLinkedPage(a, existing, sessionID, trigger)
 	}
 
@@ -101,23 +97,10 @@ func (w *WikiWriter) createLinkedPage(a PageAction, target *wiki.Page, sessionID
 		Content:    fmt.Sprintf("Related: [%s](%s)\n\n%s", target.Title, target.Path, a.Content),
 		Confidence: a.Confidence,
 		Tags:       a.Tags,
-		Extra: map[string]any{
-			"source":         "magic-docs",
-			"source_session": sessionID,
-			"source_event":   trigger,
-			"related_to":     target.Path,
-		},
 	}
+	page.SetSource(wiki.SourceMagicDocs, sessionID, trigger)
+	page.Extra["related_to"] = target.Path
 	return w.store.Create(page)
-}
-
-func isOwnedByMagicDocs(page *wiki.Page) bool {
-	if page.Extra == nil {
-		return false
-	}
-	source, _ := page.Extra["source"].(string)
-	_, hasSession := page.Extra["source_session"]
-	return source == "magic-docs" && hasSession
 }
 
 func shortHash(s string) string {

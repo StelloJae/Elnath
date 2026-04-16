@@ -279,6 +279,8 @@ func cmdDaemonStart(ctx context.Context) error {
 			telegram.WithSkillCreator(rt.skillCreator),
 			telegram.WithTaskTracker(tgSink),
 			telegram.WithWorkDir(workDir),
+			telegram.WithLearningStore(rt.learningStore),
+			telegram.WithWikiStore(rt.wikiStore),
 		)
 		if shellErr != nil {
 			return fmt.Errorf("create telegram shell: %w", shellErr)

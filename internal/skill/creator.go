@@ -109,7 +109,7 @@ func (c *Creator) Promote(name string) error {
 		page.Extra = make(map[string]any)
 	}
 	page.Extra["status"] = "active"
-	page.Extra["source"] = "promoted"
+	page.SetSource(wiki.SourcePromoted, "", "")
 	if err := c.store.Update(page); err != nil {
 		return fmt.Errorf("promote skill %q: %w", name, err)
 	}

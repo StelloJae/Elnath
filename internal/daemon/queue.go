@@ -460,6 +460,45 @@ func (c *TaskCompletion) View() map[string]interface{} {
 	}
 }
 
+// CancelPendingTask marks the most recently created pending task as failed
+// with the given reason. Returns (taskID, true, nil) when a task was found
+// and cancelled, or (0, false, nil) when no pending task exists.
+func (q *Queue) CancelPendingTask(ctx context.Context, reason string) (int64, bool, error) {
+	// Find the most recent pending task.
+	var taskID int64
+	err := q.db.QueryRowContext(ctx, `
+		SELECT id FROM task_queue WHERE status = ? ORDER BY created_at DESC LIMIT 1`,
+		string(StatusPending),
+	).Scan(&taskID)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("queue: cancel pending: select: %w", err)
+	}
+
+	completionJSON, err := q.buildCompletionJSON(ctx, taskID, StatusFailed, "", reason)
+	if err != nil {
+		return 0, false, fmt.Errorf("queue: cancel pending: build completion: %w", err)
+	}
+	now := time.Now().UnixMilli()
+	res, err := q.db.ExecContext(ctx, `
+		UPDATE task_queue SET status = ?, progress = ?, summary = ?, result = ?, completion = ?, updated_at = ?, completed_at = ?
+		WHERE id = ? AND status = ?`,
+		string(StatusFailed), "cancelled", completionSummary(StatusFailed, "", reason), reason, completionJSON, now, now,
+		taskID, string(StatusPending),
+	)
+	if err != nil {
+		return 0, false, fmt.Errorf("queue: cancel pending: update: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		// Race: task was picked up between SELECT and UPDATE.
+		return 0, false, nil
+	}
+	return taskID, true, nil
+}
+
 // RecoverStale resets tasks that have been in 'running' state longer than
 // the given timeout back to 'pending'. Tasks that have already been recovered
 // maxRecoveries times are marked as failed instead. Returns the number of

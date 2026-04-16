@@ -2,6 +2,8 @@ package telegram
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -14,8 +16,11 @@ import (
 	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/daemon"
 	"github.com/stello/elnath/internal/identity"
+	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
+	"github.com/stello/elnath/internal/routing"
 	"github.com/stello/elnath/internal/skill"
+	"github.com/stello/elnath/internal/wiki"
 )
 
 type Update struct {
@@ -85,6 +90,14 @@ func WithSkillCreator(creator *skill.Creator) ShellOption {
 	return func(s *Shell) { s.skillCreator = creator }
 }
 
+func WithLearningStore(store *learning.Store) ShellOption {
+	return func(s *Shell) { s.learningStore = store }
+}
+
+func WithWikiStore(store *wiki.Store) ShellOption {
+	return func(s *Shell) { s.wikiStore = store }
+}
+
 type Shell struct {
 	queue              *daemon.Queue
 	approvals          *daemon.ApprovalStore
@@ -101,6 +114,8 @@ type Shell struct {
 	binder             *ChatSessionBinder
 	skillReg           *skill.Registry
 	skillCreator       *skill.Creator
+	learningStore      *learning.Store
+	wikiStore          *wiki.Store
 }
 
 type shellState struct {
@@ -344,6 +359,87 @@ func (s *Shell) handleCommand(ctx context.Context, text string, principal identi
 			return "Usage: /skill-create <name>", nil
 		}
 		return s.handleSkillCreate(fields[1])
+	case "/remember":
+		text := strings.Join(fields[1:], " ")
+		if text == "" {
+			return "Usage: /remember <lesson text>", nil
+		}
+		if s.learningStore == nil {
+			return "Learning store unavailable.", nil
+		}
+		lesson := learning.Lesson{
+			Text:       text,
+			Source:     "user:telegram",
+			Confidence: "high",
+			Topic:      identity.ResolveProjectID(s.workDir, ""),
+		}
+		if err := s.learningStore.Append(lesson); err != nil {
+			return fmt.Sprintf("Failed: %v", err), nil
+		}
+		// Derive ID the same way learning.Store does: sha256(text)[:8].
+		sum := sha256.Sum256([]byte(text))
+		id := hex.EncodeToString(sum[:])[:8]
+		return fmt.Sprintf("Remembered (ID: %s)", id), nil
+
+	case "/forget":
+		if len(fields) < 2 {
+			return "Usage: /forget <lesson-id-prefix>", nil
+		}
+		if s.learningStore == nil {
+			return "Learning store unavailable.", nil
+		}
+		n, err := s.learningStore.Delete(fields[1])
+		if err != nil {
+			return fmt.Sprintf("Failed: %v", err), nil
+		}
+		return fmt.Sprintf("Forgot %d lesson(s).", n), nil
+
+	case "/override":
+		if len(fields) < 2 {
+			return "Usage: /override <intent> <workflow> | /override clear", nil
+		}
+		projectID := identity.ResolveProjectID(s.workDir, "")
+		if projectID == "" {
+			return "No active project context.", nil
+		}
+		if s.wikiStore == nil {
+			return "Wiki store unavailable.", nil
+		}
+		if fields[1] == "clear" {
+			// Delete the routing-preferences page so the advisor starts fresh.
+			// Ignore not-found: if the page is already absent the result is the same.
+			relPath := "projects/" + projectID + "/routing-preferences.md"
+			_ = s.wikiStore.Delete(relPath)
+			return fmt.Sprintf("Override cleared for project %s. Advisor manages routing again.", projectID), nil
+		}
+		if len(fields) < 3 {
+			return "Usage: /override <intent> <workflow>", nil
+		}
+		intent, workflow := fields[1], fields[2]
+		validWorkflows := map[string]bool{
+			"single": true, "team": true, "autopilot": true, "ralph": true, "research": true,
+		}
+		if !validWorkflows[workflow] {
+			return fmt.Sprintf("Unknown workflow %q. Valid: single, team, autopilot, ralph, research.", workflow), nil
+		}
+		pref := &routing.WorkflowPreference{
+			PreferredWorkflows: map[string]string{intent: workflow},
+		}
+		if err := wiki.SaveUserWorkflowPreference(s.wikiStore, projectID, pref); err != nil {
+			return fmt.Sprintf("Failed: %v", err), nil
+		}
+		return fmt.Sprintf("Override set: %s -> %s for project %s.", intent, workflow, projectID), nil
+
+	case "/undo":
+		taskID, cancelled, err := s.queue.CancelPendingTask(ctx, "cancelled by user via /undo")
+		if err != nil {
+			return fmt.Sprintf("Failed: %v", err), nil
+		}
+		if !cancelled {
+			return "No pending task to cancel.", nil
+		}
+		return fmt.Sprintf("Task #%d cancelled.", taskID), nil
+
 	case "/help":
 		help := "📖 <b>Commands</b>\n" +
 			"• <code>/status</code> — task status\n" +
@@ -351,6 +447,11 @@ func (s *Shell) handleCommand(ctx context.Context, text string, principal identi
 			"• <code>/approvals</code> — pending approvals\n" +
 			"• <code>/approve &lt;id&gt;</code> — approve\n" +
 			"• <code>/deny &lt;id&gt;</code> — deny\n" +
+			"• <code>/remember &lt;text&gt;</code> — save a lesson\n" +
+			"• <code>/forget &lt;id&gt;</code> — delete a lesson by ID prefix\n" +
+			"• <code>/override &lt;intent&gt; &lt;workflow&gt;</code> — pin routing\n" +
+			"• <code>/override clear</code> — remove routing pin\n" +
+			"• <code>/undo</code> — cancel last pending task\n" +
 			"• <code>/skill-list</code> — registered skills\n" +
 			"• <code>/skill-create</code> — create draft skill\n" +
 			"• <code>/followup &lt;sid&gt; &lt;msg&gt;</code> — follow-up\n" +

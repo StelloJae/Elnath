@@ -154,7 +154,7 @@ func TestIsOwnedByMagicDocs(t *testing.T) {
 		want  bool
 	}{
 		{"both present", map[string]any{"source": "magic-docs", "source_session": "s1"}, true},
-		{"source only", map[string]any{"source": "magic-docs"}, false},
+		{"source only", map[string]any{"source": "magic-docs"}, true},
 		{"wrong source", map[string]any{"source": "human", "source_session": "s1"}, false},
 		{"nil extra", nil, false},
 		{"empty extra", map[string]any{}, false},
@@ -162,8 +162,8 @@ func TestIsOwnedByMagicDocs(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			page := &wiki.Page{Extra: tt.extra}
-			if got := isOwnedByMagicDocs(page); got != tt.want {
-				t.Errorf("isOwnedByMagicDocs() = %v, want %v", got, tt.want)
+			if got := page.IsOwnedBy(wiki.SourceMagicDocs); got != tt.want {
+				t.Errorf("IsOwnedBy(SourceMagicDocs) = %v, want %v", got, tt.want)
 			}
 		})
 	}

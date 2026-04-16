@@ -47,6 +47,8 @@ func commandRegistry() map[string]commandRunner {
 		"lessons":     cmdLessons,
 		"skill":       cmdSkill,
 		"profile":     cmdProfile,
+		"explain":     cmdExplain,
+		"debug":       cmdDebug,
 	}
 }
 
