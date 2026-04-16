@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stello/elnath/internal/agent/errorclass"
 	"github.com/stello/elnath/internal/core"
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/tools"
@@ -38,6 +39,14 @@ func (m *mockProvider) Stream(ctx context.Context, req llm.ChatRequest, cb func(
 
 func (m *mockProvider) Name() string            { return "mock" }
 func (m *mockProvider) Models() []llm.ModelInfo { return nil }
+
+type statusCodeErr struct {
+	code int
+	msg  string
+}
+
+func (e statusCodeErr) Error() string   { return e.msg }
+func (e statusCodeErr) StatusCode() int { return e.code }
 
 // mockTool implements tools.Tool for testing.
 type mockTool struct {
@@ -142,6 +151,99 @@ func TestIsRetryable(t *testing.T) {
 			got := isRetryable(tc.err)
 			if got != tc.want {
 				t.Errorf("isRetryable(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestStreamWithRetry_ClassifiesBeforeRetry(t *testing.T) {
+	reg := tools.NewRegistry()
+	streamCalls := 0
+	provider := &mockProvider{
+		streamFn: func(_ context.Context, _ llm.ChatRequest, cb func(llm.StreamEvent)) error {
+			streamCalls++
+			if streamCalls == 1 {
+				return errors.New("RATE LIMIT exceeded")
+			}
+			cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: "recovered"})
+			cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{InputTokens: 2, OutputTokens: 1}})
+			return nil
+		},
+	}
+
+	a := New(provider, reg)
+	msg, finalReq, usage, err := a.streamWithRetry(context.Background(), llm.Request{
+		Messages:  []llm.Message{llm.NewUserMessage("hello")},
+		MaxTokens: defaultMaxTokens,
+	}, nil)
+	if err != nil {
+		t.Fatalf("streamWithRetry: %v", err)
+	}
+	if streamCalls != 2 {
+		t.Fatalf("stream calls = %d, want 2", streamCalls)
+	}
+	if msg.Text() != "recovered" {
+		t.Fatalf("msg.Text() = %q, want %q", msg.Text(), "recovered")
+	}
+	if usage.OutputTokens != 1 {
+		t.Fatalf("usage.OutputTokens = %d, want 1", usage.OutputTokens)
+	}
+	if got := finalReq.Messages[len(finalReq.Messages)-1].Text(); got != "hello" {
+		t.Fatalf("final request message = %q, want %q", got, "hello")
+	}
+}
+
+func TestStreamWithRetry_ContextOverflowReturnsClassifiedError(t *testing.T) {
+	reg := tools.NewRegistry()
+	streamCalls := 0
+	provider := &mockProvider{
+		streamFn: func(_ context.Context, _ llm.ChatRequest, _ func(llm.StreamEvent)) error {
+			streamCalls++
+			return errors.New("context_length_exceeded")
+		},
+	}
+
+	a := New(provider, reg)
+	_, _, _, err := a.streamWithRetry(context.Background(), llm.Request{
+		Messages:  []llm.Message{llm.NewUserMessage("hello")},
+		MaxTokens: defaultMaxTokens,
+	}, nil)
+	if err == nil {
+		t.Fatal("expected classified error, got nil")
+	}
+	if streamCalls != 1 {
+		t.Fatalf("stream calls = %d, want 1", streamCalls)
+	}
+
+	var classified *errorclass.ClassifiedError
+	if !errors.As(err, &classified) {
+		t.Fatalf("error type = %T, want ClassifiedError", err)
+	}
+	if classified.Category != errorclass.ContextOverflow {
+		t.Fatalf("Category = %q, want %q", classified.Category, errorclass.ContextOverflow)
+	}
+	if !classified.Recovery.ShouldCompress {
+		t.Fatal("ShouldCompress must be true")
+	}
+}
+
+func TestExtractStatusCode(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"typed error", statusCodeErr{code: 503, msg: "typed"}, 503},
+		{"http keyword", errors.New("openai: http 429: too many requests"), 429},
+		{"paren status", errors.New("rate limit (429)"), 429},
+		{"provider prefix", errors.New("ollama: 503"), 503},
+		{"false positive", errors.New("file has 500 lines"), 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := extractStatusCode(tt.err); got != tt.want {
+				t.Fatalf("extractStatusCode(%q) = %d, want %d", tt.err, got, tt.want)
 			}
 		})
 	}

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stello/elnath/internal/agent/errorclass"
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/tools"
 )
@@ -77,6 +78,16 @@ type compressionOnlyHook struct {
 func (h *compressionOnlyHook) OnCompression(_ context.Context, beforeCount, afterCount int) error {
 	h.calls = append(h.calls, [2]int{beforeCount, afterCount})
 	return nil
+}
+
+type errorObserverHook struct {
+	classified []errorclass.ClassifiedError
+	err        error
+}
+
+func (h *errorObserverHook) OnClassifiedError(_ context.Context, classified errorclass.ClassifiedError) error {
+	h.classified = append(h.classified, classified)
+	return h.err
 }
 
 func TestHookRegistryPreToolUse_Allow(t *testing.T) {
@@ -278,6 +289,34 @@ func TestIterationHookFires(t *testing.T) {
 		if hook.iterationCalls[i] != want[i] {
 			t.Fatalf("iterationCalls[%d] = %v, want %v", i, hook.iterationCalls[i], want[i])
 		}
+	}
+}
+
+func TestErrorObserverHookFires(t *testing.T) {
+	reg := tools.NewRegistry()
+	hooks := NewHookRegistry()
+	hook := &errorObserverHook{}
+	hooks.Add(hook)
+
+	provider := &mockProvider{
+		streamFn: func(_ context.Context, _ llm.ChatRequest, _ func(llm.StreamEvent)) error {
+			return errors.New("context_length_exceeded")
+		},
+	}
+
+	a := New(provider, reg, WithHooks(hooks))
+	_, _, _, err := a.streamWithRetry(context.Background(), llm.Request{
+		Messages:  []llm.Message{llm.NewUserMessage("hello")},
+		MaxTokens: defaultMaxTokens,
+	}, nil)
+	if err == nil {
+		t.Fatal("expected classified error, got nil")
+	}
+	if len(hook.classified) != 1 {
+		t.Fatalf("classified count = %d, want 1", len(hook.classified))
+	}
+	if hook.classified[0].Category != errorclass.ContextOverflow {
+		t.Fatalf("Category = %q, want %q", hook.classified[0].Category, errorclass.ContextOverflow)
 	}
 }
 
