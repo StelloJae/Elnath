@@ -215,12 +215,20 @@ func (c *Consolidator) readState() (*ConsolidationState, error) {
 	if c.statePath == "" {
 		return &ConsolidationState{}, nil
 	}
-	data, err := os.ReadFile(c.statePath)
+	return LoadConsolidationState(c.statePath)
+}
+
+// LoadConsolidationState reads a ConsolidationState from disk, returning an
+// empty state (not an error) when the file does not yet exist. Used by
+// debug subcommands that want to inspect state without building a full
+// Consolidator.
+func LoadConsolidationState(path string) (*ConsolidationState, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return &ConsolidationState{}, nil
 		}
-		return nil, err
+		return &ConsolidationState{}, err
 	}
 	var state ConsolidationState
 	if err := json.Unmarshal(data, &state); err != nil {

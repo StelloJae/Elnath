@@ -146,13 +146,23 @@ B.8 live probe remains — the orchestrator has yet to run against real lessons.
 
 **Design choice — not a wiki/boot task**: the existing ambient scheduler runs natural-language prompts through an agent. Consolidation is a deterministic pipeline (one LLM call, structured JSON, no tool use), so wiring it as a BootTask would add a pointless agent layer. A native goroutine is simpler and testable in isolation.
 
-### B.7 — Debug + Transparency
+### B.7 — Debug + Transparency ✅ (partial — `show` + `run`; `history` deferred)
 
-- [ ] `cmd_debug.go`: `elnath debug consolidation` subcommand
-  - `show` (default): last run time, gate status (pass/block reason), recent-lesson window size
-  - `run`: force-run ignoring gates (with `--force` confirmation)
-  - `history [n]`: last N consolidation runs with stats (superseded count, synthesis count)
-- [ ] Golden-output tests
+- [x] `elnath debug consolidation show` (default): gate status with pass/block reason, last mtime, next scheduled fire, active vs superseded lesson counts, synthesis page count, state run/success counts, last run stats
+- [x] `elnath debug consolidation run [--force]` (already landed with B.5)
+- [ ] `elnath debug consolidation history [n]` — **deferred**: requires extending state.json to a JSONL-style history log rather than a single snapshot. Not load-bearing for Stage B acceptance; schedule after B.8 live-cycle evidence.
+- [ ] Golden-output tests — **deferred**: `show` is a thin wrapper over the already-tested state/gate primitives; tests would mostly assert formatting. Revisit when output format stabilises.
+
+**Live evidence (2026-04-17)** after the first B.8 probe:
+```
+Gate:              BLOCKED (time-gate: 18m0s since last (need 24h0m0s))
+Next daily fire:   2026-04-18T04:00:00+09:00 (in 20h40m17s)
+Lessons active:    2
+Lessons superseded:10
+Synthesis pages:   2
+Run count:         1, Success count: 1
+Last run produced: 2 syntheses, 10 lessons superseded (from 12 active)
+```
 
 ### B.8 — Verification
 
