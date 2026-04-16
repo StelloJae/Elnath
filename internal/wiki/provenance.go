@@ -9,6 +9,7 @@ const (
 	SourceResearch        = "research"
 	SourceAgent           = "agent"
 	SourceIngest          = "ingest"
+	SourceConsolidation   = "consolidation"
 )
 
 func (p *Page) PageSource() string {

@@ -113,14 +113,17 @@ Reason (decided 2026-04-17 after B.1):
 
 **Scope change**: B.3 no longer makes the LLM call directly — that is the orchestration layer's job (B.5). B.3 owns prompt construction and response parsing only, which keeps the unit tests LLM-free.
 
-### B.4 — Synthesis Persistence
+### B.4 — Synthesis Persistence ✅
 
-- [ ] Extend `internal/learning/store.go`: add `SupersededBy string` JSON field on `Lesson`
-- [ ] `MarkSuperseded(ids []string, synthesisID string) error` — atomic UPSERT (temp-file + rename pattern, match existing outcome_store)
-- [ ] `Rotate` keeps `SupersededBy != ""` lessons when their synthesis page is still in wiki
-- [ ] Write synthesis to wiki: `wiki/synthesis/<slug>/<date>.md` with `wiki.SourceConsolidation`
-- [ ] Test: consolidation run → 3 raw lessons marked superseded + 1 synthesis page exists with expected content
-- [ ] Test: Rotate after consolidation preserves superseded-but-referenced lessons
+- [x] Extend `Lesson` with `SupersededBy string` JSON field (omitempty) — commit `fd77cd2`
+- [x] `Store.MarkSuperseded(ids, synthesisID) (int, error)` — atomic rewrite, first-write-wins, idempotent
+- [x] `RotateOpts.KeepFn` + `KeepSuperseded` predicate — caller composes with wiki check in B.5
+- [x] `wiki.SourceConsolidation` constant + `BuildSynthesisPage` + `SynthesisID` / `SynthesisSlug` helpers
+- [x] Unit tests: MarkSuperseded behaviour (update/ignore/idempotent/first-link-wins); Rotate preservation; synthesis slug & path; page round-trip through `Store.Create` → `Store.Read`
+
+The "consolidation run ⇒ synthesis page + superseded marks" integration test lives in B.5 where the orchestrator wires these primitives together with the Gate + prompt/parser from B.1 + B.3.
+
+Split into two commits: `fd77cd2` (learning side) and the follow-up wiki commit.
 
 ### B.5 — Consolidator Orchestration
 
