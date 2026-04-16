@@ -30,6 +30,7 @@ type Config struct {
 	Telegram       TelegramConfig       `yaml:"telegram"`
 	Research       ResearchConfig       `yaml:"research"`
 	LLMExtraction  LLMExtractionConfig  `yaml:"llm_extraction"`
+	MagicDocs      MagicDocsConfig      `yaml:"magic_docs"`
 	Projects       []ProjectRef         `yaml:"projects"`
 	MCPServers     []MCPServerConfig    `yaml:"mcp_servers"`
 	Hooks          []HookConfig         `yaml:"hooks"`
@@ -122,6 +123,11 @@ type LLMExtractionConfig struct {
 	// extraction system prompt. Last-resort workaround for Claude Code OAuth
 	// scope rejecting tool-laden requests that lack that signature.
 	ClaudeCodeSignature bool `yaml:"claude_code_signature"`
+}
+
+type MagicDocsConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	Model   string `yaml:"model"`
 }
 
 func Load(path string) (*Config, error) {

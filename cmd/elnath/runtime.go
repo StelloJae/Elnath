@@ -21,6 +21,7 @@ import (
 	"github.com/stello/elnath/internal/identity"
 	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
+	"github.com/stello/elnath/internal/magicdocs"
 	"github.com/stello/elnath/internal/orchestrator"
 	"github.com/stello/elnath/internal/prompt"
 	"github.com/stello/elnath/internal/secret"
@@ -556,6 +557,26 @@ func (rt *executionRuntime) runTask(
 	output orchestrationOutput,
 ) ([]llm.Message, string, error) {
 	bus := newBus(output, !rt.daemonMode)
+
+	if rt.app.Config.MagicDocs.Enabled && rt.wikiStore != nil {
+		md := magicdocs.New(magicdocs.Config{
+			Enabled:   true,
+			Store:     rt.wikiStore,
+			Provider:  rt.provider,
+			Model:     rt.app.Config.MagicDocs.Model,
+			Logger:    rt.app.Logger.With("component", "magic-docs"),
+			SessionID: sess.ID,
+		})
+		bus.Subscribe(md.Observer())
+		md.Start(ctx)
+		defer func() {
+			closeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := md.Close(closeCtx); err != nil {
+				rt.app.Logger.Warn("magic-docs close error", "error", err)
+			}
+		}()
+	}
 
 	userInput = normalizeSkillInput(userInput)
 	if rt.skillReg != nil && strings.HasPrefix(userInput, "/") {
