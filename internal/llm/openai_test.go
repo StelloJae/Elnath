@@ -24,7 +24,7 @@ func sseServer(t *testing.T, lines []string) *httptest.Server {
 
 func newTestOpenAI(t *testing.T, srv *httptest.Server) *OpenAIProvider {
 	t.Helper()
-	return NewOpenAIProvider("test-key", "gpt-4o",
+	return NewOpenAIProvider("test-key", "gpt-5.4",
 		WithOpenAIBaseURL(srv.URL),
 	)
 }
@@ -430,7 +430,7 @@ func TestToOpenAIMessagesToolResultToolCallID(t *testing.T) {
 // ---- Provider metadata ----
 
 func TestOpenAIProviderMetadata(t *testing.T) {
-	p := NewOpenAIProvider("key", "gpt-4o")
+	p := NewOpenAIProvider("key", "gpt-5.4")
 
 	if p.Name() != "openai" {
 		t.Errorf("Name() = %q, want %q", p.Name(), "openai")
@@ -442,12 +442,12 @@ func TestOpenAIProviderMetadata(t *testing.T) {
 	}
 	var found bool
 	for _, m := range models {
-		if m.ID == "gpt-4o" {
+		if m.ID == "gpt-5.4" {
 			found = true
 		}
 	}
 	if !found {
-		t.Error("Models() does not include gpt-4o")
+		t.Error("Models() does not include gpt-5.4")
 	}
 }
 
@@ -463,7 +463,7 @@ func TestOpenAIRequestHeaders(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewOpenAIProvider("my-secret-key", "gpt-4o", WithOpenAIBaseURL(srv.URL))
+	p := NewOpenAIProvider("my-secret-key", "gpt-5.4", WithOpenAIBaseURL(srv.URL))
 	_ = p.Stream(context.Background(), ChatRequest{}, func(StreamEvent) {})
 
 	want := "Bearer my-secret-key"

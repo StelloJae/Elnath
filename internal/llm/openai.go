@@ -339,20 +339,36 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRespon
 
 var openAIModels = []ModelInfo{
 	{
-		ID:              "gpt-4o",
-		Name:            "GPT-4o",
-		MaxTokens:       16384,
-		ContextWindow:   128_000,
+		ID:              "gpt-5.4",
+		Name:            "GPT-5.4",
+		MaxTokens:       128_000,
+		ContextWindow:   1_050_000,
 		InputPricePerM:  2.5,
-		OutputPricePerM: 10.0,
+		OutputPricePerM: 15.0,
 	},
 	{
-		ID:              "gpt-4o-mini",
-		Name:            "GPT-4o mini",
-		MaxTokens:       16384,
-		ContextWindow:   128_000,
-		InputPricePerM:  0.15,
-		OutputPricePerM: 0.60,
+		ID:              "gpt-5.4-mini",
+		Name:            "GPT-5.4 Mini",
+		MaxTokens:       128_000,
+		ContextWindow:   400_000,
+		InputPricePerM:  0.75,
+		OutputPricePerM: 4.5,
+	},
+	{
+		ID:              "gpt-5.4-nano",
+		Name:            "GPT-5.4 Nano",
+		MaxTokens:       128_000,
+		ContextWindow:   400_000,
+		InputPricePerM:  0.20,
+		OutputPricePerM: 1.25,
+	},
+	{
+		ID:              "gpt-5.2",
+		Name:            "GPT-5.2",
+		MaxTokens:       100_000,
+		ContextWindow:   1_050_000,
+		InputPricePerM:  1.75,
+		OutputPricePerM: 14.0,
 	},
 }
 

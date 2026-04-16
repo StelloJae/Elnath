@@ -79,10 +79,14 @@ func (p *CodexOAuthProvider) Name() string { return "codex" }
 
 func (p *CodexOAuthProvider) Models() []ModelInfo {
 	return []ModelInfo{
-		{ID: "o3", Name: "o3", MaxTokens: 100000, ContextWindow: 200_000},
-		{ID: "o4-mini", Name: "o4-mini", MaxTokens: 100000, ContextWindow: 200_000},
-		{ID: "gpt-4.1", Name: "GPT-4.1", MaxTokens: 32768, ContextWindow: 1_047_576},
-		{ID: "codex-mini-latest", Name: "Codex Mini", MaxTokens: 100000, ContextWindow: 200_000},
+		{ID: "gpt-5.4", Name: "GPT-5.4", MaxTokens: 128_000, ContextWindow: 1_050_000, InputPricePerM: 2.5, OutputPricePerM: 15.0},
+		{ID: "gpt-5.4-mini", Name: "GPT-5.4 Mini", MaxTokens: 128_000, ContextWindow: 400_000, InputPricePerM: 0.75, OutputPricePerM: 4.5},
+		{ID: "gpt-5.3-codex", Name: "GPT-5.3 Codex", MaxTokens: 128_000, ContextWindow: 1_050_000},
+		{ID: "gpt-5.3-codex-spark", Name: "GPT-5.3 Codex Spark", MaxTokens: 128_000, ContextWindow: 400_000},
+		{ID: "gpt-5.2-codex", Name: "GPT-5.2 Codex", MaxTokens: 100_000, ContextWindow: 1_050_000},
+		{ID: "gpt-5.2", Name: "GPT-5.2", MaxTokens: 100_000, ContextWindow: 1_050_000, InputPricePerM: 1.75, OutputPricePerM: 14.0},
+		{ID: "gpt-5.1-codex-max", Name: "GPT-5.1 Codex Max", MaxTokens: 100_000, ContextWindow: 1_050_000},
+		{ID: "gpt-5.1-codex-mini", Name: "GPT-5.1 Codex Mini", MaxTokens: 100_000, ContextWindow: 200_000},
 	}
 }
 
