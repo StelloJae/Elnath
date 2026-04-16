@@ -155,3 +155,70 @@ func TestAdviseMultipleIntents(t *testing.T) {
 		t.Errorf("want single for simple, got %q", pref.PreferredWorkflows["simple"])
 	}
 }
+
+func TestRoutingAdvisorIgnoresPreferenceUsedOutcomes(t *testing.T) {
+	dir := t.TempDir()
+	store := NewOutcomeStore(dir + "/outcomes.jsonl")
+	advisor := NewRoutingAdvisor(store)
+
+	base := time.Now().UTC()
+	for i := 0; i < 10; i++ {
+		rec := OutcomeRecord{
+			ProjectID:      "proj",
+			Intent:         "complex",
+			Workflow:       "team",
+			FinishReason:   "stop",
+			Success:        true,
+			PreferenceUsed: true,
+			Timestamp:      base.Add(time.Duration(i) * time.Millisecond),
+		}
+		if err := store.Append(rec); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+
+	pref, err := advisor.Advise("proj")
+	if err != nil {
+		t.Fatalf("advise: %v", err)
+	}
+	if pref != nil {
+		t.Fatalf("want nil pref (all outcomes pinned), got %+v", pref)
+	}
+}
+
+func TestRoutingAdvisorUsesNonPreferenceOutcomesOnly(t *testing.T) {
+	dir := t.TempDir()
+	store := NewOutcomeStore(dir + "/outcomes.jsonl")
+	advisor := NewRoutingAdvisor(store)
+
+	base := time.Now().UTC()
+	// 10 pinned "team" outcomes — should be ignored entirely.
+	for i := 0; i < 10; i++ {
+		rec := OutcomeRecord{
+			ProjectID:      "proj",
+			Intent:         "complex",
+			Workflow:       "team",
+			FinishReason:   "stop",
+			Success:        true,
+			PreferenceUsed: true,
+			Timestamp:      base.Add(time.Duration(i) * time.Millisecond),
+		}
+		if err := store.Append(rec); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+	// Natural signal: ralph wins 9/10, team_natural 3/10.
+	appendN(t, store, "proj", "complex", "ralph", 10, 9)
+	appendN(t, store, "proj", "complex", "team_natural", 10, 3)
+
+	pref, err := advisor.Advise("proj")
+	if err != nil {
+		t.Fatalf("advise: %v", err)
+	}
+	if pref == nil {
+		t.Fatal("want non-nil pref from natural samples")
+	}
+	if pref.PreferredWorkflows["complex"] != "ralph" {
+		t.Errorf("want ralph (natural winner), got %q", pref.PreferredWorkflows["complex"])
+	}
+}

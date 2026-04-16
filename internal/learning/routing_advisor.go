@@ -57,6 +57,21 @@ func (a *RoutingAdvisor) Advise(projectID string) (*routing.WorkflowPreference, 
 		return nil, nil
 	}
 
+	// Exclude outcomes that rode on a pinned user preference: those samples
+	// reflect the user's override, not natural workflow discovery. Including
+	// them would let the advisor re-derive the user's override as its own
+	// "insight" (circular learning loop).
+	natural := make([]OutcomeRecord, 0, len(records))
+	for _, r := range records {
+		if r.PreferenceUsed {
+			continue
+		}
+		natural = append(natural, r)
+	}
+	if len(natural) == 0 {
+		return nil, nil
+	}
+
 	// Group records by intent, then by workflow.
 	type stats struct {
 		total   int
@@ -64,7 +79,7 @@ func (a *RoutingAdvisor) Advise(projectID string) (*routing.WorkflowPreference, 
 	}
 	// intentWorkflow[intent][workflow] = stats
 	intentWorkflow := make(map[string]map[string]*stats)
-	for _, r := range records {
+	for _, r := range natural {
 		if intentWorkflow[r.Intent] == nil {
 			intentWorkflow[r.Intent] = make(map[string]*stats)
 		}
