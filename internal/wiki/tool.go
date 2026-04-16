@@ -306,6 +306,7 @@ func (t *WikiWriteTool) Execute(ctx context.Context, params json.RawMessage) (*t
 		Confidence: input.Confidence,
 		TTL:        input.TTL,
 	}
+	page.SetSource(SourceAgent, "", "wiki_write_tool")
 
 	if err := t.store.Upsert(page); err != nil {
 		return tools.ErrorResult(fmt.Sprintf("write failed: %v", err)), nil

@@ -260,6 +260,7 @@ func (l *Loop) writeRoundToWiki(ctx context.Context, topic string, round int, ro
 		Content:    b.String(),
 		Confidence: "medium",
 	}
+	page.SetSource(wiki.SourceResearch, "", "research_loop")
 
 	if err := l.wikiStore.Upsert(page); err != nil {
 		l.logger.Error("failed to write round to wiki", "path", path, "error", err)

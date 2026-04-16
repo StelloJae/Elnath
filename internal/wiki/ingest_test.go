@@ -160,6 +160,9 @@ func TestIngestGitLog(t *testing.T) {
 		if len(base) != 8+len(".md") {
 			t.Errorf("page base name %q: want 8-char hash + .md", base)
 		}
+		if got := p.PageSource(); got != SourceIngest {
+			t.Errorf("page %q source = %q, want %q", p.Path, got, SourceIngest)
+		}
 	}
 }
 
@@ -225,6 +228,9 @@ func TestIngestSession(t *testing.T) {
 	}
 	if !slicesEqual(page.Tags, []string{"session", "interactive_session", "principal:cli:stello"}) {
 		t.Fatalf("tags = %v, want session tags", page.Tags)
+	}
+	if got := page.PageSource(); got != SourceIngest {
+		t.Errorf("session page source = %q, want %q", got, SourceIngest)
 	}
 }
 
@@ -361,6 +367,9 @@ func TestIngestFile(t *testing.T) {
 
 	if !strings.Contains(page.Content, fileContent) {
 		t.Errorf("file content missing from page body, got:\n%s", page.Content)
+	}
+	if got := page.PageSource(); got != SourceIngest {
+		t.Errorf("file page source = %q, want %q", got, SourceIngest)
 	}
 }
 

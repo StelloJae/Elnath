@@ -44,7 +44,7 @@ func (m *mockProvider) Stream(_ context.Context, _ llm.ChatRequest, cb func(llm.
 	return nil
 }
 
-func (m *mockProvider) Name() string           { return "mock" }
+func (m *mockProvider) Name() string            { return "mock" }
 func (m *mockProvider) Models() []llm.ModelInfo { return nil }
 
 // mockSearcher implements WikiSearcher with canned results.
@@ -135,6 +135,21 @@ func TestRun_SingleRound(t *testing.T) {
 	if result.Rounds[0].Hypothesis.ID != "H1" {
 		t.Errorf("hypothesis ID = %q, want %q", result.Rounds[0].Hypothesis.ID, "H1")
 	}
+
+	pages, err := store.List()
+	if err != nil {
+		t.Fatalf("store.List: %v", err)
+	}
+	var found bool
+	for _, p := range pages {
+		if p.PageSource() == wiki.SourceResearch {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected at least one research-sourced wiki page, got %d pages with no research source", len(pages))
+	}
 }
 
 func TestRun_CostCap(t *testing.T) {
@@ -211,11 +226,11 @@ func TestRun_Convergence(t *testing.T) {
 	// summarize method makes one more Chat call.
 	provider := &mockProvider{
 		chatResponses: []llm.ChatResponse{
-			{Content: hypothesisResp},  // round 0: hypothesis
-			{Content: experimentResp},  // round 0: experiment agent
-			{Content: hypothesisResp},  // round 1: hypothesis
-			{Content: experimentResp},  // round 1: experiment agent
-			{Content: summaryResp},     // summarize
+			{Content: hypothesisResp}, // round 0: hypothesis
+			{Content: experimentResp}, // round 0: experiment agent
+			{Content: hypothesisResp}, // round 1: hypothesis
+			{Content: experimentResp}, // round 1: experiment agent
+			{Content: summaryResp},    // summarize
 		},
 	}
 

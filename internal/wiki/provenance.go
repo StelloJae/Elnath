@@ -6,6 +6,9 @@ const (
 	SourceMagicDocs       = "magic-docs"
 	SourcePromoted        = "promoted"
 	SourceHint            = "hint"
+	SourceResearch        = "research"
+	SourceAgent           = "agent"
+	SourceIngest          = "ingest"
 )
 
 func (p *Page) PageSource() string {

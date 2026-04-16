@@ -70,6 +70,7 @@ func (ing *Ingester) IngestSession(ctx context.Context, event IngestEvent) error
 		Content: renderSessionPageContent(event, transcript, summary),
 		Tags:    sessionTags(event),
 	}
+	page.SetSource(SourceIngest, event.SessionID, "ingest_session")
 	if err := ing.store.Upsert(page); err != nil {
 		return err
 	}
@@ -167,6 +168,7 @@ func (ing *Ingester) ingestCommit(c gitCommit, repoPath string) error {
 		Created: c.Date,
 		Updated: c.Date,
 	}
+	page.SetSource(SourceIngest, "", "ingest_git_log")
 
 	return ing.store.Upsert(page)
 }
@@ -288,6 +290,7 @@ func (ing *Ingester) IngestFile(ctx context.Context, filePath string) error {
 		Content: content,
 		Tags:    []string{"file", filepath.Ext(filePath)},
 	}
+	page.SetSource(SourceIngest, "", "ingest_file")
 
 	return ing.store.Upsert(page)
 }
