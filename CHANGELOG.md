@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.5.1 (2026-04-15)
+
+Hermes parity release: 6 of 8 audit items implemented (#3, #4, #8, #9, #11, #13, #15). Item #12 (error classifier) deferred pending dog-food failure taxonomy.
+
+### Hermes Parity
+
+- **#8 Layer 3 historical tool-result attenuation**: Progressive truncation of older tool results across turns (t-2 → 10K, t-3 → 2K, t-4+ → placeholder). Idempotent with marker-based skip. Completes the 3-layer tool-result size control alongside existing per-tool (50K) and per-turn (200K) limits.
+- **#9 9-section structured compression**: Replaces free-form Stage 2 auto-compression with a `# Session Summary` template (9 sections: user goal, completed steps, current focus, files touched, outstanding TODOs, blockers, key decisions, open questions, next action). Iterative-update prompt merges new messages into existing summary instead of re-summarizing from scratch. Legacy unstructured prompt preserved as fallback for malformed LLM output.
+- **#11 Tool argument type coercion**: Opt-in `ArgsTarget` interface on tools enables automatic coercion of LLM-provided args (string↔int, string↔bool, float64→int for whole numbers, string↔float64). Applied to `read_file`, `bash`, `glob`, `grep`. Tools without `ArgsTarget` are unaffected.
+- **#13 Decorrelated jitter backoff**: Retry delay uses AWS-style `min(maxDelay, random(baseDelay, current*3))` instead of deterministic `delay *= 2`. Eliminates synchronized retry storms when multiple gate runs hit the same provider.
+- **#15 Plugin lifecycle hooks (4 of 10 stages)**: `PreLLMCall`, `PostLLMCall`, `OnCompression`, `OnIterationStart` as split interfaces (`LLMHook`, `CompressionHook`, `IterationHook`). Existing `Hook` interface unchanged. Compression hook chained after dedup reset in runtime.
+
+### Previously shipped in v0.5.0 cycle
+
+- **#3 Dedup reset on compression** (PR #1, `d169399`)
+- **#4 Post-write timestamp refresh** (already in production, `file.go:197/297 RefreshPath`)
+
+### Deferred
+
+- **#12 Error classifier**: Awaiting dog-food failure taxonomy before adoption.
+
 ## v0.5.0 (2026-04-16)
 
 Knowledge Assistant OS milestone: Phase 3.2 Gate PASS (v7) and the F-6 feature quartet (portability, fault injection, onboarding UX, locale) ship together. Release-ready per `docs/f6-validation-plan.md` (15/16 scenarios pass, D2 `--help` intercept fixed in the same release cycle).
