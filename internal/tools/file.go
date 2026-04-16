@@ -36,6 +36,8 @@ func (t *ReadTool) Description() string {
 
 func (t *ReadTool) ReadTracker() *ReadTracker { return t.tracker }
 
+func (t *ReadTool) ArgsTarget() any { return &readParams{} }
+
 func (t *ReadTool) Schema() json.RawMessage {
 	return Object(map[string]Property{
 		"file_path": String("Path to the file (absolute, relative, or ~/)."),
@@ -312,6 +314,8 @@ func (t *GlobTool) Description() string {
 	return "Fast file pattern matching. Use this instead of find or ls via bash.\nSupports patterns like \"**/*.go\" or \"src/**/*.ts\".\nReturns matching file paths sorted by modification time."
 }
 
+func (t *GlobTool) ArgsTarget() any { return &globParams{} }
+
 func (t *GlobTool) Schema() json.RawMessage {
 	return Object(map[string]Property{
 		"pattern": String("Glob pattern (supports ** for recursive matching)."),
@@ -447,6 +451,8 @@ func (t *GrepTool) Description() string {
 }
 
 func (t *GrepTool) ReadTracker() *ReadTracker { return t.tracker }
+
+func (t *GrepTool) ArgsTarget() any { return &grepParams{} }
 
 func (t *GrepTool) Schema() json.RawMessage {
 	return Object(map[string]Property{

@@ -50,6 +50,9 @@ func (r *Registry) Execute(ctx context.Context, name string, params json.RawMess
 	if !ok {
 		return ErrorResult(fmt.Sprintf("unknown tool: %s", name)), nil
 	}
+	if targetProvider, ok := t.(ArgTargetProvider); ok {
+		params = CoerceToolArgs(params, targetProvider.ArgsTarget())
+	}
 	return t.Execute(ctx, params)
 }
 

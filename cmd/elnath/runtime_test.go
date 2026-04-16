@@ -67,6 +67,27 @@ type captureLearningWorkflow struct {
 	sawLearning bool
 }
 
+type runtimeCompressionHook struct {
+	tracker  *tools.ReadTracker
+	readPath string
+	calls    [][2]int
+	reset    bool
+}
+
+func (h *runtimeCompressionHook) PreToolUse(context.Context, string, json.RawMessage) (agent.HookResult, error) {
+	return agent.HookResult{Action: agent.HookAllow}, nil
+}
+
+func (h *runtimeCompressionHook) PostToolUse(context.Context, string, json.RawMessage, *tools.Result) error {
+	return nil
+}
+
+func (h *runtimeCompressionHook) OnCompression(_ context.Context, beforeCount, afterCount int) error {
+	h.calls = append(h.calls, [2]int{beforeCount, afterCount})
+	h.reset = h.tracker.CheckRead(h.readPath, 1, 1) == ""
+	return nil
+}
+
 func (w *stubWorkflow) Name() string { return w.name }
 
 func (w *stubWorkflow) Run(_ context.Context, input orchestrator.WorkflowInput) (*orchestrator.WorkflowResult, error) {
@@ -86,6 +107,52 @@ func (w *captureLearningWorkflow) Run(_ context.Context, input orchestrator.Work
 		Summary:  w.name + " workflow",
 		Workflow: w.name,
 	}, nil
+}
+
+func TestCompressionHookContextWindowFiresAfterDedupReset(t *testing.T) {
+	cw := conversation.NewContextWindow()
+	tracker := tools.NewReadTracker()
+	readPath := filepath.Join(t.TempDir(), "tracked.txt")
+	if msg := tracker.CheckRead(readPath, 1, 1); msg != "" {
+		t.Fatalf("initial CheckRead = %q, want empty", msg)
+	}
+
+	hooks := agent.NewHookRegistry()
+	hook := &runtimeCompressionHook{tracker: tracker, readPath: readPath}
+	hooks.Add(hook)
+	wrapper := newCompressionHookContextWindow(cw, hooks, tracker)
+
+	body := strings.Repeat("a", 400)
+	msgs := make([]llm.Message, 12)
+	msgs[0] = llm.NewUserMessage(body)
+	for i := 1; i < 4; i++ {
+		msgs[i] = llm.NewAssistantMessage(body)
+	}
+	for i := 4; i < len(msgs); i++ {
+		if i%2 == 0 {
+			msgs[i] = llm.NewUserMessage(body)
+		} else {
+			msgs[i] = llm.NewAssistantMessage(body)
+		}
+	}
+
+	provider := &countingProvider{}
+	result, err := wrapper.CompressMessages(context.Background(), provider, msgs, 200)
+	if err != nil {
+		t.Fatalf("CompressMessages: %v", err)
+	}
+	if len(result) >= len(msgs) {
+		t.Fatalf("message count = %d, want less than %d", len(result), len(msgs))
+	}
+	if len(hook.calls) != 1 {
+		t.Fatalf("compression hook calls = %d, want 1", len(hook.calls))
+	}
+	if hook.calls[0] != [2]int{len(msgs), len(result)} {
+		t.Fatalf("compression hook args = %v, want [%d %d]", hook.calls[0], len(msgs), len(result))
+	}
+	if !hook.reset {
+		t.Fatal("expected read dedup reset before compression hook")
+	}
 }
 
 func (p *countingProvider) Name() string { return "mock" }
