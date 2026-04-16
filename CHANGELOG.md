@@ -1,5 +1,62 @@
 # Changelog
 
+## v0.5.0 (2026-04-16)
+
+Knowledge Assistant OS milestone: Phase 3.2 Gate PASS (v7) and the F-6 feature quartet (portability, fault injection, onboarding UX, locale) ship together. Release-ready per `docs/f6-validation-plan.md` (15/16 scenarios pass, D2 `--help` intercept fixed in the same release cycle).
+
+### F-6 Features
+
+- **LB6 Auth/Credential Portability**: `elnath portability {export,import,list,verify}` produces AES-256-GCM chunked-streaming bundles (`.eln`, 16 MiB chunks). Supports `--scope config,db,wiki,lessons,sessions` for selective exports. Passphrase gate: <8 chars rejected, 8-11 prompts on TTY / warns on non-TTY, 12+ silent. Per-export JSON history under `<data-dir>/portability/history/`. Codex Refresh token now auto-included via the new `RefreshableProvider` interface.
+- **LB7 Fault Injection**: `elnath chaos {run,list,report}` harness with 10 scenarios across 3 categories (tool / llm / ipc). 3-stage guard for daemon-runtime injection: `ELNATH_FAULT_PROFILE` env + `fault_injection.enabled` config + 5-second SIGINT-interruptible countdown. Per-scenario thresholds (max-runs / recovery attempts), JSONL + Markdown reports, BurstLimit handling for 429-burst patterns, zero overhead when disabled.
+- **F7 Onboarding UX**: `elnath setup --quickstart` non-TUI 5-minute path. 14 `ELN-XXX` error codes with `elnath errors <code|list>` lookup. Top-level `--help` / `-h` now route to man-page-style help at every level. Setup-end demo task, local-only `~/.elnath/data/onboarding_metric.json` (0600, booleans only).
+- **F8 Locale**: Unicode block heuristic detection (ko / ja / zh / en) with session-inherited resolver. `LocaleInstructionNode` (Priority 999) and `locale.ResponseDirective` single source of truth applied to both the normal conversation path and the `/skill` execution path. Bilingual mixes (Korean + English technical terms) are preserved in responses.
+
+### F-5 Provider Patch
+
+- **OAuth parity**: Anthropic OAuth added; Codex OAuth + Anthropic OAuth now provide the primary-provider surface without requiring an API key. `RefreshableProvider` interface-only contract — Codex implements refresh, Anthropic deferred.
+- **Lesson provider reuse**: Haiku-based lesson extractor reuses the user's main provider credentials instead of a separate key.
+- Model IDs stripped of dated suffixes; Telegram progress now shows real tool arguments for `file_*` tools.
+
+### F-1 … F-4 Learning Infrastructure
+
+- `lessons` CLI operational tooling (F-1), agent-task lesson extraction (F-2), redaction pipeline (F-2.5), multi-workflow learning extractor prep (F-3.1), team/ralph/autopilot integration (F-3.2), by-source stats + list filter (F-4).
+
+### Gate 3.2 Benchmark Optimization
+
+- Evidence-based agent-loop tuning (read-dedup `ReadTracker`, budget pressure injection at 70% / 90%, `toolResultPerToolLimit = 50_000` per-tool truncation, ack-continuation detection, configurable `MaxIterations`, `BenchmarkMode` prompt-node skip).
+- BrownfieldNode execution discipline (ant P1 comments / P2 verification / P3 collaboration / P4 accuracy) with Go / TS Bugfix specifics (Viper `WatchConfig`, Next.js find-config).
+- Corpus v6 / v7 retry cycles archived; final `3eb9291` Gate 3.2 PASS: BUG 9/9 (100%), BF 7/12 (58.3%).
+- Gate Retry v8 research complete (`docs/superpowers/plans/2026-04-16-gate-retry-v8-research.md`): corpus 7 → 25 taxonomy locked, Python added, 5 prompt hypotheses deferred until dog-food evidence.
+
+### Subsystems
+
+- **C-1 Skill system**: Registry + executable skill definitions, permission/hook plumbing, `elnath skill` dispatch surface, tool filtering per skill.
+- **D-1 Secret hook + audit trail**: Detector patterns (AWS, GitHub, GitLab, Slack, Stripe, Telegram, JWT, etc.) with audit trail for detection events.
+- **E-1 Research CLI**: `elnath research` hypothesis → experiment → evaluate → wiki-update loop wired into the `research` workflow.
+- **E-2 Ambient scheduler**: package + CLI hooks for recurring background checks.
+- **E-3 Self-improvement**: follow-up files for conversation-mediated self-persona adjustments.
+- **LB3 Conversation Spine**: cross-surface session resume (CLI ↔ Telegram ↔ daemon-submitted tasks) via canonical `ChatSessionBinder`.
+- **Telegram redesign**: two-path architecture (chat direct via `ChatResponder` + task queue via workers). `ProgressReporter` (1.5s tool-dedup) + `StreamConsumer` (0.3s summary). PathGuard write-deny model. 429 inline retry.
+
+### Architecture / Infrastructure
+
+- Wiki preference routing (`internal/routing/` shared package, `RoutingContext.ProjectID`, `Router.Route(intent, ctx, pref)`).
+- Full Inclusion Graph in prompt builder (LBB1) + Wiki Ingest Extension (LBB2).
+- MC3 H1 Pass Rule + MC4 Month 3 Gate + MC2 metrics completion in `internal/eval`.
+- `internal/userfacingerr` with 14 catalog entries and `UserFacingError.Is` / `Code()` for `errors.As` chains.
+
+### Bug Fixes
+
+- Router no longer forces ralph for greenfield tasks with verification hints.
+- Top-level `--help` / `-h` flags intercept before the unknown-command branch (release-blocker fix from the F-6 validation run).
+- Telegram tool-arg display; daemon worker panic recovery; benchmark recovery timeout capping; benchmark Python3 symlink + timeout hardening.
+
+### Release Notes
+
+- Binary version bumped to `0.5.0`. Portability bundle schema is v2 (AES-256-GCM chunked); legacy v1 bundles are not readable — export a fresh bundle if you had any v1 archives.
+- Previous tags: `v0.3.0` → `v0.4.0` was documented in CHANGELOG but never tagged; this release supersedes that intent.
+- First release validated via explicit 1-day burst scenario plan (`docs/f6-validation-plan.md`), committed alongside the code.
+
 ## v0.4.0 (2026-04-08)
 
 ### Execution Parity
