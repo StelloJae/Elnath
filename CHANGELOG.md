@@ -1,5 +1,49 @@
 # Changelog
 
+## v0.6.0 (2026-04-16)
+
+Skill Emergence + Safety + Quality. 6 major features across 5 commits (+6,749 LOC). First release with wiki-native skill CRUD, autonomous skill emergence (Layer 1+3), 3-state Ralph verification, declarative agent profiles, full-surface injection scanning, and greenfield project guidance.
+
+### Skill Emergence MVP (Phase C-2)
+
+- **Skill CRUD**: `elnath skill list/show/create/edit/delete/stats` CLI + Telegram `/skill-list`, `/skill-create`. Wiki pages as single source of truth (`wiki/skills/*.md`).
+- **Layer 1 — LLM Hint**: `create_skill` tool lets the agent suggest skill creation during conversation. `SkillGuidanceNode` (priority 64) instructs the agent when to propose skills.
+- **Layer 3 — Consolidator**: `DefaultConsolidator` promotes draft skills to active when prevalence threshold is met (default: 5 sessions, 2+ independent patterns). 90-day auto-cleanup for stale drafts. Runs as `skill-promote` scheduled task type (24h interval).
+- **Tracker**: JSONL append-only usage and pattern recording (`skill-usage.jsonl`, `skill-patterns.jsonl`).
+- **Foundation**: `Status`/`Source` fields on Skill struct, draft filtering in Registry.Load(), Creator with hot-reload via Registry.Add().
+
+### Local Outcomes Ralph Refactor
+
+- **3-state verification**: `VerdictPass` (done), `VerdictNeedsRevision` (retry with feedback), `VerdictFail` (immediate exit, no retry waste). Previously all non-PASS results triggered retry identically.
+- **Rubric-based prompt**: Structured evaluation against CORRECTNESS, COMPLETENESS, VERIFICATION criteria.
+- **Evidence window expanded**: 4→8 tool results, 1200→2000 chars per result, 4000→6000 assistant chars.
+- **Learning integration**: `ralph_fail` finish reason recorded for VerdictFail cases.
+
+### Agent Profile
+
+- **Wiki-native profiles**: `wiki/profiles/*.md` with frontmatter (model, tools, max_iterations). Loaded at startup, referenced by name.
+- **Seed profiles**: `code-reviewer` (read-only tools, 20 iterations), `researcher` (full tools, 50 iterations).
+- **Seed skill**: `deep-interview` — clarifies ambiguous requests before executing.
+- **CLI**: `elnath profile list/show`.
+
+### Safety Completion (Phase D-2)
+
+- **Tool output injection scan**: `SecretScanHook.PostToolUse()` now applies `ScanContent` after secret redaction. Covers bash, file tools, and MCP results.
+- **Wiki RAG injection scan**: `BuildRAGContext` accepts `ContentScanner` parameter. Injection in wiki pages is blocked before reaching the agent.
+- **Telegram output redaction**: `TelegramSink.WithRedactor()` strips secrets before sending messages.
+- **Audit**: `EventInjectionBlocked` events logged to audit trail.
+
+### LB1 Greenfield Path
+
+- **GreenfieldNode** (priority 40): Renders project scaffolding guidance when `ExistingCode == false`. Language-specific sections for Go, TypeScript, Python. Mutually exclusive with BrownfieldNode.
+
+### Other
+
+- **GPT-5.4 model support**: OpenAI/Codex model list updated to GPT-5.4 era (`39a11a2`).
+- **Error classifier**: 13-category error classification for tool failures and API errors (`fc04a35`).
+- **Context-overflow compression**: `ModelInfo.ContextWindow` + `ShouldCompress` callback wired (`6d01d10`).
+- **Dead code cleanup**: W2 dead code removed, HookRegistry type guard added (`0c11d35`).
+
 ## v0.5.1 (2026-04-15)
 
 Hermes parity release: 6 of 8 audit items implemented (#3, #4, #8, #9, #11, #13, #15). Item #12 (error classifier) deferred pending dog-food failure taxonomy.
