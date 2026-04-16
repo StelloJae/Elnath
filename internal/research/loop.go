@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/stello/elnath/internal/event"
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/wiki"
 )
@@ -30,7 +31,7 @@ type Loop struct {
 	maxRounds    int
 	costCapUSD   float64
 	logger       *slog.Logger
-	onText       func(string)
+	sink         event.Sink
 }
 
 // LoopOption configures a Loop.
@@ -51,9 +52,9 @@ func WithSessionID(id string) LoopOption {
 	return func(l *Loop) { l.sessionID = id }
 }
 
-// WithOnText streams workflow progress text to the provided callback.
-func WithOnText(cb func(string)) LoopOption {
-	return func(l *Loop) { l.onText = cb }
+// WithSink sets the event sink for streaming research progress.
+func WithSink(s event.Sink) LoopOption {
+	return func(l *Loop) { l.sink = s }
 }
 
 // NewLoop creates a research Loop with sensible defaults.
@@ -79,6 +80,7 @@ func NewLoop(
 		maxRounds:    5,
 		costCapUSD:   5.0,
 		logger:       logger,
+		sink:         event.NopSink{},
 	}
 	for _, opt := range opts {
 		opt(l)
@@ -89,10 +91,10 @@ func NewLoop(
 // Run executes the full research loop for the given topic.
 func (l *Loop) Run(ctx context.Context, topic string) (*ResearchResult, error) {
 	var rounds []RoundResult
-	l.emitf("[research] topic: %s\n", topic)
+	l.emitResearch("init", 0, "topic: %s", topic)
 
 	for round := 0; round < l.maxRounds; round++ {
-		l.emitf("[research] round %d/%d\n", round+1, l.maxRounds)
+		l.emitResearch("round", round+1, "round %d/%d", round+1, l.maxRounds)
 		if l.usageTracker != nil {
 			cost, err := l.usageTracker.TotalCost(ctx, l.sessionID)
 			if err == nil && cost >= l.costCapUSD {
@@ -107,14 +109,14 @@ func (l *Loop) Run(ctx context.Context, topic string) (*ResearchResult, error) {
 		if err != nil {
 			return nil, fmt.Errorf("research: round %d: generate: %w", round, err)
 		}
-		l.emitf("[research] generated %d hypotheses\n", len(hypotheses))
+		l.emitResearch("hypothesis", round+1, "generated %d hypotheses", len(hypotheses))
 
 		for _, hyp := range hypotheses {
-			l.emitf("[research] hypothesis %s: %s\n", hyp.ID, hyp.Statement)
+			l.emitResearch("hypothesis", round+1, "hypothesis %s: %s", hyp.ID, hyp.Statement)
 			expResult, err := l.experimenter.Run(ctx, hyp)
 			if err != nil {
 				l.logger.Error("experiment failed", "hypothesis", hyp.ID, "error", err)
-				l.emitf("[research] hypothesis %s failed: %v\n", hyp.ID, err)
+				l.emitResearch("hypothesis", round+1, "hypothesis %s failed: %v", hyp.ID, err)
 				continue
 			}
 
@@ -123,7 +125,7 @@ func (l *Loop) Run(ctx context.Context, topic string) (*ResearchResult, error) {
 				Hypothesis: hyp,
 				Result:     *expResult,
 			})
-			l.emitf("[research] result %s supported=%t confidence=%s\n", hyp.ID, expResult.Supported, expResult.Confidence)
+			l.emitResearch("result", round+1, "result %s supported=%t confidence=%s", hyp.ID, expResult.Supported, expResult.Confidence)
 
 			if l.usageTracker != nil {
 				_ = l.usageTracker.Record(ctx, l.provider.Name(), l.model, l.sessionID, expResult.Usage)
@@ -134,13 +136,13 @@ func (l *Loop) Run(ctx context.Context, topic string) (*ResearchResult, error) {
 
 		if l.shouldStop(rounds) {
 			l.logger.Info("convergence detected, stopping", "round", round)
-			l.emitf("[research] convergence detected at round %d\n", round+1)
+			l.emitResearch("convergence", round+1, "convergence detected at round %d", round+1)
 			break
 		}
 	}
 
 	summary := l.summarize(ctx, topic, rounds)
-	l.emitf("[research] summary ready\n")
+	l.emitResearch("summary", 0, "summary ready")
 
 	var totalCost float64
 	if l.usageTracker != nil {
@@ -155,10 +157,13 @@ func (l *Loop) Run(ctx context.Context, topic string) (*ResearchResult, error) {
 	}, nil
 }
 
-func (l *Loop) emitf(format string, args ...any) {
-	if l.onText != nil {
-		l.onText(fmt.Sprintf(format, args...))
-	}
+func (l *Loop) emitResearch(phase string, round int, format string, args ...any) {
+	l.sink.Emit(event.ResearchProgressEvent{
+		Base:    event.NewBase(),
+		Phase:   phase,
+		Round:   round,
+		Message: fmt.Sprintf(format, args...),
+	})
 }
 
 // shouldStop returns true when the research has converged or stagnated.
