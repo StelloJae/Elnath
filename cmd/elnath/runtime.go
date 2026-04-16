@@ -147,7 +147,7 @@ func buildExecutionRuntime(
 	historyStore := conversation.NewHistoryStore(db.Main)
 	classifier := conversation.NewLLMClassifier()
 
-	var ctxWindow conversation.ContextWindowManager
+	var ctxWindow *conversation.ContextWindow
 	if cfg.CompressThreshold > 0 {
 		ctxWindow = conversation.NewContextWindowWithThreshold(cfg.CompressThreshold)
 	} else {
@@ -169,6 +169,9 @@ func buildExecutionRuntime(
 	}
 	guard := tools.NewPathGuard(effectiveWorkDir, protectedPaths)
 	reg := buildToolRegistry(guard)
+	if tracker := reg.ReadTracker(); tracker != nil {
+		ctxWindow.OnAutoCompress(tracker.ResetDedup)
+	}
 	gitSync, wikiIdx := registerWikiTools(reg, cfg.WikiDir, db.Wiki)
 	reg.Register(conversation.NewConversationSearchTool(historyStore))
 

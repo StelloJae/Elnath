@@ -30,8 +30,16 @@ Output only the summary, no preamble.`
 
 // ContextWindow manages token budget and message compression via a 3-stage pipeline.
 type ContextWindow struct {
-	logger    *slog.Logger
-	threshold float64 // fraction of maxTokens at which auto-compression triggers (0.0-1.0)
+	logger          *slog.Logger
+	threshold       float64 // fraction of maxTokens at which auto-compression triggers (0.0-1.0)
+	onAutoCompress  func()
+}
+
+// OnAutoCompress registers a callback invoked after a successful Stage 2 LLM
+// compression run. Used to reset read-dedup caches so the agent can re-examine
+// files whose memory was summarized away. Safe to call with nil to clear.
+func (cw *ContextWindow) OnAutoCompress(fn func()) {
+	cw.onAutoCompress = fn
 }
 
 // NewContextWindow creates a new ContextWindow manager with the default threshold (80%).
@@ -167,6 +175,9 @@ func (cw *ContextWindow) CompressMessages(ctx context.Context, provider llm.Prov
 			} else {
 				messages = compressed
 				attempts++
+				if cw.onAutoCompress != nil {
+					cw.onAutoCompress()
+				}
 				continue
 			}
 		}

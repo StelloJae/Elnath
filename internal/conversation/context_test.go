@@ -310,6 +310,56 @@ func TestCompressMessages_LLMSummary(t *testing.T) {
 	}
 }
 
+func TestCompressMessages_OnAutoCompressFires(t *testing.T) {
+	cw := NewContextWindow()
+
+	const bodyLen = 400
+	body := strings.Repeat("a", bodyLen)
+	msgs := make([]llm.Message, 12)
+	msgs[0] = llm.NewUserMessage(body)
+	for i := 1; i < 4; i++ {
+		msgs[i] = llm.NewAssistantMessage(body)
+	}
+	for i := 4; i < 12; i++ {
+		if i%2 == 0 {
+			msgs[i] = llm.NewUserMessage(body)
+		} else {
+			msgs[i] = llm.NewAssistantMessage(body)
+		}
+	}
+
+	callbackCount := 0
+	cw.OnAutoCompress(func() { callbackCount++ })
+
+	provider := &mockProvider{
+		chatFn: func(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+			return &llm.ChatResponse{Content: "Summary"}, nil
+		},
+	}
+
+	if _, err := cw.CompressMessages(context.Background(), provider, msgs, 200); err != nil {
+		t.Fatalf("CompressMessages: %v", err)
+	}
+	if callbackCount == 0 {
+		t.Fatalf("expected OnAutoCompress to fire at least once after Stage 2 LLM summary, got 0")
+	}
+}
+
+func TestCompressMessages_OnAutoCompressNotFiredUnderBudget(t *testing.T) {
+	cw := NewContextWindow()
+
+	callbackCount := 0
+	cw.OnAutoCompress(func() { callbackCount++ })
+
+	msgs := []llm.Message{llm.NewUserMessage("short"), llm.NewAssistantMessage("ok")}
+	if _, err := cw.CompressMessages(context.Background(), &mockProvider{}, msgs, 100_000); err != nil {
+		t.Fatalf("CompressMessages: %v", err)
+	}
+	if callbackCount != 0 {
+		t.Fatalf("expected OnAutoCompress not to fire when under budget, got %d", callbackCount)
+	}
+}
+
 func TestCompressMessages_FallbackToSnip(t *testing.T) {
 	cw := NewContextWindow()
 
