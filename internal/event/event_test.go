@@ -1,6 +1,7 @@
 package event
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -109,4 +110,54 @@ func TestStreamDoneEventUsage(t *testing.T) {
 		t.Fatalf("expected 100 input tokens, got %d", e.Usage.InputTokens)
 	}
 	var _ Event = e
+}
+
+func TestNopSinkDoesNotPanic(t *testing.T) {
+	var s NopSink
+	s.Emit(TextDeltaEvent{Base: NewBase(), Content: "ignored"})
+}
+
+func TestRecorderSink(t *testing.T) {
+	r := &RecorderSink{}
+	r.Emit(TextDeltaEvent{Base: NewBase(), Content: "a"})
+	r.Emit(ToolProgressEvent{Base: NewBase(), ToolName: "bash"})
+	r.Emit(StreamDoneEvent{Base: NewBase()})
+
+	if len(r.Events) != 3 {
+		t.Fatalf("expected 3 events, got %d", len(r.Events))
+	}
+}
+
+func TestRecorderSinkConcurrent(t *testing.T) {
+	r := &RecorderSink{}
+	var wg sync.WaitGroup
+	const n = 100
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r.Emit(TextDeltaEvent{Base: NewBase(), Content: "x"})
+		}()
+	}
+	wg.Wait()
+
+	if len(r.Events) != n {
+		t.Fatalf("expected %d events, got %d", n, len(r.Events))
+	}
+}
+
+func TestEventsOfType(t *testing.T) {
+	r := &RecorderSink{}
+	r.Emit(TextDeltaEvent{Base: NewBase(), Content: "first"})
+	r.Emit(ToolProgressEvent{Base: NewBase(), ToolName: "bash"})
+	r.Emit(TextDeltaEvent{Base: NewBase(), Content: "second"})
+	r.Emit(StreamDoneEvent{Base: NewBase()})
+
+	deltas := EventsOfType[TextDeltaEvent](r)
+	if len(deltas) != 2 {
+		t.Fatalf("expected 2 TextDeltaEvents, got %d", len(deltas))
+	}
+	if deltas[0].Content != "first" || deltas[1].Content != "second" {
+		t.Fatalf("unexpected contents: %v, %v", deltas[0].Content, deltas[1].Content)
+	}
 }
