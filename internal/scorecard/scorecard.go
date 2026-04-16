@@ -46,6 +46,25 @@ type Report struct {
 
 const SchemaVersion = "1.0"
 
+// Compute reads the four source artifacts and returns a complete Report.
+// It never writes. Missing files produce UNKNOWN axes rather than errors.
+func Compute(paths SourcesPaths, now time.Time, elnathVersion string) Report {
+	axes := AxesReport{
+		RoutingAdaptation:    computeRoutingAdaptation(paths, now),
+		OutcomeRecording:     computeOutcomeRecording(paths, now),
+		LessonExtraction:     computeLessonExtraction(paths, now),
+		SynthesisCompounding: computeSynthesisCompounding(paths, now),
+	}
+	return Report{
+		Timestamp:     now,
+		SchemaVersion: SchemaVersion,
+		ElnathVersion: elnathVersion,
+		Overall:       aggregateOverall(axes),
+		Axes:          axes,
+		Sources:       paths,
+	}
+}
+
 // aggregateOverall applies the composition rule:
 // any DEGRADED wins; else all OK is OK; else any UNKNOWN is UNKNOWN; else NASCENT.
 func aggregateOverall(a AxesReport) Score {
