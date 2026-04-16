@@ -40,6 +40,10 @@ var (
 	statusCodeTextRE    = regexp.MustCompile(`(?i)\b(4\d\d|5\d\d)\s+(too many requests|payment required|bad gateway|service unavailable|gateway timeout|forbidden|unauthorized|not found|request too large|payload too large)\b`)
 )
 
+// CompressFunc compresses a message history to fit within context limits.
+// It receives the current messages and returns a shorter replacement slice.
+type CompressFunc func(ctx context.Context, messages []llm.Message) ([]llm.Message, error)
+
 // Agent runs the message→LLM→tools→repeat loop.
 // The message array is the ONLY state — no hidden state machines.
 type Agent struct {
@@ -53,6 +57,8 @@ type Agent struct {
 	systemPrompt  string
 	maxIterations int
 	logger        *slog.Logger
+	compressFunc  CompressFunc
+	contextWindow int // cached from provider.Models(); 0 = unknown
 }
 
 // Option configures an Agent.
@@ -92,6 +98,13 @@ func WithReadTracker(tracker *tools.ReadTracker) Option {
 	return func(a *Agent) { a.readTracker = tracker }
 }
 
+// WithCompressFunc attaches a compression callback invoked when context overflow
+// is detected. The callback receives the current message history and must return
+// a shorter replacement. At most one compression attempt is made per iteration.
+func WithCompressFunc(fn CompressFunc) Option {
+	return func(a *Agent) { a.compressFunc = fn }
+}
+
 func WithToolExecutor(exec tools.Executor) Option {
 	return func(a *Agent) {
 		a.executor = exec
@@ -118,7 +131,22 @@ func New(provider llm.Provider, reg *tools.Registry, opts ...Option) *Agent {
 	if a.readTracker == nil && reg != nil {
 		a.readTracker = reg.ReadTracker()
 	}
+	a.contextWindow = resolveContextWindow(provider, a.model)
 	return a
+}
+
+// resolveContextWindow looks up the context window size for the given model
+// from the provider's model list. Returns 0 if the model is not found.
+func resolveContextWindow(provider llm.Provider, model string) int {
+	if provider == nil || model == "" {
+		return 0
+	}
+	for _, m := range provider.Models() {
+		if m.ID == model {
+			return m.ContextWindow
+		}
+	}
+	return 0
 }
 
 func (a *Agent) ResetReadTrackerDedup() {
@@ -209,15 +237,27 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, onText func(str
 		assistantMsg, finalReq, usage, err := a.streamWithRetry(ctx, req, onText)
 		if err != nil {
 			var classified *errorclass.ClassifiedError
-			if errors.As(err, &classified) && classified.Recovery.ShouldCompress {
-				a.logger.Warn("classified provider error requires compression",
+			if errors.As(err, &classified) && classified.Recovery.ShouldCompress && a.compressFunc != nil {
+				a.logger.Warn("context overflow: attempting compression",
 					"category", classified.Category,
 					"provider", a.provider.Name(),
 					"tokens", estimateRequestTokens(req.Messages),
 					"messages", len(req.Messages),
 				)
+				compressed, compErr := a.compressFunc(ctx, messages)
+				if compErr != nil {
+					a.logger.Warn("compression failed", "error", compErr)
+					return nil, err
+				}
+				messages = compressed
+				req.Messages = compressed
+				assistantMsg, finalReq, usage, err = a.streamWithRetry(ctx, req, onText)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				return nil, err
 			}
-			return nil, err
 		}
 		if a.hooks != nil {
 			if err := a.hooks.RunPostLLMCall(ctx, finalReq, responseFromAssistantMessage(assistantMsg), usage); err != nil {
@@ -327,12 +367,12 @@ func (a *Agent) streamWithRetry(ctx context.Context, req llm.Request, onText fun
 			return msg, reqForAttempt, usage, nil
 		}
 
-		// Without a reliable context-window source here, keep disconnect heuristics conservative.
 		classified := errorclass.Classify(err, errorclass.Context{
 			Provider:     a.provider.Name(),
 			StatusCode:   extractStatusCode(err),
 			TokensUsed:   estimateRequestTokens(reqForAttempt.Messages),
 			MessageCount: len(reqForAttempt.Messages),
+			ContextLimit: a.contextWindow,
 		})
 		if a.hooks != nil {
 			if err := a.hooks.RunOnClassifiedError(ctx, classified); err != nil {

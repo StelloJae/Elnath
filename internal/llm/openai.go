@@ -341,14 +341,16 @@ var openAIModels = []ModelInfo{
 	{
 		ID:              "gpt-4o",
 		Name:            "GPT-4o",
-		MaxTokens:       128000,
+		MaxTokens:       16384,
+		ContextWindow:   128_000,
 		InputPricePerM:  2.5,
 		OutputPricePerM: 10.0,
 	},
 	{
 		ID:              "gpt-4o-mini",
 		Name:            "GPT-4o mini",
-		MaxTokens:       128000,
+		MaxTokens:       16384,
+		ContextWindow:   128_000,
 		InputPricePerM:  0.15,
 		OutputPricePerM: 0.60,
 	},

@@ -95,6 +95,7 @@ type ModelInfo struct {
 	ID              string
 	Name            string
 	MaxTokens       int
+	ContextWindow   int // input context limit in tokens; 0 means unknown
 	InputPricePerM  float64
 	OutputPricePerM float64
 }
