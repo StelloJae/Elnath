@@ -300,6 +300,9 @@ func mergeTeamLearningMessages(results []subtaskResult, finalMessages []llm.Mess
 func (w *TeamWorkflow) runSubtasks(ctx context.Context, input WorkflowInput, subtasks []subtask) ([]subtaskResult, llm.UsageStats, error) {
 	resultCh := make(chan subtaskResult, len(subtasks))
 
+	safeInput := input
+	safeInput.Sink = &syncSink{inner: input.Sink}
+
 	// Limit concurrent LLM calls to avoid overwhelming the provider with
 	// parallel requests that all hit rate limits simultaneously.
 	const maxConcurrent = 2
@@ -312,7 +315,7 @@ func (w *TeamWorkflow) runSubtasks(ctx context.Context, input WorkflowInput, sub
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			res := w.runOne(ctx, input, st)
+			res := w.runOne(ctx, safeInput, st)
 			resultCh <- res
 		}(st)
 	}
@@ -328,11 +331,11 @@ func (w *TeamWorkflow) runSubtasks(ctx context.Context, input WorkflowInput, sub
 		if r.err != nil {
 			return nil, llm.UsageStats{}, fmt.Errorf("subtask %d %q: %w", r.subtask.ID, r.subtask.Title, r.err)
 		}
-		input.Sink.Emit(event.TextDeltaEvent{Base: event.NewBase(), Content: fmt.Sprintf("[team] completed subtask %d: %s\n", r.subtask.ID, r.subtask.Title)})
+		safeInput.Sink.Emit(event.TextDeltaEvent{Base: event.NewBase(), Content: fmt.Sprintf("[team] completed subtask %d: %s\n", r.subtask.ID, r.subtask.Title)})
 		if r.stream != "" {
-			input.Sink.Emit(event.TextDeltaEvent{Base: event.NewBase(), Content: r.stream})
+			safeInput.Sink.Emit(event.TextDeltaEvent{Base: event.NewBase(), Content: r.stream})
 			if !strings.HasSuffix(r.stream, "\n") {
-				input.Sink.Emit(event.TextDeltaEvent{Base: event.NewBase(), Content: "\n"})
+				safeInput.Sink.Emit(event.TextDeltaEvent{Base: event.NewBase(), Content: "\n"})
 			}
 		}
 		totalUsage.InputTokens += r.result.Usage.InputTokens
@@ -389,6 +392,18 @@ type teeSink struct {
 func (t *teeSink) Emit(e event.Event) {
 	t.a.Emit(e)
 	t.b.Emit(e)
+}
+
+// syncSink wraps a Sink with a mutex for concurrent callers.
+type syncSink struct {
+	mu    sync.Mutex
+	inner event.Sink
+}
+
+func (s *syncSink) Emit(e event.Event) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.inner.Emit(e)
 }
 
 // synthesise asks the LLM to combine all subtask outputs into a coherent final answer.
