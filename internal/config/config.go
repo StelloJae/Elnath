@@ -31,6 +31,7 @@ type Config struct {
 	Research       ResearchConfig       `yaml:"research"`
 	LLMExtraction  LLMExtractionConfig  `yaml:"llm_extraction"`
 	MagicDocs      MagicDocsConfig      `yaml:"magic_docs"`
+	Ambient        AmbientConfig        `yaml:"ambient"`
 	Projects       []ProjectRef         `yaml:"projects"`
 	MCPServers     []MCPServerConfig    `yaml:"mcp_servers"`
 	Hooks          []HookConfig         `yaml:"hooks"`
@@ -128,6 +129,11 @@ type LLMExtractionConfig struct {
 type MagicDocsConfig struct {
 	Enabled bool   `yaml:"enabled"`
 	Model   string `yaml:"model"`
+}
+
+type AmbientConfig struct {
+	Enabled       bool `yaml:"enabled"`
+	MaxConcurrent int  `yaml:"max_concurrent"`
 }
 
 func Load(path string) (*Config, error) {
