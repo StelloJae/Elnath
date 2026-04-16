@@ -125,13 +125,16 @@ The "consolidation run ⇒ synthesis page + superseded marks" integration test l
 
 Split into two commits: `fd77cd2` (learning side) and the follow-up wiki commit.
 
-### B.5 — Consolidator Orchestration
+### B.5 — Consolidator Orchestration ✅
 
-- [ ] `consolidator.go`: `Run(ctx)` orchestrates gate → select recent lessons → prompt → LLM call → parse → persist → state update
-- [ ] Recent-lesson window replaces B.2's abandoned clustering (N most recent, capped by prompt budget)
-- [ ] Writes `~/.elnath/data/consolidation_state.json` on each run (success or failure)
-- [ ] On failure: release lock, log error, do NOT advance `lastConsolidatedAt` (so next run retries)
-- [ ] Integration test: seeded lessons.jsonl + stub LLM → full run → assert synthesis page + state + superseded marks
+- [x] `internal/learning/consolidator.go`: `Consolidator.Run(ctx)` orchestrates gate → select recent lessons → prompt → LLM call → parse → persist → state update
+- [x] Recent-lesson window replaces B.2's abandoned clustering (`MaxLessons` knob, default 50)
+- [x] Writes `consolidation_state.json` (atomic temp+rename) on each run with run/success counts, last error, last-run/synthesis stats
+- [x] On failure: `Gate.Acquire` release func rolls mtime back so the next run retries without waiting out the time gate
+- [x] `ConsolidatorConfig` injects Store / WikiWriter / llm.Provider / Gate / model / statePath / systemPrefix (for Codex OAuth identity)
+- [x] Stub-LLM integration tests cover: full success path (synthesis page + superseded marks + state), gate-block skip, insufficient-active-lessons skip, LLM error rollback, malformed-JSON rollback, already-superseded lessons excluded from prompt, zero-synthesis success (still time-gates next run)
+
+B.8 live probe remains — the orchestrator has yet to run against real lessons.jsonl with a real provider.
 
 ### B.6 — Scheduler Wiring
 
