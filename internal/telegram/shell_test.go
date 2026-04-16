@@ -14,6 +14,7 @@ import (
 	"github.com/stello/elnath/internal/daemon"
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/skill"
+	"github.com/stello/elnath/internal/wiki"
 )
 
 type fakeBotClient struct {
@@ -632,6 +633,8 @@ func TestShellHelpListsSkills(t *testing.T) {
 		t.Fatalf("sent messages = %d, want 1", len(bot.sent))
 	}
 	checks := []string{
+		"/skill-list",
+		"/skill-create",
 		"🛠 <b>Skills</b>",
 		"/pr-review",
 		"/audit-security",
@@ -640,6 +643,56 @@ func TestShellHelpListsSkills(t *testing.T) {
 		if !strings.Contains(bot.sent[0].text, want) {
 			t.Fatalf("help reply missing %q\n%s", want, bot.sent[0].text)
 		}
+	}
+}
+
+func TestShellSkillListCommand(t *testing.T) {
+	reg := skill.NewRegistry()
+	reg.Add(&skill.Skill{Name: "pr-review", Description: "Review PRs", Status: "active"})
+	shell, queue, _, bot := newTestShellWithOptions(t, reg)
+
+	if err := shell.HandleUpdate(context.Background(), Update{
+		ID:      1,
+		Message: Message{ChatID: "chat-1", Text: "/skill-list"},
+	}); err != nil {
+		t.Fatalf("HandleUpdate(/skill-list) error = %v", err)
+	}
+	if len(bot.sent) != 1 || !strings.Contains(bot.sent[0].text, "/pr-review") {
+		t.Fatalf("reply = %#v, want listed skills", bot.sent)
+	}
+	tasks, err := queue.List(context.Background())
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(tasks) != 0 {
+		t.Fatalf("queued tasks = %d, want 0", len(tasks))
+	}
+}
+
+func TestShellSkillCreateCommand(t *testing.T) {
+	store, err := wiki.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	reg := skill.NewRegistry()
+	creator := skill.NewCreator(store, skill.NewTracker(t.TempDir()), reg)
+	shell, _, _, bot := newTestShellWithOptions(t, reg, WithSkillCreator(creator))
+
+	if err := shell.HandleUpdate(context.Background(), Update{
+		ID:      1,
+		Message: Message{ChatID: "chat-1", Text: "/skill-create deploy-check"},
+	}); err != nil {
+		t.Fatalf("HandleUpdate(/skill-create) error = %v", err)
+	}
+	if len(bot.sent) != 1 || !strings.Contains(bot.sent[0].text, "deploy-check") {
+		t.Fatalf("reply = %#v, want skill creation confirmation", bot.sent)
+	}
+	page, err := store.Read("skills/deploy-check.md")
+	if err != nil {
+		t.Fatalf("Read(created skill) error = %v", err)
+	}
+	if got := page.Extra["status"]; got != "draft" {
+		t.Fatalf("created status = %v, want draft", got)
 	}
 }
 

@@ -119,6 +119,59 @@ func TestRegistryLoad(t *testing.T) {
 	}
 }
 
+func TestRegistryLoadSkipsDraft(t *testing.T) {
+	t.Parallel()
+
+	store, err := wiki.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+
+	pages := []*wiki.Page{
+		{
+			Path:    "skills/active-skill.md",
+			Title:   "Active Skill",
+			Type:    wiki.PageTypeAnalysis,
+			Tags:    []string{"skill"},
+			Content: "Do active things",
+			Extra: map[string]any{
+				"name":   "active-skill",
+				"status": "active",
+			},
+		},
+		{
+			Path:    "skills/draft-skill.md",
+			Title:   "Draft Skill",
+			Type:    wiki.PageTypeAnalysis,
+			Tags:    []string{"skill"},
+			Content: "Do draft things",
+			Extra: map[string]any{
+				"name":   "draft-skill",
+				"status": "draft",
+			},
+		},
+	}
+	for _, page := range pages {
+		if err := store.Create(page); err != nil {
+			t.Fatalf("Create(%q) error = %v", page.Path, err)
+		}
+	}
+
+	reg := NewRegistry()
+	if err := reg.Load(store); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if _, ok := reg.Get("active-skill"); !ok {
+		t.Fatal("active skill missing after Load()")
+	}
+	if _, ok := reg.Get("draft-skill"); ok {
+		t.Fatal("draft skill loaded by Load()")
+	}
+	if got := len(reg.List()); got != 1 {
+		t.Fatalf("len(List()) = %d, want 1", got)
+	}
+}
+
 func TestRegistryLoadReturnsStoreError(t *testing.T) {
 	t.Parallel()
 

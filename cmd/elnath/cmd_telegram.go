@@ -78,11 +78,13 @@ func cmdTelegramShell(ctx context.Context) error {
 		return fmt.Errorf("get cwd: %w", err)
 	}
 	skillReg := skill.NewRegistry()
+	var skillCreator *skill.Creator
 	if cfg.WikiDir != "" {
 		if store, err := wiki.NewStore(cfg.WikiDir); err == nil {
 			if err := skillReg.Load(store); err != nil {
 				app.Logger.Warn("telegram: skill registry load failed", "error", err)
 			}
+			skillCreator = skill.NewCreator(store, skill.NewTracker(cfg.DataDir), skillReg)
 		} else {
 			app.Logger.Warn("telegram: wiki store unavailable for skills", "error", err)
 		}
@@ -90,6 +92,7 @@ func cmdTelegramShell(ctx context.Context) error {
 	shell, err := telegram.NewShell(queue, approvals, bot, cfg.Telegram.ChatID, statePath, skillReg,
 		telegram.WithWorkDir(cwd),
 		telegram.WithChatSessionBinder(binder),
+		telegram.WithSkillCreator(skillCreator),
 	)
 	if err != nil {
 		return err

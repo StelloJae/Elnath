@@ -33,8 +33,8 @@ func (t *ScheduledTask) Validate() error {
 	if t.Interval < time.Minute {
 		return fmt.Errorf("scheduled task %q: interval must be >= 1m (got %s)", t.Name, t.Interval)
 	}
-	if t.Type != "" && t.Type != "agent" && t.Type != "research" {
-		return fmt.Errorf("scheduled task %q: invalid type %q (must be agent or research)", t.Name, t.Type)
+	if t.Type != "" && t.Type != "agent" && t.Type != "research" && t.Type != "skill-promote" {
+		return fmt.Errorf("scheduled task %q: invalid type %q (must be agent, research, or skill-promote)", t.Name, t.Type)
 	}
 	return nil
 }

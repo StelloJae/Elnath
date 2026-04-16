@@ -87,5 +87,8 @@ func mapTaskType(raw string) daemon.TaskType {
 	if raw == "research" {
 		return daemon.TaskTypeResearch
 	}
+	if raw == "skill-promote" {
+		return daemon.TaskTypeSkillPromote
+	}
 	return daemon.TaskTypeAgent
 }

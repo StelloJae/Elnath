@@ -237,6 +237,7 @@ func cmdDaemonStart(ctx context.Context) error {
 			telegram.WithChatResponder(chatResponder),
 			telegram.WithChatSessionBinder(binder),
 			telegram.WithClassifier(classifier, provider),
+			telegram.WithSkillCreator(rt.skillCreator),
 			telegram.WithTaskTracker(tgSink),
 			telegram.WithWorkDir(workDir),
 		)

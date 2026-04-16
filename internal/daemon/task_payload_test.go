@@ -82,6 +82,18 @@ func TestEncodeTaskPayloadKeepsResearchPromptOnlyStructured(t *testing.T) {
 	}
 }
 
+func TestEncodeTaskPayloadRoundTripsSkillPromoteType(t *testing.T) {
+	payload := TaskPayload{Type: TaskTypeSkillPromote, Prompt: "promote queued drafts"}
+	raw := EncodeTaskPayload(payload)
+	if raw == payload.Prompt {
+		t.Fatalf("EncodeTaskPayload returned plain prompt for skill-promote payload: %q", raw)
+	}
+	got := ParseTaskPayload(raw)
+	if got != payload {
+		t.Fatalf("round trip payload = %+v, want %+v", got, payload)
+	}
+}
+
 func TestParseTaskPayloadBackfillsPrincipalSurfaceFromLegacySurfaceField(t *testing.T) {
 	got := ParseTaskPayload(`{"prompt":"hello","surface":"telegram"}`)
 	if got.Principal.Surface != "telegram" {

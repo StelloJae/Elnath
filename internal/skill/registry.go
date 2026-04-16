@@ -46,6 +46,9 @@ func (r *Registry) Load(store *wiki.Store) error {
 		if skill == nil {
 			continue
 		}
+		if skill.Status == "draft" {
+			continue
+		}
 		if _, exists := r.skills[skill.Name]; exists {
 			slog.Warn("duplicate skill definition", "name", skill.Name, "path", page.Path)
 		}

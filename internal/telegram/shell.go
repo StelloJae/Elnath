@@ -81,6 +81,10 @@ func WithChatSessionBinder(binder *ChatSessionBinder) ShellOption {
 	return func(s *Shell) { s.binder = binder }
 }
 
+func WithSkillCreator(creator *skill.Creator) ShellOption {
+	return func(s *Shell) { s.skillCreator = creator }
+}
+
 type Shell struct {
 	queue              *daemon.Queue
 	approvals          *daemon.ApprovalStore
@@ -96,6 +100,7 @@ type Shell struct {
 	workDir            string
 	binder             *ChatSessionBinder
 	skillReg           *skill.Registry
+	skillCreator       *skill.Creator
 }
 
 type shellState struct {
@@ -332,6 +337,13 @@ func (s *Shell) handleCommand(ctx context.Context, text string, principal identi
 		return s.enqueueFollowUp(ctx, text, principal, userMsgID)
 	case "/submit":
 		return s.enqueueNewTask(ctx, text, principal)
+	case "/skill-list":
+		return s.handleSkillList(), nil
+	case "/skill-create":
+		if len(fields) < 2 {
+			return "Usage: /skill-create <name>", nil
+		}
+		return s.handleSkillCreate(fields[1])
 	case "/help":
 		help := "📖 <b>Commands</b>\n" +
 			"• <code>/status</code> — task status\n" +
@@ -339,6 +351,8 @@ func (s *Shell) handleCommand(ctx context.Context, text string, principal identi
 			"• <code>/approvals</code> — pending approvals\n" +
 			"• <code>/approve &lt;id&gt;</code> — approve\n" +
 			"• <code>/deny &lt;id&gt;</code> — deny\n" +
+			"• <code>/skill-list</code> — registered skills\n" +
+			"• <code>/skill-create</code> — create draft skill\n" +
 			"• <code>/followup &lt;sid&gt; &lt;msg&gt;</code> — follow-up\n" +
 			"• <i>or just type a message</i>"
 		if s.skillReg != nil {
@@ -375,6 +389,42 @@ func (s *Shell) handleCommand(ctx context.Context, text string, principal identi
 		}
 		return s.enqueueNewTask(ctx, text, principal)
 	}
+}
+
+func (s *Shell) handleSkillList() string {
+	if s.skillReg == nil {
+		return "No skills found."
+	}
+	skills := s.skillReg.List()
+	if len(skills) == 0 {
+		return "No skills found."
+	}
+	lines := []string{"🛠 <b>Skills</b>"}
+	for _, sk := range skills {
+		lines = append(lines, fmt.Sprintf("• <code>/%s</code> — %s", sk.Name, escapeHTML(sk.Description)))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (s *Shell) handleSkillCreate(name string) (string, error) {
+	if s.skillCreator == nil {
+		return "Skill creation is unavailable in this shell.", nil
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "Usage: /skill-create <name>", nil
+	}
+	if _, err := s.skillCreator.Create(skill.CreateParams{
+		Name:        name,
+		Description: "Draft skill scaffold created from Telegram",
+		Trigger:     "/" + name,
+		Prompt:      "TODO: replace this draft skill prompt.",
+		Status:      "draft",
+		Source:      "user",
+	}); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Created draft skill /%s. Edit the wiki entry to finish it.", name), nil
 }
 
 func (s *Shell) renderStatus(ctx context.Context) (string, error) {

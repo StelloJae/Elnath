@@ -10,8 +10,9 @@ import (
 type TaskType string
 
 const (
-	TaskTypeAgent    TaskType = ""
-	TaskTypeResearch TaskType = "research"
+	TaskTypeAgent        TaskType = ""
+	TaskTypeResearch     TaskType = "research"
+	TaskTypeSkillPromote TaskType = "skill-promote"
 )
 
 // TaskPayload is the shared queue payload contract for daemon work.

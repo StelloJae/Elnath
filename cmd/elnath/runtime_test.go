@@ -1732,6 +1732,29 @@ func TestExecutionRuntimeRunTaskExecutesPrefixedSkillSlashCommand(t *testing.T) 
 	if provider.lastSystem != "Review PR #42" {
 		t.Fatalf("system prompt = %q, want %q", provider.lastSystem, "Review PR #42")
 	}
+	stats, err := rt.skillTracker.UsageStats()
+	if err != nil {
+		t.Fatalf("UsageStats() error = %v", err)
+	}
+	if got := stats["pr-review"]; got != 1 {
+		t.Fatalf("UsageStats()[%q] = %d, want 1", "pr-review", got)
+	}
+}
+
+func TestDaemonTaskRunnerHandlesSkillPromoteType(t *testing.T) {
+	rt := newTestExecutionRuntime(t, &countingProvider{streamText: "unused"})
+	payload := daemon.EncodeTaskPayload(daemon.TaskPayload{
+		Type:   daemon.TaskTypeSkillPromote,
+		Prompt: "promote queued drafts",
+	})
+
+	result, err := rt.newDaemonTaskRunner()(context.Background(), payload, nil)
+	if err != nil {
+		t.Fatalf("daemon task runner skill-promote error = %v, want nil", err)
+	}
+	if !strings.Contains(result.Summary, "promoted") {
+		t.Fatalf("summary = %q, want promoted summary", result.Summary)
+	}
 }
 
 func containsToolResult(messages []llm.Message) bool {

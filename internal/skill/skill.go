@@ -15,6 +15,8 @@ type Skill struct {
 	RequiredTools []string
 	Model         string
 	Prompt        string
+	Status        string
+	Source        string
 }
 
 func FromPage(page *wiki.Page) *Skill {
@@ -26,6 +28,10 @@ func FromPage(page *wiki.Page) *Skill {
 	if !ok || name == "" {
 		return nil
 	}
+	status := extraString(page.Extra, "status")
+	if status == "" {
+		status = "active"
+	}
 
 	return &Skill{
 		Name:          name,
@@ -34,6 +40,8 @@ func FromPage(page *wiki.Page) *Skill {
 		RequiredTools: extraStrings(page.Extra, "required_tools"),
 		Model:         extraString(page.Extra, "model"),
 		Prompt:        page.Content,
+		Status:        status,
+		Source:        extraString(page.Extra, "source"),
 	}
 }
 

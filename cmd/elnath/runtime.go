@@ -108,6 +108,8 @@ type executionRuntime struct {
 	wikiIdx            *wiki.Index
 	wikiStore          *wiki.Store
 	skillReg           *skill.Registry
+	skillCreator       *skill.Creator
+	skillTracker       *skill.Tracker
 	gitSync            *wiki.GitSync
 	workDir            string
 	daemonMode         bool
@@ -275,6 +277,14 @@ func buildExecutionRuntime(
 			app.Logger.Warn("skill registry load failed", "error", err)
 		}
 	}
+	skillTracker := skill.NewTracker(cfg.DataDir)
+	var skillCreator *skill.Creator
+	if wikiStore != nil {
+		skillCreator = skill.NewCreator(wikiStore, skillTracker, skillReg)
+	}
+	if skillCreator != nil {
+		reg.Register(tools.NewSkillTool(skillCreator, skillReg))
+	}
 	if selfState == nil {
 		selfState = self.New(cfg.DataDir)
 	}
@@ -356,6 +366,7 @@ func buildExecutionRuntime(
 	b.Register(prompt.NewToolCatalogNode(80))
 	b.Register(prompt.NewModelGuidanceNode(70))
 	b.Register(prompt.NewSkillCatalogNode(65, skillReg))
+	b.Register(prompt.NewSkillGuidanceNode(64))
 	b.Register(prompt.NewDynamicBoundaryNode())
 	b.Register(prompt.NewWikiRAGNode(60, 3))
 	b.Register(prompt.NewMemoryContextNode(55, 5, 1200))
@@ -386,6 +397,8 @@ func buildExecutionRuntime(
 		wikiIdx:            wikiIdx,
 		wikiStore:          wikiStore,
 		skillReg:           skillReg,
+		skillCreator:       skillCreator,
+		skillTracker:       skillTracker,
 		gitSync:            gitSync,
 		workDir:            effectiveWorkDir,
 		daemonMode:         daemonMode,
@@ -624,8 +637,10 @@ func (rt *executionRuntime) trySkillExecution(
 		Locale:     rt.mgr.LastLocale(sess.ID),
 	})
 	if err != nil {
+		rt.recordSkillUsage(sess.ID, skillName, false)
 		return nil, "", true, fmt.Errorf("skill %q: %w", skillName, err)
 	}
+	rt.recordSkillUsage(sess.ID, skillName, true)
 	if usage := llm.FormatUsageSummary(rt.wfCfg.Model, result.Usage); usage != "" {
 		output.emitUsage(usage)
 	}
@@ -648,6 +663,19 @@ func (rt *executionRuntime) trySkillExecution(
 	updated := append(messages, delta...)
 	sess.Messages = updated
 	return updated, result.Output, true, nil
+}
+
+func (rt *executionRuntime) recordSkillUsage(sessionID, skillName string, success bool) {
+	if rt == nil || rt.skillTracker == nil {
+		return
+	}
+	if err := rt.skillTracker.RecordUsage(skill.UsageRecord{
+		SkillName: skillName,
+		SessionID: sessionID,
+		Success:   success,
+	}); err != nil && rt.app != nil && rt.app.Logger != nil {
+		rt.app.Logger.Warn("skill usage tracking failed", "skill", skillName, "error", err)
+	}
 }
 
 func parseSkillArgs(trigger string, values []string) map[string]string {
@@ -718,6 +746,18 @@ func (rt *executionRuntime) newDaemonTaskRunner() daemon.AgentTaskRunner {
 		userInput := taskPayload.Prompt
 		if userInput == "" {
 			return daemon.TaskResult{}, fmt.Errorf("daemon task payload is empty")
+		}
+		if taskPayload.Type == daemon.TaskTypeSkillPromote {
+			if rt.skillCreator == nil || rt.wikiStore == nil {
+				return daemon.TaskResult{}, fmt.Errorf("skill promotion: creator or wiki store not configured")
+			}
+			consolidator := skill.NewConsolidator(rt.skillCreator, rt.skillTracker, rt.skillReg, rt.wikiStore, skill.DefaultConsolidatorConfig())
+			result, err := consolidator.Run(ctx)
+			if err != nil {
+				return daemon.TaskResult{}, fmt.Errorf("skill promotion: %w", err)
+			}
+			summary := fmt.Sprintf("promoted %d, cleaned %d", len(result.Promoted), len(result.Cleaned))
+			return daemon.TaskResult{Result: summary, Summary: summary}, nil
 		}
 
 		var (

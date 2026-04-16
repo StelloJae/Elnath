@@ -35,6 +35,27 @@ func TestFromPage(t *testing.T) {
 				RequiredTools: []string{"bash", "read_file"},
 				Model:         "gpt-5",
 				Prompt:        "Review PR {pr_number}",
+				Status:        "active",
+			},
+		},
+		{
+			name: "skill page with status and source",
+			page: &wiki.Page{
+				Tags:    []string{"skill"},
+				Content: "Deploy {env}",
+				Extra: map[string]any{
+					"name":        "deploy-check",
+					"description": "Check deployment status",
+					"status":      "draft",
+					"source":      "analyst",
+				},
+			},
+			want: &Skill{
+				Name:        "deploy-check",
+				Description: "Check deployment status",
+				Prompt:      "Deploy {env}",
+				Status:      "draft",
+				Source:      "analyst",
 			},
 		},
 		{
@@ -74,6 +95,7 @@ func TestFromPage(t *testing.T) {
 			want: &Skill{
 				Name:          "audit-security",
 				RequiredTools: []string{"bash", "read_file"},
+				Status:        "active",
 			},
 		},
 		{
@@ -85,7 +107,8 @@ func TestFromPage(t *testing.T) {
 				},
 			},
 			want: &Skill{
-				Name: "audit-security",
+				Name:   "audit-security",
+				Status: "active",
 			},
 		},
 	}

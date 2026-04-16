@@ -109,6 +109,10 @@ func TestScheduledTaskValidate(t *testing.T) {
 			name: "valid task",
 			task: ScheduledTask{Name: "hello", Prompt: "go", Interval: time.Hour, Type: "research", RunOnStart: true},
 		},
+		{
+			name: "valid skill promote task",
+			task: ScheduledTask{Name: "skill-promote", Prompt: "promote queued drafts", Interval: 24 * time.Hour, Type: "skill-promote"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -364,6 +368,7 @@ func TestSchedulerEnqueueOnceMapsTaskTypes(t *testing.T) {
 		{name: "default agent", wantType: daemon.TaskTypeAgent},
 		{name: "explicit agent", taskType: "agent", wantType: daemon.TaskTypeAgent},
 		{name: "research", taskType: "research", wantType: daemon.TaskTypeResearch},
+		{name: "skill promote", taskType: "skill-promote", wantType: daemon.TaskTypeSkillPromote},
 	}
 
 	for _, tt := range tests {
