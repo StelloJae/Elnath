@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/stello/elnath/internal/agent"
+	"github.com/stello/elnath/internal/event"
 	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
 )
@@ -48,6 +49,9 @@ func (w *RalphWorkflow) Name() string { return "ralph" }
 //  3. If verified, returns the result.
 //  4. If not, appends the verification feedback as a user message and retries.
 func (w *RalphWorkflow) Run(ctx context.Context, input WorkflowInput) (*WorkflowResult, error) {
+	if input.Sink == nil {
+		input.Sink = event.NopSink{}
+	}
 	single := NewSingleWorkflow()
 	totalUsage := llm.UsageStats{}
 	maxAttempts := w.MaxAttempts

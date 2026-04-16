@@ -17,6 +17,7 @@ import (
 	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/core"
 	"github.com/stello/elnath/internal/daemon"
+	"github.com/stello/elnath/internal/event"
 	"github.com/stello/elnath/internal/identity"
 	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
@@ -30,11 +31,57 @@ import (
 	"github.com/stello/elnath/internal/wiki"
 )
 
+// orchestrationOutput carries optional callbacks for event routing.
+// Production CLI and daemon modes route events through an event.Bus
+// with typed observers. The OnWorkflow/OnText/OnUsage fields remain
+// for backward compatibility with tests that set them directly.
 type orchestrationOutput struct {
 	OnProgress func(daemon.ProgressEvent)
 	OnWorkflow func(intent conversation.Intent, workflow string)
 	OnText     func(string)
 	OnUsage    func(string)
+}
+
+// terminalObserver renders typed events to stdout for interactive CLI use.
+type terminalObserver struct{}
+
+func (terminalObserver) OnEvent(e event.Event) {
+	switch ev := e.(type) {
+	case event.TextDeltaEvent:
+		fmt.Print(ev.Content)
+	case event.WorkflowProgressEvent:
+		fmt.Printf("[%s → %s]\n\n", ev.Intent, ev.Workflow)
+	case event.UsageProgressEvent:
+		fmt.Println()
+		fmt.Println(ev.Summary)
+	case event.ResearchProgressEvent:
+		fmt.Print(ev.Message)
+	}
+}
+
+// progressObserver converts typed events back to daemon.ProgressEvent
+// for the daemon task runner's onText-based progress protocol.
+type progressObserver struct {
+	onProgress func(daemon.ProgressEvent)
+}
+
+func (p progressObserver) OnEvent(e event.Event) {
+	switch ev := e.(type) {
+	case event.ToolProgressEvent:
+		p.onProgress(daemon.ToolProgressEvent(ev.ToolName, ev.Preview))
+	case event.WorkflowProgressEvent:
+		p.onProgress(daemon.WorkflowProgressEvent(ev.Intent, ev.Workflow))
+	case event.UsageProgressEvent:
+		p.onProgress(daemon.UsageProgressEvent(ev.Summary))
+	case event.TextDeltaEvent:
+		if ev.Content != "" {
+			p.onProgress(daemon.TextProgressEvent(ev.Content))
+		}
+	case event.ResearchProgressEvent:
+		if ev.Message != "" {
+			p.onProgress(daemon.TextProgressEvent(ev.Message))
+		}
+	}
 }
 
 func cliOrchestrationOutput() orchestrationOutput {
@@ -50,40 +97,54 @@ func cliOrchestrationOutput() orchestrationOutput {
 	}
 }
 
-func (o orchestrationOutput) emitWorkflow(intent conversation.Intent, workflow string) {
-	if o.OnProgress != nil {
-		o.OnProgress(daemon.WorkflowProgressEvent(string(intent), workflow))
+// newBus creates an event.Bus wired to the appropriate observers.
+// CLI mode always gets a terminalObserver; daemon mode additionally
+// gets a progressObserver when OnProgress is set. Legacy OnWorkflow/
+// OnText/OnUsage callbacks are wired as observers for test compat.
+func newBus(output orchestrationOutput, cli bool) *event.Bus {
+	bus := event.NewBus()
+	hasLegacy := output.OnWorkflow != nil || output.OnText != nil || output.OnUsage != nil
+	if hasLegacy {
+		bus.Subscribe(legacyCallbackObserver{
+			onWorkflow: output.OnWorkflow,
+			onText:     output.OnText,
+			onUsage:    output.OnUsage,
+		})
+	} else if cli {
+		bus.Subscribe(terminalObserver{})
 	}
-	if o.OnWorkflow != nil {
-		o.OnWorkflow(intent, workflow)
+	if output.OnProgress != nil {
+		bus.Subscribe(progressObserver{onProgress: output.OnProgress})
 	}
+	return bus
 }
 
-func (o orchestrationOutput) emitText(text string) {
-	if text == "" {
-		return
-	}
-	if o.OnProgress != nil {
-		if ev, ok := daemon.ParseProgressEvent(text); ok {
-			o.OnProgress(ev)
-		} else if ev := daemon.TextProgressEvent(text); ev.Message != "" {
-			o.OnProgress(ev)
+// legacyCallbackObserver bridges typed events to the old OnWorkflow/OnText/
+// OnUsage callbacks. Used by tests that set these fields directly.
+type legacyCallbackObserver struct {
+	onWorkflow func(conversation.Intent, string)
+	onText     func(string)
+	onUsage    func(string)
+}
+
+func (o legacyCallbackObserver) OnEvent(e event.Event) {
+	switch ev := e.(type) {
+	case event.TextDeltaEvent:
+		if o.onText != nil {
+			o.onText(ev.Content)
 		}
-	}
-	if o.OnText != nil {
-		o.OnText(text)
-	}
-}
-
-func (o orchestrationOutput) emitUsage(summary string) {
-	if summary == "" {
-		return
-	}
-	if o.OnProgress != nil {
-		o.OnProgress(daemon.UsageProgressEvent(summary))
-	}
-	if o.OnUsage != nil {
-		o.OnUsage(summary)
+	case event.WorkflowProgressEvent:
+		if o.onWorkflow != nil {
+			o.onWorkflow(conversation.Intent(ev.Intent), ev.Workflow)
+		}
+	case event.UsageProgressEvent:
+		if o.onUsage != nil {
+			o.onUsage(ev.Summary)
+		}
+	case event.ResearchProgressEvent:
+		if o.onText != nil {
+			o.onText(ev.Message)
+		}
 	}
 }
 
@@ -494,9 +555,11 @@ func (rt *executionRuntime) runTask(
 	userInput string,
 	output orchestrationOutput,
 ) ([]llm.Message, string, error) {
+	bus := newBus(output, !rt.daemonMode)
+
 	userInput = normalizeSkillInput(userInput)
 	if rt.skillReg != nil && strings.HasPrefix(userInput, "/") {
-		result, summary, handled, err := rt.trySkillExecution(ctx, sess, messages, userInput, output)
+		result, summary, handled, err := rt.trySkillExecution(ctx, sess, messages, userInput, bus, output)
 		if handled {
 			return result, summary, err
 		}
@@ -532,7 +595,11 @@ func (rt *executionRuntime) runTask(
 		"workflow", wf.Name(),
 		"session", sess.ID,
 	)
-	output.emitWorkflow(intent, wf.Name())
+	bus.Emit(event.WorkflowProgressEvent{
+		Base:     event.NewBase(),
+		Intent:   string(intent),
+		Workflow: wf.Name(),
+	})
 	rt.appendRouteAudit(routeAuditRecord{
 		Timestamp:        time.Now().UTC().Format(time.RFC3339),
 		SessionID:        sess.ID,
@@ -582,7 +649,7 @@ func (rt *executionRuntime) runTask(
 		Tools:    rt.reg,
 		Provider: rt.provider,
 		Config:   cfg,
-		OnText:   output.emitText,
+		Sink:     bus,
 	}
 	switch wf.Name() {
 	case "single", "team", "ralph", "autopilot":
@@ -606,7 +673,7 @@ func (rt *executionRuntime) runTask(
 	}
 
 	if usage := llm.FormatUsageSummary(rt.wfCfg.Model, result.Usage); usage != "" {
-		output.emitUsage(usage)
+		bus.Emit(event.UsageProgressEvent{Base: event.NewBase(), Summary: usage})
 	}
 
 	if err := sess.AppendMessages(result.Messages[len(prepared):]); err != nil {
@@ -621,6 +688,7 @@ func (rt *executionRuntime) trySkillExecution(
 	sess *agent.Session,
 	messages []llm.Message,
 	input string,
+	bus *event.Bus,
 	output orchestrationOutput,
 ) ([]llm.Message, string, bool, error) {
 	fields := strings.Fields(input)
@@ -636,7 +704,7 @@ func (rt *executionRuntime) trySkillExecution(
 	args := parseSkillArgs(sk.Trigger, fields[1:])
 
 	rt.app.Logger.Info("executing skill", "name", skillName, "args", args)
-	output.emitText(fmt.Sprintf("Executing skill: %s\n", skillName))
+	bus.Emit(event.TextDeltaEvent{Base: event.NewBase(), Content: fmt.Sprintf("Executing skill: %s\n", skillName)})
 
 	result, err := rt.skillReg.Execute(ctx, skill.ExecuteParams{
 		SkillName:  skillName,
@@ -644,7 +712,7 @@ func (rt *executionRuntime) trySkillExecution(
 		Provider:   rt.provider,
 		ToolReg:    rt.reg,
 		Model:      rt.wfCfg.Model,
-		OnText:     output.emitText,
+		Sink:       bus,
 		Permission: rt.wfCfg.Permission,
 		Hooks:      rt.wfCfg.Hooks,
 		Locale:     rt.mgr.LastLocale(sess.ID),
@@ -655,7 +723,7 @@ func (rt *executionRuntime) trySkillExecution(
 	}
 	rt.recordSkillUsage(sess.ID, skillName, true)
 	if usage := llm.FormatUsageSummary(rt.wfCfg.Model, result.Usage); usage != "" {
-		output.emitUsage(usage)
+		bus.Emit(event.UsageProgressEvent{Base: event.NewBase(), Summary: usage})
 	}
 
 	delta := make([]llm.Message, 0, len(result.Messages)+1)
@@ -754,7 +822,7 @@ func maxIterationsFromEnv() int {
 }
 
 func (rt *executionRuntime) newDaemonTaskRunner() daemon.AgentTaskRunner {
-	return func(ctx context.Context, payload string, onText func(string)) (daemon.TaskResult, error) {
+	return func(ctx context.Context, payload string, sink event.Sink) (daemon.TaskResult, error) {
 		taskPayload := daemon.ParseTaskPayload(payload)
 		userInput := taskPayload.Prompt
 		if userInput == "" {
@@ -805,14 +873,7 @@ func (rt *executionRuntime) newDaemonTaskRunner() daemon.AgentTaskRunner {
 		}
 
 		messages, summary, err := rt.runTask(ctx, sess, messages, userInput, orchestrationOutput{
-			OnProgress: func(ev daemon.ProgressEvent) {
-				if onText == nil {
-					return
-				}
-				if raw := daemon.EncodeProgressEvent(ev); raw != "" {
-					onText(raw)
-				}
-			},
+			OnProgress: daemonProgressFromSink(sink),
 		})
 		if err != nil {
 			return daemon.TaskResult{}, err
@@ -824,6 +885,21 @@ func (rt *executionRuntime) newDaemonTaskRunner() daemon.AgentTaskRunner {
 			Summary:   summary,
 			SessionID: sess.ID,
 		}, nil
+	}
+}
+
+// daemonProgressFromSink converts an event.Sink into a daemon.ProgressEvent
+// callback. The progressObserver on the bus converts typed events back to
+// daemon.ProgressEvent, and this callback encodes them for the wire.
+func daemonProgressFromSink(sink event.Sink) func(daemon.ProgressEvent) {
+	if sink == nil {
+		return nil
+	}
+	return func(ev daemon.ProgressEvent) {
+		raw := daemon.EncodeProgressEvent(ev)
+		if raw != "" {
+			sink.Emit(event.TextDeltaEvent{Base: event.NewBase(), Content: raw})
+		}
 	}
 }
 

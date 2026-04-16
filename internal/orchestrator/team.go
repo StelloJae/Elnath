@@ -50,6 +50,9 @@ type subtaskResult struct {
 // 3. Collect results via a channel; propagate any context cancellation.
 // 4. synthesise — ask LLM to combine the subtask results into a final answer.
 func (w *TeamWorkflow) Run(ctx context.Context, input WorkflowInput) (*WorkflowResult, error) {
+	if input.Sink == nil {
+		input.Sink = event.NopSink{}
+	}
 	input.Sink.Emit(event.TextDeltaEvent{Base: event.NewBase(), Content: "[team] planning subtasks\n"})
 	workflowInput := input
 	workflowInput.Messages = append(workflowInput.Messages, llm.NewUserMessage(input.Message))

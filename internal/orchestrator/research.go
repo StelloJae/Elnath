@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/stello/elnath/internal/event"
 	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/research"
@@ -44,6 +45,9 @@ type ResearchDeps struct {
 // and executes it. The result is returned as a WorkflowResult with the
 // research summary as an assistant message.
 func (w *ResearchWorkflow) Run(ctx context.Context, input WorkflowInput) (*WorkflowResult, error) {
+	if input.Sink == nil {
+		input.Sink = event.NopSink{}
+	}
 	topic := strings.TrimSpace(input.Message)
 	if topic == "" {
 		return nil, fmt.Errorf("research workflow: topic is required")

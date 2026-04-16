@@ -191,6 +191,9 @@ type toolStatAcc struct {
 // It streams events via the sink and returns when the model
 // stops requesting tool calls or maxIterations is reached.
 func (a *Agent) Run(ctx context.Context, messages []llm.Message, sink event.Sink) (*RunResult, error) {
+	if sink == nil {
+		sink = event.NopSink{}
+	}
 	// Build tool definitions from the registry.
 	toolDefs := buildToolDefs(a.tools)
 
@@ -440,6 +443,9 @@ func responseFromAssistantMessage(msg llm.Message) llm.ChatResponse {
 
 // stream calls the provider once and accumulates the response into a Message.
 func (a *Agent) stream(ctx context.Context, req llm.Request, sink event.Sink) (llm.Message, llm.UsageStats, error) {
+	if sink == nil {
+		sink = event.NopSink{}
+	}
 	var (
 		textParts []string
 		toolCalls []llm.CompletedToolCall
@@ -547,6 +553,9 @@ func finalizeToolStats(m map[string]*toolStatAcc) []ToolStat {
 }
 
 func (a *Agent) executeTools(ctx context.Context, messages []llm.Message, calls []llm.ToolUseBlock, sink event.Sink) ([]llm.Message, error) {
+	if sink == nil {
+		sink = event.NopSink{}
+	}
 	return a.executeToolsWithStats(ctx, messages, calls, sink, nil, nil)
 }
 

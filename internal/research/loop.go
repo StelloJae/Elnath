@@ -158,6 +158,9 @@ func (l *Loop) Run(ctx context.Context, topic string) (*ResearchResult, error) {
 }
 
 func (l *Loop) emitResearch(phase string, round int, format string, args ...any) {
+	if l.sink == nil {
+		return
+	}
 	l.sink.Emit(event.ResearchProgressEvent{
 		Base:    event.NewBase(),
 		Phase:   phase,

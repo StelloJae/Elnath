@@ -96,6 +96,9 @@ Provide a final summary stating whether the task is COMPLETE or INCOMPLETE, and 
 // all stages. A failed stage is captured as an error summary appended to the
 // messages; subsequent stages still run so partial results are available.
 func (w *AutopilotWorkflow) Run(ctx context.Context, input WorkflowInput) (*WorkflowResult, error) {
+	if input.Sink == nil {
+		input.Sink = event.NopSink{}
+	}
 	single := NewSingleWorkflow()
 	totalUsage := llm.UsageStats{}
 

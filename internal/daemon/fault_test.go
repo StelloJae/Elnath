@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stello/elnath/internal/event"
 	"github.com/stello/elnath/internal/fault"
 	"github.com/stello/elnath/internal/fault/faulttype"
 )
@@ -55,7 +56,7 @@ func TestDaemonWorkerPanicFaultMarksTaskFailedAndKeepsDaemonAlive(t *testing.T) 
 	if err != nil {
 		t.Fatalf("NewQueue: %v", err)
 	}
-	runner := func(_ context.Context, payload string, _ func(string)) (TaskResult, error) {
+	runner := func(_ context.Context, payload string, _ event.Sink) (TaskResult, error) {
 		return TaskResult{Result: payload, Summary: payload}, nil
 	}
 	socketPath := filepath.Join(os.TempDir(), fmt.Sprintf("elnath-fault-%d.sock", time.Now().UnixNano()))

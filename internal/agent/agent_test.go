@@ -12,6 +12,7 @@ import (
 
 	"github.com/stello/elnath/internal/agent/errorclass"
 	"github.com/stello/elnath/internal/core"
+	"github.com/stello/elnath/internal/event"
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/tools"
 	"github.com/stello/elnath/internal/userfacingerr"
@@ -363,7 +364,7 @@ func TestRunNoToolCalls(t *testing.T) {
 	initial := []llm.Message{llm.NewUserMessage("hi")}
 
 	var received string
-	result, err := a.Run(context.Background(), initial, func(s string) { received += s })
+	result, err := a.Run(context.Background(), initial, event.OnTextToSink(func(s string) { received += s }))
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
@@ -545,9 +546,9 @@ func TestRunFallsBackToChatOnEmptyStream(t *testing.T) {
 
 	a := New(p, reg)
 	var received string
-	result, err := a.Run(context.Background(), []llm.Message{llm.NewUserMessage("hello")}, func(s string) {
+	result, err := a.Run(context.Background(), []llm.Message{llm.NewUserMessage("hello")}, event.OnTextToSink(func(s string) {
 		received += s
-	})
+	}))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
