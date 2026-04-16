@@ -23,10 +23,10 @@ import (
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/magicdocs"
 	"github.com/stello/elnath/internal/orchestrator"
+	"github.com/stello/elnath/internal/profile"
 	"github.com/stello/elnath/internal/prompt"
 	"github.com/stello/elnath/internal/secret"
 	"github.com/stello/elnath/internal/self"
-	"github.com/stello/elnath/internal/profile"
 	"github.com/stello/elnath/internal/skill"
 	"github.com/stello/elnath/internal/tools"
 	"github.com/stello/elnath/internal/wiki"
@@ -604,7 +604,17 @@ func (rt *executionRuntime) runTask(
 
 	routeCtx := buildRoutingContext(userInput)
 	routeCtx.BenchmarkMode = benchmarkModeEnabled()
+	// Prefer the session principal's ProjectID so daemon-routed tasks
+	// (Telegram, follow-ups) record outcomes under the caller's project,
+	// not the daemon fallback principal's workspace-derived ID.
+	// The "unknown" sentinel from identity.LegacyPrincipal must not override
+	// a real rt.principal value.
 	routeCtx.ProjectID = rt.principal.ProjectID
+	if sess != nil {
+		if sp := sess.Principal.ProjectID; sp != "" && sp != "unknown" {
+			routeCtx.ProjectID = sp
+		}
+	}
 	pref, err := wiki.LoadWorkflowPreference(rt.wikiStore, routeCtx.ProjectID)
 	if err != nil {
 		rt.app.Logger.Warn("routing preference unavailable, using base routing",
@@ -700,36 +710,22 @@ func (rt *executionRuntime) runTask(
 	result, err := wf.Run(ctx, input)
 	elapsed := time.Since(wfStart)
 	if err != nil {
+		rt.recordOutcome(routeCtx, intent, wf.Name(), "error", false, elapsed, 0, userInput, pref != nil)
 		return nil, "", fmt.Errorf("workflow %s: %w", wf.Name(), err)
 	}
 
-	if rt.outcomeStore != nil && routeCtx.ProjectID != "" && learning.ShouldRecord(result.FinishReason) {
-		record := learning.OutcomeRecord{
-			ProjectID:      routeCtx.ProjectID,
-			Intent:         string(intent),
-			Workflow:       result.Workflow,
-			FinishReason:   result.FinishReason,
-			Success:        learning.IsSuccessful(result.FinishReason),
-			Duration:       elapsed.Seconds(),
-			Cost:           0,
-			Iterations:     result.Iterations,
-			InputSnippet:   runeSnippet(userInput, 100),
-			EstimatedFiles: routeCtx.EstimatedFiles,
-			ExistingCode:   routeCtx.ExistingCode,
-			PreferenceUsed: pref != nil,
-		}
-		if appendErr := rt.outcomeStore.Append(record); appendErr != nil {
-			rt.app.Logger.Warn("outcome store: append failed", "error", appendErr)
-		}
-		if rotErr := rt.outcomeStore.AutoRotateIfNeeded(300); rotErr != nil {
-			rt.app.Logger.Warn("outcome store: auto-rotate failed", "error", rotErr)
-		}
-
-		if pref, advErr := rt.routingAdvisor.Advise(routeCtx.ProjectID); advErr == nil && pref != nil {
-			if saveErr := wiki.SaveWorkflowPreference(rt.wikiStore, routeCtx.ProjectID, pref); saveErr != nil {
-				rt.app.Logger.Warn("routing advisor: wiki save failed", "error", saveErr)
-			}
-		}
+	if learning.ShouldRecord(result.FinishReason) {
+		rt.recordOutcome(
+			routeCtx,
+			intent,
+			result.Workflow,
+			result.FinishReason,
+			learning.IsSuccessful(result.FinishReason),
+			elapsed,
+			result.Iterations,
+			userInput,
+			pref != nil,
+		)
 	}
 
 	if usage := llm.FormatUsageSummary(rt.wfCfg.Model, result.Usage); usage != "" {
@@ -741,6 +737,58 @@ func (rt *executionRuntime) runTask(
 	}
 
 	return result.Messages, result.Summary, nil
+}
+
+// recordOutcome appends a learning outcome and, on success, asks the routing
+// advisor for an updated preference. Safe to call with a nil outcomeStore or an
+// empty ProjectID; both make the call a no-op so error paths stay cheap.
+func (rt *executionRuntime) recordOutcome(
+	routeCtx *orchestrator.RoutingContext,
+	intent conversation.Intent,
+	workflow string,
+	finishReason string,
+	success bool,
+	elapsed time.Duration,
+	iterations int,
+	userInput string,
+	preferenceUsed bool,
+) {
+	if rt.outcomeStore == nil || routeCtx.ProjectID == "" {
+		return
+	}
+	record := learning.OutcomeRecord{
+		ProjectID:      routeCtx.ProjectID,
+		Intent:         string(intent),
+		Workflow:       workflow,
+		FinishReason:   finishReason,
+		Success:        success,
+		Duration:       elapsed.Seconds(),
+		Cost:           0,
+		Iterations:     iterations,
+		InputSnippet:   runeSnippet(userInput, 100),
+		EstimatedFiles: routeCtx.EstimatedFiles,
+		ExistingCode:   routeCtx.ExistingCode,
+		PreferenceUsed: preferenceUsed,
+	}
+	if appendErr := rt.outcomeStore.Append(record); appendErr != nil {
+		rt.app.Logger.Warn("outcome store: append failed", "error", appendErr)
+	}
+	if rotErr := rt.outcomeStore.AutoRotateIfNeeded(300); rotErr != nil {
+		rt.app.Logger.Warn("outcome store: auto-rotate failed", "error", rotErr)
+	}
+	if !success {
+		return
+	}
+	if rt.routingAdvisor == nil {
+		return
+	}
+	advPref, advErr := rt.routingAdvisor.Advise(routeCtx.ProjectID)
+	if advErr != nil || advPref == nil {
+		return
+	}
+	if saveErr := wiki.SaveWorkflowPreference(rt.wikiStore, routeCtx.ProjectID, advPref); saveErr != nil {
+		rt.app.Logger.Warn("routing advisor: wiki save failed", "error", saveErr)
+	}
 }
 
 func (rt *executionRuntime) trySkillExecution(

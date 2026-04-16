@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -108,6 +109,17 @@ func (w *captureLearningWorkflow) Run(_ context.Context, input orchestrator.Work
 		Summary:  w.name + " workflow",
 		Workflow: w.name,
 	}, nil
+}
+
+type errorWorkflow struct {
+	name string
+	err  error
+}
+
+func (w *errorWorkflow) Name() string { return w.name }
+
+func (w *errorWorkflow) Run(_ context.Context, _ orchestrator.WorkflowInput) (*orchestrator.WorkflowResult, error) {
+	return nil, w.err
 }
 
 func TestCompressionHookContextWindowFiresAfterDedupReset(t *testing.T) {
@@ -580,6 +592,55 @@ preferred_workflows: [question
 	}
 	if gotWorkflow != "single" {
 		t.Fatalf("workflow = %q, want single", gotWorkflow)
+	}
+}
+
+func TestExecutionRuntimeRunTaskRecordsOutcomeOnWorkflowError(t *testing.T) {
+	provider := &countingProvider{}
+	rt := newTestExecutionRuntime(t, provider)
+	rt.principal = identity.Principal{UserID: "legacy", ProjectID: "elnath", Surface: "cli"}
+	rt.router = orchestrator.NewRouter(map[string]orchestrator.Workflow{
+		"single": &errorWorkflow{name: "single", err: fmt.Errorf("boom")},
+	})
+
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	_, _, err = rt.runTask(context.Background(), sess, nil, "what changed in Stella?", orchestrationOutput{})
+	if err == nil {
+		t.Fatal("runTask: expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("runTask error = %v, want error wrapping boom", err)
+	}
+
+	outcomePath := filepath.Join(rt.app.Config.DataDir, "outcomes.jsonl")
+	data, readErr := os.ReadFile(outcomePath)
+	if readErr != nil {
+		t.Fatalf("read outcomes: %v", readErr)
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	if len(lines) != 1 || lines[0] == "" {
+		t.Fatalf("outcomes.jsonl lines = %d, want 1 non-empty line; got %q", len(lines), string(data))
+	}
+
+	var rec learning.OutcomeRecord
+	if err := json.Unmarshal([]byte(lines[0]), &rec); err != nil {
+		t.Fatalf("decode outcome record: %v", err)
+	}
+	if rec.Success {
+		t.Errorf("outcome Success = true, want false")
+	}
+	if rec.FinishReason != "error" {
+		t.Errorf("outcome FinishReason = %q, want %q", rec.FinishReason, "error")
+	}
+	if rec.Workflow != "single" {
+		t.Errorf("outcome Workflow = %q, want single", rec.Workflow)
+	}
+	if rec.ProjectID != "elnath" {
+		t.Errorf("outcome ProjectID = %q, want elnath", rec.ProjectID)
 	}
 }
 
