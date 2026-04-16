@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/stello/elnath/internal/ambient"
 	"github.com/stello/elnath/internal/agent"
 	"github.com/stello/elnath/internal/config"
 	"github.com/stello/elnath/internal/conversation"
@@ -216,6 +217,40 @@ func cmdDaemonStart(ctx context.Context) error {
 			app.Logger.Info("scheduler enabled", "path", scheduledPath, "tasks", taskCount)
 		} else {
 			app.Logger.Info("scheduler config empty or all disabled", "path", scheduledPath)
+		}
+	}
+
+	if cfg.Ambient.Enabled && rt.wikiStore != nil {
+		ambientScanner := ambient.NewScanner(rt.wikiStore, app.Logger.With("component", "ambient-scanner"))
+		bootTasks, scanErr := ambientScanner.Scan()
+		if scanErr != nil {
+			app.Logger.Warn("ambient scan failed", "error", scanErr)
+		}
+		if len(bootTasks) > 0 {
+			var notifyFn ambient.NotifyFunc
+			if cfg.Telegram.Enabled && cfg.Telegram.BotToken != "" && cfg.Telegram.ChatID != "" {
+				tgBot := telegram.NewHTTPClient(cfg.Telegram.BotToken, cfg.Telegram.APIBaseURL)
+				chatID := cfg.Telegram.ChatID
+				notifyFn = func(ctx context.Context, title, body string) error {
+					return tgBot.SendMessage(ctx, chatID, title+"\n\n"+body)
+				}
+			}
+
+			maxConc := cfg.Ambient.MaxConcurrent
+			if maxConc <= 0 {
+				maxConc = 2
+			}
+
+			ambientSched := ambient.NewScheduler(ambient.Config{
+				Tasks:         bootTasks,
+				Runner:        ambient.TaskRunFunc(rt.newDaemonTaskRunner()),
+				NotifyFn:      notifyFn,
+				MaxConcurrent: maxConc,
+				Logger:        app.Logger.With("component", "ambient"),
+			})
+			ambientSched.Start(ctx)
+			defer ambientSched.Stop()
+			app.Logger.Info("ambient scheduler active", "boot_tasks", len(bootTasks))
 		}
 	}
 
