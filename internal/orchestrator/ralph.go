@@ -13,6 +13,14 @@ import (
 
 const defaultMaxAttempts = 5
 
+type VerifyVerdict int
+
+const (
+	VerdictPass          VerifyVerdict = iota
+	VerdictNeedsRevision
+	VerdictFail
+)
+
 // RalphWorkflow runs the SingleWorkflow in a verify-and-retry loop.
 // After each execution it asks the LLM whether the result is complete and
 // correct. If the verifier says yes, it returns. Otherwise it appends the
@@ -75,7 +83,7 @@ func (w *RalphWorkflow) Run(ctx context.Context, input WorkflowInput) (*Workflow
 		lastFinishReason = result.FinishReason
 		finalResult = result
 
-		ok, feedback, verifyUsage, err := w.verify(ctx, input, result)
+		verdict, feedback, verifyUsage, err := w.verify(ctx, input, result)
 		if err != nil {
 			return nil, fmt.Errorf("ralph workflow verify attempt %d: %w", a, err)
 		}
@@ -85,15 +93,40 @@ func (w *RalphWorkflow) Run(ctx context.Context, input WorkflowInput) (*Workflow
 		totalUsage.CacheRead += verifyUsage.CacheRead
 		totalUsage.CacheWrite += verifyUsage.CacheWrite
 
-		if ok {
+		switch verdict {
+		case VerdictPass:
 			w.logger.Info("ralph workflow: verified", "attempt", a)
 			verified = true
+		case VerdictFail:
+			w.logger.Warn("ralph workflow: verifier rejected", "attempt", a, "feedback", feedback)
+			if input.Learning != nil {
+				info := learning.AgentResultInfo{
+					Topic:         firstMessageSnippet(input.Message, 80),
+					FinishReason:  "ralph_fail",
+					Iterations:    totalIter,
+					MaxIterations: input.Config.MaxIterations * a,
+					OutputTokens:  totalUsage.OutputTokens,
+					InputTokens:   totalUsage.InputTokens,
+					ToolStats:     learning.MergeAgentToolStats(accToolStatSlices...),
+					RetryCount:    a - 1,
+					Workflow:      "ralph",
+				}
+				var resultMessages []llm.Message
+				if finalResult != nil {
+					resultMessages = finalResult.Messages
+				}
+				mergedStats := toWorkflowToolStats(learning.MergeAgentToolStats(accToolStatSlices...))
+				applyAgentLearning(prepareLearningDeps(input.Learning, input.Session, resultMessages, len(input.Messages), mergedStats), info)
+			}
+			return nil, fmt.Errorf("ralph workflow: verifier rejected task as fundamentally incorrect: %s", feedback)
+		case VerdictNeedsRevision:
+			w.logger.Info("ralph workflow: needs revision, retrying", "attempt", a, "feedback", feedback)
+		}
+
+		if verified {
 			break
 		}
 
-		w.logger.Info("ralph workflow: not verified, retrying", "attempt", a, "feedback", feedback)
-
-		// Append verification feedback so the next attempt has full context.
 		feedbackMsg := buildRecoveryPrompt(input.Message, feedback)
 		current = WorkflowInput{
 			Message:  feedbackMsg,
@@ -144,25 +177,27 @@ func (w *RalphWorkflow) Run(ctx context.Context, input WorkflowInput) (*Workflow
 	return finalResult, nil
 }
 
-// verify asks the LLM to evaluate whether the workflow result satisfactorily
-// answers the original task. Returns (ok, feedback, usage, err).
-func (w *RalphWorkflow) verify(ctx context.Context, input WorkflowInput, result *WorkflowResult) (bool, string, llm.UsageStats, error) {
+func (w *RalphWorkflow) verify(ctx context.Context, input WorkflowInput, result *WorkflowResult) (VerifyVerdict, string, llm.UsageStats, error) {
 	evidence := buildVerificationEvidence(result.Messages)
 
-	verifyPrompt := fmt.Sprintf(`You are a strict quality reviewer. Evaluate whether the following execution evidence completely and correctly addresses the original task.
+	verifyPrompt := fmt.Sprintf(`You are an independent quality reviewer evaluating task completion.
 
 Original task: %s
 
 Execution evidence:
 %s
 
-Use the evidence above, including tool results and verification output when present. Do not fail merely because the final assistant summary is concise if the execution evidence shows the task was completed correctly.
+Evaluate against these criteria:
+1. CORRECTNESS: Does the output correctly address the task?
+2. COMPLETENESS: Are all parts of the task addressed?
+3. VERIFICATION: Did the agent verify its work (tests, commands)?
 
 Respond with exactly one of:
-  PASS — if the answer is complete, correct, and addresses the task fully.
-  FAIL: <brief reason> — if the answer is incomplete, incorrect, or off-topic.
+  PASS — all criteria satisfied
+  NEEDS_REVISION: <specific feedback> — direction is right but needs fixes
+  FAIL: <reason> — fundamentally wrong approach, retrying won't help
 
-Your response must start with either PASS or FAIL.`, input.Message, evidence)
+Your response must start with PASS, NEEDS_REVISION, or FAIL.`, input.Message, evidence)
 
 	verifyMessages := []llm.Message{llm.NewUserMessage(verifyPrompt)}
 
@@ -177,7 +212,7 @@ Your response must start with either PASS or FAIL.`, input.Message, evidence)
 
 	verifyResult, err := a.Run(ctx, verifyMessages, nil)
 	if err != nil {
-		return false, "", llm.UsageStats{}, fmt.Errorf("verifier agent: %w", err)
+		return VerdictNeedsRevision, "", llm.UsageStats{}, fmt.Errorf("verifier agent: %w", err)
 	}
 
 	verdict := ""
@@ -189,16 +224,23 @@ Your response must start with either PASS or FAIL.`, input.Message, evidence)
 	}
 
 	upper := strings.ToUpper(verdict)
-	if strings.HasPrefix(upper, "PASS") {
-		return true, "", verifyResult.Usage, nil
+	switch {
+	case strings.HasPrefix(upper, "PASS"):
+		return VerdictPass, "", verifyResult.Usage, nil
+	case strings.HasPrefix(upper, "NEEDS_REVISION"):
+		return VerdictNeedsRevision, extractFeedback(verdict), verifyResult.Usage, nil
+	case strings.HasPrefix(upper, "FAIL"):
+		return VerdictFail, extractFeedback(verdict), verifyResult.Usage, nil
+	default:
+		return VerdictNeedsRevision, verdict, verifyResult.Usage, nil
 	}
+}
 
-	feedback := verdict
+func extractFeedback(verdict string) string {
 	if idx := strings.Index(verdict, ":"); idx >= 0 && idx < len(verdict)-1 {
-		feedback = strings.TrimSpace(verdict[idx+1:])
+		return strings.TrimSpace(verdict[idx+1:])
 	}
-
-	return false, feedback, verifyResult.Usage, nil
+	return verdict
 }
 
 func buildRecoveryPrompt(originalTask, feedback string) string {
@@ -236,9 +278,9 @@ func sanitizeRetryMessages(messages []llm.Message) []llm.Message {
 
 func buildVerificationEvidence(messages []llm.Message) string {
 	const (
-		maxAssistantChars = 4000
-		maxToolChars      = 1200
-		maxToolResults    = 4
+		maxAssistantChars = 6000
+		maxToolChars      = 2000
+		maxToolResults    = 8
 	)
 
 	assistantText := "(no assistant text returned)"

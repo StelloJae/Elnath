@@ -45,10 +45,10 @@ func TestRalphWorkflow_RetryThenPass(t *testing.T) {
 	ctx := context.Background()
 
 	provider := newTestProvider(
-		"Incomplete answer",                   // attempt 1
-		"FAIL: missing error handling",        // verify 1 → fail
-		"Complete answer with error handling", // attempt 2
-		"PASS",                                // verify 2 → pass
+		"Incomplete answer",                          // attempt 1
+		"NEEDS_REVISION: missing error handling",     // verify 1 → needs revision
+		"Complete answer with error handling",        // attempt 2
+		"PASS",                                       // verify 2 → pass
 	)
 
 	wf := NewRalphWorkflow()
@@ -79,11 +79,11 @@ func TestRalphWorkflow_RetryThenPass(t *testing.T) {
 func TestRalphWorkflow_ExhaustedAttempts(t *testing.T) {
 	ctx := context.Background()
 
-	// All attempts fail verification.
+	// All attempts get NEEDS_REVISION verdict.
 	provider := newTestProvider(
-		"Bad answer 1", "FAIL: wrong",
-		"Bad answer 2", "FAIL: still wrong",
-		"Bad answer 3", "FAIL: nope",
+		"Bad answer 1", "NEEDS_REVISION: wrong",
+		"Bad answer 2", "NEEDS_REVISION: still wrong",
+		"Bad answer 3", "NEEDS_REVISION: nope",
 	)
 
 	wf := NewRalphWorkflow()
@@ -101,6 +101,60 @@ func TestRalphWorkflow_ExhaustedAttempts(t *testing.T) {
 	// 3 attempts × 2 calls = 6
 	if provider.CallCount() != 6 {
 		t.Errorf("provider calls = %d, want 6", provider.CallCount())
+	}
+}
+
+func TestRalphWorkflow_FailExitsImmediately(t *testing.T) {
+	ctx := context.Background()
+
+	provider := newTestProvider(
+		"Wrong approach entirely",
+		"FAIL: fundamentally wrong algorithm",
+	)
+
+	wf := NewRalphWorkflow()
+	wf.MaxAttempts = 5
+	input := testInput("Implement sorting", provider)
+
+	_, err := wf.Run(ctx, input)
+	if err == nil {
+		t.Fatal("expected error on FAIL verdict")
+	}
+	if !strings.Contains(err.Error(), "fundamentally incorrect") {
+		t.Fatalf("error = %q, want 'fundamentally incorrect'", err.Error())
+	}
+
+	// 1 attempt + 1 verify = 2 calls (no retries)
+	if provider.CallCount() != 2 {
+		t.Errorf("provider calls = %d, want 2 (should not retry after FAIL)", provider.CallCount())
+	}
+}
+
+func TestRalphWorkflow_NeedsRevisionRetries(t *testing.T) {
+	ctx := context.Background()
+
+	provider := newTestProvider(
+		"Partial answer",
+		"NEEDS_REVISION: missing edge cases",
+		"Better answer with edge cases",
+		"PASS",
+	)
+
+	wf := NewRalphWorkflow()
+	input := testInput("Handle all edge cases", provider)
+
+	result, err := wf.Run(ctx, input)
+	if err != nil {
+		t.Fatalf("RalphWorkflow.Run: %v", err)
+	}
+
+	// 2 attempts × (1 execution + 1 verify) = 4 calls
+	if provider.CallCount() != 4 {
+		t.Errorf("provider calls = %d, want 4", provider.CallCount())
+	}
+
+	if !strings.Contains(result.Summary, "edge cases") {
+		t.Errorf("summary = %q, want to contain passing attempt answer", result.Summary)
 	}
 }
 
@@ -141,7 +195,7 @@ func TestRalphWorkflow_LLMExtractionUsesMergedRunContext(t *testing.T) {
 	provider := &scriptedSingleProvider{messages: []llm.Message{
 		assistantStep("", llm.CompletedToolCall{ID: "bash-1", Name: "bash", Input: `{}`}),
 		assistantStep("Attempt one"),
-		llm.NewAssistantMessage("FAIL: add verification"),
+		llm.NewAssistantMessage("NEEDS_REVISION: add verification"),
 		assistantStep("", llm.CompletedToolCall{ID: "bash-2", Name: "bash", Input: `{}`}),
 		assistantStep("Attempt two with verification"),
 		llm.NewAssistantMessage("PASS"),
@@ -169,10 +223,10 @@ func TestRalphWorkflow_LearningBelowThreshold(t *testing.T) {
 	provider := &scriptedSingleProvider{messages: []llm.Message{
 		assistantStep("", llm.CompletedToolCall{ID: "bash-1", Name: "bash", Input: `{}`}),
 		assistantStep("Attempt one"),
-		llm.NewAssistantMessage("FAIL: missing verification"),
+		llm.NewAssistantMessage("NEEDS_REVISION: missing verification"),
 		assistantStep("", llm.CompletedToolCall{ID: "bash-2", Name: "bash", Input: `{}`}),
 		assistantStep("Attempt two"),
-		llm.NewAssistantMessage("FAIL: still incomplete"),
+		llm.NewAssistantMessage("NEEDS_REVISION: still incomplete"),
 		assistantStep("", llm.CompletedToolCall{ID: "bash-3", Name: "bash", Input: `{}`}),
 		assistantStep("Attempt three"),
 		llm.NewAssistantMessage("PASS"),
@@ -203,13 +257,13 @@ func TestRalphWorkflow_LearningRetryTriggersRuleE(t *testing.T) {
 	provider := &scriptedSingleProvider{messages: []llm.Message{
 		assistantStep("", llm.CompletedToolCall{ID: "bash-1", Name: "bash", Input: `{}`}),
 		assistantStep("Attempt one"),
-		llm.NewAssistantMessage("FAIL: missing verification"),
+		llm.NewAssistantMessage("NEEDS_REVISION: missing verification"),
 		assistantStep("", llm.CompletedToolCall{ID: "bash-2", Name: "bash", Input: `{}`}),
 		assistantStep("Attempt two"),
-		llm.NewAssistantMessage("FAIL: still incomplete"),
+		llm.NewAssistantMessage("NEEDS_REVISION: still incomplete"),
 		assistantStep("", llm.CompletedToolCall{ID: "bash-3", Name: "bash", Input: `{}`}),
 		assistantStep("Attempt three"),
-		llm.NewAssistantMessage("FAIL: one more issue"),
+		llm.NewAssistantMessage("NEEDS_REVISION: one more issue"),
 		assistantStep("", llm.CompletedToolCall{ID: "bash-4", Name: "bash", Input: `{}`}),
 		assistantStep("Attempt four"),
 		llm.NewAssistantMessage("PASS"),
@@ -228,19 +282,19 @@ func TestRalphWorkflow_LearningCapExceededFinishReason(t *testing.T) {
 	provider := &scriptedSingleProvider{messages: []llm.Message{
 		assistantStep("", llm.CompletedToolCall{ID: "bash-1", Name: "bash", Input: `{}`}),
 		assistantStep("Attempt one"),
-		llm.NewAssistantMessage("FAIL: missing verification"),
+		llm.NewAssistantMessage("NEEDS_REVISION: missing verification"),
 		assistantStep("", llm.CompletedToolCall{ID: "bash-2", Name: "bash", Input: `{}`}),
 		assistantStep("Attempt two"),
-		llm.NewAssistantMessage("FAIL: still incomplete"),
+		llm.NewAssistantMessage("NEEDS_REVISION: still incomplete"),
 		assistantStep("", llm.CompletedToolCall{ID: "bash-3", Name: "bash", Input: `{}`}),
 		assistantStep("Attempt three"),
-		llm.NewAssistantMessage("FAIL: one more issue"),
+		llm.NewAssistantMessage("NEEDS_REVISION: one more issue"),
 		assistantStep("", llm.CompletedToolCall{ID: "bash-4", Name: "bash", Input: `{}`}),
 		assistantStep("Attempt four"),
-		llm.NewAssistantMessage("FAIL: not done"),
+		llm.NewAssistantMessage("NEEDS_REVISION: not done"),
 		assistantStep("", llm.CompletedToolCall{ID: "bash-5", Name: "bash", Input: `{}`}),
 		assistantStep("Attempt five"),
-		llm.NewAssistantMessage("FAIL: still broken"),
+		llm.NewAssistantMessage("NEEDS_REVISION: still broken"),
 	}}
 
 	wf := NewRalphWorkflow()
@@ -273,10 +327,10 @@ func TestRalphWorkflow_NoPerIterLearning(t *testing.T) {
 	provider := &scriptedSingleProvider{messages: []llm.Message{
 		assistantStep("", llm.CompletedToolCall{ID: "bash-1", Name: "bash", Input: `{}`}),
 		assistantStep("Attempt one"),
-		llm.NewAssistantMessage("FAIL: missing verification"),
+		llm.NewAssistantMessage("NEEDS_REVISION: missing verification"),
 		assistantStep("", llm.CompletedToolCall{ID: "bash-2", Name: "bash", Input: `{}`}),
 		assistantStep("Attempt two"),
-		llm.NewAssistantMessage("FAIL: still incomplete"),
+		llm.NewAssistantMessage("NEEDS_REVISION: still incomplete"),
 		assistantStep("", llm.CompletedToolCall{ID: "bash-3", Name: "bash", Input: `{}`}),
 		assistantStep("Attempt three"),
 		llm.NewAssistantMessage("PASS"),
@@ -298,16 +352,19 @@ func TestRalphWorkflow_NoPerIterLearning(t *testing.T) {
 
 func TestRalphWorkflow_VerifyParsing(t *testing.T) {
 	tests := []struct {
-		name     string
-		verdict  string
-		wantOK   bool
-		wantFeed string
+		name        string
+		verdict     string
+		wantVerdict VerifyVerdict
+		wantFeed    string
 	}{
-		{"plain pass", "PASS", true, ""},
-		{"pass with detail", "PASS — excellent work", true, ""},
-		{"lowercase pass", "pass", true, ""},
-		{"fail with reason", "FAIL: needs more tests", false, "needs more tests"},
-		{"fail no colon", "FAIL needs more tests", false, "FAIL needs more tests"},
+		{"plain pass", "PASS", VerdictPass, ""},
+		{"pass with detail", "PASS — excellent work", VerdictPass, ""},
+		{"lowercase pass", "pass", VerdictPass, ""},
+		{"fail with reason", "FAIL: needs more tests", VerdictFail, "needs more tests"},
+		{"fail no colon", "FAIL needs more tests", VerdictFail, "FAIL needs more tests"},
+		{"needs revision with feedback", "NEEDS_REVISION: add error handling", VerdictNeedsRevision, "add error handling"},
+		{"needs revision no colon", "NEEDS_REVISION add tests", VerdictNeedsRevision, "NEEDS_REVISION add tests"},
+		{"unknown defaults to needs revision", "MAYBE", VerdictNeedsRevision, "MAYBE"},
 	}
 
 	for _, tt := range tests {
@@ -323,17 +380,27 @@ func TestRalphWorkflow_VerifyParsing(t *testing.T) {
 
 			result, err := wf.Run(ctx(), input)
 
-			if tt.wantOK {
+			switch tt.wantVerdict {
+			case VerdictPass:
 				if err != nil {
 					t.Fatalf("expected pass, got error: %v", err)
 				}
 				if result == nil {
 					t.Fatal("expected non-nil result on PASS")
 				}
-			} else {
-				// With MaxAttempts=1, a FAIL means exhausted → error returned
+			case VerdictFail:
 				if err == nil {
-					t.Fatal("expected error for FAIL verdict with 1 attempt")
+					t.Fatal("expected error for FAIL verdict")
+				}
+				if !strings.Contains(err.Error(), "fundamentally incorrect") {
+					t.Fatalf("error = %q, want 'fundamentally incorrect'", err.Error())
+				}
+			case VerdictNeedsRevision:
+				if err == nil {
+					t.Fatal("expected error for NEEDS_REVISION verdict with 1 attempt")
+				}
+				if !strings.Contains(err.Error(), "not verified after 1 attempts") {
+					t.Fatalf("error = %q, want 'not verified after 1 attempts'", err.Error())
 				}
 			}
 		})
@@ -470,12 +537,12 @@ func TestRalphVerifyPromptUsesExecutionEvidence(t *testing.T) {
 		},
 	}
 
-	ok, _, _, err := wf.verify(context.Background(), input, result)
+	verdict, _, _, err := wf.verify(context.Background(), input, result)
 	if err != nil {
 		t.Fatalf("verify: %v", err)
 	}
-	if !ok {
-		t.Fatal("expected PASS verdict")
+	if verdict != VerdictPass {
+		t.Fatalf("expected VerdictPass, got %d", verdict)
 	}
 	for _, needle := range []string{
 		"Execution evidence:",
@@ -489,5 +556,8 @@ func TestRalphVerifyPromptUsesExecutionEvidence(t *testing.T) {
 	}
 	if strings.Contains(provider.prompt, "Answer to evaluate:") {
 		t.Fatalf("verification prompt should use execution evidence wording:\n%s", provider.prompt)
+	}
+	if !strings.Contains(provider.prompt, "NEEDS_REVISION") {
+		t.Fatalf("verification prompt should include NEEDS_REVISION option:\n%s", provider.prompt)
 	}
 }
