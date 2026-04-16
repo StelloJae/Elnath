@@ -164,13 +164,17 @@ Run count:         1, Success count: 1
 Last run produced: 2 syntheses, 10 lessons superseded (from 12 active)
 ```
 
-### B.8 — Verification
+### B.8 — Verification ✅ (core gate cleared; 24h ambient follow-up pending)
 
-- [ ] `go build ./...`
-- [ ] `go test -race ./...` — all packages pass
-- [ ] `make lint` — clean
-- [ ] **Live probe**: `elnath debug consolidation run --force` on current lessons.jsonl (11 entries) → assert at least one synthesis page created, raw lessons get `superseded_by` field, state.json updated
-- [ ] **Follow-up probe** 24h later (ambient cycle): assert natural schedule fires without manual intervention
+- [x] `go build ./...` — clean across all packages
+- [x] `go test -race ./...` — all 35 packages pass (cmd/elnath, internal/learning, internal/wiki, internal/ambient, internal/conversation, internal/telegram, ...)
+- [x] `make lint` — no new warnings from Stage B; 17 pre-existing warnings untouched
+- [x] **Live probe (2026-04-17)**: `elnath debug consolidation run --force` on 12-entry lessons.jsonl produced:
+  - 2 synthesis pages: `wiki/synthesis/filesystem/2026-04-16-0cd7acab.md` + `wiki/synthesis/format-following/2026-04-16-a008731b.md`
+  - 10 raw lessons marked `superseded_by: synth-*` in `lessons.jsonl`
+  - `consolidation_state.json` populated (run=1, success=1, last_synth=2, last_superseded=10, last_active=12)
+  - Provider: codex / gpt-5.4 (OAuth), via buildLessonProvider
+- [ ] **Follow-up probe (24h)**: the daemon scheduler at 04:00 local time should fire without manual intervention. First opportunity: 2026-04-18 04:00. Confirm via `elnath debug consolidation show` that run_count advances.
 
 ---
 
