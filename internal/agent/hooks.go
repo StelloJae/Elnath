@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/tools"
 )
 
@@ -34,9 +35,25 @@ type Hook interface {
 	PostToolUse(ctx context.Context, toolName string, params json.RawMessage, result *tools.Result) error
 }
 
+// LLMHook adds optional lifecycle hooks around provider calls.
+type LLMHook interface {
+	PreLLMCall(ctx context.Context, req *llm.Request) error
+	PostLLMCall(ctx context.Context, req llm.Request, resp llm.ChatResponse, usage llm.UsageStats) error
+}
+
+// CompressionHook observes Stage 2 auto-compression events.
+type CompressionHook interface {
+	OnCompression(ctx context.Context, beforeCount, afterCount int) error
+}
+
+// IterationHook observes the start of each agent loop iteration.
+type IterationHook interface {
+	OnIterationStart(ctx context.Context, iteration, maxIterations int) error
+}
+
 // HookRegistry holds ordered hooks and runs them sequentially.
 type HookRegistry struct {
-	hooks  []Hook
+	hooks  []any
 	onStop []func(ctx context.Context) error
 }
 
@@ -45,8 +62,8 @@ func NewHookRegistry() *HookRegistry {
 	return &HookRegistry{}
 }
 
-// Add appends a hook to the registry.
-func (r *HookRegistry) Add(h Hook) {
+// Add appends a hook or optional lifecycle extension to the registry.
+func (r *HookRegistry) Add(h any) {
 	r.hooks = append(r.hooks, h)
 }
 
@@ -57,7 +74,11 @@ func (r *HookRegistry) AddOnStop(fn func(ctx context.Context) error) {
 
 // RunPreToolUse runs all pre-tool-use hooks. Stops on first deny or error.
 func (r *HookRegistry) RunPreToolUse(ctx context.Context, toolName string, params json.RawMessage) (HookResult, error) {
-	for _, h := range r.hooks {
+	for _, rawHook := range r.hooks {
+		h, ok := rawHook.(Hook)
+		if !ok {
+			continue
+		}
 		result, err := h.PreToolUse(ctx, toolName, params)
 		if err != nil {
 			return HookResult{Action: HookDeny, Message: err.Error()}, err
@@ -71,8 +92,68 @@ func (r *HookRegistry) RunPreToolUse(ctx context.Context, toolName string, param
 
 // RunPostToolUse runs all post-tool-use hooks. Stops on first error.
 func (r *HookRegistry) RunPostToolUse(ctx context.Context, toolName string, params json.RawMessage, result *tools.Result) error {
-	for _, h := range r.hooks {
+	for _, rawHook := range r.hooks {
+		h, ok := rawHook.(Hook)
+		if !ok {
+			continue
+		}
 		if err := h.PostToolUse(ctx, toolName, params, result); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// RunPreLLMCall runs all supported pre-LLM hooks.
+func (r *HookRegistry) RunPreLLMCall(ctx context.Context, req *llm.Request) error {
+	for _, h := range r.hooks {
+		lh, ok := h.(LLMHook)
+		if !ok {
+			continue
+		}
+		if err := lh.PreLLMCall(ctx, req); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// RunPostLLMCall runs all supported post-LLM hooks.
+func (r *HookRegistry) RunPostLLMCall(ctx context.Context, req llm.Request, resp llm.ChatResponse, usage llm.UsageStats) error {
+	for _, h := range r.hooks {
+		lh, ok := h.(LLMHook)
+		if !ok {
+			continue
+		}
+		if err := lh.PostLLMCall(ctx, req, resp, usage); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// RunOnCompression runs all supported compression hooks.
+func (r *HookRegistry) RunOnCompression(ctx context.Context, beforeCount, afterCount int) error {
+	for _, h := range r.hooks {
+		ch, ok := h.(CompressionHook)
+		if !ok {
+			continue
+		}
+		if err := ch.OnCompression(ctx, beforeCount, afterCount); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// RunOnIterationStart runs all supported iteration hooks.
+func (r *HookRegistry) RunOnIterationStart(ctx context.Context, iteration, maxIterations int) error {
+	for _, h := range r.hooks {
+		ih, ok := h.(IterationHook)
+		if !ok {
+			continue
+		}
+		if err := ih.OnIterationStart(ctx, iteration, maxIterations); err != nil {
 			return err
 		}
 	}

@@ -166,6 +166,11 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, onText func(str
 	var toolStatsMu sync.Mutex
 
 	for iter := 0; iter < a.maxIterations; iter++ {
+		if a.hooks != nil {
+			if err := a.hooks.RunOnIterationStart(ctx, iter+1, a.maxIterations); err != nil {
+				return nil, fmt.Errorf("iteration hook: %w", err)
+			}
+		}
 		iterations++
 
 		// Budget pressure injection.
@@ -187,10 +192,20 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, onText func(str
 			MaxTokens:   defaultMaxTokens,
 			EnableCache: a.provider.Name() == "anthropic",
 		}
+		if a.hooks != nil {
+			if err := a.hooks.RunPreLLMCall(ctx, &req); err != nil {
+				return nil, fmt.Errorf("pre-llm hook: %w", err)
+			}
+		}
 
-		assistantMsg, usage, err := a.streamWithRetry(ctx, req, onText)
+		assistantMsg, finalReq, usage, err := a.streamWithRetry(ctx, req, onText)
 		if err != nil {
 			return nil, err
+		}
+		if a.hooks != nil {
+			if err := a.hooks.RunPostLLMCall(ctx, finalReq, responseFromAssistantMessage(assistantMsg), usage); err != nil {
+				return nil, fmt.Errorf("post-llm hook: %w", err)
+			}
 		}
 
 		totalUsage.InputTokens += usage.InputTokens
@@ -255,7 +270,7 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, onText func(str
 }
 
 // streamWithRetry calls the provider with exponential backoff on 429/5xx errors.
-func (a *Agent) streamWithRetry(ctx context.Context, req llm.Request, onText func(string)) (llm.Message, llm.UsageStats, error) {
+func (a *Agent) streamWithRetry(ctx context.Context, req llm.Request, onText func(string)) (llm.Message, llm.Request, llm.UsageStats, error) {
 	var lastErr error
 	delay := retryBaseDelay
 	currentReq := req
@@ -271,7 +286,7 @@ func (a *Agent) streamWithRetry(ctx context.Context, req llm.Request, onText fun
 			)
 			select {
 			case <-ctx.Done():
-				return llm.Message{}, llm.UsageStats{}, ctx.Err()
+				return llm.Message{}, llm.Request{}, llm.UsageStats{}, ctx.Err()
 			case <-time.After(delay):
 			}
 		}
@@ -281,7 +296,7 @@ func (a *Agent) streamWithRetry(ctx context.Context, req llm.Request, onText fun
 			if isEmptyAssistantMessage(msg) {
 				fallbackMsg, fallbackUsage, fbErr := a.chatFallback(ctx, reqForAttempt, onText)
 				if fbErr == nil && !isEmptyAssistantMessage(fallbackMsg) {
-					return fallbackMsg, fallbackUsage, nil
+					return fallbackMsg, reqForAttempt, fallbackUsage, nil
 				}
 				if fbErr == nil {
 					fbErr = fmt.Errorf("empty assistant response")
@@ -292,17 +307,17 @@ func (a *Agent) streamWithRetry(ctx context.Context, req llm.Request, onText fun
 				lastErr = userfacingerr.Wrap(userfacingerr.ELN120, fbErr, "empty llm response")
 				continue
 			}
-			return msg, usage, nil
+			return msg, reqForAttempt, usage, nil
 		}
 
 		if isRetryable(err) {
 			lastErr = err
 			continue
 		}
-		return llm.Message{}, llm.UsageStats{}, err
+		return llm.Message{}, llm.Request{}, llm.UsageStats{}, err
 	}
 
-	return llm.Message{}, llm.UsageStats{}, fmt.Errorf("%w: %w", core.ErrProviderError, lastErr)
+	return llm.Message{}, llm.Request{}, llm.UsageStats{}, fmt.Errorf("%w: %w", core.ErrProviderError, lastErr)
 }
 
 func (a *Agent) chatFallback(ctx context.Context, req llm.Request, onText func(string)) (llm.Message, llm.UsageStats, error) {
@@ -335,6 +350,22 @@ func (a *Agent) chatFallback(ctx context.Context, req llm.Request, onText func(s
 
 func isEmptyAssistantMessage(msg llm.Message) bool {
 	return len(msg.Content) == 0 || (msg.Text() == "" && len(llm.ExtractToolUseBlocks(msg)) == 0)
+}
+
+func responseFromAssistantMessage(msg llm.Message) llm.ChatResponse {
+	toolUses := llm.ExtractToolUseBlocks(msg)
+	toolCalls := make([]llm.ToolCall, 0, len(toolUses))
+	for _, tc := range toolUses {
+		toolCalls = append(toolCalls, llm.ToolCall{
+			ID:    tc.ID,
+			Name:  tc.Name,
+			Input: string(tc.Input),
+		})
+	}
+	return llm.ChatResponse{
+		Content:   msg.Text(),
+		ToolCalls: toolCalls,
+	}
 }
 
 // stream calls the provider once and accumulates the response into a Message.

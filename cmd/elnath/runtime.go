@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/stello/elnath/internal/agent"
@@ -114,6 +115,89 @@ type executionRuntime struct {
 	auditTrail         *audit.Trail
 }
 
+type compressionHookContextWindow struct {
+	inner       *conversation.ContextWindow
+	hooks       *agent.HookRegistry
+	tracker     *tools.ReadTracker
+	activeCalls []*compressionCall
+	compressMu  sync.Mutex
+	mu          sync.Mutex
+}
+
+type compressionCall struct {
+	autoCompressed bool
+}
+
+func newCompressionHookContextWindow(
+	inner *conversation.ContextWindow,
+	hooks *agent.HookRegistry,
+	tracker *tools.ReadTracker,
+) *compressionHookContextWindow {
+	w := &compressionHookContextWindow{
+		inner:   inner,
+		hooks:   hooks,
+		tracker: tracker,
+	}
+	inner.OnAutoCompress(func() {
+		if w.tracker != nil {
+			w.tracker.ResetDedup()
+		}
+		w.markAutoCompressed()
+	})
+	return w
+}
+
+func (w *compressionHookContextWindow) Fit(ctx context.Context, messages []llm.Message, maxTokens int) ([]llm.Message, error) {
+	return w.inner.Fit(ctx, messages, maxTokens)
+}
+
+func (w *compressionHookContextWindow) CompressMessages(ctx context.Context, provider llm.Provider, messages []llm.Message, maxTokens int) ([]llm.Message, error) {
+	w.compressMu.Lock()
+	defer w.compressMu.Unlock()
+
+	call := &compressionCall{}
+	w.pushCall(call)
+	defer w.popCall(call)
+
+	result, err := w.inner.CompressMessages(ctx, provider, messages, maxTokens)
+	if err != nil {
+		return nil, err
+	}
+	if call.autoCompressed && w.hooks != nil {
+		if hookErr := w.hooks.RunOnCompression(ctx, len(messages), len(result)); hookErr != nil {
+			return nil, hookErr
+		}
+	}
+	return result, nil
+}
+
+func (w *compressionHookContextWindow) pushCall(call *compressionCall) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.activeCalls = append(w.activeCalls, call)
+}
+
+func (w *compressionHookContextWindow) popCall(call *compressionCall) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for i := len(w.activeCalls) - 1; i >= 0; i-- {
+		if w.activeCalls[i] != call {
+			continue
+		}
+		w.activeCalls = append(w.activeCalls[:i], w.activeCalls[i+1:]...)
+		return
+	}
+}
+
+func (w *compressionHookContextWindow) markAutoCompressed() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.activeCalls) == 0 {
+		return
+	}
+	w.activeCalls[len(w.activeCalls)-1].autoCompressed = true
+}
+
 type routeAuditRecord struct {
 	Timestamp        string              `json:"timestamp"`
 	SessionID        string              `json:"session_id"`
@@ -169,9 +253,6 @@ func buildExecutionRuntime(
 	}
 	guard := tools.NewPathGuard(effectiveWorkDir, protectedPaths)
 	reg := buildToolRegistry(guard)
-	if tracker := reg.ReadTracker(); tracker != nil {
-		ctxWindow.OnAutoCompress(tracker.ResetDedup)
-	}
 	gitSync, wikiIdx := registerWikiTools(reg, cfg.WikiDir, db.Wiki)
 	reg.Register(conversation.NewConversationSearchTool(historyStore))
 
@@ -215,6 +296,11 @@ func buildExecutionRuntime(
 		app.RegisterCloser("audit trail", auditTrail)
 	}
 	hooks.Add(secret.NewSecretScanHook(secret.NewDetector(), auditTrail))
+	mgr.WithContextWindow(newCompressionHookContextWindow(
+		ctxWindow,
+		hooks,
+		reg.ReadTracker(),
+	))
 
 	wfCfg := orchestrator.WorkflowConfig{
 		Model:         model,
