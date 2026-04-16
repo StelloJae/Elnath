@@ -24,10 +24,11 @@ type activeTask struct {
 type SinkOption func(*TelegramSink)
 
 type TelegramSink struct {
-	bot    BotClient
-	chatID string
-	logger *slog.Logger
-	binder *ChatSessionBinder
+	bot      BotClient
+	chatID   string
+	logger   *slog.Logger
+	binder   *ChatSessionBinder
+	redactor func(string) string
 
 	mu     sync.Mutex
 	active map[int64]*activeTask
@@ -35,6 +36,10 @@ type TelegramSink struct {
 
 func WithSinkBinder(binder *ChatSessionBinder) SinkOption {
 	return func(s *TelegramSink) { s.binder = binder }
+}
+
+func WithRedactor(fn func(string) string) SinkOption {
+	return func(s *TelegramSink) { s.redactor = fn }
 }
 
 func NewTelegramSink(bot BotClient, chatID string, logger *slog.Logger, opts ...SinkOption) *TelegramSink {
@@ -82,7 +87,7 @@ func (s *TelegramSink) OnStreamDelta(taskID int64, text string) {
 	sc := task.stream
 	s.mu.Unlock()
 
-	sc.Send(text)
+	sc.Send(s.redact(text))
 }
 
 func (s *TelegramSink) OnStreamDone(taskID int64) {
@@ -191,7 +196,7 @@ func (s *TelegramSink) NotifyCompletion(_ context.Context, c daemon.TaskCompleti
 	}
 
 	if !task.stream.AlreadySent() {
-		summary := condenseSummary(emptyFallback(c.Summary, "-"))
+		summary := s.redact(condenseSummary(emptyFallback(c.Summary, "-")))
 		if summary != "" {
 			_ = s.bot.SendMessage(ctx, s.chatID, summary)
 		}
@@ -222,6 +227,13 @@ func (s *TelegramSink) ensureTask(taskID int64) *activeTask {
 	task.stream.Run()
 	s.active[taskID] = task
 	return task
+}
+
+func (s *TelegramSink) redact(text string) string {
+	if s.redactor != nil {
+		return s.redactor(text)
+	}
+	return text
 }
 
 // --- Utilities ---

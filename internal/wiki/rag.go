@@ -9,9 +9,14 @@ import (
 
 const ragContentLimit = 500
 
+// ContentScanner scans content for threats. It returns the cleaned content
+// and true if the content was blocked/modified.
+type ContentScanner func(content, source string) (cleaned string, blocked bool)
+
 // BuildRAGContext searches the wiki index for content relevant to the query
 // and returns a formatted string suitable for injection into the system prompt.
-func BuildRAGContext(ctx context.Context, idx *Index, query string, maxResults int) string {
+// If scanner is non-nil, each result's content is scanned for injection threats.
+func BuildRAGContext(ctx context.Context, idx *Index, query string, maxResults int, scanner ContentScanner) string {
 	if idx == nil || query == "" {
 		return ""
 	}
@@ -32,6 +37,11 @@ func BuildRAGContext(ctx context.Context, idx *Index, query string, maxResults i
 				content = content[:len(content)-1]
 			}
 			content += "..."
+		}
+		if scanner != nil {
+			if cleaned, blocked := scanner(content, "wiki:"+r.Page.Path); blocked {
+				content = cleaned
+			}
 		}
 		sb.WriteString(content)
 		sb.WriteString("\n\n")

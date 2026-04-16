@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -429,6 +430,74 @@ func TestSinkNotifyCompletionEditsProgressMessage(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected completion header edit with elapsed time, edits=%+v", edits)
+	}
+}
+
+func TestSinkNotifyCompletionRedactsSummary(t *testing.T) {
+	bot := newSinkBot()
+	redactor := func(s string) string {
+		return strings.ReplaceAll(s, "sk-secret-key-12345", "[REDACTED]")
+	}
+	sink := NewTelegramSink(bot, "chat-1", nil, WithRedactor(redactor))
+
+	sink.TrackUserMessage(42, 100)
+
+	err := sink.NotifyCompletion(context.Background(), daemon.TaskCompletion{
+		TaskID:      42,
+		Status:      daemon.StatusDone,
+		Summary:     "Result: sk-secret-key-12345 done",
+		StartedAt:   time.Unix(10, 0),
+		CompletedAt: time.Unix(20, 0),
+	})
+	if err != nil {
+		t.Fatalf("NotifyCompletion: %v", err)
+	}
+
+	sent := bot.getSent()
+	for _, m := range sent {
+		if strings.Contains(m.text, "sk-secret-key-12345") {
+			t.Fatalf("secret leaked in sent message: %q", m.text)
+		}
+	}
+	found := false
+	for _, m := range sent {
+		if strings.Contains(m.text, "[REDACTED]") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected redacted summary in sent messages, sent=%+v", sent)
+	}
+}
+
+func TestSinkNoRedactorPassesThrough(t *testing.T) {
+	bot := newSinkBot()
+	sink := NewTelegramSink(bot, "chat-1", nil)
+
+	sink.TrackUserMessage(42, 100)
+
+	err := sink.NotifyCompletion(context.Background(), daemon.TaskCompletion{
+		TaskID:      42,
+		Status:      daemon.StatusDone,
+		Summary:     "plain text summary",
+		StartedAt:   time.Unix(10, 0),
+		CompletedAt: time.Unix(20, 0),
+	})
+	if err != nil {
+		t.Fatalf("NotifyCompletion: %v", err)
+	}
+
+	sent := bot.getSent()
+	found := false
+	for _, m := range sent {
+		if contains(m.text, "plain text summary") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected plain summary in sent messages, sent=%+v", sent)
 	}
 }
 

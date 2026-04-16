@@ -22,6 +22,7 @@ import (
 	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/research"
 	"github.com/stello/elnath/internal/scheduler"
+	"github.com/stello/elnath/internal/secret"
 	"github.com/stello/elnath/internal/self"
 	"github.com/stello/elnath/internal/telegram"
 	"github.com/stello/elnath/internal/userfacingerr"
@@ -230,7 +231,10 @@ func cmdDaemonStart(ctx context.Context) error {
 		if binderErr != nil {
 			return fmt.Errorf("telegram: init binder: %w", binderErr)
 		}
-		tgSink := telegram.NewTelegramSink(bot, cfg.Telegram.ChatID, app.Logger, telegram.WithSinkBinder(binder))
+		tgSink := telegram.NewTelegramSink(bot, cfg.Telegram.ChatID, app.Logger,
+			telegram.WithSinkBinder(binder),
+			telegram.WithRedactor(secret.NewDetector().RedactString),
+		)
 		chatResponder := telegram.NewChatResponder(provider, bot, cfg.Telegram.ChatID, app.Logger)
 		classifier := conversation.NewLLMClassifier()
 		shell, shellErr := telegram.NewShell(queue, approvalStore, bot, cfg.Telegram.ChatID, statePath, rt.skillReg,

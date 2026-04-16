@@ -87,7 +87,7 @@ func TestWikiRAGNodeCallsBuildRAGContext(t *testing.T) {
 		t.Fatalf("Render error: %v", err)
 	}
 
-	want := wiki.BuildRAGContext(context.Background(), idx, state.UserInput, 2)
+	want := wiki.BuildRAGContext(context.Background(), idx, state.UserInput, 2, ScanContent)
 	if got != want {
 		t.Fatalf("Render = %q, want %q", got, want)
 	}

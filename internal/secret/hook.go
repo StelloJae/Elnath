@@ -8,6 +8,7 @@ import (
 
 	"github.com/stello/elnath/internal/agent"
 	"github.com/stello/elnath/internal/audit"
+	"github.com/stello/elnath/internal/prompt"
 	"github.com/stello/elnath/internal/tools"
 )
 
@@ -30,11 +31,9 @@ func (h *SecretScanHook) PostToolUse(_ context.Context, toolName string, _ json.
 	}
 
 	redacted, findings := h.detector.ScanAndRedact(result.Output)
-	if len(findings) == 0 {
-		return nil
+	if len(findings) > 0 {
+		result.Output = redacted
 	}
-
-	result.Output = redacted
 	for _, finding := range findings {
 		chars := finding.End - finding.Start
 		slog.Warn("secret redacted in tool output", "tool", toolName, "rule", finding.RuleID, "chars", chars)
@@ -50,5 +49,20 @@ func (h *SecretScanHook) PostToolUse(_ context.Context, toolName string, _ json.
 			slog.Warn("audit trail write failed", "tool", toolName, "rule", finding.RuleID, "error", err)
 		}
 	}
+
+	cleaned, blocked := prompt.ScanContent(result.Output, "tool:"+toolName)
+	if blocked {
+		result.Output = cleaned
+		if h.trail != nil {
+			if err := h.trail.Log(audit.Event{
+				Type:     audit.EventInjectionBlocked,
+				ToolName: toolName,
+				Detail:   "injection blocked in tool output",
+			}); err != nil {
+				slog.Warn("audit trail write failed", "tool", toolName, "error", err)
+			}
+		}
+	}
+
 	return nil
 }

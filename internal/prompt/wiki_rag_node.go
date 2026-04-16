@@ -38,5 +38,5 @@ func (n *WikiRAGNode) Render(ctx context.Context, state *RenderState) (string, e
 	if n == nil || state == nil || state.WikiIdx == nil || strings.TrimSpace(state.UserInput) == "" {
 		return "", nil
 	}
-	return wiki.BuildRAGContext(ctx, state.WikiIdx, state.UserInput, n.maxResults), nil
+	return wiki.BuildRAGContext(ctx, state.WikiIdx, state.UserInput, n.maxResults, ScanContent), nil
 }
