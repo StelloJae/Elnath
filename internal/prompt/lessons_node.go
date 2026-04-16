@@ -10,6 +10,11 @@ import (
 	"github.com/stello/elnath/internal/learning"
 )
 
+// minTopicLessons is the smallest number of topic-filtered lessons we accept
+// before falling back to global recent lessons. Below this, a single-lesson
+// hit is too noisy to be useful for the model; we prefer broader recency.
+const minTopicLessons = 3
+
 type LessonLister interface {
 	Recent(n int) ([]learning.Lesson, error)
 }
@@ -58,7 +63,7 @@ func (n *LessonsNode) Render(_ context.Context, state *RenderState) (string, err
 	if state != nil && state.ProjectID != "" {
 		if fl, ok := n.store.(LessonFilteredLister); ok {
 			lessons, err = fl.ListFiltered(learning.Filter{Topic: state.ProjectID, Limit: n.maxEntries, Reverse: true})
-			if err != nil || len(lessons) < 3 {
+			if err != nil || len(lessons) < minTopicLessons {
 				lessons, err = n.store.Recent(n.maxEntries)
 			}
 		} else {
