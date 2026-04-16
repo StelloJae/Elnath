@@ -89,7 +89,7 @@ func (s *Scheduler) Start(ctx context.Context) {
 			go func(t BootTask) {
 				defer s.wg.Done()
 				for {
-					delay := nextDailyRun(time.Now(), t.Schedule.DailyAt)
+					delay := NextDailyRun(time.Now(), t.Schedule.DailyAt)
 					timer := time.NewTimer(delay)
 					select {
 					case <-schedCtx.Done():

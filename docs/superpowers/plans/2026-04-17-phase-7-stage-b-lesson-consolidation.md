@@ -136,11 +136,15 @@ Split into two commits: `fd77cd2` (learning side) and the follow-up wiki commit.
 
 B.8 live probe remains — the orchestrator has yet to run against real lessons.jsonl with a real provider.
 
-### B.6 — Scheduler Wiring
+### B.6 — Scheduler Wiring ✅
 
-- [ ] Create `wiki/boot/lesson-consolidation.md` ambient boot task (cron: daily 04:00)
-- [ ] Verify Phase 5.2 ambient scheduler picks it up
-- [ ] Manual trigger via `elnath debug consolidation run` (for testing without waiting for schedule)
+- [x] Daily scheduler (04:00 local) via `learning.RunDailyConsolidationLoop` launched as a daemon goroutine
+- [x] Reuses `ambient.NextDailyRun` (exported from lowercase) for DST-safe next-fire timing
+- [x] Wired in `cmd_daemon.go` next to the ambient boot-task scheduler; activates whenever `rt.learningStore` and `rt.wikiStore` are both live
+- [x] Manual trigger via `elnath debug consolidation run [--force]` (B.5 + minimal CLI)
+- [x] Shared construction via `consolidation_setup.go` so CLI and daemon agree on gate knobs, provider resolution, and Claude-Code signature
+
+**Design choice — not a wiki/boot task**: the existing ambient scheduler runs natural-language prompts through an agent. Consolidation is a deterministic pipeline (one LLM call, structured JSON, no tool use), so wiring it as a BootTask would add a pointless agent layer. A native goroutine is simpler and testable in isolation.
 
 ### B.7 — Debug + Transparency
 

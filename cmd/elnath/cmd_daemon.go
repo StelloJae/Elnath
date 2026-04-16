@@ -252,6 +252,22 @@ func cmdDaemonStart(ctx context.Context) error {
 			defer ambientSched.Stop()
 			app.Logger.Info("ambient scheduler active", "boot_tasks", len(bootTasks))
 		}
+
+		// Lesson consolidation scheduler — runs Consolidator.Run once per day
+		// at 04:00 local time. This is separate from the ambient boot-task
+		// scheduler above because consolidation is a deterministic pipeline
+		// (not an agent-language task), and because it needs typed access to
+		// Consolidator rather than a natural-language prompt.
+		if rt.learningStore != nil && rt.wikiStore != nil {
+			consolidationDeps, err := buildConsolidationDepsFromConfig(cfg, provider, rt.wikiStore, rt.learningStore, model)
+			if err != nil {
+				app.Logger.Warn("consolidation scheduler disabled", "error", err)
+			} else {
+				consolidator := newConsolidator(consolidationDeps, false)
+				go learning.RunDailyConsolidationLoop(ctx, consolidator, ambient.TimeOfDay{Hour: 4, Minute: 0}, app.Logger)
+				app.Logger.Info("consolidation scheduler active", "schedule", "daily 04:00")
+			}
+		}
 	}
 
 	if cfg.Telegram.Enabled && cfg.Telegram.BotToken != "" && cfg.Telegram.ChatID != "" {

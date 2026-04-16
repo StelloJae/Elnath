@@ -4,12 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
-	"time"
 
 	"github.com/stello/elnath/internal/config"
-	"github.com/stello/elnath/internal/learning"
-	"github.com/stello/elnath/internal/wiki"
 )
 
 // debugConsolidation handles `elnath debug consolidation <subcommand>`.
@@ -62,60 +58,15 @@ func debugConsolidationRun(ctx context.Context, args []string) error {
 		return fmt.Errorf("debug consolidation: load config: %w", err)
 	}
 
-	provider, model, err := buildProvider(cfg)
+	deps, err := buildConsolidationDepsFromCLI(cfg)
 	if err != nil {
-		return fmt.Errorf("debug consolidation: build provider: %w", err)
+		return fmt.Errorf("debug consolidation: %w", err)
 	}
-	lessonProvider, lessonModel := buildLessonProvider(cfg, provider)
-	if lessonProvider == nil {
-		return fmt.Errorf("debug consolidation: no provider configured (set anthropic.api_key or codex OAuth)")
-	}
-	if lessonModel == "" {
-		lessonModel = model
-	}
-
-	wikiStore, err := wiki.NewStore(cfg.WikiDir)
-	if err != nil {
-		return fmt.Errorf("debug consolidation: wiki store: %w", err)
-	}
-
-	lessonsPath := filepath.Join(cfg.DataDir, "lessons.jsonl")
-	lessonStore := learning.NewStore(lessonsPath)
-
-	lockPath := filepath.Join(cfg.DataDir, ".consolidate-lock")
-	statePath := filepath.Join(cfg.DataDir, "consolidation_state.json")
-
-	gateOpts := []learning.GateOption{
-		learning.WithHolderStale(60 * time.Minute),
-		// Session gate stays permissive here — B.6 will wire in a real session
-		// counter. `--force` zeroes both thresholds.
-		learning.WithMinSessions(0),
-	}
-	if force {
-		gateOpts = append(gateOpts, learning.WithMinInterval(0))
-	} else {
-		gateOpts = append(gateOpts, learning.WithMinInterval(24*time.Hour))
-	}
-	gate := learning.NewGate(lockPath, gateOpts...)
-
-	systemPrefix := ""
-	if cfg.LLMExtraction.ClaudeCodeSignature {
-		systemPrefix = "You are Claude Code, Anthropic's official CLI for Claude.\n\n"
-	}
-
-	consolidator := learning.NewConsolidator(learning.ConsolidatorConfig{
-		Store:        lessonStore,
-		Wiki:         wikiStore,
-		Provider:     lessonProvider,
-		Gate:         gate,
-		Model:        lessonModel,
-		StatePath:    statePath,
-		SystemPrefix: systemPrefix,
-	})
+	consolidator := newConsolidator(deps, force)
 
 	fmt.Printf("Consolidation run (force=%v)\n", force)
-	fmt.Printf("  Provider:    %s\n", lessonProvider.Name())
-	fmt.Printf("  Model:       %s\n", lessonModel)
+	fmt.Printf("  Provider:    %s\n", deps.providerName)
+	fmt.Printf("  Model:       %s\n", deps.model)
 	fmt.Printf("  Wiki dir:    %s\n", cfg.WikiDir)
 	fmt.Printf("  Data dir:    %s\n", cfg.DataDir)
 	fmt.Println()
@@ -137,7 +88,6 @@ func debugConsolidationRun(ctx context.Context, args []string) error {
 	fmt.Printf("Success:\n")
 	fmt.Printf("  Syntheses created:  %d\n", result.SynthesisCount)
 	fmt.Printf("  Lessons superseded: %d\n", result.SupersededCount)
-	fmt.Printf("\nState:  %s\n", statePath)
-	fmt.Printf("Wiki synthesis pages under: %s/synthesis/\n", cfg.WikiDir)
+	fmt.Printf("\nWiki synthesis pages under: %s/synthesis/\n", cfg.WikiDir)
 	return nil
 }

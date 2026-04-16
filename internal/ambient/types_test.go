@@ -128,9 +128,9 @@ func TestNextDailyRun(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := nextDailyRun(tc.now, tc.tod)
+			got := NextDailyRun(tc.now, tc.tod)
 			if got < tc.wantMin || got > tc.wantMax {
-				t.Errorf("nextDailyRun = %v, want in [%v, %v]", got, tc.wantMin, tc.wantMax)
+				t.Errorf("NextDailyRun = %v, want in [%v, %v]", got, tc.wantMin, tc.wantMax)
 			}
 		})
 	}

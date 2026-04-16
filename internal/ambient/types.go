@@ -79,10 +79,10 @@ func ParseSchedule(raw string) (Schedule, error) {
 	return Schedule{}, fmt.Errorf("ambient: unknown schedule format %q", raw)
 }
 
-// nextDailyRun returns the duration until the next occurrence of tod after now.
+// NextDailyRun returns the duration until the next occurrence of tod after now.
 // If tod has not yet passed today, the next run is today; otherwise it is tomorrow.
 // Uses AddDate(0,0,1) for DST-safe next-day calculation.
-func nextDailyRun(now time.Time, tod TimeOfDay) time.Duration {
+func NextDailyRun(now time.Time, tod TimeOfDay) time.Duration {
 	target := time.Date(now.Year(), now.Month(), now.Day(), tod.Hour, tod.Minute, 0, 0, now.Location())
 	if !now.Before(target) {
 		// Target has passed (or is exactly now); advance to the same time tomorrow.
