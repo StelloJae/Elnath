@@ -1,2 +1,0 @@
-caddy.go
-caddy_test.go
