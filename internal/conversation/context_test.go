@@ -122,9 +122,9 @@ func TestContextWindowFit_Trim(t *testing.T) {
 	// Within the 100-token budget: 4 messages × 24 = 96 ≤ 100, 5 × 24 = 120 > 100.
 	// So snip keeps the 4 most-recent messages.
 	const (
-		maxTokens  = 3100
-		msgCount   = 130
-		bodyLen    = 80
+		maxTokens = 3100
+		msgCount  = 130
+		bodyLen   = 80
 	)
 
 	body := strings.Repeat("x", bodyLen)
@@ -390,6 +390,218 @@ func TestCompressMessages_FallbackToSnip(t *testing.T) {
 	}
 }
 
+func TestCompressMessages_UsesNewSessionPromptWhenNoPriorSummary(t *testing.T) {
+	cw := NewContextWindow()
+	msgs := newLargeCompressionMessages("new-session")
+
+	var capturedReq llm.ChatRequest
+	provider := &mockProvider{
+		chatFn: func(_ context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+			capturedReq = req
+			return &llm.ChatResponse{Content: testStructuredSummary("Continue updating the summary.")}, nil
+		},
+	}
+
+	if _, err := cw.CompressMessages(context.Background(), provider, msgs, structuredCompressionMaxTokens); err != nil {
+		t.Fatalf("CompressMessages: %v", err)
+	}
+	if !strings.Contains(capturedReq.System, "You are compressing a conversation.") {
+		t.Fatalf("expected new-session prompt, got %q", capturedReq.System)
+	}
+	if strings.Contains(capturedReq.System, "You are updating a structured conversation summary.") {
+		t.Fatalf("expected new-session prompt only, got %q", capturedReq.System)
+	}
+	if !strings.Contains(capturedReq.System, "new-session-0") {
+		t.Fatalf("expected prompt to contain injected conversation transcript, got %q", capturedReq.System)
+	}
+}
+
+func TestCompressMessages_UsesIterativePromptWhenPriorSummaryPresent(t *testing.T) {
+	cw := NewContextWindow()
+	priorSummary := testStructuredSummary("Audit the compression pipeline.")
+	msgs := newLargeCompressionMessagesWithPriorSummary(priorSummary, "iterative")
+
+	var capturedReq llm.ChatRequest
+	provider := &mockProvider{
+		chatFn: func(_ context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+			capturedReq = req
+			return &llm.ChatResponse{Content: testStructuredSummary("Merge the new messages into the existing summary.")}, nil
+		},
+	}
+
+	if _, err := cw.CompressMessages(context.Background(), provider, msgs, structuredCompressionMaxTokens); err != nil {
+		t.Fatalf("CompressMessages: %v", err)
+	}
+	if !strings.Contains(capturedReq.System, "You are updating a structured conversation summary.") {
+		t.Fatalf("expected iterative prompt, got %q", capturedReq.System)
+	}
+	if !strings.Contains(capturedReq.System, "## 9. Next action\nAudit the compression pipeline.") {
+		t.Fatalf("expected prompt to inject existing summary, got %q", capturedReq.System)
+	}
+	if !strings.Contains(capturedReq.System, "iterative-1") {
+		t.Fatalf("expected prompt to inject new messages, got %q", capturedReq.System)
+	}
+}
+
+func TestCompressMessages_OutputIsStructuredSummary(t *testing.T) {
+	cw := NewContextWindow()
+	msgs := newLargeCompressionMessages("structured-output")
+	provider := &mockProvider{
+		chatFn: func(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+			return &llm.ChatResponse{Content: testStructuredSummary("Run the remaining regression tests.")}, nil
+		},
+	}
+
+	result, err := cw.CompressMessages(context.Background(), provider, msgs, structuredCompressionMaxTokens)
+	if err != nil {
+		t.Fatalf("CompressMessages: %v", err)
+	}
+	if len(result) != 9 {
+		t.Fatalf("message count = %d, want 9 (1 summary + 8 recent messages)", len(result))
+	}
+	if result[0].Role != llm.RoleAssistant {
+		t.Fatalf("summary role = %q, want assistant", result[0].Role)
+	}
+	if _, ok := parseStructuredSummary(result[0].Text()); !ok {
+		t.Fatalf("expected structured summary output, got %q", result[0].Text())
+	}
+	structuredCount := 0
+	for _, msg := range result {
+		if isStructuredSummaryMessage(msg) {
+			structuredCount++
+		}
+	}
+	if structuredCount != 1 {
+		t.Fatalf("structured summary count = %d, want 1", structuredCount)
+	}
+}
+
+func TestCompressMessages_MalformedOutputFallsBackToLegacy(t *testing.T) {
+	cw := NewContextWindow()
+	msgs := newLargeCompressionMessages("fallback")
+
+	var requests []llm.ChatRequest
+	provider := &mockProvider{
+		chatFn: func(_ context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+			requests = append(requests, req)
+			if len(requests) == 1 {
+				return &llm.ChatResponse{Content: "one-line malformed summary"}, nil
+			}
+			return &llm.ChatResponse{Content: "legacy fallback summary"}, nil
+		},
+	}
+
+	result, err := cw.CompressMessages(context.Background(), provider, msgs, structuredCompressionMaxTokens)
+	if err != nil {
+		t.Fatalf("CompressMessages: %v", err)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("provider calls = %d, want 2", len(requests))
+	}
+	if !strings.Contains(requests[0].System, "You are compressing a conversation.") {
+		t.Fatalf("expected structured prompt first, got %q", requests[0].System)
+	}
+	if requests[1].System != legacyUnstructuredSummaryPrompt {
+		t.Fatalf("legacy prompt = %q, want %q", requests[1].System, legacyUnstructuredSummaryPrompt)
+	}
+	if got := result[0].Text(); got != "legacy fallback summary" {
+		t.Fatalf("summary text = %q, want legacy fallback output", got)
+	}
+	if isStructuredSummaryMessage(result[0]) {
+		t.Fatal("expected fallback summary to remain unstructured")
+	}
+	if len(result) != 9 {
+		t.Fatalf("message count = %d, want 9 (1 fallback summary + 8 recent messages)", len(result))
+	}
+	if result[0].Role != llm.RoleAssistant {
+		t.Fatalf("summary role = %q, want assistant", result[0].Role)
+	}
+	if len(result[0].Content) != 1 || result[0].Text() == "" {
+		t.Fatal("expected fallback output to be injected into a single assistant message")
+	}
+	if len(result[1:]) != 8 {
+		t.Fatalf("recent tail length = %d, want 8", len(result[1:]))
+	}
+}
+
+func TestCompressMessages_PreservesOnAutoCompressCallback(t *testing.T) {
+	cw := NewContextWindow()
+	msgs := newLargeCompressionMessages("callback")
+
+	callbackCount := 0
+	cw.OnAutoCompress(func() { callbackCount++ })
+
+	provider := &mockProvider{
+		chatFn: func(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+			return &llm.ChatResponse{Content: testStructuredSummary("Continue with verification.")}, nil
+		},
+	}
+
+	if _, err := cw.CompressMessages(context.Background(), provider, msgs, structuredCompressionMaxTokens); err != nil {
+		t.Fatalf("CompressMessages: %v", err)
+	}
+	if callbackCount == 0 {
+		t.Fatal("expected OnAutoCompress to fire after successful structured compression")
+	}
+}
+
+func TestCompressMessages_SnipsWhenOnlyStructuredSummaryRemains(t *testing.T) {
+	cw := NewContextWindow()
+	msgs := newLargeCompressionMessages("summary-loop")
+
+	callCount := 0
+	provider := &mockProvider{
+		chatFn: func(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+			callCount++
+			return &llm.ChatResponse{Content: testStructuredSummary("Keep working through the recent tail.")}, nil
+		},
+	}
+
+	result, err := cw.CompressMessages(context.Background(), provider, msgs, 200)
+	if err != nil {
+		t.Fatalf("CompressMessages: %v", err)
+	}
+	if callCount != 1 {
+		t.Fatalf("provider calls = %d, want 1 before snip fallback", callCount)
+	}
+	if len(result) != 1 {
+		t.Fatalf("message count = %d, want 1 after snip fallback", len(result))
+	}
+	if strings.Contains(result[0].Text(), "# Session Summary") {
+		t.Fatalf("expected snip fallback to keep the newest message, got %q", result[0].Text())
+	}
+}
+
+func TestCompressMessages_LegacyFallbackFailureSnipsInsteadOfKeepingMalformedSummary(t *testing.T) {
+	cw := NewContextWindow()
+	msgs := newLargeCompressionMessages("legacy-fallback-error")
+
+	callCount := 0
+	provider := &mockProvider{
+		chatFn: func(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+			callCount++
+			if callCount == 1 {
+				return &llm.ChatResponse{Content: "malformed structured output"}, nil
+			}
+			return nil, fmt.Errorf("legacy fallback unavailable")
+		},
+	}
+
+	result, err := cw.CompressMessages(context.Background(), provider, msgs, 200)
+	if err != nil {
+		t.Fatalf("CompressMessages: %v", err)
+	}
+	if callCount != 2 {
+		t.Fatalf("provider calls = %d, want 2 (structured + legacy fallback)", callCount)
+	}
+	if len(result) != 1 {
+		t.Fatalf("message count = %d, want 1 after snip fallback", len(result))
+	}
+	if got := result[0].Text(); strings.Contains(got, "malformed structured output") {
+		t.Fatalf("expected malformed output to be discarded, got %q", got)
+	}
+}
+
 func TestImportanceThreshold_Median(t *testing.T) {
 	cw := NewContextWindow()
 	segments := []topicSegment{
@@ -470,4 +682,34 @@ func TestContextWindowFit_TrimKeepsRecent(t *testing.T) {
 			t.Errorf("result[%d] text mismatch: got %q, want %q", i, m.Text(), orig.Text())
 		}
 	}
+}
+
+const structuredCompressionMaxTokens = 1240
+
+func newLargeCompressionMessages(prefix string) []llm.Message {
+	const bodyLen = 400
+	msgs := make([]llm.Message, 12)
+	for i := range msgs {
+		body := fmt.Sprintf("%s-%d-%s", prefix, i, strings.Repeat("x", bodyLen))
+		if i == 0 {
+			msgs[i] = llm.NewUserMessage(body)
+			continue
+		}
+		if i < 4 {
+			msgs[i] = llm.NewAssistantMessage(body)
+			continue
+		}
+		if i%2 == 0 {
+			msgs[i] = llm.NewUserMessage(body)
+		} else {
+			msgs[i] = llm.NewAssistantMessage(body)
+		}
+	}
+	return msgs
+}
+
+func newLargeCompressionMessagesWithPriorSummary(summary, prefix string) []llm.Message {
+	msgs := newLargeCompressionMessages(prefix)
+	msgs[0] = llm.NewAssistantMessage(summary)
+	return msgs
 }

@@ -23,16 +23,11 @@ const (
 	autoCompressThreshold = 0.80
 )
 
-// summarizePrompt is sent to the LLM when performing auto-compression.
-const summarizePrompt = `Summarize the following conversation history concisely.
-Preserve key decisions, facts, and context needed to continue the conversation.
-Output only the summary, no preamble.`
-
 // ContextWindow manages token budget and message compression via a 3-stage pipeline.
 type ContextWindow struct {
-	logger          *slog.Logger
-	threshold       float64 // fraction of maxTokens at which auto-compression triggers (0.0-1.0)
-	onAutoCompress  func()
+	logger         *slog.Logger
+	threshold      float64 // fraction of maxTokens at which auto-compression triggers (0.0-1.0)
+	onAutoCompress func()
 }
 
 // OnAutoCompress registers a callback invoked after a successful Stage 2 LLM
@@ -277,12 +272,8 @@ func segmentByTopic(messages []llm.Message) []topicSegment {
 	return segments
 }
 
-// autoCompress performs hierarchical summarization of old messages.
-//
-// Level 1 (topic-level): groups old messages into topic segments, summarizes
-// low-importance segments individually, preserves high-importance segments.
-// Level 2 (session-level): if the result is still too large, collapses all
-// old summaries into a single session summary.
+// autoCompress collapses older messages into one summary while preserving the
+// most recent turns verbatim.
 func (cw *ContextWindow) autoCompress(ctx context.Context, provider llm.Provider, messages []llm.Message) ([]llm.Message, error) {
 	keepCount := recentTurnsToKeep * 2
 	if len(messages) <= keepCount {
@@ -291,63 +282,7 @@ func (cw *ContextWindow) autoCompress(ctx context.Context, provider llm.Provider
 
 	toCompress := messages[:len(messages)-keepCount]
 	recent := messages[len(messages)-keepCount:]
-
-	segments := segmentByTopic(toCompress)
-
-	if len(segments) <= 1 {
-		// Single segment: fall back to flat summarization.
-		return cw.flatSummarize(ctx, provider, toCompress, recent)
-	}
-
-	// Determine importance threshold: segments below median importance get summarized.
-	threshold := cw.importanceThreshold(segments)
-
-	var compressed []llm.Message
-	var toSummarize []topicSegment
-
-	for _, seg := range segments {
-		if seg.importance >= threshold {
-			// Flush any pending low-importance segments as a summary first.
-			if len(toSummarize) > 0 {
-				summary, err := cw.summarizeSegments(ctx, provider, toSummarize)
-				if err != nil {
-					// On failure, keep original messages.
-					for _, s := range toSummarize {
-						compressed = append(compressed, s.messages...)
-					}
-				} else {
-					compressed = append(compressed, summary)
-				}
-				toSummarize = nil
-			}
-			// Preserve high-importance segment as-is.
-			compressed = append(compressed, seg.messages...)
-		} else {
-			toSummarize = append(toSummarize, seg)
-		}
-	}
-
-	// Flush remaining low-importance segments.
-	if len(toSummarize) > 0 {
-		summary, err := cw.summarizeSegments(ctx, provider, toSummarize)
-		if err != nil {
-			for _, s := range toSummarize {
-				compressed = append(compressed, s.messages...)
-			}
-		} else {
-			compressed = append(compressed, summary)
-		}
-	}
-
-	result := append(compressed, recent...)
-
-	cw.logger.Debug("hierarchical compression",
-		"original_count", len(messages),
-		"segments", len(segments),
-		"compressed_count", len(result),
-	)
-
-	return result, nil
+	return cw.flatSummarize(ctx, provider, toCompress, recent)
 }
 
 // importanceThreshold returns the median importance across segments.
@@ -370,52 +305,34 @@ func (cw *ContextWindow) importanceThreshold(segments []topicSegment) int {
 	return scores[len(scores)/2]
 }
 
-// summarizeSegments collapses multiple topic segments into one summary message.
-func (cw *ContextWindow) summarizeSegments(ctx context.Context, provider llm.Provider, segments []topicSegment) (llm.Message, error) {
-	var sb strings.Builder
-	for i, seg := range segments {
-		fmt.Fprintf(&sb, "--- Topic %d ---\n", i+1)
-		for _, m := range seg.messages {
-			sb.WriteString(m.Role)
-			sb.WriteString(": ")
-			sb.WriteString(m.Text())
-			sb.WriteString("\n")
-		}
-		sb.WriteString("\n")
-	}
-
-	resp, err := provider.Chat(ctx, llm.ChatRequest{
-		System:    summarizePrompt,
-		Messages:  []llm.Message{llm.NewUserMessage(sb.String())},
-		MaxTokens: 512,
-	})
-	if err != nil {
-		return llm.Message{}, fmt.Errorf("summarize segments: %w", err)
-	}
-
-	return llm.NewAssistantMessage("[Summary of earlier topics]\n" + resp.Content), nil
-}
-
-// flatSummarize is the original single-pass summarization, used as fallback.
+// flatSummarize summarizes older messages into a single assistant message.
 func (cw *ContextWindow) flatSummarize(ctx context.Context, provider llm.Provider, toSummarize, recent []llm.Message) ([]llm.Message, error) {
-	var sb strings.Builder
-	for _, m := range toSummarize {
-		sb.WriteString(m.Role)
-		sb.WriteString(": ")
-		sb.WriteString(m.Text())
-		sb.WriteString("\n")
+	request := newSessionSummaryRequest(toSummarize)
+	if existingSummary, summaryIndex, ok := latestStructuredSummary(toSummarize); ok {
+		newMessages := toSummarize[summaryIndex+1:]
+		if len(newMessages) == 0 {
+			return nil, fmt.Errorf("auto-compress: no new messages after structured summary")
+		}
+		request = iterativeSummaryRequest(existingSummary, newMessages)
 	}
 
-	resp, err := provider.Chat(ctx, llm.ChatRequest{
-		System:    summarizePrompt,
-		Messages:  []llm.Message{llm.NewUserMessage(sb.String())},
-		MaxTokens: 512,
-	})
+	resp, err := provider.Chat(ctx, request)
 	if err != nil {
 		return nil, fmt.Errorf("auto-compress: summarize: %w", err)
 	}
 
-	summary := llm.NewAssistantMessage("[Summary of earlier conversation]\n" + resp.Content)
+	summaryText := resp.Content
+	if _, ok := parseStructuredSummary(summaryText); !ok {
+		cw.logger.Warn("structured summary malformed, falling back to legacy summary")
+		legacyResp, legacyErr := provider.Chat(ctx, legacySummaryRequest(toSummarize))
+		if legacyErr != nil {
+			return nil, fmt.Errorf("auto-compress: legacy fallback: %w", legacyErr)
+		} else {
+			summaryText = legacyResp.Content
+		}
+	}
+
+	summary := llm.NewAssistantMessage(summaryText)
 
 	compressed := make([]llm.Message, 0, 1+len(recent))
 	compressed = append(compressed, summary)
