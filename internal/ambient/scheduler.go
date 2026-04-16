@@ -109,11 +109,7 @@ func (s *Scheduler) Start(ctx context.Context) {
 // executeTask acquires the concurrency semaphore, runs the task, and optionally
 // notifies the user on success or failure.
 func (s *Scheduler) executeTask(ctx context.Context, task BootTask) {
-	select {
-	case s.sem <- struct{}{}:
-	case <-ctx.Done():
-		return
-	}
+	s.sem <- struct{}{}
 	defer func() { <-s.sem }()
 
 	defer func() {
