@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	randv2 "math/rand/v2"
 	"strings"
 	"testing"
 	"time"
@@ -648,5 +649,230 @@ func TestRunEmptyResponseExhaustionEmitsELN120(t *testing.T) {
 	}
 	if ufe.Code() != userfacingerr.ELN120 {
 		t.Fatalf("expected code %q, got %q (err: %v)", userfacingerr.ELN120, ufe.Code(), err)
+	}
+}
+
+func toolResultTurnMessages(contents ...string) []llm.Message {
+	messages := []llm.Message{llm.NewUserMessage("start")}
+	for i, content := range contents {
+		messages = append(messages, llm.BuildAssistantMessage(nil, []llm.CompletedToolCall{{
+			ID:    fmt.Sprintf("tool-%d", i),
+			Name:  "bash",
+			Input: `{}`,
+		}}))
+		messages = llm.AppendToolResult(messages, fmt.Sprintf("tool-%d", i), content, false)
+	}
+	return messages
+}
+
+func toolResultContentForTurn(t *testing.T, messages []llm.Message, turn int) string {
+	t.Helper()
+	contents := toolResultContentsForTurn(t, messages, turn)
+	return contents[0]
+}
+
+func toolResultContentsForTurn(t *testing.T, messages []llm.Message, turn int) []string {
+	t.Helper()
+	toolTurn := 0
+	for _, msg := range messages {
+		if msg.Role != llm.RoleUser {
+			continue
+		}
+		var contents []string
+		for _, block := range msg.Content {
+			tr, ok := block.(llm.ToolResultBlock)
+			if !ok {
+				continue
+			}
+			contents = append(contents, tr.Content)
+		}
+		if len(contents) == 0 {
+			continue
+		}
+		if toolTurn == turn {
+			return contents
+		}
+		toolTurn++
+	}
+	t.Fatalf("tool-result turn %d not found", turn)
+	return nil
+}
+
+func TestAttenuateHistoricalToolResults_NewTurnUnaffected(t *testing.T) {
+	t.Parallel()
+
+	content := strings.Repeat("n", 30_000)
+	messages := toolResultTurnMessages(content)
+
+	attenuateHistoricalToolResults(messages, 0)
+
+	if got := toolResultContentForTurn(t, messages, 0); got != content {
+		t.Fatalf("current turn changed: got len=%d want len=%d", len(got), len(content))
+	}
+}
+
+func TestAttenuateHistoricalToolResults_TwoTurnsAgoLimit10K(t *testing.T) {
+	t.Parallel()
+
+	messages := toolResultTurnMessages(
+		strings.Repeat("a", 30_000),
+		strings.Repeat("b", 128),
+		strings.Repeat("c", 128),
+	)
+
+	attenuateHistoricalToolResults(messages, 2)
+
+	got := toolResultContentForTurn(t, messages, 0)
+	if !strings.HasPrefix(got, attenuationMarker) {
+		t.Fatalf("two-turn-old result missing marker prefix: %q", got[:min(len(got), 64)])
+	}
+	if len(got) > toolResultHistoryStage1Limit {
+		t.Fatalf("two-turn-old result len=%d, want <= %d", len(got), toolResultHistoryStage1Limit)
+	}
+	if !strings.Contains(got, "original=30000") {
+		t.Fatalf("two-turn-old result missing original size metadata: %q", got)
+	}
+}
+
+func TestAttenuateHistoricalToolResults_ThreeTurnsAgoLimit2K(t *testing.T) {
+	t.Parallel()
+
+	messages := toolResultTurnMessages(
+		strings.Repeat("a", 10_000),
+		strings.Repeat("b", 128),
+		strings.Repeat("c", 128),
+		strings.Repeat("d", 128),
+	)
+
+	attenuateHistoricalToolResults(messages, 3)
+
+	got := toolResultContentForTurn(t, messages, 0)
+	if !strings.HasPrefix(got, attenuationMarker) {
+		t.Fatalf("three-turn-old result missing marker prefix: %q", got[:min(len(got), 64)])
+	}
+	if len(got) > toolResultHistoryStage2Limit {
+		t.Fatalf("three-turn-old result len=%d, want <= %d", len(got), toolResultHistoryStage2Limit)
+	}
+	if !strings.Contains(got, "original=10000") {
+		t.Fatalf("three-turn-old result missing original size metadata: %q", got)
+	}
+}
+
+func TestAttenuateHistoricalToolResults_FourPlusTurnsAgoPlaceholder(t *testing.T) {
+	t.Parallel()
+
+	stale := strings.Repeat("z", 512)
+	messages := toolResultTurnMessages(
+		stale,
+		strings.Repeat("b", 128),
+		strings.Repeat("c", 128),
+		strings.Repeat("d", 128),
+		strings.Repeat("e", 128),
+	)
+
+	firstTurn := &messages[2]
+	firstTurn.Content = append(firstTurn.Content, llm.ToolResultBlock{ToolUseID: "tool-0b", Content: strings.Repeat("y", 256)})
+
+	attenuateHistoricalToolResults(messages, 4)
+
+	got := toolResultContentsForTurn(t, messages, 0)
+	if len(got) != 2 {
+		t.Fatalf("stale turn result count = %d, want 2", len(got))
+	}
+	if got[0] != "[stale tool result, turns=4, original=512]" {
+		t.Fatalf("first stale result placeholder mismatch: %q", got[0])
+	}
+	if got[1] != "[stale tool result, turns=4, original=256]" {
+		t.Fatalf("second stale result placeholder mismatch: %q", got[1])
+	}
+	if strings.Contains(got[0], stale[:64]) {
+		t.Fatalf("stale result should not keep original payload: %q", got[0])
+	}
+}
+
+func TestAttenuateHistoricalToolResults_Idempotent(t *testing.T) {
+	t.Parallel()
+
+	messages := toolResultTurnMessages(
+		strings.Repeat("a", 30_000),
+		strings.Repeat("b", 128),
+		strings.Repeat("c", 128),
+	)
+
+	attenuateHistoricalToolResults(messages, 2)
+	first := toolResultContentForTurn(t, messages, 0)
+	attenuateHistoricalToolResults(messages, 2)
+	second := toolResultContentForTurn(t, messages, 0)
+
+	if second != first {
+		t.Fatalf("attenuation must be idempotent\nfirst:  %q\nsecond: %q", first, second)
+	}
+}
+
+func TestNextJitterDelay_MinimumRespected(t *testing.T) {
+	t.Parallel()
+
+	rng := randv2.New(randv2.NewPCG(1, 2))
+	for _, current := range []time.Duration{0, retryBaseDelay / 2, retryBaseDelay, 5 * retryBaseDelay, retryMaxDelay} {
+		for i := 0; i < 1000; i++ {
+			got := nextJitterDelayWithRand(current, rng)
+			if got < retryBaseDelay {
+				t.Fatalf("nextJitterDelayWithRand(%s) = %s, want >= %s", current, got, retryBaseDelay)
+			}
+		}
+	}
+}
+
+func TestNextJitterDelay_MaximumCapped(t *testing.T) {
+	t.Parallel()
+
+	rng := randv2.New(randv2.NewPCG(3, 4))
+	for _, current := range []time.Duration{10 * retryBaseDelay, retryMaxDelay, 10 * retryMaxDelay} {
+		for i := 0; i < 1000; i++ {
+			got := nextJitterDelayWithRand(current, rng)
+			if got > retryMaxDelay {
+				t.Fatalf("nextJitterDelayWithRand(%s) = %s, want <= %s", current, got, retryMaxDelay)
+			}
+		}
+	}
+}
+
+func TestNextJitterDelay_Distribution(t *testing.T) {
+	t.Parallel()
+
+	rng := randv2.New(randv2.NewPCG(5, 6))
+	current := 5 * retryBaseDelay
+	unique := map[time.Duration]struct{}{}
+	var total time.Duration
+
+	for i := 0; i < 1000; i++ {
+		got := nextJitterDelayWithRand(current, rng)
+		total += got
+		unique[got] = struct{}{}
+	}
+
+	mean := total / 1000
+	if mean <= 4*retryBaseDelay {
+		t.Fatalf("mean jitter delay = %s, want well above deterministic 2x baseline %s", mean, 2*retryBaseDelay)
+	}
+	if len(unique) < 100 {
+		t.Fatalf("distribution too narrow: got %d unique samples", len(unique))
+	}
+}
+
+func TestNextJitterDelay_Reproducible(t *testing.T) {
+	t.Parallel()
+
+	left := randv2.New(randv2.NewPCG(7, 8))
+	right := randv2.New(randv2.NewPCG(7, 8))
+	leftDelay := retryBaseDelay
+	rightDelay := retryBaseDelay
+
+	for i := 0; i < 8; i++ {
+		leftDelay = nextJitterDelayWithRand(leftDelay, left)
+		rightDelay = nextJitterDelayWithRand(rightDelay, right)
+		if leftDelay != rightDelay {
+			t.Fatalf("step %d mismatch: left=%s right=%s", i, leftDelay, rightDelay)
+		}
 	}
 }

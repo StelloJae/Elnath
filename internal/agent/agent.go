@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	randv2 "math/rand/v2"
 	"sort"
 	"strings"
 	"sync"
@@ -23,6 +24,12 @@ const (
 
 	retryMaxAttempts = 3
 	retryBaseDelay   = time.Second
+	retryMaxDelay    = 30 * time.Second
+)
+
+var (
+	jitterRandMu sync.Mutex
+	jitterRand   = randv2.New(randv2.NewPCG(uint64(time.Now().UnixNano()), 0))
 )
 
 // Agent runs the message→LLM→tools→repeat loop.
@@ -220,6 +227,7 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, onText func(str
 
 		// Truncate oversized tool results to keep context manageable.
 		truncateToolResults(messages)
+		attenuateHistoricalToolResults(messages, countToolResultTurns(messages)-1)
 	}
 
 	if len(messages) > 0 {
@@ -255,6 +263,7 @@ func (a *Agent) streamWithRetry(ctx context.Context, req llm.Request, onText fun
 	for attempt := 0; attempt < retryMaxAttempts; attempt++ {
 		reqForAttempt := currentReq
 		if attempt > 0 {
+			delay = nextJitterDelay(delay)
 			a.logger.Warn("retrying after provider error",
 				"attempt", attempt,
 				"delay", delay,
@@ -265,7 +274,6 @@ func (a *Agent) streamWithRetry(ctx context.Context, req llm.Request, onText fun
 				return llm.Message{}, llm.UsageStats{}, ctx.Err()
 			case <-time.After(delay):
 			}
-			delay *= 2
 		}
 
 		msg, usage, err := a.stream(ctx, reqForAttempt, onText)
@@ -601,6 +609,10 @@ func isAckOnly(text string) bool {
 const (
 	toolResultPerToolLimit = 50_000
 	toolResultTotalLimit   = 200_000
+
+	toolResultHistoryStage1Limit = 10_000
+	toolResultHistoryStage2Limit = 2_000
+	attenuationMarker            = "[attenuated/"
 )
 
 // truncateToolResults caps oversized tool results in the message slice.
@@ -661,4 +673,189 @@ func truncateToolResults(messages []llm.Message) {
 		total = total - oldSize + len(tr.Content)
 		refs[largest].size = len(tr.Content)
 	}
+}
+
+func countToolResultTurns(messages []llm.Message) int {
+	count := 0
+	for _, msg := range messages {
+		if hasToolResultBlocks(msg) {
+			count++
+		}
+	}
+	return count
+}
+
+func attenuateHistoricalToolResults(messages []llm.Message, currentTurnIdx int) {
+	if currentTurnIdx < 0 {
+		return
+	}
+
+	turnIdx := -1
+	for i := range messages {
+		if !hasToolResultBlocks(messages[i]) {
+			continue
+		}
+		turnIdx++
+
+		turnsAgo := currentTurnIdx - turnIdx
+		switch {
+		case turnsAgo <= 1:
+			continue
+		case turnsAgo == 2:
+			attenuateToolResultMessage(&messages[i], turnsAgo, toolResultHistoryStage1Limit)
+		case turnsAgo == 3:
+			attenuateToolResultMessage(&messages[i], turnsAgo, toolResultHistoryStage2Limit)
+		default:
+			replaceWithStaleToolResultPlaceholder(&messages[i], turnsAgo)
+		}
+	}
+}
+
+func hasToolResultBlocks(msg llm.Message) bool {
+	if msg.Role != llm.RoleUser {
+		return false
+	}
+	for _, block := range msg.Content {
+		if _, ok := block.(llm.ToolResultBlock); ok {
+			return true
+		}
+	}
+	return false
+}
+
+type attenuatedToolResult struct {
+	preview      string
+	originalSize int
+	turnsAgo     int
+	stale        bool
+}
+
+func attenuateToolResultMessage(msg *llm.Message, turnsAgo, limit int) {
+	for i, block := range msg.Content {
+		tr, ok := block.(llm.ToolResultBlock)
+		if !ok {
+			continue
+		}
+
+		source := tr.Content
+		originalSize := len(tr.Content)
+		if prior, ok := parseAttenuatedToolResult(tr.Content); ok {
+			if prior.turnsAgo >= turnsAgo {
+				continue
+			}
+			source = prior.preview
+			originalSize = prior.originalSize
+		}
+
+		if len(source) <= limit {
+			continue
+		}
+
+		tr.Content = buildAttenuatedToolResult(source, turnsAgo, limit, originalSize)
+		msg.Content[i] = tr
+	}
+}
+
+func replaceWithStaleToolResultPlaceholder(msg *llm.Message, turnsAgo int) {
+	for i, block := range msg.Content {
+		tr, ok := block.(llm.ToolResultBlock)
+		if !ok {
+			continue
+		}
+
+		originalSize := len(tr.Content)
+		if prior, ok := parseAttenuatedToolResult(tr.Content); ok {
+			if prior.stale && prior.turnsAgo >= turnsAgo {
+				continue
+			}
+			originalSize = prior.originalSize
+		}
+
+		tr.Content = buildStaleToolResultPlaceholder(turnsAgo, originalSize)
+		msg.Content[i] = tr
+	}
+}
+
+func buildAttenuatedToolResult(content string, turnsAgo, limit, originalSize int) string {
+	header := fmt.Sprintf("%sturns=%d original=%d]", attenuationMarker, turnsAgo, originalSize)
+	if len(header) >= limit {
+		return header[:limit]
+	}
+
+	previewLimit := limit - len(header)
+	if previewLimit > 2 {
+		header += "\n\n"
+		previewLimit -= 2
+	}
+	if previewLimit > len(content) {
+		previewLimit = len(content)
+	}
+	return header + content[:previewLimit]
+}
+
+func buildStaleToolResultPlaceholder(turnsAgo, originalSize int) string {
+	return fmt.Sprintf("[stale tool result, turns=%d, original=%d]", turnsAgo, originalSize)
+}
+
+func parseAttenuatedToolResult(content string) (attenuatedToolResult, bool) {
+	if strings.HasPrefix(content, "[stale tool result, turns=") {
+		var parsed attenuatedToolResult
+		if _, err := fmt.Sscanf(content, "[stale tool result, turns=%d, original=%d]", &parsed.turnsAgo, &parsed.originalSize); err != nil {
+			return attenuatedToolResult{}, false
+		}
+		parsed.stale = true
+		return parsed, true
+	}
+
+	if !strings.HasPrefix(content, attenuationMarker) {
+		return attenuatedToolResult{}, false
+	}
+
+	if strings.HasPrefix(content, attenuationMarker+"stale tool result, turns=") {
+		var parsed attenuatedToolResult
+		if _, err := fmt.Sscanf(content, attenuationMarker+"stale tool result, turns=%d, original=%d]", &parsed.turnsAgo, &parsed.originalSize); err != nil {
+			return attenuatedToolResult{}, false
+		}
+		parsed.stale = true
+		return parsed, true
+	}
+
+	headerEnd := strings.Index(content, "]")
+	if headerEnd == -1 {
+		return attenuatedToolResult{}, false
+	}
+
+	var parsed attenuatedToolResult
+	header := content[:headerEnd+1]
+	if _, err := fmt.Sscanf(header, attenuationMarker+"turns=%d original=%d]", &parsed.turnsAgo, &parsed.originalSize); err != nil {
+		return attenuatedToolResult{}, false
+	}
+	parsed.preview = strings.TrimPrefix(content[headerEnd+1:], "\n\n")
+	return parsed, true
+}
+
+func nextJitterDelay(current time.Duration) time.Duration {
+	jitterRandMu.Lock()
+	defer jitterRandMu.Unlock()
+	return nextJitterDelayWithRand(current, jitterRand)
+}
+
+func nextJitterDelayWithRand(current time.Duration, rng *randv2.Rand) time.Duration {
+	if current < retryBaseDelay {
+		current = retryBaseDelay
+	}
+
+	upper := retryMaxDelay
+	if current <= retryMaxDelay/3 {
+		upper = current * 3
+	}
+	if upper < retryBaseDelay {
+		upper = retryBaseDelay
+	}
+	if upper == retryBaseDelay {
+		return retryBaseDelay
+	}
+
+	span := upper - retryBaseDelay
+	return retryBaseDelay + time.Duration(rng.Int64N(int64(span)+1))
 }
