@@ -120,6 +120,86 @@ func TestLessonsNodeStoreErrorIsIgnored(t *testing.T) {
 	}
 }
 
+type mockFilteredLessonLister struct {
+	mockLessonLister
+	filtered []learning.Lesson
+	filterErr error
+}
+
+func (m *mockFilteredLessonLister) ListFiltered(f learning.Filter) ([]learning.Lesson, error) {
+	if m.filterErr != nil {
+		return nil, m.filterErr
+	}
+	return m.filtered, nil
+}
+
+func TestLessonsNodeWithProjectID(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, 4, 13, 12, 0, 0, 0, time.UTC)
+	recentLessons := []learning.Lesson{
+		{Created: base, Text: "recent lesson"},
+	}
+	filteredLessons := []learning.Lesson{
+		{Created: base, Text: "project lesson one"},
+		{Created: base.Add(24 * time.Hour), Text: "project lesson two"},
+		{Created: base.Add(48 * time.Hour), Text: "project lesson three"},
+	}
+	mock := &mockFilteredLessonLister{
+		mockLessonLister: mockLessonLister{lessons: recentLessons},
+		filtered:         filteredLessons,
+	}
+	got, err := NewLessonsNode(87, mock, 10, 1000).Render(context.Background(), &RenderState{ProjectID: "elnath"})
+	if err != nil {
+		t.Fatalf("Render error: %v", err)
+	}
+	for _, want := range []string{"project lesson one", "project lesson two", "project lesson three"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("Render = %q, want substring %q", got, want)
+		}
+	}
+	if strings.Contains(got, "recent lesson") {
+		t.Fatalf("Render = %q, should not contain fallback lesson", got)
+	}
+}
+
+func TestLessonsNodeProjectIDFallback(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, 4, 13, 12, 0, 0, 0, time.UTC)
+	recentLessons := []learning.Lesson{
+		{Created: base, Text: "fallback lesson one"},
+		{Created: base.Add(24 * time.Hour), Text: "fallback lesson two"},
+	}
+	mock := &mockFilteredLessonLister{
+		mockLessonLister: mockLessonLister{lessons: recentLessons},
+		filtered:         []learning.Lesson{{Created: base, Text: "sparse"}},
+	}
+	got, err := NewLessonsNode(87, mock, 10, 1000).Render(context.Background(), &RenderState{ProjectID: "elnath"})
+	if err != nil {
+		t.Fatalf("Render error: %v", err)
+	}
+	if !strings.Contains(got, "fallback lesson one") {
+		t.Fatalf("Render = %q, want fallback lesson", got)
+	}
+}
+
+func TestLessonsNodeProjectIDNoFilterSupport(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, 4, 13, 12, 0, 0, 0, time.UTC)
+	mock := &mockLessonLister{lessons: []learning.Lesson{
+		{Created: base, Text: "only recent lesson"},
+	}}
+	got, err := NewLessonsNode(87, mock, 10, 1000).Render(context.Background(), &RenderState{ProjectID: "elnath"})
+	if err != nil {
+		t.Fatalf("Render error: %v", err)
+	}
+	if !strings.Contains(got, "only recent lesson") {
+		t.Fatalf("Render = %q, want recent lesson as graceful fallback", got)
+	}
+}
+
 func TestLessonsNodeDefaultsNameAndPriority(t *testing.T) {
 	t.Parallel()
 

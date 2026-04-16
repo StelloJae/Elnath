@@ -28,6 +28,7 @@ type RenderState struct {
 	BenchmarkMode bool
 	TaskLanguage  string
 	DaemonMode    bool
+	ProjectID     string
 	MessageCount  int
 }
 

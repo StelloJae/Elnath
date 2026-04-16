@@ -163,6 +163,8 @@ type executionRuntime struct {
 	breaker            *learning.Breaker
 	learningRedactor   func(string) string
 	llmComplexityGate  learning.ComplexityGate
+	outcomeStore       *learning.OutcomeStore
+	routingAdvisor     *learning.RoutingAdvisor
 	usageTracker       *llm.UsageTracker
 	researchMaxRounds  int
 	researchCostCapUSD float64
@@ -400,6 +402,9 @@ func buildExecutionRuntime(
 		learning.WithRedactor(learningRedactor),
 	)
 	cursorStore := learning.NewCursorStore(filepath.Join(cfg.DataDir, "lesson_cursors.jsonl"))
+	outcomePath := filepath.Join(cfg.DataDir, "outcomes.jsonl")
+	outcomeStore := learning.NewOutcomeStore(outcomePath, learning.WithOutcomeRedactor(learningRedactor))
+	routingAdvisor := learning.NewRoutingAdvisor(outcomeStore)
 	llmMinMessages := cfg.LLMExtraction.MinMessages
 	if llmMinMessages == 0 {
 		llmMinMessages = learning.DefaultComplexityGate.MinMessages
@@ -459,6 +464,8 @@ func buildExecutionRuntime(
 		promptBuilder:      b,
 		learningStore:      learningStore,
 		cursorStore:        cursorStore,
+		outcomeStore:       outcomeStore,
+		routingAdvisor:     routingAdvisor,
 		llmExtractor:       llmExtractor,
 		breaker:            breaker,
 		learningRedactor:   learningRedactor,
@@ -655,6 +662,7 @@ func (rt *executionRuntime) runTask(
 		TaskLanguage:  taskLanguageFromEnv(),
 		DaemonMode:    rt.daemonMode,
 		MessageCount:  len(prepared),
+		ProjectID:     routeCtx.ProjectID,
 	}
 	systemPrompt, err := rt.promptBuilder.Build(ctx, renderState)
 	if err != nil {
@@ -688,9 +696,40 @@ func (rt *executionRuntime) runTask(
 		}
 	}
 
+	wfStart := time.Now()
 	result, err := wf.Run(ctx, input)
+	elapsed := time.Since(wfStart)
 	if err != nil {
 		return nil, "", fmt.Errorf("workflow %s: %w", wf.Name(), err)
+	}
+
+	if rt.outcomeStore != nil && routeCtx.ProjectID != "" && learning.ShouldRecord(result.FinishReason) {
+		record := learning.OutcomeRecord{
+			ProjectID:      routeCtx.ProjectID,
+			Intent:         string(intent),
+			Workflow:       result.Workflow,
+			FinishReason:   result.FinishReason,
+			Success:        learning.IsSuccessful(result.FinishReason),
+			Duration:       elapsed.Seconds(),
+			Cost:           0,
+			Iterations:     result.Iterations,
+			InputSnippet:   runeSnippet(userInput, 100),
+			EstimatedFiles: routeCtx.EstimatedFiles,
+			ExistingCode:   routeCtx.ExistingCode,
+			PreferenceUsed: pref != nil,
+		}
+		if appendErr := rt.outcomeStore.Append(record); appendErr != nil {
+			rt.app.Logger.Warn("outcome store: append failed", "error", appendErr)
+		}
+		if rotErr := rt.outcomeStore.AutoRotateIfNeeded(300); rotErr != nil {
+			rt.app.Logger.Warn("outcome store: auto-rotate failed", "error", rotErr)
+		}
+
+		if pref, advErr := rt.routingAdvisor.Advise(routeCtx.ProjectID); advErr == nil && pref != nil {
+			if saveErr := wiki.SaveWorkflowPreference(rt.wikiStore, routeCtx.ProjectID, pref); saveErr != nil {
+				rt.app.Logger.Warn("routing advisor: wiki save failed", "error", saveErr)
+			}
+		}
 	}
 
 	if usage := llm.FormatUsageSummary(rt.wfCfg.Model, result.Usage); usage != "" {
@@ -974,4 +1013,12 @@ func (rt *executionRuntime) appendRouteAudit(record routeAuditRecord) {
 	if _, err := f.Write(append(data, '\n')); err != nil {
 		rt.app.Logger.Warn("route audit write failed", "path", path, "error", err)
 	}
+}
+
+func runeSnippet(s string, maxRunes int) string {
+	runes := []rune(strings.TrimSpace(s))
+	if len(runes) <= maxRunes {
+		return string(runes)
+	}
+	return string(runes[:maxRunes])
 }

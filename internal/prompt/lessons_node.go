@@ -14,6 +14,11 @@ type LessonLister interface {
 	Recent(n int) ([]learning.Lesson, error)
 }
 
+type LessonFilteredLister interface {
+	LessonLister
+	ListFiltered(f learning.Filter) ([]learning.Lesson, error)
+}
+
 type LessonsNode struct {
 	priority   int
 	store      LessonLister
@@ -48,7 +53,20 @@ func (n *LessonsNode) Render(_ context.Context, state *RenderState) (string, err
 		return "", nil
 	}
 
-	lessons, err := n.store.Recent(n.maxEntries)
+	var lessons []learning.Lesson
+	var err error
+	if state != nil && state.ProjectID != "" {
+		if fl, ok := n.store.(LessonFilteredLister); ok {
+			lessons, err = fl.ListFiltered(learning.Filter{Topic: state.ProjectID, Limit: n.maxEntries, Reverse: true})
+			if err != nil || len(lessons) < 3 {
+				lessons, err = n.store.Recent(n.maxEntries)
+			}
+		} else {
+			lessons, err = n.store.Recent(n.maxEntries)
+		}
+	} else {
+		lessons, err = n.store.Recent(n.maxEntries)
+	}
 	if err != nil {
 		slog.Warn("lessons node: store read failed", "error", err)
 		return "", nil
