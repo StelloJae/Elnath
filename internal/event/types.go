@@ -143,7 +143,7 @@ func (e SkillExecuteEvent) EventType() string { return "skill_execute" }
 
 type SessionResumeEvent struct {
 	Base
-	SID     string
+	ResumedSessionID string
 	Surface string
 }
 
