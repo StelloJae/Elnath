@@ -8,8 +8,33 @@ import (
 	"testing"
 
 	"github.com/stello/elnath/internal/identity"
+	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
 )
+
+type mockOutcomeAppender struct {
+	mu      sync.Mutex
+	records []learning.OutcomeRecord
+	err     error
+}
+
+func (m *mockOutcomeAppender) Append(r learning.OutcomeRecord) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.err != nil {
+		return m.err
+	}
+	m.records = append(m.records, r)
+	return nil
+}
+
+func (m *mockOutcomeAppender) snapshot() []learning.OutcomeRecord {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]learning.OutcomeRecord, len(m.records))
+	copy(out, m.records)
+	return out
+}
 
 type chatMockBot struct {
 	mu     sync.Mutex
@@ -164,5 +189,92 @@ func TestChatResponderEmptyResponse(t *testing.T) {
 	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "Hi", 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestChatResponderRecordsSuccessOutcome(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{response: "Hi back"}
+	store := &mockOutcomeAppender{}
+	cr := NewChatResponder(provider, bot, "chat-42", nil, WithOutcomeStore(store))
+
+	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj-ok", Surface: "telegram"}, "hello", 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	records := store.snapshot()
+	if len(records) != 1 {
+		t.Fatalf("expected 1 outcome record, got %d", len(records))
+	}
+	r := records[0]
+	if r.ProjectID != "proj-ok" {
+		t.Errorf("ProjectID: got %q, want %q", r.ProjectID, "proj-ok")
+	}
+	if r.Intent != "chat" {
+		t.Errorf("Intent: got %q, want %q", r.Intent, "chat")
+	}
+	if r.Workflow != "chat_direct" {
+		t.Errorf("Workflow: got %q, want %q", r.Workflow, "chat_direct")
+	}
+	if !r.Success {
+		t.Errorf("Success: got false, want true")
+	}
+	if r.FinishReason != "stop" {
+		t.Errorf("FinishReason: got %q, want %q", r.FinishReason, "stop")
+	}
+	if r.PreferenceUsed {
+		t.Errorf("PreferenceUsed: got true, want false (chat bypasses routing)")
+	}
+	if r.InputSnippet == "" {
+		t.Errorf("InputSnippet: expected non-empty")
+	}
+}
+
+func TestChatResponderRecordsErrorOutcome(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{streamErr: fmt.Errorf("provider unavailable")}
+	store := &mockOutcomeAppender{}
+	cr := NewChatResponder(provider, bot, "chat-42", nil, WithOutcomeStore(store))
+
+	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj-err", Surface: "telegram"}, "hi", 1)
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+
+	records := store.snapshot()
+	if len(records) != 1 {
+		t.Fatalf("expected 1 outcome record, got %d", len(records))
+	}
+	r := records[0]
+	if r.ProjectID != "proj-err" {
+		t.Errorf("ProjectID: got %q, want %q", r.ProjectID, "proj-err")
+	}
+	if r.Intent != "chat" {
+		t.Errorf("Intent: got %q, want %q", r.Intent, "chat")
+	}
+	if r.Workflow != "chat_direct" {
+		t.Errorf("Workflow: got %q, want %q", r.Workflow, "chat_direct")
+	}
+	if r.Success {
+		t.Errorf("Success: got true, want false")
+	}
+	if r.FinishReason != "error" {
+		t.Errorf("FinishReason: got %q, want %q", r.FinishReason, "error")
+	}
+}
+
+func TestChatResponderSkipsOutcomeWhenProjectIDEmpty(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{response: "hello"}
+	store := &mockOutcomeAppender{}
+	cr := NewChatResponder(provider, bot, "chat-42", nil, WithOutcomeStore(store))
+
+	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "", Surface: "telegram"}, "hi", 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if n := len(store.snapshot()); n != 0 {
+		t.Errorf("expected 0 outcome records when ProjectID empty, got %d", n)
 	}
 }

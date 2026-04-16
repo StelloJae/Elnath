@@ -286,7 +286,9 @@ func cmdDaemonStart(ctx context.Context) error {
 			telegram.WithSinkBinder(binder),
 			telegram.WithRedactor(secret.NewDetector().RedactString),
 		)
-		chatResponder := telegram.NewChatResponder(provider, bot, cfg.Telegram.ChatID, app.Logger)
+		chatResponder := telegram.NewChatResponder(provider, bot, cfg.Telegram.ChatID, app.Logger,
+			telegram.WithOutcomeStore(rt.outcomeStore),
+		)
 		classifier := conversation.NewLLMClassifier()
 		shell, shellErr := telegram.NewShell(queue, approvalStore, bot, cfg.Telegram.ChatID, statePath, rt.skillReg,
 			telegram.WithChatResponder(chatResponder),
