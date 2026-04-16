@@ -383,6 +383,7 @@ func buildExecutionRuntime(
 	b.Register(prompt.NewMemoryContextNode(55, 5, 1200))
 	b.Register(prompt.NewProjectContextNode(50))
 	b.Register(prompt.NewBrownfieldNode(40))
+	b.Register(prompt.NewGreenfieldNode(40))
 	b.Register(prompt.NewSessionSummaryNode(30, 5, 800))
 	b.Register(&prompt.LocaleInstructionNode{})
 
