@@ -221,3 +221,72 @@ Written by user.
 		t.Errorf("source = %q, want %q", source, "user")
 	}
 }
+
+func TestSaveUserWorkflowPreferenceDedupAvoidWorkflows(t *testing.T) {
+	tests := []struct {
+		name     string
+		calls    [][]string
+		wantSet  []string
+		wantSize int
+	}{
+		{
+			name:     "two calls with full overlap",
+			calls:    [][]string{{"team", "ralph"}, {"team", "ralph"}},
+			wantSet:  []string{"team", "ralph"},
+			wantSize: 2,
+		},
+		{
+			name:     "two calls with partial overlap",
+			calls:    [][]string{{"team"}, {"team", "ralph"}},
+			wantSet:  []string{"team", "ralph"},
+			wantSize: 2,
+		},
+		{
+			name:     "incoming duplicates within a single call",
+			calls:    [][]string{{"team", "team", "ralph"}},
+			wantSet:  []string{"team", "ralph"},
+			wantSize: 2,
+		},
+		{
+			name:     "no overlap across calls",
+			calls:    [][]string{{"team"}, {"ralph"}, {"single"}},
+			wantSet:  []string{"team", "ralph", "single"},
+			wantSize: 3,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newTestStore(t)
+			projectID := "elnath-dedup"
+			for _, avoids := range tc.calls {
+				pref := &routing.WorkflowPreference{AvoidWorkflows: avoids}
+				if err := SaveUserWorkflowPreference(store, projectID, pref); err != nil {
+					t.Fatalf("SaveUserWorkflowPreference: %v", err)
+				}
+			}
+
+			relPath := filepath.ToSlash(filepath.Join("projects", projectID, "routing-preferences.md"))
+			page, err := store.Read(relPath)
+			if err != nil {
+				t.Fatalf("Read: %v", err)
+			}
+
+			avoided, _ := page.Extra["avoid_workflows"].([]any)
+			if len(avoided) != tc.wantSize {
+				t.Fatalf("avoid_workflows length = %d, want %d (got %v)", len(avoided), tc.wantSize, avoided)
+			}
+			gotSet := make(map[string]int, len(avoided))
+			for _, v := range avoided {
+				if s, ok := v.(string); ok {
+					gotSet[s]++
+				}
+			}
+			for _, want := range tc.wantSet {
+				if gotSet[want] != 1 {
+					t.Errorf("avoid_workflows[%q] count = %d, want 1", want, gotSet[want])
+				}
+			}
+		})
+	}
+}

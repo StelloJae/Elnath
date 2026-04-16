@@ -92,7 +92,7 @@ func SaveUserWorkflowPreference(store *Store, projectID string, pref *routing.Wo
 	for intent, workflow := range pref.PreferredWorkflows {
 		merged.PreferredWorkflows[intent] = workflow
 	}
-	merged.AvoidWorkflows = append(merged.AvoidWorkflows, pref.AvoidWorkflows...)
+	merged.AvoidWorkflows = dedupStrings(merged.AvoidWorkflows, pref.AvoidWorkflows)
 
 	page := &Page{
 		Path:    relPath,
@@ -197,4 +197,29 @@ func buildPreferenceBody(projectID string, pref *routing.WorkflowPreference) str
 	sb.WriteString("> This page is managed by Elnath self-improvement. Manual edits will be preserved if you remove `source: self-improvement` from the frontmatter.\n")
 
 	return sb.String()
+}
+
+// dedupStrings returns the concatenation of existing and incoming without
+// preserving duplicates. Order follows first-occurrence.
+func dedupStrings(existing, incoming []string) []string {
+	if len(existing) == 0 && len(incoming) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(existing)+len(incoming))
+	out := make([]string, 0, len(existing)+len(incoming))
+	for _, s := range existing {
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	for _, s := range incoming {
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
 }
