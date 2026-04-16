@@ -374,6 +374,16 @@ func TestLifecycleOnlyHookCanRegister(t *testing.T) {
 	}
 }
 
+func TestAddPanicsOnInvalidHook(t *testing.T) {
+	reg := NewHookRegistry()
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic when adding a value that implements no hook interface")
+		}
+	}()
+	reg.Add(struct{}{})
+}
+
 func TestCommandHookMatching(t *testing.T) {
 	tests := []struct {
 		matcher  string

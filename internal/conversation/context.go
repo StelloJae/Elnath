@@ -246,32 +246,6 @@ func messageImportance(m llm.Message) int {
 	return score
 }
 
-// topicSegment groups consecutive messages that belong to the same conversational topic.
-type topicSegment struct {
-	messages   []llm.Message
-	importance int // sum of individual message importances
-}
-
-// segmentByTopic groups messages into topic segments.
-// A new segment starts at each user message (the natural turn boundary).
-func segmentByTopic(messages []llm.Message) []topicSegment {
-	var segments []topicSegment
-	var current topicSegment
-
-	for _, m := range messages {
-		if m.Role == llm.RoleUser && len(current.messages) > 0 {
-			segments = append(segments, current)
-			current = topicSegment{}
-		}
-		current.messages = append(current.messages, m)
-		current.importance += messageImportance(m)
-	}
-	if len(current.messages) > 0 {
-		segments = append(segments, current)
-	}
-	return segments
-}
-
 // autoCompress collapses older messages into one summary while preserving the
 // most recent turns verbatim.
 func (cw *ContextWindow) autoCompress(ctx context.Context, provider llm.Provider, messages []llm.Message) ([]llm.Message, error) {
@@ -283,26 +257,6 @@ func (cw *ContextWindow) autoCompress(ctx context.Context, provider llm.Provider
 	toCompress := messages[:len(messages)-keepCount]
 	recent := messages[len(messages)-keepCount:]
 	return cw.flatSummarize(ctx, provider, toCompress, recent)
-}
-
-// importanceThreshold returns the median importance across segments.
-func (cw *ContextWindow) importanceThreshold(segments []topicSegment) int {
-	if len(segments) == 0 {
-		return 0
-	}
-	scores := make([]int, len(segments))
-	for i, s := range segments {
-		scores[i] = s.importance
-	}
-	// Simple selection: sort and take median.
-	for i := 0; i < len(scores); i++ {
-		for j := i + 1; j < len(scores); j++ {
-			if scores[j] < scores[i] {
-				scores[i], scores[j] = scores[j], scores[i]
-			}
-		}
-	}
-	return scores[len(scores)/2]
 }
 
 // flatSummarize summarizes older messages into a single assistant message.

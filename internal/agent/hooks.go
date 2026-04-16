@@ -63,7 +63,15 @@ func NewHookRegistry() *HookRegistry {
 }
 
 // Add appends a hook or optional lifecycle extension to the registry.
+// Panics if h does not implement at least one of Hook, LLMHook, CompressionHook, or IterationHook.
 func (r *HookRegistry) Add(h any) {
+	_, isHook := h.(Hook)
+	_, isLLM := h.(LLMHook)
+	_, isCompression := h.(CompressionHook)
+	_, isIteration := h.(IterationHook)
+	if !isHook && !isLLM && !isCompression && !isIteration {
+		panic(fmt.Sprintf("HookRegistry.Add: %T implements none of Hook, LLMHook, CompressionHook, IterationHook", h))
+	}
 	r.hooks = append(r.hooks, h)
 }
 

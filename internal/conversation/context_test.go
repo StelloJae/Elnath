@@ -201,51 +201,6 @@ func TestMessageImportance(t *testing.T) {
 	}
 }
 
-func TestSegmentByTopic(t *testing.T) {
-	messages := []llm.Message{
-		llm.NewUserMessage("topic 1"),
-		llm.NewAssistantMessage("answer 1"),
-		llm.NewUserMessage("topic 2"),
-		llm.NewAssistantMessage("answer 2a"),
-		llm.NewAssistantMessage("answer 2b"),
-		llm.NewUserMessage("topic 3"),
-		llm.NewAssistantMessage("answer 3"),
-	}
-
-	segments := segmentByTopic(messages)
-
-	if len(segments) != 3 {
-		t.Fatalf("got %d segments, want 3", len(segments))
-	}
-	if len(segments[0].messages) != 2 {
-		t.Errorf("segment 0: got %d messages, want 2", len(segments[0].messages))
-	}
-	if len(segments[1].messages) != 3 {
-		t.Errorf("segment 1: got %d messages, want 3", len(segments[1].messages))
-	}
-	if len(segments[2].messages) != 2 {
-		t.Errorf("segment 2: got %d messages, want 2", len(segments[2].messages))
-	}
-}
-
-func TestSegmentByTopic_Empty(t *testing.T) {
-	segments := segmentByTopic(nil)
-	if len(segments) != 0 {
-		t.Errorf("got %d segments for nil input, want 0", len(segments))
-	}
-}
-
-func TestSegmentByTopic_AssistantOnly(t *testing.T) {
-	messages := []llm.Message{
-		llm.NewAssistantMessage("only assistant messages"),
-		llm.NewAssistantMessage("still going"),
-	}
-	segments := segmentByTopic(messages)
-	if len(segments) != 1 {
-		t.Errorf("got %d segments, want 1", len(segments))
-	}
-}
-
 func TestCompressMessages_UnderBudget(t *testing.T) {
 	cw := NewContextWindow()
 	msgs := []llm.Message{
@@ -599,37 +554,6 @@ func TestCompressMessages_LegacyFallbackFailureSnipsInsteadOfKeepingMalformedSum
 	}
 	if got := result[0].Text(); strings.Contains(got, "malformed structured output") {
 		t.Fatalf("expected malformed output to be discarded, got %q", got)
-	}
-}
-
-func TestImportanceThreshold_Median(t *testing.T) {
-	cw := NewContextWindow()
-	segments := []topicSegment{
-		{importance: 1},
-		{importance: 5},
-		{importance: 3},
-	}
-	// Sorted: [1, 3, 5] → median at index 1 = 3.
-	got := cw.importanceThreshold(segments)
-	if got != 3 {
-		t.Errorf("importanceThreshold = %d, want 3", got)
-	}
-}
-
-func TestImportanceThreshold_Single(t *testing.T) {
-	cw := NewContextWindow()
-	segments := []topicSegment{{importance: 7}}
-	got := cw.importanceThreshold(segments)
-	if got != 7 {
-		t.Errorf("importanceThreshold = %d, want 7", got)
-	}
-}
-
-func TestImportanceThreshold_Empty(t *testing.T) {
-	cw := NewContextWindow()
-	got := cw.importanceThreshold(nil)
-	if got != 0 {
-		t.Errorf("importanceThreshold(nil) = %d, want 0", got)
 	}
 }
 
