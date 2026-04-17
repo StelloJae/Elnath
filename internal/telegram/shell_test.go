@@ -699,6 +699,46 @@ func TestShellSkillCreateCommand(t *testing.T) {
 	}
 }
 
+// TestShellSkillListShowsDraftsFromStore guards FU-SkillReload: after
+// /skill-create produces a draft (the default status for telegram-created
+// skills), /skill-list must surface the draft so the author can find it.
+// The in-memory registry intentionally omits drafts, so /skill-list must
+// read from the wiki store when available.
+func TestShellSkillListShowsDraftsFromStore(t *testing.T) {
+	store, err := wiki.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	reg := skill.NewRegistry()
+	creator := skill.NewCreator(store, skill.NewTracker(t.TempDir()), reg)
+	shell, _, _, bot := newTestShellWithOptions(t, reg,
+		WithSkillCreator(creator),
+		WithWikiStore(store),
+	)
+
+	// Create a draft via /skill-create (default status=draft for telegram).
+	if err := shell.HandleUpdate(context.Background(), Update{
+		ID:      1,
+		Message: Message{ChatID: "chat-1", Text: "/skill-create dogfood-test"},
+	}); err != nil {
+		t.Fatalf("HandleUpdate(create): %v", err)
+	}
+	// /skill-list should surface it with a (draft) marker.
+	if err := shell.HandleUpdate(context.Background(), Update{
+		ID:      2,
+		Message: Message{ChatID: "chat-1", Text: "/skill-list"},
+	}); err != nil {
+		t.Fatalf("HandleUpdate(list): %v", err)
+	}
+	last := lastSentText(bot)
+	if !strings.Contains(last, "/dogfood-test") {
+		t.Errorf("skill-list reply missing the draft skill name:\n%s", last)
+	}
+	if !strings.Contains(last, "draft") {
+		t.Errorf("skill-list reply missing the draft status marker:\n%s", last)
+	}
+}
+
 func TestShellSkillCommandQueuesTask(t *testing.T) {
 	reg := skill.NewRegistry()
 	reg.Add(&skill.Skill{Name: "pr-review", Description: "Review PR", Trigger: "/pr-review <pr_number>"})

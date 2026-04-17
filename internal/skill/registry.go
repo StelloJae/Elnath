@@ -82,6 +82,30 @@ func (r *Registry) List() []*Skill {
 	return out
 }
 
+// ListAllFromStore returns every skill page in the wiki store, including
+// drafts. Unlike Registry.List which reflects only the active skills
+// currently loaded in memory (Load filters drafts), this helper is for
+// user-facing listings that should reveal drafts so the author can find and
+// edit them. The active registry path remains unchanged, so draft skills
+// cannot be executed via Registry.Execute.
+func ListAllFromStore(store *wiki.Store) ([]*Skill, error) {
+	if store == nil {
+		return nil, nil
+	}
+	pages, err := store.List()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*Skill, 0, len(pages))
+	for _, page := range pages {
+		if sk := FromPage(page); sk != nil {
+			out = append(out, sk)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
 func (r *Registry) Names() []string {
 	if r == nil {
 		return nil

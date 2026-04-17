@@ -512,16 +512,29 @@ func (s *Shell) handleCommand(ctx context.Context, text string, principal identi
 }
 
 func (s *Shell) handleSkillList() string {
-	if s.skillReg == nil {
-		return "No skills found."
+	// Prefer the wiki-backed listing so draft skills created via
+	// /skill-create are visible to the user. The in-memory registry
+	// intentionally omits drafts (they are not executable yet), but the
+	// list UI must reveal them so the author can find and promote them.
+	var skills []*skill.Skill
+	if s.wikiStore != nil {
+		if all, err := skill.ListAllFromStore(s.wikiStore); err == nil {
+			skills = all
+		}
 	}
-	skills := s.skillReg.List()
+	if skills == nil && s.skillReg != nil {
+		skills = s.skillReg.List()
+	}
 	if len(skills) == 0 {
 		return "No skills found."
 	}
 	lines := []string{"🛠 <b>Skills</b>"}
 	for _, sk := range skills {
-		lines = append(lines, fmt.Sprintf("• <code>/%s</code> — %s", sk.Name, escapeHTML(sk.Description)))
+		label := fmt.Sprintf("• <code>/%s</code> — %s", sk.Name, escapeHTML(sk.Description))
+		if sk.Status != "" && sk.Status != "active" {
+			label = label + fmt.Sprintf(" <i>(%s)</i>", escapeHTML(sk.Status))
+		}
+		lines = append(lines, label)
 	}
 	return strings.Join(lines, "\n")
 }
