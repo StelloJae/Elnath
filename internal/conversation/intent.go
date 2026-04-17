@@ -118,7 +118,69 @@ func (c *LLMClassifier) Classify(ctx context.Context, provider llm.Provider, mes
 		"confidence", result.Confidence,
 	)
 
+	// Phase 7.5 (3a) depth gate: the LLM will happily promote "find X on the
+	// web and summarize" to "research" based on phrasing cues, but the full
+	// research workflow spawns 3 hypotheses and up to 20 iterations per
+	// hypothesis — wildly overkill for a lightweight lookup. Demote to
+	// "question" when the message is short and carries no investigation
+	// keyword. Inspired by Hermes's smart_model_routing.py size+keyword gate.
+	if result.Intent == IntentResearch && !isComplexEnoughForResearch(message) {
+		c.logger.Debug("depth gate: demoting research → question",
+			"message_len", len(message),
+		)
+		return IntentQuestion, nil
+	}
+
 	return result.Intent, nil
+}
+
+// isComplexEnoughForResearch reports whether the user message carries enough
+// signal to justify the heavyweight research workflow. Returns false for
+// short, keyword-free, URL-free messages so callers can demote the intent to
+// a lighter path.
+func isComplexEnoughForResearch(message string) bool {
+	trimmed := strings.TrimSpace(message)
+	if trimmed == "" {
+		return false
+	}
+	if len(trimmed) >= researchMinMessageLen {
+		return true
+	}
+	if len(strings.Fields(trimmed)) >= researchMinWordCount {
+		return true
+	}
+	if strings.Contains(trimmed, "http://") || strings.Contains(trimmed, "https://") {
+		return true
+	}
+	lower := strings.ToLower(trimmed)
+	for _, kw := range researchComplexityKeywords {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+const (
+	// researchMinMessageLen mirrors Hermes's 160-char gate in
+	// smart_model_routing.py — longer messages usually contain more
+	// structural detail and are worth spending research budget on.
+	researchMinMessageLen = 160
+	// researchMinWordCount mirrors Hermes's 28-word gate.
+	researchMinWordCount = 28
+)
+
+// researchComplexityKeywords is the investigation-intent block list. When
+// the user explicitly asks for analysis, comparison, audit, or debugging,
+// keep the research intent even for short messages. Mirrors Hermes's
+// _COMPLEX_KEYWORDS set, extended with common Korean equivalents.
+var researchComplexityKeywords = []string{
+	// English investigation verbs
+	"analyze", "analysis", "investigate", "investigation",
+	"compare", "comparison", "audit", "debug",
+	"research", "diagnose", "evaluate", "hypothesis",
+	// Korean investigation terms
+	"분석", "조사", "비교", "감사", "진단", "평가", "가설", "디버그",
 }
 
 // filterTextMessages returns only messages whose content blocks are all text.

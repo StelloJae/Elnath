@@ -251,19 +251,69 @@ func TestLLMClassifierClassify_ShortHistory(t *testing.T) {
 	}
 }
 
+// TestLLMClassifierDemotesShortResearchToQuestion guards Phase 7.5 (3a):
+// Hermes-style depth signal. Classifier may promote lightweight queries to
+// "research" based on phrasing (e.g., "웹에서 찾아서 정리해줘"), but a short
+// message without investigation keywords should not trigger the full
+// research workflow. Post-classifier gate demotes those to "question".
+func TestLLMClassifierDemotesShortResearchToQuestion(t *testing.T) {
+	cases := []struct {
+		name    string
+		message string
+		want    Intent
+	}{
+		{
+			name:    "short_lookup_demoted",
+			message: "오늘 인기 미국 주식 TOP 5를 웹에서 찾아서 정리해줘",
+			want:    IntentQuestion,
+		},
+		{
+			name:    "long_with_analyze_keyword_keeps_research",
+			message: "Compare the pricing model, security posture, and uptime of AWS RDS and GCP Cloud SQL over the last year and analyze the tradeoffs.",
+			want:    IntentResearch,
+		},
+		{
+			name:    "korean_investigation_keyword_keeps_research",
+			message: "회사별 OAuth 구현을 비교 분석해서 어떤 게 가장 안전한지 평가해줘",
+			want:    IntentResearch,
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			classifier := NewLLMClassifier()
+			provider := &mockProvider{
+				chatFn: func(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+					return &llm.ChatResponse{Content: `{"intent":"research","confidence":0.9}`}, nil
+				},
+			}
+			got, err := classifier.Classify(context.Background(), provider, tc.message, nil)
+			if err != nil {
+				t.Fatalf("Classify: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("intent for %q = %q, want %q", tc.message, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestLLMClassifierClassify_AllIntents(t *testing.T) {
 	cases := []struct {
 		response string
+		message  string
 		want     Intent
 	}{
-		{`{"intent":"question","confidence":0.9}`, IntentQuestion},
-		{`{"intent":"simple_task","confidence":0.8}`, IntentSimpleTask},
-		{`{"intent":"complex_task","confidence":0.7}`, IntentComplexTask},
-		{`{"intent":"project","confidence":0.6}`, IntentProject},
-		{`{"intent":"research","confidence":0.95}`, IntentResearch},
-		{`{"intent":"wiki_query","confidence":0.92}`, IntentWikiQuery},
-		{`{"intent":"unclear","confidence":0.3}`, IntentUnclear},
-		{`{"intent":"chat","confidence":1.0}`, IntentChat},
+		{`{"intent":"question","confidence":0.9}`, "msg", IntentQuestion},
+		{`{"intent":"simple_task","confidence":0.8}`, "msg", IntentSimpleTask},
+		{`{"intent":"complex_task","confidence":0.7}`, "msg", IntentComplexTask},
+		{`{"intent":"project","confidence":0.6}`, "msg", IntentProject},
+		// Research must carry an investigation keyword to pass the depth
+		// gate introduced in Phase 7.5 (3a) and avoid demotion to question.
+		{`{"intent":"research","confidence":0.95}`, "Compare and analyze the tradeoffs between PostgreSQL and MySQL for our specific workload pattern.", IntentResearch},
+		{`{"intent":"wiki_query","confidence":0.92}`, "msg", IntentWikiQuery},
+		{`{"intent":"unclear","confidence":0.3}`, "msg", IntentUnclear},
+		{`{"intent":"chat","confidence":1.0}`, "msg", IntentChat},
 	}
 
 	for _, tc := range cases {
@@ -275,7 +325,7 @@ func TestLLMClassifierClassify_AllIntents(t *testing.T) {
 					return &llm.ChatResponse{Content: tc.response}, nil
 				},
 			}
-			got, err := classifier.Classify(context.Background(), provider, "msg", nil)
+			got, err := classifier.Classify(context.Background(), provider, tc.message, nil)
 			if err != nil {
 				t.Fatalf("Classify: %v", err)
 			}
