@@ -745,6 +745,40 @@ func TestManagerLoadSessionForPrincipal_DifferentUserRejected(t *testing.T) {
 	}
 }
 
+// TestManagerLoadSessionForPrincipal_CanonicalDriftAllowed guards the F3 root-
+// cause fix. Canonical user IDs are derived from USER@HOSTNAME and can drift
+// across network/VPN/daemon-restart boundaries even for the same user on the
+// same surface. Session ownership must still succeed when the stable triple
+// (UserID, ProjectID, Surface) matches, even if canonical has drifted.
+func TestManagerLoadSessionForPrincipal_CanonicalDriftAllowed(t *testing.T) {
+	dir := t.TempDir()
+	created := identity.Principal{
+		UserID:          "8568468639",
+		CanonicalUserID: "stello@192.168.nate.com",
+		ProjectID:       "proj-1",
+		Surface:         "telegram",
+	}
+	sess, err := agent.NewSession(dir, created)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	mgr := NewManager(nil, dir)
+	resuming := identity.Principal{
+		UserID:          "8568468639",
+		CanonicalUserID: "stello@Stellos-MacBook-Pro.local",
+		ProjectID:       "proj-1",
+		Surface:         "telegram",
+	}
+	loaded, err := mgr.LoadSessionForPrincipal(sess.ID, resuming)
+	if err != nil {
+		t.Fatalf("LoadSessionForPrincipal(canonical-drift) = %v, want success", err)
+	}
+	if loaded.ID != sess.ID {
+		t.Fatalf("loaded session = %q, want %q", loaded.ID, sess.ID)
+	}
+}
+
 func TestManagerLoadSessionForPrincipal_LegacySessionAllowed(t *testing.T) {
 	dir := t.TempDir()
 	sessionsDir := filepath.Join(dir, "sessions")

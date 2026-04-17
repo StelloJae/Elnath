@@ -251,7 +251,22 @@ func sameResumePrincipal(candidate, target identity.Principal) bool {
 }
 
 func sessionPrincipalAllowed(candidate, target identity.Principal) bool {
-	return sameResumePrincipal(candidate, target) || isLegacyPrincipal(candidate)
+	return sameResumePrincipal(candidate, target) ||
+		isLegacyPrincipal(candidate) ||
+		stableIdentityMatch(candidate, target)
+}
+
+// stableIdentityMatch allows session resumption when the stable identifiers
+// (UserID, ProjectID) match even if CanonicalUserID has drifted. Canonical IDs
+// are derived from USER@HOSTNAME and change across network, VPN, or
+// daemon-restart boundaries; gating ownership on them alone locks legitimate
+// users out of their own sessions. The stable UserID (raw telegram ID / CLI
+// value at session creation) plus ProjectID is sufficient to scope ownership.
+func stableIdentityMatch(candidate, target identity.Principal) bool {
+	return candidate.UserID != "" &&
+		candidate.UserID == target.UserID &&
+		candidate.ProjectID != "" &&
+		candidate.ProjectID == target.ProjectID
 }
 
 func isLegacyPrincipal(principal identity.Principal) bool {
