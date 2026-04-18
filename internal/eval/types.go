@@ -32,12 +32,29 @@ type Task struct {
 	RepoRef            string   `json:"repo_ref,omitempty"`
 	SourceURL          string   `json:"source_url,omitempty"`
 	AcceptanceCriteria []string `json:"acceptance_criteria,omitempty"`
+	// Intent is the user-intent category for v2 self-improvement benchmarks
+	// (e.g. "question", "complex_task", "bugfix"). Used by the v2 harness to
+	// aggregate outcomes by intent for advisor preference learning.
+	Intent string `json:"intent,omitempty"`
+	// ExpectedWorkflow is the workflow that stub execution records as the
+	// successful workflow for this task's outcome. v2-only.
+	ExpectedWorkflow string `json:"expected_workflow,omitempty"`
 }
 
 // Corpus is a versioned task list.
 type Corpus struct {
 	Version string `json:"version"`
 	Tasks   []Task `json:"tasks"`
+	// IntentDistribution declares the target mix of intents in v2 corpora
+	// (e.g. {"question": 0.45, "complex_task": 0.35, "bugfix": 0.20}).
+	// The same distribution must apply to both TrainingSet and HeldOutSet so
+	// held-out hit-rate measurement reflects in-distribution generalization.
+	IntentDistribution map[string]float64 `json:"intent_distribution,omitempty"`
+	// TrainingSet is the list of Task IDs the advisor learns from. v2-only.
+	TrainingSet []string `json:"training_set,omitempty"`
+	// HeldOutSet is the disjoint list of Task IDs used to measure advisor
+	// hit rate without feeding outcomes back into the scratch store. v2-only.
+	HeldOutSet []string `json:"held_out_set,omitempty"`
 }
 
 // RunResult is the outcome of one benchmark task execution.
