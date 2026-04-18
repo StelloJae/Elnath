@@ -1,0 +1,173 @@
+{
+  "version": "v2",
+  "intent_distribution": {
+    "question": 0.45,
+    "complex_task": 0.35,
+    "bugfix": 0.20
+  },
+  "training_set": [
+    "V2-Q-T01", "V2-Q-T02", "V2-Q-T03", "V2-Q-T04", "V2-Q-T05",
+    "V2-C-T01", "V2-C-T02", "V2-C-T03", "V2-C-T04",
+    "V2-B-T01", "V2-B-T02", "V2-B-T03"
+  ],
+  "held_out_set": [
+    "V2-Q-H01", "V2-Q-H02",
+    "V2-C-H01", "V2-C-H02",
+    "V2-B-H01"
+  ],
+  "tasks": [
+    {
+      "id": "V2-Q-T01",
+      "title": "Clarify a Go idiom",
+      "track": "brownfield_feature",
+      "language": "go",
+      "prompt": "What is the difference between a nil slice and an empty slice in Go?",
+      "intent": "question",
+      "expected_workflow": "single"
+    },
+    {
+      "id": "V2-Q-T02",
+      "title": "Explain a CLI flag",
+      "track": "brownfield_feature",
+      "language": "go",
+      "prompt": "What does the --race flag do on go test?",
+      "intent": "question",
+      "expected_workflow": "single"
+    },
+    {
+      "id": "V2-Q-T03",
+      "title": "Contrast two APIs",
+      "track": "brownfield_feature",
+      "language": "typescript",
+      "prompt": "When would I pick fetch over axios in a TypeScript client?",
+      "intent": "question",
+      "expected_workflow": "single"
+    },
+    {
+      "id": "V2-Q-T04",
+      "title": "Recall a library convention",
+      "track": "brownfield_feature",
+      "language": "go",
+      "prompt": "What is the idiomatic way to pass a cancellation signal in Go?",
+      "intent": "question",
+      "expected_workflow": "single"
+    },
+    {
+      "id": "V2-Q-T05",
+      "title": "Describe a data format",
+      "track": "brownfield_feature",
+      "language": "typescript",
+      "prompt": "What fields are required in a package.json to publish a library?",
+      "intent": "question",
+      "expected_workflow": "single"
+    },
+    {
+      "id": "V2-C-T01",
+      "title": "Add a middleware layer",
+      "track": "brownfield_feature",
+      "language": "go",
+      "prompt": "Introduce a request-id logging middleware across all HTTP handlers in a Go service.",
+      "intent": "complex_task",
+      "expected_workflow": "team"
+    },
+    {
+      "id": "V2-C-T02",
+      "title": "Introduce a caching layer",
+      "track": "brownfield_feature",
+      "language": "typescript",
+      "prompt": "Add a Redis-backed caching layer with invalidation to a TypeScript Express app.",
+      "intent": "complex_task",
+      "expected_workflow": "team"
+    },
+    {
+      "id": "V2-C-T03",
+      "title": "Refactor a package boundary",
+      "track": "brownfield_feature",
+      "language": "go",
+      "prompt": "Split the internal/storage package into internal/store and internal/cache with a shared interface.",
+      "intent": "complex_task",
+      "expected_workflow": "team"
+    },
+    {
+      "id": "V2-C-T04",
+      "title": "Migrate a persistence library",
+      "track": "brownfield_feature",
+      "language": "typescript",
+      "prompt": "Replace sequelize with drizzle-orm in the orders service, keeping the public query API stable.",
+      "intent": "complex_task",
+      "expected_workflow": "team"
+    },
+    {
+      "id": "V2-B-T01",
+      "title": "Fix an off-by-one",
+      "track": "bugfix",
+      "language": "go",
+      "prompt": "The pagination math in PaginatedFetch returns one page past the last; fix the off-by-one.",
+      "intent": "bugfix",
+      "expected_workflow": "ralph"
+    },
+    {
+      "id": "V2-B-T02",
+      "title": "Fix a goroutine leak",
+      "track": "bugfix",
+      "language": "go",
+      "prompt": "A background worker retains its context after shutdown, leaking goroutines. Fix the lifecycle.",
+      "intent": "bugfix",
+      "expected_workflow": "ralph"
+    },
+    {
+      "id": "V2-B-T03",
+      "title": "Fix a flaky test",
+      "track": "bugfix",
+      "language": "typescript",
+      "prompt": "The watcher.test.ts retry test is flaky; find the race and stabilise the timing assumption.",
+      "intent": "bugfix",
+      "expected_workflow": "ralph"
+    },
+    {
+      "id": "V2-Q-H01",
+      "title": "Explain error wrapping",
+      "track": "brownfield_feature",
+      "language": "go",
+      "prompt": "When should I use errors.Join vs fmt.Errorf with %w to combine errors?",
+      "intent": "question",
+      "expected_workflow": "single"
+    },
+    {
+      "id": "V2-Q-H02",
+      "title": "Clarify async behavior",
+      "track": "brownfield_feature",
+      "language": "typescript",
+      "prompt": "What is the difference between Promise.all and Promise.allSettled?",
+      "intent": "question",
+      "expected_workflow": "single"
+    },
+    {
+      "id": "V2-C-H01",
+      "title": "Extract a shared module",
+      "track": "brownfield_feature",
+      "language": "go",
+      "prompt": "Factor the duplicated retry logic across three packages into internal/retry with tests.",
+      "intent": "complex_task",
+      "expected_workflow": "team"
+    },
+    {
+      "id": "V2-C-H02",
+      "title": "Add a new adapter",
+      "track": "brownfield_feature",
+      "language": "typescript",
+      "prompt": "Add a new payment-provider adapter behind the existing PaymentGateway interface.",
+      "intent": "complex_task",
+      "expected_workflow": "team"
+    },
+    {
+      "id": "V2-B-H01",
+      "title": "Fix a memory issue",
+      "track": "bugfix",
+      "language": "go",
+      "prompt": "A long-running daemon slowly grows heap memory; identify the retained-reference pattern and fix.",
+      "intent": "bugfix",
+      "expected_workflow": "ralph"
+    }
+  ]
+}
