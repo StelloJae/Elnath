@@ -14,15 +14,44 @@ import (
 // All page paths are relative to wikiDir.
 type Store struct {
 	wikiDir string
+	index   indexSync
+}
+
+// indexSync is the subset of *Index that Store needs to keep the filesystem
+// and the SQLite wiki_pages table in step. Declared as an interface so
+// Store stays decoupled from Index for testing, even within the same
+// package.
+type indexSync interface {
+	Upsert(page *Page) error
+	Remove(path string) error
+}
+
+// StoreOption configures a Store during NewStore.
+type StoreOption func(*Store)
+
+// WithIndex wires an indexSync (typically *Index) so Create/Update/Delete/
+// Upsert mirror their filesystem mutations into the wiki DB (and FTS5 via
+// triggers). Without this option, Store only writes .md files, which means
+// search drifts out of sync until a manual reindex.
+//
+// When an index sync fails the file write is NOT rolled back; the error is
+// returned so callers can decide what to do. Run `elnath wiki integrity`
+// to detect any drift that slips through.
+func WithIndex(idx indexSync) StoreOption {
+	return func(s *Store) { s.index = idx }
 }
 
 // NewStore creates a Store rooted at wikiDir.
 // The directory is created if it does not exist.
-func NewStore(wikiDir string) (*Store, error) {
+func NewStore(wikiDir string, opts ...StoreOption) (*Store, error) {
 	if err := os.MkdirAll(wikiDir, 0o755); err != nil {
 		return nil, fmt.Errorf("wiki store: create dir %q: %w", wikiDir, err)
 	}
-	return &Store{wikiDir: wikiDir}, nil
+	s := &Store{wikiDir: wikiDir}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s, nil
 }
 
 // absPath resolves a relative page path to an absolute filesystem path.
@@ -65,6 +94,11 @@ func (s *Store) Create(page *Page) error {
 
 	if err := os.WriteFile(abs, data, 0o644); err != nil {
 		return fmt.Errorf("wiki store: write %q: %w", page.Path, err)
+	}
+	if s.index != nil {
+		if err := s.index.Upsert(page); err != nil {
+			return fmt.Errorf("wiki store: sync index for %q: %w", page.Path, err)
+		}
 	}
 	return nil
 }
@@ -117,6 +151,11 @@ func (s *Store) Update(page *Page) error {
 	if err := os.WriteFile(abs, data, 0o644); err != nil {
 		return fmt.Errorf("wiki store: write %q: %w", page.Path, err)
 	}
+	if s.index != nil {
+		if err := s.index.Upsert(page); err != nil {
+			return fmt.Errorf("wiki store: sync index for %q: %w", page.Path, err)
+		}
+	}
 	return nil
 }
 
@@ -132,6 +171,11 @@ func (s *Store) Delete(path string) error {
 			return userfacingerr.Wrap(userfacingerr.ELN100, inner, "wiki delete")
 		}
 		return fmt.Errorf("wiki store: delete %q: %w", path, err)
+	}
+	if s.index != nil {
+		if err := s.index.Remove(path); err != nil {
+			return fmt.Errorf("wiki store: sync index remove %q: %w", path, err)
+		}
 	}
 	return nil
 }
