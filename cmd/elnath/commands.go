@@ -280,11 +280,11 @@ func registerWikiTools(reg *tools.Registry, wikiDir string, wikiDB *sql.DB) (*wi
 	if wikiDir == "" || wikiDB == nil {
 		return nil, nil
 	}
-	store, err := wiki.NewStore(wikiDir)
+	idx, err := wiki.NewIndex(wikiDB)
 	if err != nil {
 		return nil, nil
 	}
-	idx, err := wiki.NewIndex(wikiDB)
+	store, err := wiki.NewStore(wikiDir, wiki.WithIndex(idx))
 	if err != nil {
 		return nil, nil
 	}

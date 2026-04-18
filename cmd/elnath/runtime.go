@@ -333,7 +333,11 @@ func buildExecutionRuntime(
 
 	var wikiStore *wiki.Store
 	if cfg.WikiDir != "" {
-		if ws, err := wiki.NewStore(cfg.WikiDir); err == nil {
+		var opts []wiki.StoreOption
+		if wikiIdx != nil {
+			opts = append(opts, wiki.WithIndex(wikiIdx))
+		}
+		if ws, err := wiki.NewStore(cfg.WikiDir, opts...); err == nil {
 			wikiStore = ws
 		}
 	}
