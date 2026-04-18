@@ -13,10 +13,20 @@ type RoutingAdvisor struct {
 }
 
 func NewRoutingAdvisor(store *OutcomeStore) *RoutingAdvisor {
+	return NewRoutingAdvisorWithConfig(store, 30, 5)
+}
+
+// NewRoutingAdvisorWithConfig builds an advisor with non-default window and
+// minimum-sample thresholds. The v2 longitudinal benchmark uses this to
+// construct a scratch advisor with windowSize=200 (so 10 runs of 12-15
+// training outcomes all fit within the window) and minSamples=3 (so
+// recommendations emerge by run 2-3 with the 3-intent distribution).
+// Production code should continue to use NewRoutingAdvisor.
+func NewRoutingAdvisorWithConfig(store *OutcomeStore, windowSize, minSamples int) *RoutingAdvisor {
 	return &RoutingAdvisor{
 		store:      store,
-		windowSize: 30,
-		minSamples: 5,
+		windowSize: windowSize,
+		minSamples: minSamples,
 	}
 }
 
