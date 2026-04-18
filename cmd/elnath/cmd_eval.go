@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 
 	"github.com/stello/elnath/internal/eval"
 )
@@ -23,7 +24,8 @@ Subcommands:
   run-baseline <plan.json>   Execute a baseline runner plan and write a scorecard
   run-current <plan.json>    Execute a current-system runner plan and write a scorecard
   scaffold-baseline <output.json>     Write a baseline runner scaffold
-  scaffold-current <output.json>      Write a current-system runner scaffold`)
+  scaffold-current <output.json>      Write a current-system runner scaffold
+  run-v2 <corpus.v2.json> <output_dir> Phase 7.3 self-improvement benchmark (stub execution)`)
 		return nil
 	}
 
@@ -283,9 +285,66 @@ Subcommands:
 		}
 		fmt.Printf("Current scaffold written: %s\n", args[1])
 		return nil
+	case "run-v2":
+		if len(args) < 3 {
+			return fmt.Errorf("usage: elnath eval run-v2 <corpus.v2.json> <output_dir>")
+		}
+		return cmdEvalRunV2(args[1], args[2])
 	default:
 		return fmt.Errorf("unknown eval subcommand: %s", args[0])
 	}
+}
+
+// cmdEvalRunV2 runs one Phase 7.3 benchmark cycle: loads the v2 corpus,
+// executes 10 training+held-out runs, and writes a timeseries JSON + a
+// human-readable Markdown report under the given output directory. On
+// STRONG_PASS/PASS the function returns nil (exit 0); on FAIL it returns
+// an error so the CLI exits non-zero.
+func cmdEvalRunV2(corpusPath, outputDir string) error {
+	corpus, err := eval.LoadCorpus(corpusPath)
+	if err != nil {
+		return err
+	}
+	if corpus.Version != "v2" {
+		return fmt.Errorf("run-v2: corpus version %q is not v2", corpus.Version)
+	}
+
+	series, runErr := eval.RunV2(eval.V2RunOptions{
+		Corpus:    corpus,
+		OutputDir: outputDir,
+	})
+	if runErr != nil && series == nil {
+		return runErr
+	}
+
+	// Persist timeseries as JSON alongside the report for downstream
+	// tooling (trend analysis, CI step, etc).
+	if err := eval.WriteV2TimeSeries(filepath.Join(outputDir, "timeseries.json"), series); err != nil {
+		return fmt.Errorf("run-v2: write timeseries: %w", err)
+	}
+
+	reportPath := filepath.Join(outputDir, "report.md")
+	if _, err := eval.RenderV2Report(series, eval.V2ReportOptions{
+		Corpus:     corpus,
+		OutputPath: reportPath,
+	}); err != nil {
+		return fmt.Errorf("run-v2: render report: %w", err)
+	}
+
+	fmt.Printf("Phase 7.3 v2 cycle complete\n")
+	fmt.Printf("  verdict:       %s\n", series.Verdict)
+	fmt.Printf("  spearman:      %.4f (is_constant=%t)\n", series.SpearmanCoeff, series.IsConstant)
+	fmt.Printf("  first3 avg:    %.4f\n", series.First3Avg)
+	fmt.Printf("  last3 avg:     %.4f\n", series.Last3Avg)
+	fmt.Printf("  report:        %s\n", reportPath)
+
+	if runErr != nil {
+		return runErr
+	}
+	if series.Verdict == eval.V2VerdictFail {
+		return fmt.Errorf("run-v2: FAIL (see report)")
+	}
+	return nil
 }
 
 func printH1Result(label string, result eval.H1Result) {

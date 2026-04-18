@@ -1,5 +1,33 @@
 package eval
 
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+)
+
+// WriteV2TimeSeries persists the series as pretty-printed JSON, creating
+// parent directories as needed. Intended for the `elnath eval run-v2`
+// CLI so external tooling (CI, trend dashboards) can consume the cycle
+// result without re-parsing the Markdown report.
+func WriteV2TimeSeries(path string, series *V2TimeSeries) error {
+	if series == nil {
+		return fmt.Errorf("write v2 timeseries: series is nil")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("write v2 timeseries: mkdir: %w", err)
+	}
+	data, err := json.MarshalIndent(series, "", "  ")
+	if err != nil {
+		return fmt.Errorf("write v2 timeseries: marshal: %w", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("write v2 timeseries: %w", err)
+	}
+	return nil
+}
+
 // V2BenchmarkProjectID is the fixed synthetic project ID used by every v2
 // benchmark run. Every Advise() call and every scratch OutcomeStore write in
 // the v2 harness uses this constant so the scratch advisor's ForProject
