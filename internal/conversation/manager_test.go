@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -918,5 +920,171 @@ func TestManagerSendMessage_IsolatesLocalePerSession(t *testing.T) {
 	}
 	if got := mgr.LastLocale(second.ID); got != "en" {
 		t.Fatalf("LastLocale(second) = %q, want en", got)
+	}
+}
+
+// --- FU-SessionCompaction P1: dynamic provider context window ---
+
+func buildStructuredSummaryFixture() string {
+	return `# Session Summary
+
+## 1. User goal
+Testing compression behavior.
+
+## 2. Completed steps
+- Seeded fixture messages for compression tests.
+
+## 3. Current focus
+Validating the dynamic threshold path.
+
+## 4. Files touched
+(none)
+
+## 5. Outstanding TODOs
+(none)
+
+## 6. Blockers / unresolved
+(none)
+
+## 7. Key decisions
+- Use a 9-section fixture so parseStructuredSummary succeeds.
+
+## 8. Open questions
+(none)
+
+## 9. Next action
+Run the compression path end-to-end.`
+}
+
+func seedCompressionMessages(t *testing.T, sess *agent.Session, count int) {
+	t.Helper()
+	msgs := make([]llm.Message, 0, count)
+	filler := strings.Repeat("abc ", 24) // ~96 chars + index suffix keeps each body unique
+	for i := 0; i < count; i++ {
+		// Session.AppendMessage dedups user-role messages by content hash, so each
+		// body must be distinct to survive persistence. See internal/agent/session.go.
+		body := fmt.Sprintf("%s[msg-%03d]", filler, i)
+		if i%2 == 0 {
+			msgs = append(msgs, llm.NewUserMessage(body))
+		} else {
+			msgs = append(msgs, llm.NewAssistantMessage(body))
+		}
+	}
+	if err := sess.AppendMessages(msgs); err != nil {
+		t.Fatalf("AppendMessages: %v", err)
+	}
+}
+
+// TestManagerSendMessage_CompressesWhenOverDynamicThreshold verifies that when
+// a provider context window is wired on the Manager, the compression threshold
+// derives from that window instead of the static 100K default. Seed 50 messages
+// (~1450 estimated tokens) with providerContextWindow=1000 and assert the
+// returned slice was compressed and starts with a structured summary.
+func TestManagerSendMessage_CompressesWhenOverDynamicThreshold(t *testing.T) {
+	sess, dir := newTestSession(t)
+	seedCompressionMessages(t, sess, 50)
+
+	fixture := buildStructuredSummaryFixture()
+	provider := &mockProvider{
+		chatFn: func(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+			return &llm.ChatResponse{Content: fixture}, nil
+		},
+	}
+
+	cw := NewContextWindow()
+	mgr := NewManager(nil, dir).
+		WithContextWindow(cw).
+		WithProvider(provider).
+		WithProviderContextWindow(1000)
+
+	result, _, err := mgr.SendMessage(context.Background(), sess.ID, "ping")
+	if err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+
+	// 50 seeded + 1 new user message = 51 before compression. Expect shrink.
+	if len(result) >= 50 {
+		t.Errorf("compressed message count = %d, want < 50", len(result))
+	}
+	if len(result) == 0 {
+		t.Fatal("result is empty")
+	}
+	if !isStructuredSummaryMessage(result[0]) {
+		t.Errorf("first message is not a structured summary: role=%q text=%q",
+			result[0].Role, result[0].Text())
+	}
+}
+
+// TestManagerSendMessage_SkipsCompressionWhenUnderThreshold verifies that when
+// the provider context window is comfortably above the message total, no LLM
+// summary call is made and the history flows through intact.
+func TestManagerSendMessage_SkipsCompressionWhenUnderThreshold(t *testing.T) {
+	sess, dir := newTestSession(t)
+	seedCompressionMessages(t, sess, 50)
+
+	chatCalled := 0
+	provider := &mockProvider{
+		chatFn: func(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+			chatCalled++
+			return &llm.ChatResponse{Content: buildStructuredSummaryFixture()}, nil
+		},
+	}
+
+	cw := NewContextWindow()
+	mgr := NewManager(nil, dir).
+		WithContextWindow(cw).
+		WithProvider(provider).
+		WithProviderContextWindow(100_000)
+
+	result, _, err := mgr.SendMessage(context.Background(), sess.ID, "ping")
+	if err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+
+	if len(result) != 51 {
+		t.Errorf("message count = %d, want 51 (50 seeded + 1 new user)", len(result))
+	}
+	if chatCalled != 0 {
+		t.Errorf("provider.Chat called %d times, want 0 (no compression expected)", chatCalled)
+	}
+}
+
+// TestManagerSendMessage_FallsBackToConfigMaxWhenProviderWindowUnknown covers
+// the fallback branch: providerContextWindow=0 (unknown) means the manager
+// should use the configured MaxContextTokens to size the threshold.
+func TestManagerSendMessage_FallsBackToConfigMaxWhenProviderWindowUnknown(t *testing.T) {
+	sess, dir := newTestSession(t)
+	seedCompressionMessages(t, sess, 50)
+
+	fixture := buildStructuredSummaryFixture()
+	provider := &mockProvider{
+		chatFn: func(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+			return &llm.ChatResponse{Content: fixture}, nil
+		},
+	}
+
+	cw := NewContextWindow()
+	mgr := NewManager(nil, dir).
+		WithContextWindow(cw).
+		WithProvider(provider).
+		WithMaxContextTokens(500).
+		WithProviderContextWindow(0)
+
+	result, _, err := mgr.SendMessage(context.Background(), sess.ID, "ping")
+	if err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+
+	// With maxContextTokens=500 the auto-compress threshold is 400. 50 seeded
+	// messages (~1450 estimated tokens) comfortably exceed that → compress.
+	if len(result) >= 50 {
+		t.Errorf("compressed message count = %d, want < 50 (config fallback threshold)", len(result))
+	}
+	if len(result) == 0 {
+		t.Fatal("result is empty")
+	}
+	if !isStructuredSummaryMessage(result[0]) {
+		t.Errorf("first message is not a structured summary: role=%q text=%q",
+			result[0].Role, result[0].Text())
 	}
 }

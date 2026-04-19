@@ -637,3 +637,44 @@ func newLargeCompressionMessagesWithPriorSummary(summary, prefix string) []llm.M
 	msgs[0] = llm.NewAssistantMessage(summary)
 	return msgs
 }
+
+// TestContextWindowCompressMessages_PostCompressionValidation guards the P1
+// validation invariant: when the LLM summarizer produces no usable output
+// (empty content across both structured and legacy paths) CompressMessages
+// must still return at least one message with a populated role and non-empty
+// content — via the snip fallback. This prevents invalid compression from
+// propagating an empty assistant shell into the next turn.
+func TestContextWindowCompressMessages_PostCompressionValidation(t *testing.T) {
+	cw := NewContextWindow()
+	ctx := context.Background()
+
+	provider := &mockProvider{
+		chatFn: func(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+			return &llm.ChatResponse{Content: ""}, nil
+		},
+	}
+
+	messages := make([]llm.Message, 0, 30)
+	body := strings.Repeat("payload ", 25) // 200 chars → ~50 prose tokens per msg
+	for i := 0; i < 30; i++ {
+		if i%2 == 0 {
+			messages = append(messages, llm.NewUserMessage(body))
+		} else {
+			messages = append(messages, llm.NewAssistantMessage(body))
+		}
+	}
+
+	result, err := cw.CompressMessages(ctx, provider, messages, 500)
+	if err != nil {
+		t.Fatalf("CompressMessages: %v", err)
+	}
+	if len(result) == 0 {
+		t.Fatal("result is empty, want at least 1 message")
+	}
+	if result[0].Role == "" {
+		t.Errorf("first message has empty role: %+v", result[0])
+	}
+	if strings.TrimSpace(result[0].Text()) == "" {
+		t.Errorf("first message has empty content; expected snip fallback to preserve a real message. Got %+v", result[0])
+	}
+}

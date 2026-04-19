@@ -162,12 +162,18 @@ func (cw *ContextWindow) CompressMessages(ctx context.Context, provider llm.Prov
 		if estimated > threshold && provider != nil {
 			// Stage 2: LLM summary.
 			compressed, err := cw.autoCompress(ctx, provider, messages)
-			if err != nil {
+			switch {
+			case err != nil:
 				cw.logger.Warn("auto-compression failed, falling back to snip",
 					"attempt", attempts+1,
 					"error", err,
 				)
-			} else {
+			case !validCompressionResult(compressed):
+				cw.logger.Warn("auto-compression produced invalid result, falling back to snip",
+					"attempt", attempts+1,
+					"result_count", len(compressed),
+				)
+			default:
 				messages = compressed
 				attempts++
 				if cw.onAutoCompress != nil {
@@ -190,6 +196,22 @@ func (cw *ContextWindow) CompressMessages(ctx context.Context, provider llm.Prov
 	}
 
 	return messages, nil
+}
+
+// validCompressionResult returns true when an LLM summary output preserves
+// the post-compaction invariants: at least one message, the first message
+// has a populated role, and its text content is non-empty. Invalid output
+// (e.g. an empty completion from the summarizer) should fall through to the
+// snip path rather than propagate an empty assistant shell.
+func validCompressionResult(messages []llm.Message) bool {
+	if len(messages) == 0 {
+		return false
+	}
+	first := messages[0]
+	if first.Role == "" {
+		return false
+	}
+	return strings.TrimSpace(first.Text()) != ""
 }
 
 // microCompress performs free, non-LLM cleanup:

@@ -196,6 +196,23 @@ type compressionCall struct {
 	autoCompressed bool
 }
 
+// resolveProviderContextWindow looks up the active model's input-context limit
+// from the provider's model catalog so the conversation manager can size its
+// compaction threshold against the real window instead of the static 100K
+// fallback. Returns 0 when the provider does not advertise the model — the
+// manager treats that as "unknown" and falls back to MaxContextTokens.
+func resolveProviderContextWindow(provider llm.Provider, model string) int {
+	if provider == nil || model == "" {
+		return 0
+	}
+	for _, m := range provider.Models() {
+		if m.ID == model {
+			return m.ContextWindow
+		}
+	}
+	return 0
+}
+
 func newCompressionHookContextWindow(
 	inner *conversation.ContextWindow,
 	hooks *agent.HookRegistry,
@@ -311,6 +328,7 @@ func buildExecutionRuntime(
 		WithClassifier(classifier).
 		WithContextWindow(ctxWindow).
 		WithMaxContextTokens(cfg.MaxContextTokens).
+		WithProviderContextWindow(resolveProviderContextWindow(provider, model)).
 		WithHistoryStore(historyStore).
 		WithConfig(cfg).
 		WithLogger(app.Logger)

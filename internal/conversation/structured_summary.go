@@ -10,7 +10,10 @@ import (
 )
 
 const (
-	compressionSummaryMaxTokens = 512
+	// compressionSummaryMaxTokens caps the structured-summary output. The
+	// prompt asks for "under 2000 tokens" across 9 sections; 512 truncates
+	// long sessions mid-summary, so the budget is raised to fit the spec.
+	compressionSummaryMaxTokens = 2048
 	summaryReturnMessage        = "Return only the requested summary."
 
 	structuredSummaryConversationPlaceholder = "<INSERT CONVERSATION HERE>"

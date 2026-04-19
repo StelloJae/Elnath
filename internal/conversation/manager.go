@@ -38,17 +38,18 @@ type HistoryStore interface {
 // Manager wraps agent.Session and provides higher-level conversation management.
 // It coordinates intent classification, context window management, and history persistence.
 type Manager struct {
-	db               *sql.DB
-	dataDir          string
-	logger           *slog.Logger
-	provider         llm.Provider
-	classifier       IntentClassifier
-	context          ContextWindowManager
-	history          HistoryStore
-	maxContextTokens int
-	cfg              *config.Config
-	localeMu         sync.RWMutex
-	lastLocale       map[string]string
+	db                    *sql.DB
+	dataDir               string
+	logger                *slog.Logger
+	provider              llm.Provider
+	classifier            IntentClassifier
+	context               ContextWindowManager
+	history               HistoryStore
+	maxContextTokens      int
+	providerContextWindow int
+	cfg                   *config.Config
+	localeMu              sync.RWMutex
+	lastLocale            map[string]string
 }
 
 // SessionMeta is the resumable-session index entry derived from JSONL files.
@@ -100,6 +101,15 @@ func (m *Manager) WithHistoryStore(hs HistoryStore) *Manager {
 // If not set, defaults to 100,000.
 func (m *Manager) WithMaxContextTokens(n int) *Manager {
 	m.maxContextTokens = n
+	return m
+}
+
+// WithProviderContextWindow records the active provider's input-context limit
+// (in tokens) so compression can trigger at a ratio of the real window rather
+// than the static 100K fallback. A value of 0 means "unknown"; fall back to
+// WithMaxContextTokens (or the static default).
+func (m *Manager) WithProviderContextWindow(n int) *Manager {
+	m.providerContextWindow = n
 	return m
 }
 
@@ -246,6 +256,28 @@ func (m *Manager) loadLatestMatchingSession(sessions []SessionMeta, match func(S
 	return nil, nil, false
 }
 
+// resolveCompressionBudget picks the token budget for auto-compression based
+// on what the runtime knows. Priority order:
+//  1. Both known: use min(providerCW, configMax) so a user override can cap
+//     the provider window but never inflate it.
+//  2. Only one known: use that value.
+//  3. Neither known: fall back to the historical static 100K default.
+func resolveCompressionBudget(providerCW, configMax int) int {
+	switch {
+	case providerCW > 0 && configMax > 0:
+		if providerCW < configMax {
+			return providerCW
+		}
+		return configMax
+	case providerCW > 0:
+		return providerCW
+	case configMax > 0:
+		return configMax
+	default:
+		return 100_000
+	}
+}
+
 func sameResumePrincipal(candidate, target identity.Principal) bool {
 	return candidate.ResumeUserID() == target.ResumeUserID() && candidate.ProjectID == target.ProjectID
 }
@@ -311,10 +343,7 @@ func (m *Manager) SendMessage(ctx context.Context, sessionID, userMsg string) ([
 
 	// Compress messages to fit context window if available.
 	if m.context != nil {
-		maxTokens := m.maxContextTokens
-		if maxTokens == 0 {
-			maxTokens = 100_000
-		}
+		maxTokens := resolveCompressionBudget(m.providerContextWindow, m.maxContextTokens)
 		if m.provider != nil {
 			messages, err = m.context.CompressMessages(ctx, m.provider, messages, maxTokens)
 		} else {
