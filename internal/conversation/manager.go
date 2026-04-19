@@ -47,6 +47,7 @@ type Manager struct {
 	history               HistoryStore
 	maxContextTokens      int
 	providerContextWindow int
+	memoryLimitMB         int
 	cfg                   *config.Config
 	localeMu              sync.RWMutex
 	lastLocale            map[string]string
@@ -110,6 +111,16 @@ func (m *Manager) WithMaxContextTokens(n int) *Manager {
 // WithMaxContextTokens (or the static default).
 func (m *Manager) WithProviderContextWindow(n int) *Manager {
 	m.providerContextWindow = n
+	return m
+}
+
+// WithMemoryLimitMB configures the process-Alloc ceiling (in megabytes) that
+// CompressMessages uses as a belt-and-suspenders guard. When set, SendMessage
+// attaches the budget to the compression context; the ContextWindow checks
+// live MemStats before each LLM-backed attempt and forces a hard snip if the
+// ceiling has already been breached. A non-positive value disables the check.
+func (m *Manager) WithMemoryLimitMB(n int) *Manager {
+	m.memoryLimitMB = n
 	return m
 }
 
@@ -344,10 +355,11 @@ func (m *Manager) SendMessage(ctx context.Context, sessionID, userMsg string) ([
 	// Compress messages to fit context window if available.
 	if m.context != nil {
 		maxTokens := ResolveCompressionBudget(m.providerContextWindow, m.maxContextTokens)
+		compressCtx := WithMemoryLimitContext(ctx, m.memoryLimitMB)
 		if m.provider != nil {
-			messages, err = m.context.CompressMessages(ctx, m.provider, messages, maxTokens)
+			messages, err = m.context.CompressMessages(compressCtx, m.provider, messages, maxTokens)
 		} else {
-			messages, err = m.context.Fit(ctx, messages, maxTokens)
+			messages, err = m.context.Fit(compressCtx, messages, maxTokens)
 		}
 		if err != nil {
 			m.logger.Warn("context compression failed, using original messages",

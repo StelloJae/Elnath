@@ -333,6 +333,7 @@ func buildExecutionRuntime(
 		WithContextWindow(ctxWindow).
 		WithMaxContextTokens(cfg.MaxContextTokens).
 		WithProviderContextWindow(resolveProviderContextWindow(provider, model)).
+		WithMemoryLimitMB(conversation.DefaultMemoryLimitMB).
 		WithHistoryStore(historyStore).
 		WithConfig(cfg).
 		WithLogger(app.Logger)

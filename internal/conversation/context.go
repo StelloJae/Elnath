@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"runtime"
 	"strings"
 
 	"github.com/stello/elnath/internal/llm"
@@ -21,7 +22,48 @@ const (
 
 	// autoCompressThreshold is the fraction of maxTokens at which auto-compression triggers.
 	autoCompressThreshold = 0.80
+
+	// DefaultMemoryLimitMB is the default process-Alloc budget used by
+	// CompressMessages' belt-and-suspenders memory-pressure guard. Runtime
+	// callers pass this via WithMemoryLimitContext (or Manager.WithMemoryLimitMB)
+	// to force snip-fallback before the LLM summary call when the process is
+	// already close to OOM.
+	DefaultMemoryLimitMB = 512
 )
+
+// memoryLimitContextKey keys the memory-pressure budget on a context so that
+// CompressMessages can opt into the snip-fallback path when the process is
+// under memory pressure. The value is the limit in megabytes; <= 0 disables.
+type memoryLimitContextKey struct{}
+
+// WithMemoryLimitContext returns a derived context that carries an Alloc
+// budget in megabytes. CompressMessages consults this budget before each
+// LLM-backed compression attempt and forces a hard snip when process Alloc
+// already exceeds it, avoiding a runaway summarizer call under memory
+// pressure. A non-positive value is a no-op.
+func WithMemoryLimitContext(ctx context.Context, mb int) context.Context {
+	if mb <= 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, memoryLimitContextKey{}, mb)
+}
+
+func memoryLimitFromContext(ctx context.Context) int {
+	v, _ := ctx.Value(memoryLimitContextKey{}).(int)
+	return v
+}
+
+// CheckMemoryPressure reports whether the current process Alloc exceeds the
+// given budget (in megabytes). A non-positive budget disables the check and
+// always returns false.
+func CheckMemoryPressure(maxAllocMB int) bool {
+	if maxAllocMB <= 0 {
+		return false
+	}
+	var stats runtime.MemStats
+	runtime.ReadMemStats(&stats)
+	return stats.Alloc > uint64(maxAllocMB)*1024*1024
+}
 
 // ContextWindow manages token budget and message compression via a 3-stage pipeline.
 type ContextWindow struct {
@@ -151,10 +193,24 @@ func (cw *ContextWindow) CompressMessages(ctx context.Context, provider llm.Prov
 	// Stage 1: micro.
 	messages = cw.microCompress(messages)
 
+	memoryLimitMB := memoryLimitFromContext(ctx)
+
 	attempts := 0
 	for attempts < maxCompressionAttempts {
 		estimated := cw.EstimateTokens(messages)
 		if estimated <= maxTokens {
+			break
+		}
+
+		// Break-glass: if process Alloc is already past the configured budget,
+		// skip the LLM summary call (which allocates a full request copy) and
+		// fall through to snip, which only reslices the existing backing array.
+		if CheckMemoryPressure(memoryLimitMB) {
+			cw.logger.Warn("memory pressure detected, forcing hard snip",
+				"attempt", attempts+1,
+				"limit_mb", memoryLimitMB,
+			)
+			messages = cw.snip(messages, maxTokens)
 			break
 		}
 

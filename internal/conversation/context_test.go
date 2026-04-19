@@ -678,3 +678,68 @@ func TestContextWindowCompressMessages_PostCompressionValidation(t *testing.T) {
 		t.Errorf("first message has empty content; expected snip fallback to preserve a real message. Got %+v", result[0])
 	}
 }
+
+// --- FU-SessionCompaction P3: memory-pressure break-glass ---
+
+// TestCheckMemoryPressure_UnderLimit verifies the memory-pressure check is
+// false when the configured budget is well above the test process's current
+// allocation (10 GiB ceiling).
+func TestCheckMemoryPressure_UnderLimit(t *testing.T) {
+	if CheckMemoryPressure(10240) {
+		t.Errorf("CheckMemoryPressure(10240) = true, want false (budget far above runtime alloc)")
+	}
+}
+
+// TestCheckMemoryPressure_OverLimit verifies the check fires when the budget
+// is set below the test process's real allocation. The Go test harness alone
+// allocates more than 1 MiB, so a 1 MiB budget reliably triggers.
+func TestCheckMemoryPressure_OverLimit(t *testing.T) {
+	if !CheckMemoryPressure(1) {
+		t.Errorf("CheckMemoryPressure(1) = false, want true (1 MiB budget below runtime alloc)")
+	}
+}
+
+// TestCheckMemoryPressure_Disabled verifies a non-positive budget disables the
+// check entirely (never reports pressure).
+func TestCheckMemoryPressure_Disabled(t *testing.T) {
+	if CheckMemoryPressure(0) {
+		t.Errorf("CheckMemoryPressure(0) = true, want false (0 disables the check)")
+	}
+	if CheckMemoryPressure(-5) {
+		t.Errorf("CheckMemoryPressure(-5) = true, want false (negative disables the check)")
+	}
+}
+
+// TestCompressMessages_MemoryPressure_SkipsLLMGoesToSnip pins the P3 contract:
+// when the context carries a memory-pressure limit that's already exceeded,
+// CompressMessages must NOT invoke the provider's Chat summary call — it must
+// fall straight through to snip. This is the belt-and-suspenders guard against
+// OOM during summarization of a runaway history.
+func TestCompressMessages_MemoryPressure_SkipsLLMGoesToSnip(t *testing.T) {
+	cw := NewContextWindow()
+
+	provider := &mockProvider{
+		chatFn: func(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+			t.Fatal("provider.Chat must not be called under memory pressure")
+			return nil, nil
+		},
+	}
+
+	messages := make([]llm.Message, 0, 30)
+	for i := 0; i < 30; i++ {
+		messages = append(messages, llm.NewUserMessage(
+			strings.Repeat("payload ", 25)+fmt.Sprintf(" [msg-%03d]", i)))
+	}
+
+	ctx := WithMemoryLimitContext(context.Background(), 1) // 1 MiB — always triggers
+	result, err := cw.CompressMessages(ctx, provider, messages, 500)
+	if err != nil {
+		t.Fatalf("CompressMessages: %v", err)
+	}
+	if len(result) == 0 {
+		t.Fatal("result is empty, want at least 1 message")
+	}
+	if strings.TrimSpace(result[0].Text()) == "" {
+		t.Errorf("first message has empty content, expected snip fallback to preserve real message")
+	}
+}
