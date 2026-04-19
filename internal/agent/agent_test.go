@@ -22,6 +22,7 @@ import (
 type mockProvider struct {
 	chatFn   func(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error)
 	streamFn func(ctx context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error
+	modelsFn func() []llm.ModelInfo
 }
 
 func (m *mockProvider) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
@@ -38,8 +39,13 @@ func (m *mockProvider) Stream(ctx context.Context, req llm.ChatRequest, cb func(
 	return nil
 }
 
-func (m *mockProvider) Name() string            { return "mock" }
-func (m *mockProvider) Models() []llm.ModelInfo { return nil }
+func (m *mockProvider) Name() string { return "mock" }
+func (m *mockProvider) Models() []llm.ModelInfo {
+	if m.modelsFn != nil {
+		return m.modelsFn()
+	}
+	return nil
+}
 
 type statusCodeErr struct {
 	code int
@@ -977,5 +983,170 @@ func TestNextJitterDelay_Reproducible(t *testing.T) {
 		if leftDelay != rightDelay {
 			t.Fatalf("step %d mismatch: left=%s right=%s", i, leftDelay, rightDelay)
 		}
+	}
+}
+
+// --- FU-SessionCompaction P2: agent-loop compression wiring ---
+
+// TestAgent_ProactiveCompression_FiresBeforeRequest pins the P2 proactive
+// compaction invariant: when the cached provider context window is known and
+// the estimated request exceeds the 80% threshold, the agent compresses the
+// message history BEFORE building the LLM request, not only reactively after
+// an overflow error.
+func TestAgent_ProactiveCompression_FiresBeforeRequest(t *testing.T) {
+	reg := tools.NewRegistry()
+
+	compressCalls := 0
+	var streamSawMessages int
+
+	provider := &mockProvider{
+		modelsFn: func() []llm.ModelInfo {
+			return []llm.ModelInfo{{ID: "tiny", ContextWindow: 500}}
+		},
+		streamFn: func(_ context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
+			streamSawMessages = len(req.Messages)
+			cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: "done"})
+			cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{InputTokens: 1, OutputTokens: 1}})
+			return nil
+		},
+	}
+
+	compressFunc := func(_ context.Context, _ []llm.Message) ([]llm.Message, error) {
+		compressCalls++
+		return []llm.Message{llm.NewAssistantMessage("[summary]")}, nil
+	}
+
+	a := New(provider, reg,
+		WithModel("tiny"),
+		WithCompressFunc(compressFunc),
+		WithMaxIterations(1),
+	)
+
+	// Seed ~1200 tokens of user messages (50 * ~24 tokens each) to blow past
+	// the 80% threshold of the 500-token context window (= 400 tokens).
+	messages := make([]llm.Message, 0, 50)
+	for i := 0; i < 50; i++ {
+		messages = append(messages, llm.NewUserMessage(strings.Repeat("z", 80)+fmt.Sprintf("-%d", i)))
+	}
+
+	if _, err := a.Run(context.Background(), messages, nil); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if compressCalls != 1 {
+		t.Errorf("compressFunc calls = %d, want 1 (proactive pre-turn)", compressCalls)
+	}
+	if streamSawMessages >= 50 {
+		t.Errorf("stream saw %d messages, want < 50 (provider received compressed history)", streamSawMessages)
+	}
+}
+
+// TestAgent_ReactiveCompression_FiresOnOverflowError pins the existing
+// reactive recovery path: when the provider returns a ContextOverflow
+// classified error, the agent calls compressFunc once and retries.
+func TestAgent_ReactiveCompression_FiresOnOverflowError(t *testing.T) {
+	reg := tools.NewRegistry()
+
+	compressCalls := 0
+	streamCalls := 0
+
+	provider := &mockProvider{
+		streamFn: func(_ context.Context, _ llm.ChatRequest, cb func(llm.StreamEvent)) error {
+			streamCalls++
+			if streamCalls == 1 {
+				return errors.New("context_length_exceeded")
+			}
+			cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: "recovered"})
+			cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{InputTokens: 1, OutputTokens: 1}})
+			return nil
+		},
+	}
+
+	compressFunc := func(_ context.Context, msgs []llm.Message) ([]llm.Message, error) {
+		compressCalls++
+		return []llm.Message{llm.NewAssistantMessage("[summary]")}, nil
+	}
+
+	a := New(provider, reg,
+		WithCompressFunc(compressFunc),
+		WithMaxIterations(1),
+	)
+
+	if _, err := a.Run(context.Background(), []llm.Message{llm.NewUserMessage("hi")}, nil); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if compressCalls != 1 {
+		t.Errorf("compressFunc calls = %d, want 1 (reactive after overflow)", compressCalls)
+	}
+	if streamCalls != 2 {
+		t.Errorf("stream calls = %d, want 2 (initial overflow + post-compression retry)", streamCalls)
+	}
+}
+
+// TestAgent_CompressionCircuitBreaker pins the P2 safety invariant: when the
+// compressFunc keeps failing (returning an error), the agent stops attempting
+// compression after 3 consecutive failures within a single Run. This mirrors
+// Claude Code's MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES=3 guard so a broken
+// summarizer cannot burn unbounded tokens in a tight retry loop.
+func TestAgent_CompressionCircuitBreaker(t *testing.T) {
+	reg := tools.NewRegistry()
+	reg.Register(&mockTool{
+		name:        "noop",
+		description: "no-op",
+		schema:      json.RawMessage(`{"type":"object"}`),
+		safe:        true,
+	})
+
+	compressCalls := 0
+	streamCalls := 0
+
+	provider := &mockProvider{
+		modelsFn: func() []llm.ModelInfo {
+			return []llm.ModelInfo{{ID: "tiny", ContextWindow: 500}}
+		},
+		streamFn: func(_ context.Context, _ llm.ChatRequest, cb func(llm.StreamEvent)) error {
+			streamCalls++
+			// Emit a tool call so the loop keeps iterating past the first turn.
+			// After 6 iterations let the model "stop" so Run terminates.
+			if streamCalls >= 6 {
+				cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: "final"})
+				cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{InputTokens: 1, OutputTokens: 1}})
+				return nil
+			}
+			id := fmt.Sprintf("t%d", streamCalls)
+			cb(llm.StreamEvent{Type: llm.EventToolUseStart, ToolCall: &llm.ToolUseEvent{ID: id, Name: "noop"}})
+			cb(llm.StreamEvent{Type: llm.EventToolUseDone, ToolCall: &llm.ToolUseEvent{ID: id, Name: "noop", Input: "{}"}})
+			cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{InputTokens: 1, OutputTokens: 1}})
+			return nil
+		},
+	}
+
+	compressFunc := func(_ context.Context, _ []llm.Message) ([]llm.Message, error) {
+		compressCalls++
+		return nil, errors.New("summary unavailable")
+	}
+
+	a := New(provider, reg,
+		WithModel("tiny"),
+		WithCompressFunc(compressFunc),
+		WithMaxIterations(10),
+	)
+
+	// Seed enough messages to force the proactive threshold on every turn.
+	messages := make([]llm.Message, 0, 50)
+	for i := 0; i < 50; i++ {
+		messages = append(messages, llm.NewUserMessage(strings.Repeat("z", 80)+fmt.Sprintf("-%d", i)))
+	}
+
+	if _, err := a.Run(context.Background(), messages, nil); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if compressCalls > 3 {
+		t.Errorf("compressFunc calls = %d, circuit breaker should cap at 3 consecutive failures", compressCalls)
+	}
+	if compressCalls == 0 {
+		t.Fatal("compressFunc was never invoked; proactive path appears dead")
 	}
 }

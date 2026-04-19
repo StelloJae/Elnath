@@ -228,6 +228,10 @@ func newCompressionHookContextWindow(
 			w.tracker.ResetDedup()
 		}
 		w.markAutoCompressed()
+		// Surface a CLI-visible marker so the user/daemon log sees that a Stage 2
+		// compaction just happened (mirrors Claude Code's "Conversation compacted"
+		// signal). In daemon mode stderr is captured into daemon.log by launchd.
+		fmt.Fprintln(os.Stderr, "[context compacted]")
 	})
 	return w
 }
@@ -403,18 +407,23 @@ func buildExecutionRuntime(
 		app.RegisterCloser("audit trail", auditTrail)
 	}
 	hooks.Add(secret.NewSecretScanHook(secret.NewDetector(), auditTrail))
-	mgr.WithContextWindow(newCompressionHookContextWindow(
+	wrappedCtxWindow := newCompressionHookContextWindow(
 		ctxWindow,
 		hooks,
 		reg.ReadTracker(),
-	))
+	)
+	mgr.WithContextWindow(wrappedCtxWindow)
 
+	providerCW := resolveProviderContextWindow(provider, model)
+	compressionBudget := conversation.ResolveCompressionBudget(providerCW, cfg.MaxContextTokens)
 	wfCfg := orchestrator.WorkflowConfig{
-		Model:         model,
-		MaxIterations: maxIterationsFromEnv(),
-		SystemPrompt:  "",
-		Hooks:         hooks,
-		Permission:    perm,
+		Model:                model,
+		MaxIterations:        maxIterationsFromEnv(),
+		SystemPrompt:         "",
+		Hooks:                hooks,
+		Permission:           perm,
+		ContextWindow:        wrappedCtxWindow,
+		CompressionMaxTokens: compressionBudget,
 	}
 	learningPath := filepath.Join(cfg.DataDir, "lessons.jsonl")
 	learningDetector := secret.NewDetector()

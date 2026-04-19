@@ -57,13 +57,23 @@ type WorkflowResult struct {
 	Workflow     string // which workflow was used
 }
 
+// ContextCompressor is the minimal interface workflows need to trigger message
+// compaction mid-run. conversation.ContextWindow (and the runtime's
+// hook-decorated wrapper) satisfies it; the orchestrator does not import
+// conversation directly to avoid a package dependency cycle.
+type ContextCompressor interface {
+	CompressMessages(ctx context.Context, provider llm.Provider, messages []llm.Message, maxTokens int) ([]llm.Message, error)
+}
+
 // WorkflowConfig holds tuning parameters passed to every workflow.
 type WorkflowConfig struct {
-	MaxIterations int
-	MaxTokens     int
-	Model         string
-	SystemPrompt  string
-	Hooks         *agent.HookRegistry
-	Permission    *agent.Permission
-	ToolExecutor  tools.Executor
+	MaxIterations        int
+	MaxTokens            int
+	Model                string
+	SystemPrompt         string
+	Hooks                *agent.HookRegistry
+	Permission           *agent.Permission
+	ToolExecutor         tools.Executor
+	ContextWindow        ContextCompressor // nil disables agent-loop compaction
+	CompressionMaxTokens int               // token budget passed to ContextWindow.CompressMessages
 }

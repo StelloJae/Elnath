@@ -256,13 +256,13 @@ func (m *Manager) loadLatestMatchingSession(sessions []SessionMeta, match func(S
 	return nil, nil, false
 }
 
-// resolveCompressionBudget picks the token budget for auto-compression based
+// ResolveCompressionBudget picks the token budget for auto-compression based
 // on what the runtime knows. Priority order:
 //  1. Both known: use min(providerCW, configMax) so a user override can cap
 //     the provider window but never inflate it.
 //  2. Only one known: use that value.
 //  3. Neither known: fall back to the historical static 100K default.
-func resolveCompressionBudget(providerCW, configMax int) int {
+func ResolveCompressionBudget(providerCW, configMax int) int {
 	switch {
 	case providerCW > 0 && configMax > 0:
 		if providerCW < configMax {
@@ -343,7 +343,7 @@ func (m *Manager) SendMessage(ctx context.Context, sessionID, userMsg string) ([
 
 	// Compress messages to fit context window if available.
 	if m.context != nil {
-		maxTokens := resolveCompressionBudget(m.providerContextWindow, m.maxContextTokens)
+		maxTokens := ResolveCompressionBudget(m.providerContextWindow, m.maxContextTokens)
 		if m.provider != nil {
 			messages, err = m.context.CompressMessages(ctx, m.provider, messages, maxTokens)
 		} else {

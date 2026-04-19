@@ -28,6 +28,18 @@ const (
 	retryMaxAttempts = 3
 	retryBaseDelay   = time.Second
 	retryMaxDelay    = 30 * time.Second
+
+	// proactiveCompressRatio is the fraction of the provider context window
+	// above which the agent compacts preemptively on the next turn. Mirrors
+	// Claude Code's autoCompact threshold.
+	proactiveCompressRatio = 0.80
+
+	// maxConsecutiveCompressFailures is the circuit-breaker cap for the
+	// agent-side compression attempts. Once this many consecutive compressFunc
+	// calls return an error, the agent stops attempting compression for the
+	// remainder of the current Run so a broken summarizer cannot burn tokens
+	// in a tight retry loop.
+	maxConsecutiveCompressFailures = 3
 )
 
 var (
@@ -57,8 +69,9 @@ type Agent struct {
 	systemPrompt  string
 	maxIterations int
 	logger        *slog.Logger
-	compressFunc  CompressFunc
-	contextWindow int // cached from provider.Models(); 0 = unknown
+	compressFunc       CompressFunc
+	contextWindow      int // cached from provider.Models(); 0 = unknown
+	compressFailCount  int // consecutive compressFunc failures in current Run
 }
 
 // Option configures an Agent.
@@ -155,6 +168,54 @@ func (a *Agent) ResetReadTrackerDedup() {
 	}
 }
 
+// tryCompress invokes compressFunc while enforcing the consecutive-failure
+// circuit breaker. Returns the compressed slice and true on success; returns
+// the original slice and false when compressFunc is unset, the circuit breaker
+// has tripped, or the call errors.
+func (a *Agent) tryCompress(ctx context.Context, messages []llm.Message) ([]llm.Message, bool) {
+	if a.compressFunc == nil {
+		return messages, false
+	}
+	if a.compressFailCount >= maxConsecutiveCompressFailures {
+		return messages, false
+	}
+	compressed, err := a.compressFunc(ctx, messages)
+	if err != nil {
+		a.compressFailCount++
+		a.logger.Warn("compression failed",
+			"error", err,
+			"consecutive_failures", a.compressFailCount,
+		)
+		return messages, false
+	}
+	a.compressFailCount = 0
+	return compressed, true
+}
+
+// maybeProactiveCompress compacts the history when the cached provider context
+// window is known and the estimated token count is past the proactive
+// threshold. No-op when the provider did not advertise a window, when no
+// compressFunc is wired, or when the circuit breaker has tripped.
+func (a *Agent) maybeProactiveCompress(ctx context.Context, messages []llm.Message) []llm.Message {
+	if a.compressFunc == nil || a.contextWindow <= 0 {
+		return messages
+	}
+	estimated := estimateRequestTokens(messages)
+	threshold := int(float64(a.contextWindow) * proactiveCompressRatio)
+	if estimated <= threshold {
+		return messages
+	}
+	a.logger.Debug("proactive compression",
+		"estimated_tokens", estimated,
+		"threshold", threshold,
+		"context_window", a.contextWindow,
+	)
+	if compressed, ok := a.tryCompress(ctx, messages); ok {
+		return compressed
+	}
+	return messages
+}
+
 // RunResult is returned after the agent loop completes.
 type RunResult struct {
 	Messages     []llm.Message
@@ -223,6 +284,12 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, sink event.Sink
 				iter, a.maxIterations, a.maxIterations-iter)))
 		}
 
+		// Proactive pre-turn compaction: if the cached provider context window
+		// is known and the current history is past the 80% threshold, compact
+		// before sending. The circuit breaker inside tryCompress halts attempts
+		// after maxConsecutiveCompressFailures.
+		messages = a.maybeProactiveCompress(ctx, messages)
+
 		req := llm.Request{
 			Model:       a.model,
 			Messages:    messages,
@@ -247,9 +314,8 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, sink event.Sink
 					"tokens", estimateRequestTokens(req.Messages),
 					"messages", len(req.Messages),
 				)
-				compressed, compErr := a.compressFunc(ctx, messages)
-				if compErr != nil {
-					a.logger.Warn("compression failed", "error", compErr)
+				compressed, ok := a.tryCompress(ctx, messages)
+				if !ok {
 					return nil, err
 				}
 				messages = compressed

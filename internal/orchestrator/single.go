@@ -36,6 +36,15 @@ func (w *SingleWorkflow) Run(ctx context.Context, input WorkflowInput) (*Workflo
 	messages := append(input.Messages, llm.NewUserMessage(input.Message))
 
 	opts := agentOptions(input.Config)
+	if input.Config.ContextWindow != nil && input.Config.CompressionMaxTokens > 0 {
+		cw := input.Config.ContextWindow
+		budget := input.Config.CompressionMaxTokens
+		provider := input.Provider
+		compressFn := func(ctx context.Context, msgs []llm.Message) ([]llm.Message, error) {
+			return cw.CompressMessages(ctx, provider, msgs, budget)
+		}
+		opts = append(opts, agent.WithCompressFunc(compressFn))
+	}
 	a := agent.New(input.Provider, input.Tools, opts...)
 
 	result, err := a.Run(ctx, messages, input.Sink)
