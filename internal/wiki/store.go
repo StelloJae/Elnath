@@ -213,6 +213,29 @@ func (s *Store) List() ([]*Page, error) {
 	return pages, nil
 }
 
+// ResyncIndex reads the page at relPath from disk and pushes it to the
+// index. Use when a file has been mutated outside the Store API — e.g.
+// a user running `$EDITOR` directly against a skill page — so the FTS5
+// index matches the current on-disk content.
+//
+// No-op when no index is wired. Returns the underlying error when the
+// page cannot be read (including when it was deleted externally) or when
+// the index rejects the upsert; the caller decides whether to retry or
+// surface the error.
+func (s *Store) ResyncIndex(relPath string) error {
+	if s.index == nil {
+		return nil
+	}
+	page, err := s.Read(relPath)
+	if err != nil {
+		return err
+	}
+	if err := s.index.Upsert(page); err != nil {
+		return fmt.Errorf("wiki store: resync index for %q: %w", relPath, err)
+	}
+	return nil
+}
+
 // Upsert creates the page if it does not exist, or updates it if it does.
 func (s *Store) Upsert(page *Page) error {
 	abs, err := s.absPath(page.Path)

@@ -223,16 +223,32 @@ func cmdSkillEdit(_ context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	store, db, err := openWikiStoreWithIndex(cfg)
+	if err != nil {
+		return err
+	}
+	if store == nil {
+		return fmt.Errorf("skill edit: wiki dir is not configured")
+	}
+	defer db.Close()
+
+	relPath := filepath.Join("skills", args[0]+".md")
+	absPath := filepath.Join(cfg.WikiDir, relPath)
 	editor := strings.TrimSpace(os.Getenv("EDITOR"))
 	if editor == "" {
 		editor = "vi"
 	}
-	path := filepath.Join(cfg.WikiDir, "skills", args[0]+".md")
-	cmd := exec.Command(editor, path)
+	cmd := exec.Command(editor, absPath)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+	if err := store.ResyncIndex(relPath); err != nil {
+		return fmt.Errorf("skill edit: sync index: %w", err)
+	}
+	return nil
 }
 
 func cmdSkillStats(_ context.Context, _ []string) error {
