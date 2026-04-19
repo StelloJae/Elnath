@@ -26,11 +26,6 @@ func cmdWiki(ctx context.Context, args []string) error {
 		return userfacingerr.Wrap(userfacingerr.ELN010, err, "wiki dir")
 	}
 
-	store, err := wiki.NewStore(cfg.WikiDir)
-	if err != nil {
-		return fmt.Errorf("wiki store: %w", err)
-	}
-
 	db, err := core.OpenDB(cfg.DataDir)
 	if err != nil {
 		return fmt.Errorf("open db: %w", err)
@@ -40,6 +35,11 @@ func cmdWiki(ctx context.Context, args []string) error {
 	idx, err := wiki.NewIndex(db.Wiki)
 	if err != nil {
 		return fmt.Errorf("wiki index: %w", err)
+	}
+
+	store, err := wiki.NewStore(cfg.WikiDir, wiki.WithIndex(idx))
+	if err != nil {
+		return fmt.Errorf("wiki store: %w", err)
 	}
 
 	if len(args) == 0 {

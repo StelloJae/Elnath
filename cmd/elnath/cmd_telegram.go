@@ -80,7 +80,13 @@ func cmdTelegramShell(ctx context.Context) error {
 	skillReg := skill.NewRegistry()
 	var skillCreator *skill.Creator
 	if cfg.WikiDir != "" {
-		if store, err := wiki.NewStore(cfg.WikiDir); err == nil {
+		var storeOpts []wiki.StoreOption
+		if idx, ierr := wiki.NewIndex(db.Wiki); ierr == nil {
+			storeOpts = append(storeOpts, wiki.WithIndex(idx))
+		} else {
+			app.Logger.Warn("telegram: wiki index unavailable; skill writes will not sync FTS", "error", ierr)
+		}
+		if store, err := wiki.NewStore(cfg.WikiDir, storeOpts...); err == nil {
 			if err := skillReg.Load(store); err != nil {
 				app.Logger.Warn("telegram: skill registry load failed", "error", err)
 			}
