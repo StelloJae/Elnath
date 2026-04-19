@@ -153,6 +153,9 @@ func debugConsolidationRun(ctx context.Context, args []string) error {
 	if err != nil {
 		return fmt.Errorf("debug consolidation: %w", err)
 	}
+	if deps.wikiDB != nil {
+		defer deps.wikiDB.Close()
+	}
 	consolidator := newConsolidator(deps, force)
 
 	fmt.Printf("Consolidation run (force=%v)\n", force)

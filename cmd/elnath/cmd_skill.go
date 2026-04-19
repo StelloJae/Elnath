@@ -136,10 +136,14 @@ func cmdSkillCreate(_ context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	store, err := wiki.NewStore(cfg.WikiDir)
+	store, db, err := openWikiStoreWithIndex(cfg)
 	if err != nil {
 		return err
 	}
+	if store == nil {
+		return fmt.Errorf("skill create: wiki dir is not configured")
+	}
+	defer db.Close()
 	creator := skill.NewCreator(store, skill.NewTracker(cfg.DataDir), nil)
 	reader := bufio.NewReader(os.Stdin)
 
@@ -182,10 +186,14 @@ func cmdSkillDelete(_ context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	store, err := wiki.NewStore(cfg.WikiDir)
+	store, db, err := openWikiStoreWithIndex(cfg)
 	if err != nil {
 		return err
 	}
+	if store == nil {
+		return fmt.Errorf("skill delete: wiki dir is not configured")
+	}
+	defer db.Close()
 	creator := skill.NewCreator(store, skill.NewTracker(cfg.DataDir), nil)
 	reader := bufio.NewReader(os.Stdin)
 

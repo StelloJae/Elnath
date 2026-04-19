@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/stello/elnath/internal/config"
+	"github.com/stello/elnath/internal/core"
 	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/wiki"
@@ -14,12 +15,17 @@ import (
 // consolidationDeps is the minimum set of pre-built dependencies a
 // Consolidator needs. The CLI and the daemon both construct their own
 // flavour of these values, so the heavy wiring lives here once.
+//
+// wikiDB is owned by the CLI path (set via openWikiStoreWithIndex) and
+// must be closed by the caller; the daemon path leaves it nil because
+// the runtime owns the DB lifecycle.
 type consolidationDeps struct {
 	cfg          *config.Config
 	provider     llm.Provider
 	providerName string
 	model        string
 	wikiStore    *wiki.Store
+	wikiDB       *core.DB
 	lessonStore  *learning.Store
 }
 
@@ -55,18 +61,28 @@ func buildConsolidationDepsFromConfig(cfg *config.Config, mainProvider llm.Provi
 }
 
 // buildConsolidationDepsFromCLI is the CLI entry point: it loads config and
-// constructs the stores from scratch.
+// constructs the stores from scratch. The returned deps.wikiDB is non-nil
+// when a wiki dir is configured and must be closed by the caller.
 func buildConsolidationDepsFromCLI(cfg *config.Config) (consolidationDeps, error) {
 	provider, model, err := buildProvider(cfg)
 	if err != nil {
 		return consolidationDeps{}, fmt.Errorf("consolidation setup: build provider: %w", err)
 	}
-	wikiStore, err := wiki.NewStore(cfg.WikiDir)
+	wikiStore, wikiDB, err := openWikiStoreWithIndex(cfg)
 	if err != nil {
-		return consolidationDeps{}, fmt.Errorf("consolidation setup: wiki store: %w", err)
+		return consolidationDeps{}, fmt.Errorf("consolidation setup: wiki: %w", err)
+	}
+	if wikiStore == nil {
+		return consolidationDeps{}, fmt.Errorf("consolidation setup: wiki dir not configured")
 	}
 	lessonStore := learning.NewStore(filepath.Join(cfg.DataDir, "lessons.jsonl"))
-	return buildConsolidationDepsFromConfig(cfg, provider, wikiStore, lessonStore, model)
+	deps, err := buildConsolidationDepsFromConfig(cfg, provider, wikiStore, lessonStore, model)
+	if err != nil {
+		wikiDB.Close()
+		return consolidationDeps{}, err
+	}
+	deps.wikiDB = wikiDB
+	return deps, nil
 }
 
 // newConsolidator assembles the Consolidator with the right gate knobs.
