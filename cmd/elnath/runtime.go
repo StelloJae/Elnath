@@ -805,6 +805,7 @@ func (rt *executionRuntime) runTask(
 		SessionID:     sess.ID,
 		UserInput:     userInput,
 		Self:          rt.selfState,
+		Principal:     rt.principal,
 		Messages:      promptMessages,
 		WikiIdx:       rt.wikiIdx,
 		TokenBudget:   0,

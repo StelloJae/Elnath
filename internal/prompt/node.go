@@ -3,6 +3,7 @@ package prompt
 import (
 	"context"
 
+	"github.com/stello/elnath/internal/identity"
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/self"
 	"github.com/stello/elnath/internal/wiki"
@@ -14,6 +15,7 @@ type RenderState struct {
 	SessionID     string
 	UserInput     string
 	Self          *self.SelfState
+	Principal     identity.Principal
 	Messages      []llm.Message
 	WikiIdx       *wiki.Index
 	TokenBudget   int

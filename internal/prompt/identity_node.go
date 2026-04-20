@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/stello/elnath/internal/identity"
 )
 
 // IdentityNode renders self identity and persona fields without using the
@@ -46,5 +48,30 @@ func (n *IdentityNode) Render(_ context.Context, state *RenderState) (string, er
 	fmt.Fprintf(&b, "  creativity=%.2f\n", p.Creativity)
 	fmt.Fprintf(&b, "  persistence=%.2f", p.Persistence)
 
+	if line := principalLine(state.Principal); line != "" {
+		b.WriteString("\n\n")
+		b.WriteString(line)
+	}
+
 	return strings.TrimSpace(b.String()), nil
+}
+
+func principalLine(p identity.Principal) string {
+	if p.IsZero() {
+		return ""
+	}
+	var parts []string
+	if uid := strings.TrimSpace(p.UserID); uid != "" {
+		parts = append(parts, fmt.Sprintf("user=%s", uid))
+	}
+	if surface := strings.TrimSpace(p.Surface); surface != "" {
+		parts = append(parts, fmt.Sprintf("surface=%s", surface))
+	}
+	if proj := strings.TrimSpace(p.ProjectID); proj != "" {
+		parts = append(parts, fmt.Sprintf("project=%s", proj))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "Currently assisting: " + strings.Join(parts, ", ")
 }
