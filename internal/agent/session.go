@@ -363,6 +363,62 @@ func sessionPath(dataDir, id string) string {
 	return filepath.Join(dataDir, "sessions", id+".jsonl")
 }
 
+// ResolveSessionID maps user-supplied input (full UUID, prefix, or status-line
+// truncation like "cac7a3cc-c799...") to the canonical session ID on disk.
+// Exact-file matches short-circuit before any directory scan; otherwise all
+// sessions are listed and filtered by prefix. Ambiguous or missing matches
+// return errors that name the offending candidates so callers can surface them
+// directly to the user instead of the silent load_session_failed outcome that
+// FU-DaemonStatusFullID was filed against.
+func ResolveSessionID(dataDir, input string) (string, error) {
+	normalized := normalizeSessionInput(input)
+	if normalized == "" {
+		return "", fmt.Errorf("session id is empty")
+	}
+
+	if _, err := os.Stat(sessionPath(dataDir, normalized)); err == nil {
+		return normalized, nil
+	}
+
+	infos, err := ListSessionFiles(dataDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve session %q: %w", normalized, err)
+	}
+
+	var matches []string
+	for _, info := range infos {
+		if strings.HasPrefix(info.ID, normalized) {
+			matches = append(matches, info.ID)
+		}
+	}
+
+	switch len(matches) {
+	case 0:
+		return "", fmt.Errorf("session not found for %q", normalized)
+	case 1:
+		return matches[0], nil
+	default:
+		return "", fmt.Errorf("ambiguous session prefix %q: %d matches (%s)", normalized, len(matches), strings.Join(matches, ", "))
+	}
+}
+
+// normalizeSessionInput strips whitespace and the trailing ellipsis markers
+// ("...", "…") that `elnath daemon status` appends when column-truncating UUIDs,
+// so the output can be copy-pasted back into --session without manual edits.
+func normalizeSessionInput(input string) string {
+	trimmed := strings.TrimSpace(input)
+	for {
+		switch {
+		case strings.HasSuffix(trimmed, "..."):
+			trimmed = strings.TrimSuffix(trimmed, "...")
+		case strings.HasSuffix(trimmed, "…"):
+			trimmed = strings.TrimSuffix(trimmed, "…")
+		default:
+			return strings.TrimSpace(trimmed)
+		}
+	}
+}
+
 // ListSessionFiles returns metadata for all JSONL-backed sessions known on disk.
 // UpdatedAt is derived from file modification time; CreatedAt is read from the
 // JSONL header when available. Files that cannot be parsed still participate via
