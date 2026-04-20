@@ -91,17 +91,24 @@ func (w *TeamWorkflow) Run(ctx context.Context, input WorkflowInput) (*WorkflowR
 	var toolStatSlices [][]learning.AgentToolStat
 	finishReasons := make([]string, 0, len(results))
 	totalIter := 0
+	succeeded := 0
+	failed := 0
 	for _, r := range results {
-		if r.result == nil {
+		if r.err != nil {
 			finishReasons = append(finishReasons, string(agent.FinishReasonError))
+			failed++
 			continue
 		}
 		toolStatSlices = append(toolStatSlices, toAgentToolStats(r.result.ToolStats))
 		finishReasons = append(finishReasons, string(r.result.FinishReason))
 		totalIter += r.result.Iterations
+		succeeded++
 	}
 	mergedToolStats := learning.MergeAgentToolStats(toolStatSlices...)
 	finishReason := aggregateFinishReason(finishReasons)
+	if succeeded > 0 && failed > 0 {
+		finishReason = string(agent.FinishReasonPartialSuccess)
+	}
 	workflowToolStats := toWorkflowToolStats(mergedToolStats)
 
 	if input.Learning != nil {

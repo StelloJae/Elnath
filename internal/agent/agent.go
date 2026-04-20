@@ -240,6 +240,12 @@ const (
 	FinishReasonBudgetExceeded FinishReason = "budget_exceeded"
 	FinishReasonAckLoop        FinishReason = "ack_loop"
 	FinishReasonError          FinishReason = "error"
+	// FinishReasonPartialSuccess is emitted by composite workflows (team) when
+	// at least one subtask succeeded and at least one failed while the
+	// synthesiser still produced a coherent answer. Learning/routing treat it
+	// as success (IsSuccessful), but it remains distinguishable from a clean
+	// all-stop aggregate so partial-failure patterns can be analysed later.
+	FinishReasonPartialSuccess FinishReason = "partial_success"
 )
 
 type toolStatAcc struct {

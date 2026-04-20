@@ -188,6 +188,7 @@ func TestIsSuccessful(t *testing.T) {
 		want   bool
 	}{
 		{"stop", true},
+		{"partial_success", true},
 		{"budget_exceeded", false},
 		{"error", false},
 		{"", false},

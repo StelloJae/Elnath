@@ -34,7 +34,7 @@ type OutcomeRecord struct {
 }
 
 func IsSuccessful(finishReason string) bool {
-	return finishReason == "stop"
+	return finishReason == "stop" || finishReason == "partial_success"
 }
 
 func ShouldRecord(finishReason string) bool {

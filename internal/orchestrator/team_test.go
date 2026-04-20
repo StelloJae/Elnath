@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/stello/elnath/internal/agent"
 	"github.com/stello/elnath/internal/event"
 	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
@@ -533,5 +534,10 @@ func TestTeamWorkflow_PartialFailure_DoesNotAbort(t *testing.T) {
 	}
 	if !strings.Contains(synthPrompt, "result C") {
 		t.Fatalf("synthesiser prompt must include subtask C output; got:\n%s", synthPrompt)
+	}
+
+	if result.FinishReason != string(agent.FinishReasonPartialSuccess) {
+		t.Fatalf("partial (1 failed, 2 succeeded) must surface FinishReason=%q so learning treats it as partial success; got %q",
+			agent.FinishReasonPartialSuccess, result.FinishReason)
 	}
 }
