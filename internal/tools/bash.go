@@ -91,9 +91,13 @@ func (t *BashTool) Execute(ctx context.Context, params json.RawMessage) (*Result
 		timeout = d
 	}
 
-	workDir := t.guard.WorkDir()
+	sessionDir, sessErr := t.guard.EnsureSessionWorkDir(SessionIDFrom(ctx))
+	if sessErr != nil {
+		return ErrorResult(fmt.Sprintf("session workspace: %v", sessErr)), nil
+	}
+	workDir := sessionDir
 	if p.WorkingDir != "" {
-		resolved, err := t.guard.ResolveIn(t.guard.WorkDir(), p.WorkingDir)
+		resolved, err := t.guard.ResolveIn(sessionDir, p.WorkingDir)
 		if err != nil {
 			return ErrorResult(fmt.Sprintf("invalid working_dir: %v", err)), nil
 		}

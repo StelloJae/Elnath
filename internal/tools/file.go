@@ -347,15 +347,19 @@ type fileEntry struct {
 	modTime int64
 }
 
-func (t *GlobTool) Execute(_ context.Context, params json.RawMessage) (*Result, error) {
+func (t *GlobTool) Execute(ctx context.Context, params json.RawMessage) (*Result, error) {
 	var p globParams
 	if err := json.Unmarshal(params, &p); err != nil {
 		return ErrorResult(fmt.Sprintf("invalid params: %v", err)), nil
 	}
 
-	searchBase := t.guard.WorkDir()
+	sessionBase, err := t.guard.EnsureSessionWorkDir(SessionIDFrom(ctx))
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("session workspace: %v", err)), nil
+	}
+	searchBase := sessionBase
 	if p.Path != "" {
-		abs, err := t.guard.Resolve(p.Path)
+		abs, err := t.guard.ResolveIn(sessionBase, p.Path)
 		if err != nil {
 			return ErrorResult(err.Error()), nil
 		}
@@ -364,7 +368,7 @@ func (t *GlobTool) Execute(_ context.Context, params json.RawMessage) (*Result, 
 
 	var entries []fileEntry
 	if strings.Contains(p.Pattern, "**") {
-		entries = recursiveGlob(searchBase, t.guard.WorkDir(), p.Pattern)
+		entries = recursiveGlob(searchBase, sessionBase, p.Pattern)
 	} else {
 		absPattern := filepath.Join(searchBase, p.Pattern)
 		found, err := filepath.Glob(absPattern)
@@ -376,7 +380,7 @@ func (t *GlobTool) Execute(_ context.Context, params json.RawMessage) (*Result, 
 			if err != nil || info.IsDir() {
 				continue
 			}
-			rel, _ := filepath.Rel(t.guard.WorkDir(), f)
+			rel, _ := filepath.Rel(sessionBase, f)
 			entries = append(entries, fileEntry{path: rel, modTime: info.ModTime().UnixNano()})
 		}
 	}
@@ -505,7 +509,7 @@ func resolvedBaseReadScope(guard *PathGuard, rawPath string) ToolScope {
 	return resolvedReadScope(guard, rawPath)
 }
 
-func (t *GrepTool) Execute(_ context.Context, params json.RawMessage) (*Result, error) {
+func (t *GrepTool) Execute(ctx context.Context, params json.RawMessage) (*Result, error) {
 	var p grepParams
 	if err := json.Unmarshal(params, &p); err != nil {
 		return ErrorResult(fmt.Sprintf("invalid params: %v", err)), nil
@@ -516,9 +520,13 @@ func (t *GrepTool) Execute(_ context.Context, params json.RawMessage) (*Result, 
 		return ErrorResult(fmt.Sprintf("grep: invalid pattern: %v", err)), nil
 	}
 
-	searchRoot := t.guard.WorkDir()
+	sessionBase, err := t.guard.EnsureSessionWorkDir(SessionIDFrom(ctx))
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("session workspace: %v", err)), nil
+	}
+	searchRoot := sessionBase
 	if p.Path != "" {
-		abs, err := t.guard.Resolve(p.Path)
+		abs, err := t.guard.ResolveIn(sessionBase, p.Path)
 		if err != nil {
 			return ErrorResult(err.Error()), nil
 		}
@@ -549,7 +557,7 @@ func (t *GrepTool) Execute(_ context.Context, params json.RawMessage) (*Result, 
 			return nil
 		}
 
-		rel, _ := filepath.Rel(t.guard.WorkDir(), path)
+		rel, _ := filepath.Rel(sessionBase, path)
 		lines := strings.Split(string(data), "\n")
 		for i, line := range lines {
 			if matchCount >= grepMaxMatches {

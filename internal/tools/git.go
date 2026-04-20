@@ -98,17 +98,22 @@ func (t *GitTool) Execute(ctx context.Context, params json.RawMessage) (*Result,
 
 // run executes a git command with the given arguments.
 func (t *GitTool) run(ctx context.Context, args ...string) (*Result, error) {
+	sessionDir, err := t.guard.EnsureSessionWorkDir(SessionIDFrom(ctx))
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("session workspace: %v", err)), nil
+	}
+
 	execCtx, cancel := context.WithTimeout(ctx, gitTimeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(execCtx, "git", args...)
-	cmd.Dir = t.guard.WorkDir()
+	cmd.Dir = sessionDir
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	err := cmd.Run()
+	err = cmd.Run()
 	output := stdout.String()
 	if stderr.Len() > 0 {
 		if output != "" {
