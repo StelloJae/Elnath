@@ -155,6 +155,7 @@ type executionRuntime struct {
 	mgr                *conversation.Manager
 	router             *orchestrator.Router
 	reg                *tools.Registry
+	guard              *tools.PathGuard
 	wfCfg              orchestrator.WorkflowConfig
 	promptBuilder      *prompt.Builder
 	learningStore      *learning.Store
@@ -492,6 +493,7 @@ func buildExecutionRuntime(
 		mgr:                mgr,
 		router:             buildRouter(wfCfg),
 		reg:                reg,
+		guard:              guard,
 		wfCfg:              wfCfg,
 		promptBuilder:      b,
 		learningStore:      learningStore,
@@ -699,8 +701,9 @@ func (rt *executionRuntime) runTask(
 		PersonaExtra:  rt.personaExtra,
 		Model:         rt.wfCfg.Model,
 		Provider:      rt.provider.Name(),
-		ToolNames:     rt.reg.Names(),
-		WorkDir:       rt.workDir,
+		ToolNames:      rt.reg.Names(),
+		WorkDir:        rt.workDir,
+		SessionWorkDir: rt.sessionRenderWorkDir(sess),
 		ExistingCode:  routeCtx.ExistingCode,
 		VerifyHint:    routeCtx.VerificationHint,
 		BenchmarkMode: routeCtx.BenchmarkMode,
@@ -788,6 +791,30 @@ func (rt *executionRuntime) runTask(
 	}
 
 	return result.Messages, result.Summary, nil
+}
+
+// sessionRenderWorkDir returns the cwd path advertised to the LLM through
+// prompt nodes. It points at the per-session workspace subdir so the model
+// does not learn the shared root path; otherwise the LLM would stamp the
+// root into bash working_dir overrides and defeat session isolation
+// (FU-WorkspaceScope dogfood probe #335). Falls back to rt.workDir on any
+// guard / mkdir failure so prompt rendering never aborts a turn.
+func (rt *executionRuntime) sessionRenderWorkDir(sess *agent.Session) string {
+	if rt == nil || rt.guard == nil || sess == nil {
+		if rt != nil {
+			return rt.workDir
+		}
+		return ""
+	}
+	dir, err := rt.guard.EnsureSessionWorkDir(sess.ID)
+	if err != nil {
+		rt.app.Logger.Warn("session render workdir ensure failed",
+			"session", sess.ID,
+			"error", err,
+		)
+		return rt.workDir
+	}
+	return dir
 }
 
 // recordOutcome appends a learning outcome and, on success, asks the routing

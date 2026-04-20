@@ -23,7 +23,13 @@ type RenderState struct {
 	Provider      string
 	ToolNames     []string
 	WorkDir       string
-	ExistingCode  bool
+	// SessionWorkDir, when non-empty, is the per-session subdir advertised
+	// to the LLM by SelfStateNode in place of the shared root WorkDir.
+	// Search-oriented nodes (ContextFilesNode, ProjectContextNode) keep
+	// using WorkDir so project-root files (CLAUDE.md, ELNATH.md, etc.)
+	// remain reachable. Empty falls back to WorkDir.
+	SessionWorkDir string
+	ExistingCode   bool
 	VerifyHint    bool
 	BenchmarkMode bool
 	TaskLanguage  string

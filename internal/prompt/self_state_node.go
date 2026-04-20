@@ -41,7 +41,10 @@ func (n *SelfStateNode) Render(_ context.Context, state *RenderState) (string, e
 		mode = "daemon"
 	}
 
-	workDir := strings.TrimSpace(state.WorkDir)
+	workDir := strings.TrimSpace(state.SessionWorkDir)
+	if workDir == "" {
+		workDir = strings.TrimSpace(state.WorkDir)
+	}
 	if workDir == "" {
 		workDir = "(none)"
 	}

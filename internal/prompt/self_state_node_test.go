@@ -51,6 +51,25 @@ func TestSelfStateNodeUsesNewSessionPlaceholder(t *testing.T) {
 	}
 }
 
+func TestSelfStateNodePrefersSessionWorkDir(t *testing.T) {
+	t.Parallel()
+
+	got, err := NewSelfStateNode(85).Render(context.Background(), &RenderState{
+		SessionID:      "sess-iso",
+		WorkDir:        "/shared/root",
+		SessionWorkDir: "/shared/root/sessions/sess-iso",
+	})
+	if err != nil {
+		t.Fatalf("Render error: %v", err)
+	}
+	if !strings.Contains(got, "- Working directory: /shared/root/sessions/sess-iso") {
+		t.Fatalf("Render = %q, want session workdir advertised", got)
+	}
+	if strings.Contains(got, "- Working directory: /shared/root\n") {
+		t.Fatalf("Render = %q, root WorkDir leaked despite SessionWorkDir override", got)
+	}
+}
+
 func TestSelfStateNodeDaemonMode(t *testing.T) {
 	t.Parallel()
 
