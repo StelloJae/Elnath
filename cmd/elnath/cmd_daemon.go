@@ -298,6 +298,8 @@ func cmdDaemonStart(ctx context.Context) error {
 				WikiIdx:      rt.wikiIdx,
 				History:      rt.mgr,
 				Lookup:       binder,
+				Persister:    rt.mgr,
+				BindRecorder: binder,
 				PersonaExtra: rt.personaExtra,
 				ProviderName: rt.provider.Name(),
 				Model:        rt.wfCfg.Model,

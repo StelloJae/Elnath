@@ -50,6 +50,20 @@ type ChatSessionLookup interface {
 	Lookup(chatID, userID string) (string, bool)
 }
 
+// ChatSessionPersister creates a new chat-bound session (when one is not yet
+// bound) and appends completed chat turns to the session transcript.
+// conversation.Manager satisfies this via EnsureChatSession / AppendChatTurn.
+type ChatSessionPersister interface {
+	EnsureChatSession(ctx context.Context, principal identity.Principal) (string, error)
+	AppendChatTurn(ctx context.Context, sessionID string, user, assistant llm.Message) error
+}
+
+// ChatSessionRemember records a newly-created chat→session binding so future
+// Lookup calls return the same session ID. *ChatSessionBinder satisfies this.
+type ChatSessionRemember interface {
+	Remember(chatID, userID, sessionID string) error
+}
+
 // ChatPipelineDeps bundles the prompt-pipeline dependencies injected by the
 // runtime so ChatResponder can build system prompts via prompt.Builder and
 // hydrate history from the bound session. When nil, ChatResponder falls back
@@ -60,6 +74,8 @@ type ChatPipelineDeps struct {
 	WikiIdx      *wiki.Index
 	History      ChatHistoryLoader
 	Lookup       ChatSessionLookup
+	Persister    ChatSessionPersister
+	BindRecorder ChatSessionRemember
 	PersonaExtra string
 	ProviderName string
 	Model        string
@@ -136,11 +152,13 @@ func (c *ChatResponder) Respond(ctx context.Context, principal identity.Principa
 		System:      systemPrompt,
 	}
 
+	var assistantText strings.Builder
 	start := time.Now()
 	streamErr := c.provider.Stream(ctx, req, func(ev llm.StreamEvent) {
 		switch ev.Type {
 		case llm.EventTextDelta:
 			sc.Send(ev.Content)
+			assistantText.WriteString(ev.Content)
 		case llm.EventDone:
 			sc.Finish()
 		}
@@ -159,7 +177,56 @@ func (c *ChatResponder) Respond(ctx context.Context, principal identity.Principa
 
 	sc.Wait()
 	c.recordChatOutcome(principal, userMessage, true, "stop", time.Since(start))
+
+	if assistantText.Len() > 0 {
+		c.persistChatTurn(ctx, principal,
+			llm.NewUserMessage(userMessage),
+			llm.NewAssistantMessage(assistantText.String()),
+			logger,
+		)
+	}
 	return nil
+}
+
+// persistChatTurn writes the user+assistant pair to the session-bound JSONL
+// transcript so subsequent chats can self-reference prior turns. Missing
+// pipeline deps or append errors are logged but never fail the chat itself —
+// Telegram UX already showed the reply.
+func (c *ChatResponder) persistChatTurn(ctx context.Context, principal identity.Principal, userMsg, assistantMsg llm.Message, logger *slog.Logger) {
+	if c.pipeline == nil || c.pipeline.Persister == nil {
+		return
+	}
+
+	sessionID := ""
+	if c.pipeline.Lookup != nil {
+		if sid, ok := c.pipeline.Lookup.Lookup(c.chatID, principal.UserID); ok {
+			sessionID = sid
+		}
+	}
+
+	if sessionID == "" {
+		sid, err := c.pipeline.Persister.EnsureChatSession(ctx, principal)
+		if err != nil {
+			logger.Warn("chat responder: ensure session failed; skipping persist", "error", err)
+			return
+		}
+		sessionID = sid
+		if c.pipeline.BindRecorder != nil {
+			if err := c.pipeline.BindRecorder.Remember(c.chatID, principal.UserID, sessionID); err != nil {
+				logger.Warn("chat responder: binder remember failed",
+					"error", err,
+					"session_id", sessionID,
+				)
+			}
+		}
+	}
+
+	if err := c.pipeline.Persister.AppendChatTurn(ctx, sessionID, userMsg, assistantMsg); err != nil {
+		logger.Warn("chat responder: append chat turn failed",
+			"error", err,
+			"session_id", sessionID,
+		)
+	}
 }
 
 // recordChatOutcome synthesises a learning outcome for the chat path. It

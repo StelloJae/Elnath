@@ -468,6 +468,194 @@ func TestChatResponder_TrimsHistoryAtMax(t *testing.T) {
 	}
 }
 
+// --- Chat-path session persistence (FU-ChatSessionPersist) ---
+
+type chatAppend struct {
+	sessionID string
+	user      llm.Message
+	assistant llm.Message
+}
+
+type stubChatPersister struct {
+	ensuredSession string
+	ensureErr      error
+	appendErr      error
+
+	mu               sync.Mutex
+	appends          []chatAppend
+	ensureCalls      int
+	ensureCalledWith identity.Principal
+}
+
+func (p *stubChatPersister) EnsureChatSession(_ context.Context, principal identity.Principal) (string, error) {
+	p.mu.Lock()
+	p.ensureCalls++
+	p.ensureCalledWith = principal
+	p.mu.Unlock()
+	if p.ensureErr != nil {
+		return "", p.ensureErr
+	}
+	return p.ensuredSession, nil
+}
+
+func (p *stubChatPersister) AppendChatTurn(_ context.Context, sid string, user, assistant llm.Message) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.appendErr != nil {
+		return p.appendErr
+	}
+	p.appends = append(p.appends, chatAppend{sessionID: sid, user: user, assistant: assistant})
+	return nil
+}
+
+func (p *stubChatPersister) snapshot() []chatAppend {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]chatAppend, len(p.appends))
+	copy(out, p.appends)
+	return out
+}
+
+type chatBind struct {
+	chatID    string
+	userID    string
+	sessionID string
+}
+
+type stubChatBinder struct {
+	err error
+
+	mu         sync.Mutex
+	remembered []chatBind
+}
+
+func (b *stubChatBinder) Remember(chatID, userID, sessionID string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.err != nil {
+		return b.err
+	}
+	b.remembered = append(b.remembered, chatBind{chatID: chatID, userID: userID, sessionID: sessionID})
+	return nil
+}
+
+func (b *stubChatBinder) snapshot() []chatBind {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]chatBind, len(b.remembered))
+	copy(out, b.remembered)
+	return out
+}
+
+func TestChatResponder_PersistsTurnToBoundSession(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{response: "hello back"}
+	builder := &stubChatBuilder{result: "SYS"}
+	lookup := &stubSessionLookup{session: "sess-bound", ok: true}
+	persister := &stubChatPersister{}
+
+	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		Builder:   builder,
+		Lookup:    lookup,
+		Persister: persister,
+	}))
+
+	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi there", 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	appends := persister.snapshot()
+	if len(appends) != 1 {
+		t.Fatalf("expected 1 AppendChatTurn call, got %d", len(appends))
+	}
+	a := appends[0]
+	if a.sessionID != "sess-bound" {
+		t.Errorf("sessionID = %q, want sess-bound", a.sessionID)
+	}
+	if a.user.Role != llm.RoleUser || a.user.Text() != "hi there" {
+		t.Errorf("user msg = {%q, %q}, want {user, hi there}", a.user.Role, a.user.Text())
+	}
+	if a.assistant.Role != llm.RoleAssistant || a.assistant.Text() != "hello back" {
+		t.Errorf("assistant msg = {%q, %q}, want {assistant, hello back}", a.assistant.Role, a.assistant.Text())
+	}
+}
+
+func TestChatResponder_CreatesAndBindsNewSessionWhenUnbound(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{response: "response"}
+	builder := &stubChatBuilder{result: "SYS"}
+	lookup := &stubSessionLookup{ok: false}
+	persister := &stubChatPersister{ensuredSession: "sess-new"}
+	binder := &stubChatBinder{}
+
+	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		Builder:      builder,
+		Lookup:       lookup,
+		Persister:    persister,
+		BindRecorder: binder,
+	}))
+
+	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj-x", Surface: "telegram"}, "first hi", 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	persister.mu.Lock()
+	ensureCalls := persister.ensureCalls
+	ensurePrincipal := persister.ensureCalledWith
+	persister.mu.Unlock()
+	if ensureCalls != 1 {
+		t.Fatalf("EnsureChatSession called %d times, want 1", ensureCalls)
+	}
+	if ensurePrincipal.UserID != "42" || ensurePrincipal.ProjectID != "proj-x" || ensurePrincipal.Surface != "telegram" {
+		t.Errorf("EnsureChatSession principal = %+v, want {42, proj-x, telegram}", ensurePrincipal)
+	}
+
+	appends := persister.snapshot()
+	if len(appends) != 1 {
+		t.Fatalf("expected 1 append, got %d", len(appends))
+	}
+	if appends[0].sessionID != "sess-new" {
+		t.Errorf("append sessionID = %q, want sess-new", appends[0].sessionID)
+	}
+
+	remembered := binder.snapshot()
+	if len(remembered) != 1 {
+		t.Fatalf("expected 1 Remember call, got %d", len(remembered))
+	}
+	r := remembered[0]
+	if r.chatID != "chat-42" || r.userID != "42" || r.sessionID != "sess-new" {
+		t.Errorf("Remember call = %+v, want {chat-42, 42, sess-new}", r)
+	}
+}
+
+func TestChatResponder_SkipsPersistWhenStreamFails(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{streamErr: fmt.Errorf("provider down")}
+	persister := &stubChatPersister{}
+	binder := &stubChatBinder{}
+
+	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		Builder:      &stubChatBuilder{result: "SYS"},
+		Lookup:       &stubSessionLookup{session: "sess-1", ok: true},
+		Persister:    persister,
+		BindRecorder: binder,
+	}))
+
+	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 1)
+	if err == nil {
+		t.Fatal("expected error from Respond when stream fails")
+	}
+
+	if appends := persister.snapshot(); len(appends) != 0 {
+		t.Errorf("expected 0 AppendChatTurn calls on stream error, got %d", len(appends))
+	}
+	if remembered := binder.snapshot(); len(remembered) != 0 {
+		t.Errorf("expected 0 Remember calls on stream error, got %d", len(remembered))
+	}
+}
+
 func TestChatResponder_LegacyPathPreservedWhenNoPipeline(t *testing.T) {
 	bot := newChatMockBot()
 	provider := &chatMockProvider{response: "ok"}
