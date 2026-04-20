@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -785,10 +786,30 @@ func TestShellSkillCommandQueuesTask(t *testing.T) {
 type mockClassifier struct {
 	intent conversation.Intent
 	err    error
+
+	mu          sync.Mutex
+	calls       int
+	lastHistory []llm.Message
 }
 
-func (m *mockClassifier) Classify(_ context.Context, _ llm.Provider, _ string, _ []llm.Message) (conversation.Intent, error) {
+func (m *mockClassifier) Classify(_ context.Context, _ llm.Provider, _ string, history []llm.Message) (conversation.Intent, error) {
+	m.mu.Lock()
+	m.calls++
+	m.lastHistory = append([]llm.Message(nil), history...)
+	m.mu.Unlock()
 	return m.intent, m.err
+}
+
+func (m *mockClassifier) snapshotHistory() []llm.Message {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]llm.Message(nil), m.lastHistory...)
+}
+
+func (m *mockClassifier) callCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.calls
 }
 
 type shellMockProvider struct{}
@@ -1397,4 +1418,125 @@ func TestShellUndoCommand(t *testing.T) {
 			t.Errorf("response = %q, want substring %q", got, "No pending task")
 		}
 	})
+}
+
+// --- Classifier history wiring (FU-ClassifierHistoryWire) ---
+
+func buildShellForClassifierTest(t *testing.T, classifier *mockClassifier, extraOpts ...ShellOption) (*Shell, *fakeBotClient) {
+	t.Helper()
+	db := openTelegramTestDB(t)
+	queue, err := daemon.NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+	approvals, err := daemon.NewApprovalStore(db)
+	if err != nil {
+		t.Fatalf("NewApprovalStore: %v", err)
+	}
+	bot := &fakeBotClient{}
+	provider := &shellMockProvider{}
+	responder := NewChatResponder(provider, bot, "chat-1", nil)
+
+	opts := []ShellOption{
+		WithChatResponder(responder),
+		WithClassifier(classifier, provider),
+	}
+	opts = append(opts, extraOpts...)
+
+	shell, err := NewShell(queue, approvals, bot, "chat-1",
+		filepath.Join(t.TempDir(), "telegram-state.json"),
+		nil, opts...)
+	if err != nil {
+		t.Fatalf("NewShell: %v", err)
+	}
+	return shell, bot
+}
+
+func TestShellClassifier_PassesHistoryWhenSessionBound(t *testing.T) {
+	binder, validator := newShellBinder(t)
+	validator.set("sess-bound", true)
+	if err := binder.Remember("chat-1", "51", "sess-bound"); err != nil {
+		t.Fatalf("Remember: %v", err)
+	}
+	loader := &stubHistoryLoader{messages: []llm.Message{
+		llm.NewUserMessage("prior 1"),
+		llm.NewAssistantMessage("reply 1"),
+	}}
+	classifier := &mockClassifier{intent: conversation.IntentChat}
+
+	shell, _ := buildShellForClassifierTest(t, classifier,
+		WithChatSessionBinder(binder),
+		WithChatHistoryLoader(loader),
+	)
+
+	if err := shell.HandleUpdate(context.Background(), Update{
+		ID:      1,
+		Message: Message{ChatID: "chat-1", UserID: "51", MessageID: 10, Text: "follow up"},
+	}); err != nil {
+		t.Fatalf("HandleUpdate: %v", err)
+	}
+
+	got := classifier.snapshotHistory()
+	if len(got) != 2 {
+		t.Fatalf("classifier received history len = %d, want 2 (prior turn pair)", len(got))
+	}
+	if got[0].Text() != "prior 1" {
+		t.Errorf("history[0] = %q, want 'prior 1'", got[0].Text())
+	}
+}
+
+func TestShellClassifier_NoHistoryWhenUnbound(t *testing.T) {
+	binder, _ := newShellBinder(t)
+	loader := &stubHistoryLoader{messages: []llm.Message{
+		llm.NewUserMessage("should-not-appear"),
+	}}
+	classifier := &mockClassifier{intent: conversation.IntentChat}
+
+	shell, _ := buildShellForClassifierTest(t, classifier,
+		WithChatSessionBinder(binder),
+		WithChatHistoryLoader(loader),
+	)
+
+	if err := shell.HandleUpdate(context.Background(), Update{
+		ID:      2,
+		Message: Message{ChatID: "chat-1", UserID: "99", MessageID: 11, Text: "hello"},
+	}); err != nil {
+		t.Fatalf("HandleUpdate: %v", err)
+	}
+
+	if n := classifier.callCount(); n != 1 {
+		t.Fatalf("Classify call count = %d, want 1", n)
+	}
+	if got := classifier.snapshotHistory(); len(got) != 0 {
+		t.Errorf("classifier received history len = %d, want 0 (unbound session)", len(got))
+	}
+}
+
+func TestShellClassifier_NilHistoryOnLoaderError(t *testing.T) {
+	binder, validator := newShellBinder(t)
+	validator.set("sess-err", true)
+	if err := binder.Remember("chat-1", "51", "sess-err"); err != nil {
+		t.Fatalf("Remember: %v", err)
+	}
+	loader := &stubHistoryLoader{err: fmt.Errorf("disk full")}
+	classifier := &mockClassifier{intent: conversation.IntentChat}
+
+	shell, _ := buildShellForClassifierTest(t, classifier,
+		WithChatSessionBinder(binder),
+		WithChatHistoryLoader(loader),
+	)
+
+	if err := shell.HandleUpdate(context.Background(), Update{
+		ID:      3,
+		Message: Message{ChatID: "chat-1", UserID: "51", MessageID: 12, Text: "x"},
+	}); err != nil {
+		t.Fatalf("HandleUpdate: %v", err)
+	}
+
+	if n := classifier.callCount(); n != 1 {
+		t.Fatalf("Classify call count = %d, want 1 (should still be called on loader error)", n)
+	}
+	if got := classifier.snapshotHistory(); len(got) != 0 {
+		t.Errorf("classifier received history len = %d, want 0 on loader error", len(got))
+	}
 }

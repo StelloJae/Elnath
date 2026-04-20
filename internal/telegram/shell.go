@@ -86,6 +86,20 @@ func WithChatSessionBinder(binder *ChatSessionBinder) ShellOption {
 	return func(s *Shell) { s.binder = binder }
 }
 
+// defaultClassifierHistoryTurns caps how many prior turns are injected into
+// the intent classifier. Follow-up classification only needs the last few
+// exchanges for reference resolution ("그거 다시 해줘" → prior task);
+// keeping the window small protects classifier latency and token cost.
+const defaultClassifierHistoryTurns = 10
+
+// WithChatHistoryLoader injects the history source used to hydrate the
+// intent classifier with recent session turns. Without this, the classifier
+// sees every message in isolation — follow-ups referencing prior turns are
+// routed incorrectly (GAP-TG-03).
+func WithChatHistoryLoader(loader ChatHistoryLoader) ShellOption {
+	return func(s *Shell) { s.historyLoader = loader }
+}
+
 func WithSkillCreator(creator *skill.Creator) ShellOption {
 	return func(s *Shell) { s.skillCreator = creator }
 }
@@ -112,6 +126,7 @@ type Shell struct {
 	taskTracker        TaskTracker
 	workDir            string
 	binder             *ChatSessionBinder
+	historyLoader      ChatHistoryLoader
 	skillReg           *skill.Registry
 	skillCreator       *skill.Creator
 	learningStore      *learning.Store
@@ -200,7 +215,8 @@ func (s *Shell) HandleUpdate(ctx context.Context, update Update) error {
 
 	// Non-command messages: classify intent if classifier is available.
 	if s.classifier != nil && s.chatResponder != nil {
-		intent, err := s.classifier.Classify(ctx, s.classifyProvider, text, nil)
+		classifyHistory := s.loadClassifierHistory(ctx, principal.UserID)
+		intent, err := s.classifier.Classify(ctx, s.classifyProvider, text, classifyHistory)
 		if err != nil {
 			s.logger.Warn("intent classification failed, falling back to queue", "error", err)
 		} else if isChatIntent(intent) && !s.hasPinnedWorkflow(intent, principal.ProjectID) {
@@ -223,6 +239,37 @@ func (s *Shell) HandleUpdate(ctx context.Context, update Update) error {
 	_ = s.bot.SendMessage(ctx, s.chatID, s.taskAcknowledgment(ctx, text))
 	s.trackEnqueuedTask(taskID, update.Message.MessageID, principal.UserID)
 	return nil
+}
+
+// loadClassifierHistory hydrates the bound session's recent turns for intent
+// classification. A nil slice is returned (and Classify falls back to
+// single-message behavior) when no binder/loader is wired, when the session
+// is unbound, or when history retrieval fails. Load errors are warned but
+// never propagated — classifier must still run.
+func (s *Shell) loadClassifierHistory(ctx context.Context, userID string) []llm.Message {
+	if s.binder == nil || s.historyLoader == nil {
+		return nil
+	}
+	sid, ok := s.binder.Lookup(s.chatID, userID)
+	if !ok {
+		return nil
+	}
+	hist, err := s.historyLoader.GetHistory(ctx, sid)
+	if err != nil {
+		s.logger.Warn("classifier history load failed, continuing with nil history",
+			"session_id", sid,
+			"error", err,
+		)
+		return nil
+	}
+	return trimClassifierHistory(hist, defaultClassifierHistoryTurns)
+}
+
+func trimClassifierHistory(msgs []llm.Message, maxTurns int) []llm.Message {
+	if maxTurns <= 0 || len(msgs) <= maxTurns {
+		return msgs
+	}
+	return msgs[len(msgs)-maxTurns:]
 }
 
 func (s *Shell) taskAcknowledgment(ctx context.Context, userMessage string) string {
