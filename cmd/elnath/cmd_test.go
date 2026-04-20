@@ -705,7 +705,7 @@ func TestCmdDaemonStatusEmpty(t *testing.T) {
 	resetLoadLocaleCache()
 
 	stdout, _ := captureOutput(t, func() {
-		if err := cmdDaemonStatus(context.Background()); err != nil {
+		if err := cmdDaemonStatus(context.Background(), nil); err != nil {
 			t.Fatalf("cmdDaemonStatus: %v", err)
 		}
 	})
@@ -746,7 +746,7 @@ func TestCmdDaemonStatusDaemonError(t *testing.T) {
 	withArgs(t, []string{"elnath", "--config", cfgPath})
 	resetLoadLocaleCache()
 
-	err = cmdDaemonStatus(context.Background())
+	err = cmdDaemonStatus(context.Background(), nil)
 	if err == nil || !strings.Contains(err.Error(), "internal error") {
 		t.Fatalf("cmdDaemonStatus error = %v, want internal error", err)
 	}
@@ -788,7 +788,7 @@ func TestCmdDaemonStatusUnmarshalablResponse(t *testing.T) {
 	resetLoadLocaleCache()
 
 	stdout, _ := captureOutput(t, func() {
-		if err := cmdDaemonStatus(context.Background()); err != nil {
+		if err := cmdDaemonStatus(context.Background(), nil); err != nil {
 			t.Fatalf("cmdDaemonStatus: %v", err)
 		}
 	})
@@ -850,7 +850,7 @@ func TestCmdDaemonStatusTruncatesLongFields(t *testing.T) {
 	resetLoadLocaleCache()
 
 	stdout, _ := captureOutput(t, func() {
-		if err := cmdDaemonStatus(context.Background()); err != nil {
+		if err := cmdDaemonStatus(context.Background(), nil); err != nil {
 			t.Fatalf("cmdDaemonStatus: %v", err)
 		}
 	})
@@ -1308,7 +1308,7 @@ func TestCmdDaemonStatusMultipleTasks(t *testing.T) {
 	resetLoadLocaleCache()
 
 	stdout, _ := captureOutput(t, func() {
-		if err := cmdDaemonStatus(context.Background()); err != nil {
+		if err := cmdDaemonStatus(context.Background(), nil); err != nil {
 			t.Fatalf("cmdDaemonStatus: %v", err)
 		}
 	})
@@ -2076,7 +2076,7 @@ func TestCmdDaemonStatusConnectionRefused(t *testing.T) {
 	withArgs(t, []string{"elnath", "--config", cfgPath})
 	resetLoadLocaleCache()
 
-	err := cmdDaemonStatus(context.Background())
+	err := cmdDaemonStatus(context.Background(), nil)
 	if err == nil {
 		t.Fatal("expected error for connection refused")
 	}

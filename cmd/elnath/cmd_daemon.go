@@ -11,8 +11,11 @@ import (
 	"strings"
 	"time"
 
+	"sort"
+
 	"github.com/stello/elnath/internal/ambient"
 	"github.com/stello/elnath/internal/agent"
+	"github.com/stello/elnath/internal/agent/reflection"
 	"github.com/stello/elnath/internal/config"
 	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/core"
@@ -48,7 +51,7 @@ Subcommands:
 	case "submit":
 		return cmdDaemonSubmit(ctx, args[1:])
 	case "status":
-		return cmdDaemonStatus(ctx)
+		return cmdDaemonStatus(ctx, args[1:])
 	case "stop":
 		return cmdDaemonStop(ctx)
 	case "install":
@@ -448,7 +451,7 @@ func parseDaemonSubmitArgs(args []string) (sessionID string, prompt string, err 
 	return sessionID, prompt, nil
 }
 
-func cmdDaemonStatus(ctx context.Context) error {
+func cmdDaemonStatus(ctx context.Context, args []string) error {
 	cfgPath := extractConfigFlag(os.Args)
 	if cfgPath == "" {
 		cfgPath = config.DefaultConfigPath()
@@ -456,6 +459,10 @@ func cmdDaemonStatus(ctx context.Context) error {
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
+	}
+
+	if hasFlag(args, "--self-heal") {
+		return printSelfHealStatus(cfg)
 	}
 
 	req := daemon.IPCRequest{Command: "status"}
@@ -509,6 +516,60 @@ func cmdDaemonStatus(ctx context.Context) error {
 		fmt.Printf("%-6.0f  %-12s  %-16s  %-28s  %-28s  %s\n", t.ID, t.Status, sessionID, progress, summary, payload)
 	}
 	return nil
+}
+
+// printSelfHealStatus renders a Phase 0 reflection observation summary.
+// Reads the JSONL directly (no IPC) so callers can inspect history even when
+// the daemon is offline.
+func printSelfHealStatus(cfg *config.Config) error {
+	path := cfg.SelfHealing.Path
+	if path == "" {
+		path = filepath.Join(cfg.DataDir, "self_heal_attempts.jsonl")
+	}
+	store := reflection.NewFileStore(path)
+	sum, err := store.Read()
+	if err != nil {
+		return fmt.Errorf("read self-heal store: %w", err)
+	}
+	status := "enabled"
+	if !cfg.SelfHealing.Enabled {
+		status = "disabled"
+	}
+	fmt.Println("Self-Heal Observations (Phase 0)")
+	fmt.Printf("  status:                 %s\n", status)
+	fmt.Printf("  store:                  %s\n", path)
+	fmt.Printf("  total attempts:         %d\n", sum.Total)
+	if sum.Total == 0 {
+		fmt.Println("  (no observations recorded yet)")
+		return nil
+	}
+	fmt.Printf("  by finish_reason:       %s\n", formatCountMap(sum.FinishReason))
+	fmt.Printf("  by error_category:      %s\n", formatCountMap(sum.ErrorCategory))
+	fmt.Printf("  strategy distribution:  %s\n", formatCountMap(sum.StrategyCounts))
+	fmt.Printf("  schema fail rate:       %d/%d = %.1f%%\n", sum.SchemaFailures, sum.Total, sum.SchemaFailureRate*100)
+	fmt.Printf("  sample window:          %s → %s\n",
+		sum.FirstTS.Format(time.RFC3339),
+		sum.LastTS.Format(time.RFC3339),
+	)
+	return nil
+}
+
+// formatCountMap renders a map in "key=count, key=count" form sorted by key
+// so repeated invocations produce deterministic output.
+func formatCountMap(m map[string]int) string {
+	if len(m) == 0 {
+		return "(none)"
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%d", k, m[k]))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func cmdDaemonStop(ctx context.Context) error {

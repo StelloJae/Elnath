@@ -585,7 +585,7 @@ func TestCmdDaemonStatusRendersStructuredProgressEnvelope(t *testing.T) {
 	resetLoadLocaleCache()
 
 	stdout, stderr := captureOutput(t, func() {
-		if err := cmdDaemonStatus(context.Background()); err != nil {
+		if err := cmdDaemonStatus(context.Background(), nil); err != nil {
 			t.Fatalf("cmdDaemonStatus: %v", err)
 		}
 	})
