@@ -675,3 +675,69 @@ func TestChatResponder_LegacyPathPreservedWhenNoPipeline(t *testing.T) {
 		t.Errorf("Messages len: got %d, want 1 (legacy single-message path)", len(req.Messages))
 	}
 }
+
+// --- FU-CR2a: ChatPipelineDeps.ToolDefs plumbing ---
+
+func TestChatResponder_ForwardsToolDefsToProvider(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{response: "ok"}
+	wantTools := []llm.ToolDef{
+		{Name: "read_file", Description: "read"},
+		{Name: "web_fetch", Description: "fetch"},
+	}
+
+	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		ToolDefs: wantTools,
+	}))
+
+	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	req := provider.capturedRequest(t)
+	if len(req.Tools) != len(wantTools) {
+		t.Fatalf("Tools len: got %d, want %d", len(req.Tools), len(wantTools))
+	}
+	for i, want := range wantTools {
+		if req.Tools[i].Name != want.Name {
+			t.Errorf("Tools[%d].Name: got %q, want %q", i, req.Tools[i].Name, want.Name)
+		}
+	}
+}
+
+func TestChatResponder_NoToolsWhenPipelineAbsent(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{response: "ok"}
+
+	cr := NewChatResponder(provider, bot, "chat-42", nil)
+
+	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	req := provider.capturedRequest(t)
+	if len(req.Tools) != 0 {
+		t.Errorf("Tools: got %d entries, want 0 (legacy path, no pipeline)", len(req.Tools))
+	}
+}
+
+func TestChatResponder_NoToolsWhenToolDefsEmpty(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{response: "ok"}
+
+	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		Builder: &stubChatBuilder{result: "SYS"},
+	}))
+
+	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	req := provider.capturedRequest(t)
+	if len(req.Tools) != 0 {
+		t.Errorf("Tools: got %d entries, want 0 (pipeline present, ToolDefs empty)", len(req.Tools))
+	}
+}

@@ -82,6 +82,12 @@ type ChatPipelineDeps struct {
 	WorkDir      string
 	DaemonMode   bool
 	MaxHistory   int
+	// ToolDefs, when non-empty, is forwarded to the provider as ChatRequest.Tools
+	// so the chat path exposes a curated tool subset. Filtering lives at the wire
+	// site; ChatResponder trusts the caller to supply only safe, chat-appropriate
+	// defs. Tool execution (tool_use → tool_result loop) is not yet implemented
+	// here — FU-CR2b wires that. Leaving ToolDefs nil preserves legacy behavior.
+	ToolDefs []llm.ToolDef
 }
 
 type ChatResponder struct {
@@ -150,6 +156,9 @@ func (c *ChatResponder) Respond(ctx context.Context, principal identity.Principa
 		MaxTokens:   1024,
 		Temperature: 0.7,
 		System:      systemPrompt,
+	}
+	if c.pipeline != nil && len(c.pipeline.ToolDefs) > 0 {
+		req.Tools = c.pipeline.ToolDefs
 	}
 
 	var assistantText strings.Builder
