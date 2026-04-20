@@ -52,6 +52,8 @@ func TestPrintSelfHealStatus_Populated(t *testing.T) {
 		meta := reflection.StoreMeta{
 			TS:        time.Date(2026, 4, 20, 17+i, 0, 0, 0, time.UTC),
 			SessionID: "sess",
+			Principal: "jay@workstation",
+			ProjectID: "elnath",
 		}
 		if err := store.Append(context.Background(), r, meta); err != nil {
 			t.Fatalf("append %d: %v", i, err)

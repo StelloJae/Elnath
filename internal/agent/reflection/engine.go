@@ -38,9 +38,13 @@ func validStrategy(s Strategy) bool {
 }
 
 // TaskMeta carries non-LLM task identity for the observation record.
+// Principal/ProjectID enrich the record without participating in trigger,
+// skip, or strategy evaluation (spec §3.1 Phase 0 observe-only invariant).
 type TaskMeta struct {
 	TaskID    string
 	SessionID string
+	Principal string
+	ProjectID string
 }
 
 // Report is the structured reflection output persisted to self_heal_attempts.jsonl.

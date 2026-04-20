@@ -603,6 +603,14 @@ func (c reflectionPoolCloser) Close() error {
 // buildReflectionEnqueuer returns an agent.ReflectionEnqueuer closure that
 // adapts agent.ReflectionInput to reflection.Input + StoreMeta and forwards
 // to the daemon-level pool. Returns nil when self-healing is disabled.
+//
+// Principal/ProjectID resolution mirrors the routing path at lines 767-772:
+// session.Principal wins when it carries a real ProjectID (the "unknown"
+// sentinel from identity.LegacyPrincipal must not override rt.principal), so
+// Telegram-routed and follow-up tasks record observations under the caller's
+// identity rather than the daemon fallback workspace. The enrichment fields
+// are passthrough-only — trigger, skip, and strategy evaluation logic remain
+// untouched (spec §3.1 Phase 0 observe-only invariant).
 func (rt *executionRuntime) buildReflectionEnqueuer(sess *agent.Session, userInput string) agent.ReflectionEnqueuer {
 	if rt.reflectPool == nil {
 		return nil
@@ -617,12 +625,26 @@ func (rt *executionRuntime) buildReflectionEnqueuer(sess *agent.Session, userInp
 	}
 	subject := runeSnippet(userInput, 80)
 	fp := reflection.ComputeFingerprint(subject, toolNames)
+	principalUserID := rt.principal.UserID
+	projectID := rt.principal.ProjectID
+	if sess != nil {
+		if sp := sess.Principal.UserID; sp != "" {
+			principalUserID = sp
+		}
+		if sp := sess.Principal.ProjectID; sp != "" && sp != "unknown" {
+			projectID = sp
+		}
+	}
 	return func(in agent.ReflectionInput) {
 		rt.reflectPool.Enqueue(
 			reflection.Input{
-				Transcript:    in.Messages,
-				ErrorSummary:  in.ErrorSummary,
-				TaskMeta:      reflection.TaskMeta{SessionID: sessionID},
+				Transcript:   in.Messages,
+				ErrorSummary: in.ErrorSummary,
+				TaskMeta: reflection.TaskMeta{
+					SessionID: sessionID,
+					Principal: principalUserID,
+					ProjectID: projectID,
+				},
 				Fingerprint:   fp,
 				FinishReason:  string(in.FinishReason),
 				ErrorCategory: string(in.ErrCategory),
@@ -630,6 +652,8 @@ func (rt *executionRuntime) buildReflectionEnqueuer(sess *agent.Session, userInp
 			reflection.StoreMeta{
 				TS:        time.Now().UTC(),
 				SessionID: sessionID,
+				Principal: principalUserID,
+				ProjectID: projectID,
 			},
 		)
 	}

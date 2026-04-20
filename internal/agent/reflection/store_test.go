@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -28,7 +29,13 @@ func TestFileStore_Append_RoundTrip(t *testing.T) {
 	path := filepath.Join(dir, "self_heal_attempts.jsonl")
 	store := NewFileStore(path)
 
-	meta := StoreMeta{TS: time.Date(2026, 4, 20, 17, 54, 0, 0, time.UTC), TaskID: "341", SessionID: "596b"}
+	meta := StoreMeta{
+		TS:        time.Date(2026, 4, 20, 17, 54, 0, 0, time.UTC),
+		TaskID:    "341",
+		SessionID: "596b",
+		Principal: "jay@workstation",
+		ProjectID: "elnath",
+	}
 	if err := store.Append(context.Background(), newTestReport(), meta); err != nil {
 		t.Fatalf("append: %v", err)
 	}
@@ -53,8 +60,44 @@ func TestFileStore_Append_RoundTrip(t *testing.T) {
 	if rec.TaskID != "341" || rec.SessionID != "596b" {
 		t.Fatalf("meta mismatch: %+v", rec)
 	}
+	if rec.PrincipalUserID != "jay@workstation" || rec.ProjectID != "elnath" {
+		t.Fatalf("principal mismatch: %+v", rec)
+	}
 	if rec.TS == "" {
 		t.Fatalf("ts missing")
+	}
+
+	payload := string(trimNewline(data))
+	if !strings.Contains(payload, `"principal_user_id":"jay@workstation"`) {
+		t.Fatalf("principal_user_id JSON key missing: %s", payload)
+	}
+	if !strings.Contains(payload, `"project_id":"elnath"`) {
+		t.Fatalf("project_id JSON key missing: %s", payload)
+	}
+}
+
+func TestFileStore_Append_PrincipalOmitEmpty(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "self_heal_attempts.jsonl")
+	store := NewFileStore(path)
+
+	// A meta with zero Principal/ProjectID must keep the on-disk JSON
+	// backward compatible — the optional keys should be omitted so existing
+	// readers and jq queries against older records stay stable.
+	meta := StoreMeta{TS: time.Date(2026, 4, 20, 17, 54, 0, 0, time.UTC), TaskID: "t", SessionID: "s"}
+	if err := store.Append(context.Background(), newTestReport(), meta); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	payload := string(trimNewline(data))
+	if strings.Contains(payload, "principal_user_id") {
+		t.Fatalf("principal_user_id should be omitted when empty: %s", payload)
+	}
+	if strings.Contains(payload, "project_id") {
+		t.Fatalf("project_id should be omitted when empty: %s", payload)
 	}
 }
 

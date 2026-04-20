@@ -12,10 +12,15 @@ import (
 )
 
 // StoreMeta carries the non-LLM envelope fields written alongside the Report.
+// Principal/ProjectID are Phase 0 enrichment fields: passthrough-only, never
+// consulted by trigger or evaluation logic. Empty values are omitted from the
+// on-disk JSON (backward compatible with pre-v8.1 records).
 type StoreMeta struct {
 	TS        time.Time
 	TaskID    string
 	SessionID string
+	Principal string
+	ProjectID string
 }
 
 // Store persists Phase 0 reflection observations. Implementations MUST be
@@ -50,6 +55,8 @@ type diskRecord struct {
 	TS                string `json:"ts"`
 	TaskID            string `json:"task_id,omitempty"`
 	SessionID         string `json:"session_id,omitempty"`
+	PrincipalUserID   string `json:"principal_user_id,omitempty"`
+	ProjectID         string `json:"project_id,omitempty"`
 	Fingerprint       string `json:"fingerprint"`
 	FinishReason      string `json:"finish_reason"`
 	ErrorCategory     string `json:"error_category"`
@@ -78,6 +85,8 @@ func (s *FileStore) Append(ctx context.Context, report Report, meta StoreMeta) e
 		TS:                meta.TS.UTC().Format(time.RFC3339Nano),
 		TaskID:            meta.TaskID,
 		SessionID:         meta.SessionID,
+		PrincipalUserID:   meta.Principal,
+		ProjectID:         meta.ProjectID,
 		Fingerprint:       string(report.Fingerprint),
 		FinishReason:      report.FinishReason,
 		ErrorCategory:     report.ErrorCategory,
