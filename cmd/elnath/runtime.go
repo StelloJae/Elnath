@@ -595,6 +595,9 @@ func (rt *executionRuntime) runTask(
 	userInput string,
 	output orchestrationOutput,
 ) ([]llm.Message, string, error) {
+	if sess != nil {
+		ctx = tools.WithSessionID(ctx, sess.ID)
+	}
 	bus := newBus(output, !rt.daemonMode)
 
 	if rt.app.Config.MagicDocs.Enabled && rt.wikiStore != nil {

@@ -123,6 +123,7 @@ func (r *TaskRunner) Run(ctx context.Context, payload daemon.TaskPayload, sink e
 	if sessionID == "" {
 		sessionID = "research-" + uuid.NewString()
 	}
+	ctx = tools.WithSessionID(ctx, sessionID)
 	toolReg := r.toolReg
 	if toolReg == nil {
 		toolReg = tools.NewRegistry()
