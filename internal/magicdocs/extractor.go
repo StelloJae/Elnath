@@ -10,22 +10,91 @@ import (
 	"time"
 
 	"github.com/stello/elnath/internal/llm"
+	"github.com/stello/elnath/internal/prompt"
+	"github.com/stello/elnath/internal/self"
+	"github.com/stello/elnath/internal/wiki"
 )
+
+// ExtractorPromptBuilder is the minimum surface the magic-docs extractor
+// needs to render a base prompt prefix. prompt.Builder satisfies this via
+// its Build method. A local interface keeps magicdocs decoupled from the
+// full prompt package construction details.
+type ExtractorPromptBuilder interface {
+	Build(ctx context.Context, state *prompt.RenderState) (string, error)
+}
+
+// ExtractorPromptDeps bundles the optional prompt-pipeline dependencies
+// for wiki-extraction. When non-nil, the extractor prefixes the hardcoded
+// extraction rules with a Builder-rendered system prompt carrying identity,
+// persona, and wiki-RAG context. A nil deps (or a Build error at call
+// time) falls back to the legacy hardcoded-only system prompt so the
+// extractor always produces output.
+type ExtractorPromptDeps struct {
+	Builder      ExtractorPromptBuilder
+	Self         *self.SelfState
+	WikiIdx      *wiki.Index
+	PersonaExtra string
+	ProviderName string
+	WorkDir      string
+}
+
+// ExtractorOption configures optional Extractor dependencies.
+type ExtractorOption func(*Extractor)
+
+// WithPromptPipeline wires the prompt-pipeline so wiki extraction benefits
+// from base identity + persona + RAG context in addition to the hardcoded
+// extraction rules (GAP-MAGICDOCS-01 fix).
+func WithPromptPipeline(deps ExtractorPromptDeps) ExtractorOption {
+	return func(e *Extractor) {
+		d := deps
+		e.pipeline = &d
+	}
+}
 
 type Extractor struct {
 	provider llm.Provider
 	model    string
 	writer   *WikiWriter
 	logger   *slog.Logger
+	pipeline *ExtractorPromptDeps
 }
 
-func NewExtractor(provider llm.Provider, model string, writer *WikiWriter, logger *slog.Logger) *Extractor {
-	return &Extractor{
+func NewExtractor(provider llm.Provider, model string, writer *WikiWriter, logger *slog.Logger, opts ...ExtractorOption) *Extractor {
+	e := &Extractor{
 		provider: provider,
 		model:    model,
 		writer:   writer,
 		logger:   logger,
 	}
+	for _, opt := range opts {
+		opt(e)
+	}
+	return e
+}
+
+// assemblePromptPrefix renders the pipeline prefix that carries identity
+// and RAG context for extraction. Returns empty string (legacy fallback)
+// when no pipeline is wired or when the builder errors.
+func (x *Extractor) assemblePromptPrefix(ctx context.Context) string {
+	if x.pipeline == nil || x.pipeline.Builder == nil {
+		return ""
+	}
+	state := &prompt.RenderState{
+		UserInput:    "wiki knowledge extraction from agent activity events",
+		Self:         x.pipeline.Self,
+		WikiIdx:      x.pipeline.WikiIdx,
+		PersonaExtra: x.pipeline.PersonaExtra,
+		Model:        x.model,
+		Provider:     x.pipeline.ProviderName,
+		WorkDir:      x.pipeline.WorkDir,
+		DaemonMode:   true,
+	}
+	built, err := x.pipeline.Builder.Build(ctx, state)
+	if err != nil {
+		x.logger.Warn("magic-docs: prompt pipeline build failed, using legacy fallback", "error", err)
+		return ""
+	}
+	return built
 }
 
 func (x *Extractor) Run(ctx context.Context, ch <-chan ExtractionRequest) {
@@ -58,8 +127,9 @@ func (x *Extractor) processRequest(ctx context.Context, req ExtractionRequest) {
 	callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	prompt := buildPrompt(req, filtered, x.model)
-	resp, err := x.provider.Chat(callCtx, prompt)
+	systemPrefix := x.assemblePromptPrefix(callCtx)
+	chatReq := buildPrompt(req, filtered, x.model, systemPrefix)
+	resp, err := x.provider.Chat(callCtx, chatReq)
 	if err != nil {
 		x.logger.Error("magic-docs LLM call failed",
 			"trigger", req.Trigger,

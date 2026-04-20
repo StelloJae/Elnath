@@ -7,6 +7,7 @@ import (
 
 	"github.com/stello/elnath/internal/event"
 	"github.com/stello/elnath/internal/llm"
+	"github.com/stello/elnath/internal/self"
 	"github.com/stello/elnath/internal/wiki"
 )
 
@@ -19,6 +20,19 @@ type Config struct {
 	Model     string
 	Logger    *slog.Logger
 	SessionID string
+
+	// Prompt pipeline (optional). When PromptBuilder is non-nil, the
+	// extractor prefixes the hardcoded extraction rules with a
+	// Builder-rendered system prompt carrying identity, persona, and
+	// wiki-RAG context. The daemon populates these from its runtime
+	// pipeline deps; when zero, the extractor falls back to legacy
+	// hardcoded-only behavior (GAP-MAGICDOCS-01).
+	PromptBuilder ExtractorPromptBuilder
+	Self          *self.SelfState
+	WikiIdx       *wiki.Index
+	PersonaExtra  string
+	ProviderName  string
+	WorkDir       string
 }
 
 type MagicDocs struct {
@@ -44,9 +58,21 @@ func New(cfg Config) *MagicDocs {
 	ch := make(chan ExtractionRequest, extractChSize)
 	writer := NewWikiWriter(cfg.Store, logger)
 
+	var extractorOpts []ExtractorOption
+	if cfg.PromptBuilder != nil {
+		extractorOpts = append(extractorOpts, WithPromptPipeline(ExtractorPromptDeps{
+			Builder:      cfg.PromptBuilder,
+			Self:         cfg.Self,
+			WikiIdx:      cfg.WikiIdx,
+			PersonaExtra: cfg.PersonaExtra,
+			ProviderName: cfg.ProviderName,
+			WorkDir:      cfg.WorkDir,
+		}))
+	}
+
 	return &MagicDocs{
 		observer:  NewAccumulatorObserver(ch, cfg.SessionID, logger),
-		extractor: NewExtractor(cfg.Provider, cfg.Model, writer, logger),
+		extractor: NewExtractor(cfg.Provider, cfg.Model, writer, logger, extractorOpts...),
 		extractCh: ch,
 		enabled:   true,
 		logger:    logger,

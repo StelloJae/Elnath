@@ -2,13 +2,17 @@ package magicdocs
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stello/elnath/internal/event"
 	"github.com/stello/elnath/internal/llm"
+	"github.com/stello/elnath/internal/prompt"
 	"github.com/stello/elnath/internal/wiki"
 )
 
@@ -92,13 +96,30 @@ func TestValidatePageAction(t *testing.T) {
 type mockProvider struct {
 	response string
 	err      error
+
+	mu      sync.Mutex
+	lastReq *llm.ChatRequest
 }
 
-func (m *mockProvider) Chat(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+func (m *mockProvider) Chat(_ context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	m.mu.Lock()
+	copied := req
+	m.lastReq = &copied
+	m.mu.Unlock()
 	if m.err != nil {
 		return nil, m.err
 	}
 	return &llm.ChatResponse{Content: m.response}, nil
+}
+
+func (m *mockProvider) capturedRequest(t *testing.T) llm.ChatRequest {
+	t.Helper()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.lastReq == nil {
+		t.Fatal("expected provider to capture a ChatRequest")
+	}
+	return *m.lastReq
 }
 func (m *mockProvider) Stream(_ context.Context, _ llm.ChatRequest, _ func(llm.StreamEvent)) error {
 	return nil
@@ -169,4 +190,112 @@ func TestExtractor_SkipsWhenNoSignal(t *testing.T) {
 	if len(pages) != 0 {
 		t.Errorf("expected no pages, got %d", len(pages))
 	}
+}
+
+// --- Prompt pipeline integration (FU-MagicDocsContextInjection) ---
+
+type stubMagicBuilder struct {
+	result string
+	err    error
+
+	mu       sync.Mutex
+	received *prompt.RenderState
+}
+
+func (b *stubMagicBuilder) Build(_ context.Context, state *prompt.RenderState) (string, error) {
+	b.mu.Lock()
+	b.received = state
+	b.mu.Unlock()
+	if b.err != nil {
+		return "", b.err
+	}
+	return b.result, nil
+}
+
+func newExtractorTestBits(t *testing.T) (*wiki.Store, *mockProvider, *slog.Logger, *WikiWriter) {
+	t.Helper()
+	store, err := wiki.NewStore(filepath.Join(t.TempDir(), "wiki"))
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	provider := &mockProvider{
+		response: `{"pages": []}`,
+	}
+	logger := slog.Default()
+	writer := NewWikiWriter(store, logger)
+	return store, provider, logger, writer
+}
+
+func runExtractorOnce(t *testing.T, ext *Extractor) {
+	t.Helper()
+	ch := make(chan ExtractionRequest, 1)
+	base := event.NewBaseWith(time.Now(), "test-session")
+	ch <- ExtractionRequest{
+		Events: []event.Event{
+			event.ResearchProgressEvent{Base: base, Phase: "conclusion", Round: 1, Message: "x"},
+			event.AgentFinishEvent{Base: base, FinishReason: "end_turn"},
+		},
+		SessionID: "test-session",
+		Trigger:   "agent_finish",
+		Timestamp: time.Now(),
+	}
+	close(ch)
+	ext.Run(context.Background(), ch)
+}
+
+func TestExtractor_LegacySystemPromptWhenNoPipeline(t *testing.T) {
+	_, provider, logger, writer := newExtractorTestBits(t)
+	ext := NewExtractor(provider, "test-model", writer, logger)
+
+	runExtractorOnce(t, ext)
+
+	req := provider.capturedRequest(t)
+	if !strings.HasPrefix(req.System, "You are a knowledge extraction agent") {
+		t.Errorf("System prompt should start with legacy hardcoded systemPrompt; got %q", firstLine(req.System))
+	}
+}
+
+func TestExtractor_WithPromptPipeline_InjectsPrefix(t *testing.T) {
+	_, provider, logger, writer := newExtractorTestBits(t)
+	builder := &stubMagicBuilder{result: "CUSTOM-MAGIC-PREFIX"}
+
+	ext := NewExtractor(provider, "test-model", writer, logger,
+		WithPromptPipeline(ExtractorPromptDeps{Builder: builder}),
+	)
+
+	runExtractorOnce(t, ext)
+
+	req := provider.capturedRequest(t)
+	if !strings.Contains(req.System, "CUSTOM-MAGIC-PREFIX") {
+		t.Errorf("expected System to contain pipeline prefix, got %q", req.System)
+	}
+	if !strings.Contains(req.System, "knowledge extraction agent") {
+		t.Errorf("expected System to retain legacy extraction rules, got %q", req.System)
+	}
+	if idxPrefix, idxLegacy := strings.Index(req.System, "CUSTOM-MAGIC-PREFIX"), strings.Index(req.System, "knowledge extraction agent"); idxPrefix > idxLegacy {
+		t.Errorf("pipeline prefix should appear before legacy rules, got prefix@%d legacy@%d", idxPrefix, idxLegacy)
+	}
+}
+
+func TestExtractor_PromptPipelineError_FallsBackToLegacy(t *testing.T) {
+	_, provider, logger, writer := newExtractorTestBits(t)
+	builder := &stubMagicBuilder{err: fmt.Errorf("build failed intentionally")}
+
+	ext := NewExtractor(provider, "test-model", writer, logger,
+		WithPromptPipeline(ExtractorPromptDeps{Builder: builder}),
+	)
+
+	runExtractorOnce(t, ext)
+
+	req := provider.capturedRequest(t)
+	if !strings.HasPrefix(req.System, "You are a knowledge extraction agent") {
+		t.Errorf("expected legacy fallback on builder error; got %q", firstLine(req.System))
+	}
+}
+
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
 }

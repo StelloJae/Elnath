@@ -32,7 +32,7 @@ Rules:
 - Be concise: 100-500 words per page
 - Use lowercase slugs with hyphens for paths (e.g. "analyses/go-error-wrapping.md")`
 
-func buildPrompt(req ExtractionRequest, f FilterResult, model string) llm.ChatRequest {
+func buildPrompt(req ExtractionRequest, f FilterResult, model, systemPrefix string) llm.ChatRequest {
 	var sb strings.Builder
 	sb.WriteString("## Signal Events (핵심)\n")
 	for i, e := range f.Signal {
@@ -45,9 +45,14 @@ func buildPrompt(req ExtractionRequest, f FilterResult, model string) llm.ChatRe
 		}
 	}
 
+	system := systemPrompt
+	if trimmed := strings.TrimSpace(systemPrefix); trimmed != "" {
+		system = trimmed + "\n\n" + systemPrompt
+	}
+
 	return llm.ChatRequest{
 		Model:     model,
-		System:    systemPrompt,
+		System:    system,
 		MaxTokens: 4096,
 		Messages: []llm.Message{
 			llm.NewUserMessage(sb.String()),
