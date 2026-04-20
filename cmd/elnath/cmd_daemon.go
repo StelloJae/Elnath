@@ -312,6 +312,7 @@ func cmdDaemonStart(ctx context.Context) error {
 		shell, shellErr := telegram.NewShell(queue, approvalStore, bot, cfg.Telegram.ChatID, statePath, rt.skillReg,
 			telegram.WithChatResponder(chatResponder),
 			telegram.WithChatSessionBinder(binder),
+			telegram.WithChatHistoryLoader(rt.mgr),
 			telegram.WithClassifier(classifier, provider),
 			telegram.WithSkillCreator(rt.skillCreator),
 			telegram.WithTaskTracker(tgSink),
