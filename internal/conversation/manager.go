@@ -389,6 +389,45 @@ func (m *Manager) SendMessage(ctx context.Context, sessionID, userMsg string) ([
 	return messages, intent, nil
 }
 
+// EnsureChatSession creates a fresh JSONL-backed session bound to the given
+// principal and returns its ID. This is the chat-path counterpart to
+// NewSessionWithPrincipal, shaped as a narrow context-taking API so callers
+// (telegram ChatResponder) can persist conversations without importing
+// agent.Session directly.
+func (m *Manager) EnsureChatSession(_ context.Context, principal identity.Principal) (string, error) {
+	s, err := m.NewSessionWithPrincipal(principal)
+	if err != nil {
+		return "", fmt.Errorf("conversation: ensure chat session: %w", err)
+	}
+	return s.ID, nil
+}
+
+// AppendChatTurn persists a user message and its assistant response to the
+// session's JSONL transcript (and to the secondary history store when one
+// is configured). The chat path skips intent classification and context
+// compression that SendMessage performs, because the Telegram chat surface
+// runs outside the task queue with a fixed 1024-token output cap.
+//
+// Locale state is refreshed from the user message so subsequent identity/
+// prompt rendering picks up language switches between turns.
+func (m *Manager) AppendChatTurn(_ context.Context, sessionID string, user, assistant llm.Message) error {
+	s, err := m.LoadSession(sessionID)
+	if err != nil {
+		return fmt.Errorf("conversation: append chat turn: %w", err)
+	}
+	if err := s.AppendMessages([]llm.Message{user, assistant}); err != nil {
+		return fmt.Errorf("conversation: persist chat turn: %w", err)
+	}
+	lang, conf := locale.DetectLanguage(user.Text())
+	resolved := locale.Resolve(
+		locale.DetectResult{Lang: lang, Confidence: conf},
+		m.LastLocale(sessionID),
+		m.configuredLocale(),
+	)
+	m.setLastLocale(sessionID, resolved)
+	return nil
+}
+
 func (m *Manager) resolveLocale(userMsg, sessionLast string) string {
 	lang, conf := locale.DetectLanguage(userMsg)
 	return locale.Resolve(locale.DetectResult{Lang: lang, Confidence: conf}, sessionLast, m.configuredLocale())

@@ -1088,3 +1088,100 @@ func TestManagerSendMessage_FallsBackToConfigMaxWhenProviderWindowUnknown(t *tes
 			result[0].Role, result[0].Text())
 	}
 }
+
+// --- Chat-path persistence (FU-ChatSessionPersist) ---
+
+func TestManagerEnsureChatSession_CreatesSessionWithPrincipal(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager(nil, dir)
+
+	principal := identity.Principal{UserID: "42", ProjectID: "proj-chat", Surface: "telegram"}
+	sid, err := mgr.EnsureChatSession(context.Background(), principal)
+	if err != nil {
+		t.Fatalf("EnsureChatSession: %v", err)
+	}
+	if sid == "" {
+		t.Fatal("EnsureChatSession returned empty session ID")
+	}
+
+	loaded, err := mgr.LoadSession(sid)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if loaded.Principal.UserID != "42" {
+		t.Errorf("Principal.UserID = %q, want %q", loaded.Principal.UserID, "42")
+	}
+	if loaded.Principal.ProjectID != "proj-chat" {
+		t.Errorf("Principal.ProjectID = %q, want %q", loaded.Principal.ProjectID, "proj-chat")
+	}
+	if loaded.Principal.Surface != "telegram" {
+		t.Errorf("Principal.Surface = %q, want %q", loaded.Principal.Surface, "telegram")
+	}
+}
+
+func TestManagerAppendChatTurn_PersistsUserAndAssistant(t *testing.T) {
+	sess, dir := newTestSession(t)
+	mgr := NewManager(nil, dir)
+
+	userMsg := llm.NewUserMessage("what time is it?")
+	asstMsg := llm.NewAssistantMessage("it's 9 pm")
+
+	if err := mgr.AppendChatTurn(context.Background(), sess.ID, userMsg, asstMsg); err != nil {
+		t.Fatalf("AppendChatTurn: %v", err)
+	}
+
+	reloaded, err := mgr.LoadSession(sess.ID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if len(reloaded.Messages) != 2 {
+		t.Fatalf("reloaded message count = %d, want 2", len(reloaded.Messages))
+	}
+	if reloaded.Messages[0].Role != llm.RoleUser {
+		t.Errorf("first message role = %q, want user", reloaded.Messages[0].Role)
+	}
+	if got := reloaded.Messages[0].Text(); got != "what time is it?" {
+		t.Errorf("first message text = %q, want %q", got, "what time is it?")
+	}
+	if reloaded.Messages[1].Role != llm.RoleAssistant {
+		t.Errorf("second message role = %q, want assistant", reloaded.Messages[1].Role)
+	}
+	if got := reloaded.Messages[1].Text(); got != "it's 9 pm" {
+		t.Errorf("second message text = %q, want %q", got, "it's 9 pm")
+	}
+}
+
+func TestManagerAppendChatTurn_AccumulatesAcrossTurns(t *testing.T) {
+	sess, dir := newTestSession(t)
+	mgr := NewManager(nil, dir)
+	ctx := context.Background()
+
+	if err := mgr.AppendChatTurn(ctx,
+		sess.ID,
+		llm.NewUserMessage("hi"),
+		llm.NewAssistantMessage("hello"),
+	); err != nil {
+		t.Fatalf("first AppendChatTurn: %v", err)
+	}
+	if err := mgr.AppendChatTurn(ctx,
+		sess.ID,
+		llm.NewUserMessage("what did I just say?"),
+		llm.NewAssistantMessage("you said hi"),
+	); err != nil {
+		t.Fatalf("second AppendChatTurn: %v", err)
+	}
+
+	history, err := mgr.GetHistory(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(history) != 4 {
+		t.Fatalf("history len = %d, want 4 (2 turns × 2 msgs)", len(history))
+	}
+	if got := history[0].Text(); got != "hi" {
+		t.Errorf("history[0].Text = %q, want hi", got)
+	}
+	if got := history[3].Text(); got != "you said hi" {
+		t.Errorf("history[3].Text = %q, want 'you said hi'", got)
+	}
+}
