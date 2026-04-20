@@ -56,6 +56,7 @@ func cmdRun(ctx context.Context, args []string) error {
 	if err != nil {
 		return userfacingerr.Wrap(userfacingerr.ELN060, err, "load config")
 	}
+	applyGlobalFlagOverrides(cfg, os.Args)
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("get cwd: %w", err)

@@ -76,4 +76,10 @@ type WorkflowConfig struct {
 	ToolExecutor         tools.Executor
 	ContextWindow        ContextCompressor // nil disables agent-loop compaction
 	CompressionMaxTokens int               // token budget passed to ContextWindow.CompressMessages
+
+	// ReflectionEnqueuer, when non-nil, is forwarded to each agent.New call as
+	// an observe-only hook (Phase 0 self-healing, spec §3.2). The enqueuer
+	// must be non-blocking; runtime adapters typically wrap
+	// internal/agent/reflection.Pool.Enqueue.
+	ReflectionEnqueuer agent.ReflectionEnqueuer
 }

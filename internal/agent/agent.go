@@ -56,6 +56,23 @@ var (
 // It receives the current messages and returns a shorter replacement slice.
 type CompressFunc func(ctx context.Context, messages []llm.Message) ([]llm.Message, error)
 
+// ReflectionInput is the payload delivered to a ReflectionEnqueuer at the end
+// of Run. Consumers (Phase 0: internal/agent/reflection.Pool adapter) build a
+// reflection.Input from this struct without the agent package importing
+// reflection (avoids an import cycle, since reflection already imports agent).
+type ReflectionInput struct {
+	FinishReason        FinishReason
+	Messages            []llm.Message
+	ErrCategory         errorclass.Category
+	ErrorSummary        string
+	UserCancelled       bool
+	DestructiveApproved bool
+}
+
+// ReflectionEnqueuer is the observe-only hook invoked once per Run, after the
+// finish reason is determined. Implementations must be non-blocking.
+type ReflectionEnqueuer func(in ReflectionInput)
+
 // Agent runs the message→LLM→tools→repeat loop.
 // The message array is the ONLY state — no hidden state machines.
 type Agent struct {
@@ -72,6 +89,7 @@ type Agent struct {
 	compressFunc       CompressFunc
 	contextWindow      int // cached from provider.Models(); 0 = unknown
 	compressFailCount  int // consecutive compressFunc failures in current Run
+	reflectEnqueue     ReflectionEnqueuer
 }
 
 // Option configures an Agent.
@@ -122,6 +140,14 @@ func WithToolExecutor(exec tools.Executor) Option {
 	return func(a *Agent) {
 		a.executor = exec
 	}
+}
+
+// WithReflection attaches a post-Run observation hook (spec §3.2). Invoked
+// once at the end of each Run — after finishReason is decided — with the
+// final transcript and the last classified error, if any. The enqueuer must
+// be non-blocking; see internal/agent/reflection.Pool for the Phase 0 adapter.
+func WithReflection(fn ReflectionEnqueuer) Option {
+	return func(a *Agent) { a.reflectEnqueue = fn }
 }
 
 // New creates an Agent with the given provider and tool registry.
@@ -257,7 +283,7 @@ type toolStatAcc struct {
 // Run executes the agent loop starting with the provided messages.
 // It streams events via the sink and returns when the model
 // stops requesting tool calls or maxIterations is reached.
-func (a *Agent) Run(ctx context.Context, messages []llm.Message, sink event.Sink) (*RunResult, error) {
+func (a *Agent) Run(ctx context.Context, messages []llm.Message, sink event.Sink) (result *RunResult, err error) {
 	if sink == nil {
 		sink = event.NopSink{}
 	}
@@ -270,6 +296,11 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, sink event.Sink
 	finishReason := FinishReasonBudgetExceeded
 	toolStats := map[string]*toolStatAcc{}
 	var toolStatsMu sync.Mutex
+	var lastClassified *errorclass.ClassifiedError
+
+	defer func() {
+		a.fireReflectionHook(ctx, messages, result, err, lastClassified)
+	}()
 
 	for iter := 0; iter < a.maxIterations; iter++ {
 		if a.hooks != nil {
@@ -310,10 +341,13 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, sink event.Sink
 			}
 		}
 
-		assistantMsg, finalReq, usage, err := a.streamWithRetry(ctx, req, sink)
-		if err != nil {
+		assistantMsg, finalReq, usage, streamErr := a.streamWithRetry(ctx, req, sink)
+		if streamErr != nil {
 			var classified *errorclass.ClassifiedError
-			if errors.As(err, &classified) && classified.Recovery.ShouldCompress && a.compressFunc != nil {
+			if errors.As(streamErr, &classified) {
+				lastClassified = classified
+			}
+			if classified != nil && classified.Recovery.ShouldCompress && a.compressFunc != nil {
 				a.logger.Warn("context overflow: attempting compression",
 					"category", classified.Category,
 					"provider", a.provider.Name(),
@@ -322,16 +356,19 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, sink event.Sink
 				)
 				compressed, ok := a.tryCompress(ctx, messages)
 				if !ok {
-					return nil, err
+					return nil, streamErr
 				}
 				messages = compressed
 				req.Messages = compressed
-				assistantMsg, finalReq, usage, err = a.streamWithRetry(ctx, req, sink)
-				if err != nil {
-					return nil, err
+				assistantMsg, finalReq, usage, streamErr = a.streamWithRetry(ctx, req, sink)
+				if streamErr != nil {
+					if errors.As(streamErr, &classified) {
+						lastClassified = classified
+					}
+					return nil, streamErr
 				}
 			} else {
-				return nil, err
+				return nil, streamErr
 			}
 		}
 		if a.hooks != nil {
@@ -399,6 +436,73 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, sink event.Sink
 		Iterations:   iterations,
 		FinishReason: finishReason,
 	}, nil
+}
+
+// reflectionSkipCategories mirrors reflection.skipCategories. Duplicated here
+// (not imported) to avoid an import cycle between agent and reflection. Kept
+// small and comparatively tested in reflection/trigger_test.go.
+var reflectionSkipCategories = map[errorclass.Category]struct{}{
+	errorclass.RateLimit:     {},
+	errorclass.Auth:          {},
+	errorclass.AuthPermanent: {},
+	errorclass.Billing:       {},
+	errorclass.Overloaded:    {},
+}
+
+// wantsReflection gates whether the agent should fire its observation hook.
+// Matches reflection.ShouldReflect semantics (spec §3.1).
+func wantsReflection(fr FinishReason, cat errorclass.Category, cancelled bool) bool {
+	if cancelled {
+		return false
+	}
+	if _, skip := reflectionSkipCategories[cat]; skip {
+		return false
+	}
+	switch fr {
+	case FinishReasonError, FinishReasonBudgetExceeded, FinishReasonAckLoop:
+		return true
+	default:
+		return false
+	}
+}
+
+// fireReflectionHook invokes the observe-only reflection enqueuer once per
+// Run, after the finish reason and last classified error are known. The
+// enqueuer contract requires it to be non-blocking (typically fan-out into a
+// bounded pool). Skip rules match reflection.ShouldReflect.
+func (a *Agent) fireReflectionHook(
+	ctx context.Context,
+	messages []llm.Message,
+	result *RunResult,
+	runErr error,
+	lastClassified *errorclass.ClassifiedError,
+) {
+	if a.reflectEnqueue == nil {
+		return
+	}
+	fr := FinishReasonError
+	if result != nil {
+		fr = result.FinishReason
+	}
+	var cat errorclass.Category
+	summary := ""
+	if lastClassified != nil {
+		cat = lastClassified.Category
+		summary = lastClassified.Message
+	} else if runErr != nil {
+		summary = runErr.Error()
+	}
+	cancelled := ctx.Err() == context.Canceled
+	if !wantsReflection(fr, cat, cancelled) {
+		return
+	}
+	a.reflectEnqueue(ReflectionInput{
+		FinishReason:  fr,
+		Messages:      messages,
+		ErrCategory:   cat,
+		ErrorSummary:  summary,
+		UserCancelled: cancelled,
+	})
 }
 
 // streamWithRetry calls the provider with exponential backoff on classified retryable errors.

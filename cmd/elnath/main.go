@@ -8,6 +8,7 @@ import (
 	"runtime/debug"
 	"syscall"
 
+	"github.com/stello/elnath/internal/config"
 	"github.com/stello/elnath/internal/core"
 )
 
@@ -86,6 +87,18 @@ func hasFlag(args []string, flag string) bool {
 	return false
 }
 
+// applyGlobalFlagOverrides mutates cfg based on process-wide CLI flags that
+// are not tied to a specific subcommand. Currently handles --no-self-heal,
+// which disables the Phase 0 reflection observer regardless of config.yaml.
+func applyGlobalFlagOverrides(cfg *config.Config, args []string) {
+	if cfg == nil {
+		return
+	}
+	if hasFlag(args, "--no-self-heal") {
+		cfg.SelfHealing.Enabled = false
+	}
+}
+
 func splitCommandArgs(args []string) (string, []string) {
 	if len(args) < 2 {
 		return "", nil
@@ -101,6 +114,7 @@ func splitCommandArgs(args []string) (string, []string) {
 	booleanFlags := map[string]struct{}{
 		"--continue":        {},
 		"--non-interactive": {},
+		"--no-self-heal":    {},
 	}
 	for i := 1; i < len(args); i++ {
 		if _, ok := flagsWithValue[args[i]]; ok {

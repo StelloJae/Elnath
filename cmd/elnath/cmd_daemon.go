@@ -67,6 +67,7 @@ func cmdDaemonStart(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+	applyGlobalFlagOverrides(cfg, os.Args)
 	scenarioName, err := fault.CheckGuards(fault.GuardConfig{Enabled: cfg.FaultInjection.Enabled})
 	if err != nil {
 		return err

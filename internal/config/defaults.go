@@ -45,5 +45,13 @@ func DefaultConfig() *Config {
 			Model:       "claude-haiku-4-5",
 			MinMessages: 5,
 		},
+		SelfHealing: SelfHealingConfig{
+			Enabled:        true,
+			ObserveOnly:    true,
+			MaxTurns:       20,
+			TimeoutSeconds: 15,
+			MaxConcurrent:  2,
+			QueueSize:      10,
+		},
 	}
 }

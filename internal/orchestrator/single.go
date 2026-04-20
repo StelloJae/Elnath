@@ -99,6 +99,9 @@ func agentOptions(cfg WorkflowConfig) []agent.Option {
 	if cfg.ToolExecutor != nil {
 		opts = append(opts, agent.WithToolExecutor(cfg.ToolExecutor))
 	}
+	if cfg.ReflectionEnqueuer != nil {
+		opts = append(opts, agent.WithReflection(cfg.ReflectionEnqueuer))
+	}
 	return opts
 }
 

@@ -32,9 +32,23 @@ type Config struct {
 	LLMExtraction  LLMExtractionConfig  `yaml:"llm_extraction"`
 	MagicDocs      MagicDocsConfig      `yaml:"magic_docs"`
 	Ambient        AmbientConfig        `yaml:"ambient"`
+	SelfHealing    SelfHealingConfig    `yaml:"self_healing"`
 	Projects       []ProjectRef         `yaml:"projects"`
 	MCPServers     []MCPServerConfig    `yaml:"mcp_servers"`
 	Hooks          []HookConfig         `yaml:"hooks"`
+}
+
+// SelfHealingConfig controls the Phase 0 observe-only reflection infrastructure.
+// See docs/superpowers/specs/2026-04-20-self-healing-observe-only-phase0-design.md.
+type SelfHealingConfig struct {
+	Enabled        bool   `yaml:"enabled"`         // default true
+	ObserveOnly    bool   `yaml:"observe_only"`    // default true (Phase 0)
+	MaxTurns       int    `yaml:"max_turns"`       // transcript cap, default 20
+	TimeoutSeconds int    `yaml:"timeout_seconds"` // per-reflection LLM call cap, default 15
+	Model          string `yaml:"model"`           // blank → reuse main provider model
+	Path           string `yaml:"path"`            // blank → <data_dir>/self_heal_attempts.jsonl
+	MaxConcurrent  int    `yaml:"max_concurrent"`  // default 2
+	QueueSize      int    `yaml:"queue_size"`      // default 10
 }
 
 // MCPServerConfig defines an external MCP server to connect to.

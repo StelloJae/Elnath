@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/stello/elnath/internal/agent"
+	"github.com/stello/elnath/internal/agent/reflection"
 	"github.com/stello/elnath/internal/audit"
 	"github.com/stello/elnath/internal/config"
 	"github.com/stello/elnath/internal/conversation"
@@ -182,6 +183,11 @@ type executionRuntime struct {
 	daemonMode         bool
 	principal          identity.Principal
 	auditTrail         *audit.Trail
+	reflectPool        *reflection.Pool
+	reflectStore       *reflection.FileStore
+	reflectModel       string
+	reflectMaxTurns    int
+	reflectTimeout     time.Duration
 }
 
 type compressionHookContextWindow struct {
@@ -408,6 +414,55 @@ func buildExecutionRuntime(
 	} else {
 		app.RegisterCloser("audit trail", auditTrail)
 	}
+
+	var (
+		reflectPool     *reflection.Pool
+		reflectStore    *reflection.FileStore
+		reflectModel    string
+		reflectMaxTurns int
+		reflectTimeout  time.Duration
+	)
+	if cfg.SelfHealing.Enabled {
+		path := cfg.SelfHealing.Path
+		if path == "" {
+			path = filepath.Join(cfg.DataDir, "self_heal_attempts.jsonl")
+		}
+		reflectStore = reflection.NewFileStore(path)
+		reflectModel = cfg.SelfHealing.Model
+		if reflectModel == "" {
+			reflectModel = model
+		}
+		reflectMaxTurns = cfg.SelfHealing.MaxTurns
+		if reflectMaxTurns <= 0 {
+			reflectMaxTurns = 20
+		}
+		reflectTimeout = time.Duration(cfg.SelfHealing.TimeoutSeconds) * time.Second
+		if reflectTimeout <= 0 {
+			reflectTimeout = 15 * time.Second
+		}
+		engine := reflection.NewLLMEngine(provider, reflectModel,
+			reflection.WithEngineTimeout(reflectTimeout),
+			reflection.WithEngineMaxTurns(reflectMaxTurns),
+		)
+		concurrency := cfg.SelfHealing.MaxConcurrent
+		if concurrency <= 0 {
+			concurrency = 2
+		}
+		queueSize := cfg.SelfHealing.QueueSize
+		if queueSize <= 0 {
+			queueSize = 10
+		}
+		reflectPool = reflection.NewPool(engine, reflectStore, concurrency, queueSize,
+			reflection.WithPoolLogger(app.Logger.With("component", "reflection")),
+		)
+		app.RegisterCloser("reflection pool", reflectionPoolCloser{pool: reflectPool})
+		app.Logger.Info("self-healing observer enabled",
+			"path", path,
+			"model", reflectModel,
+			"max_concurrent", concurrency,
+			"queue_size", queueSize,
+		)
+	}
 	hooks.Add(secret.NewSecretScanHook(secret.NewDetector(), auditTrail))
 	wrappedCtxWindow := newCompressionHookContextWindow(
 		ctxWindow,
@@ -520,7 +575,63 @@ func buildExecutionRuntime(
 		daemonMode:         daemonMode,
 		principal:          defaultPrincipal,
 		auditTrail:         auditTrail,
+		reflectPool:        reflectPool,
+		reflectStore:       reflectStore,
+		reflectModel:       reflectModel,
+		reflectMaxTurns:    reflectMaxTurns,
+		reflectTimeout:     reflectTimeout,
 	}, nil
+}
+
+// reflectionPoolCloser adapts *reflection.Pool to the core.Closer interface,
+// draining pending reflection work with a 30s grace window (spec §3.3
+// safeguards) during app shutdown.
+type reflectionPoolCloser struct {
+	pool *reflection.Pool
+}
+
+func (c reflectionPoolCloser) Close() error {
+	if c.pool == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return c.pool.Shutdown(ctx)
+}
+
+// buildReflectionEnqueuer returns an agent.ReflectionEnqueuer closure that
+// adapts agent.ReflectionInput to reflection.Input + StoreMeta and forwards
+// to the daemon-level pool. Returns nil when self-healing is disabled.
+func (rt *executionRuntime) buildReflectionEnqueuer(sess *agent.Session, userInput string) agent.ReflectionEnqueuer {
+	if rt.reflectPool == nil {
+		return nil
+	}
+	sessionID := ""
+	if sess != nil {
+		sessionID = sess.ID
+	}
+	toolNames := []string{}
+	if rt.reg != nil {
+		toolNames = rt.reg.Names()
+	}
+	subject := runeSnippet(userInput, 80)
+	fp := reflection.ComputeFingerprint(subject, toolNames)
+	return func(in agent.ReflectionInput) {
+		rt.reflectPool.Enqueue(
+			reflection.Input{
+				Transcript:    in.Messages,
+				ErrorSummary:  in.ErrorSummary,
+				TaskMeta:      reflection.TaskMeta{SessionID: sessionID},
+				Fingerprint:   fp,
+				FinishReason:  string(in.FinishReason),
+				ErrorCategory: string(in.ErrCategory),
+			},
+			reflection.StoreMeta{
+				TS:        time.Now().UTC(),
+				SessionID: sessionID,
+			},
+		)
+	}
 }
 
 // buildLessonProvider returns the provider + model used for lesson extraction.
@@ -718,6 +829,7 @@ func (rt *executionRuntime) runTask(
 	}
 	cfg := rt.wfCfg
 	cfg.SystemPrompt = systemPrompt
+	cfg.ReflectionEnqueuer = rt.buildReflectionEnqueuer(sess, userInput)
 
 	input := orchestrator.WorkflowInput{
 		Message:  userInput,
