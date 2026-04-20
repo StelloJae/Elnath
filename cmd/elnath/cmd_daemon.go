@@ -236,8 +236,10 @@ func cmdDaemonStart(ctx context.Context) error {
 			if cfg.Telegram.Enabled && cfg.Telegram.BotToken != "" && cfg.Telegram.ChatID != "" {
 				tgBot := telegram.NewHTTPClient(cfg.Telegram.BotToken, cfg.Telegram.APIBaseURL)
 				chatID := cfg.Telegram.ChatID
+				persona := rt.personaExtra
+				locale := cfg.Locale
 				notifyFn = func(ctx context.Context, title, body string) error {
-					return tgBot.SendMessage(ctx, chatID, title+"\n\n"+body)
+					return tgBot.SendMessage(ctx, chatID, ambient.FormatNotification(title, body, persona, locale))
 				}
 			}
 
