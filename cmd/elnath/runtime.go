@@ -715,12 +715,18 @@ func (rt *executionRuntime) runTask(
 
 	if rt.app.Config.MagicDocs.Enabled && rt.wikiStore != nil {
 		md := magicdocs.New(magicdocs.Config{
-			Enabled:   true,
-			Store:     rt.wikiStore,
-			Provider:  rt.provider,
-			Model:     rt.app.Config.MagicDocs.Model,
-			Logger:    rt.app.Logger.With("component", "magic-docs"),
-			SessionID: sess.ID,
+			Enabled:       true,
+			Store:         rt.wikiStore,
+			Provider:      rt.provider,
+			Model:         rt.app.Config.MagicDocs.Model,
+			Logger:        rt.app.Logger.With("component", "magic-docs"),
+			SessionID:     sess.ID,
+			PromptBuilder: rt.promptBuilder,
+			Self:          rt.selfState,
+			WikiIdx:       rt.wikiIdx,
+			PersonaExtra:  rt.personaExtra,
+			ProviderName:  rt.provider.Name(),
+			WorkDir:       rt.workDir,
 		})
 		bus.Subscribe(md.Observer())
 		md.Start(ctx)
