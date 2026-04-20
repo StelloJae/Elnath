@@ -3,10 +3,14 @@ package research
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"log/slog"
 	"os"
+	"strings"
+	"sync"
 	"testing"
 
+	"github.com/stello/elnath/internal/event"
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/tools"
 	"github.com/stello/elnath/internal/wiki"
@@ -17,10 +21,13 @@ import (
 // mockProvider implements llm.Provider with canned responses.
 // Chat and Stream share the same response queue so that both the
 // hypothesis generator (Chat) and the experiment agent (Stream) consume
-// responses in order.
+// responses in order. Each incoming ChatRequest is recorded so tests can
+// assert on the resolved System prompt (for pipeline prefix coverage).
 type mockProvider struct {
+	mu            sync.Mutex
 	chatResponses []llm.ChatResponse
 	callIndex     int
+	requests      []llm.ChatRequest
 }
 
 func (m *mockProvider) next() llm.ChatResponse {
@@ -32,12 +39,30 @@ func (m *mockProvider) next() llm.ChatResponse {
 	return resp
 }
 
-func (m *mockProvider) Chat(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+func (m *mockProvider) record(req llm.ChatRequest) {
+	m.mu.Lock()
+	m.requests = append(m.requests, req)
+	m.mu.Unlock()
+}
+
+func (m *mockProvider) capturedSystems() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]string, len(m.requests))
+	for i, r := range m.requests {
+		out[i] = r.System
+	}
+	return out
+}
+
+func (m *mockProvider) Chat(_ context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	m.record(req)
 	resp := m.next()
 	return &resp, nil
 }
 
-func (m *mockProvider) Stream(_ context.Context, _ llm.ChatRequest, cb func(llm.StreamEvent)) error {
+func (m *mockProvider) Stream(_ context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
+	m.record(req)
 	resp := m.next()
 	cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: resp.Content})
 	cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{}})
@@ -353,4 +378,284 @@ func TestSanitizeTopic(t *testing.T) {
 			}
 		})
 	}
+}
+
+// --- Prompt pipeline integration (FU-ResearchPipelineIntegration) ---
+
+type stubPrefixRenderer struct {
+	prefix string
+	err    error
+
+	mu          sync.Mutex
+	invocations []Invocation
+}
+
+func (s *stubPrefixRenderer) RenderPromptPrefix(_ context.Context, inv Invocation) (string, error) {
+	s.mu.Lock()
+	s.invocations = append(s.invocations, inv)
+	s.mu.Unlock()
+	if s.err != nil {
+		return "", s.err
+	}
+	return s.prefix, nil
+}
+
+func (s *stubPrefixRenderer) stages() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, len(s.invocations))
+	for i, inv := range s.invocations {
+		out[i] = inv.Stage
+	}
+	return out
+}
+
+func TestHypothesisGenerator_PipelinePrefixPrepended(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	provider := &mockProvider{
+		chatResponses: []llm.ChatResponse{
+			{Content: `[{"id":"H1","statement":"s","rationale":"r","test_plan":"p","priority":1}]`},
+		},
+	}
+	stub := &stubPrefixRenderer{prefix: "You are Elnath.\nMission: Research."}
+	gen := NewHypothesisGenerator(provider, "test-model", logger).WithPipeline(stub, "sess-123")
+
+	_, err := gen.Generate(context.Background(), "topic", nil, nil)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	systems := provider.capturedSystems()
+	if len(systems) != 1 {
+		t.Fatalf("captured %d systems, want 1", len(systems))
+	}
+	want := "You are Elnath.\nMission: Research.\n\n" + hypothesisSystemPrompt
+	if systems[0] != want {
+		t.Errorf("system prompt mismatch\n got: %q\nwant: %q", systems[0], want)
+	}
+	if !strings.HasSuffix(systems[0], hypothesisSystemPrompt) {
+		t.Errorf("system should end with legacy hypothesisSystemPrompt, got: %q", systems[0])
+	}
+	if got := stub.stages(); len(got) != 1 || got[0] != StageHypothesis {
+		t.Errorf("stages = %v, want [%s]", got, StageHypothesis)
+	}
+}
+
+func TestHypothesisGenerator_NilPipelineUsesLegacy(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	provider := &mockProvider{
+		chatResponses: []llm.ChatResponse{
+			{Content: `[{"id":"H1","statement":"s","rationale":"r","test_plan":"p","priority":1}]`},
+		},
+	}
+	gen := NewHypothesisGenerator(provider, "test-model", logger)
+
+	_, err := gen.Generate(context.Background(), "topic", nil, nil)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	systems := provider.capturedSystems()
+	if len(systems) != 1 || systems[0] != hypothesisSystemPrompt {
+		t.Errorf("expected legacy prompt, got %q", systems[0])
+	}
+}
+
+func TestHypothesisGenerator_PipelineErrorFallsBackToLegacy(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	provider := &mockProvider{
+		chatResponses: []llm.ChatResponse{
+			{Content: `[{"id":"H1","statement":"s","rationale":"r","test_plan":"p","priority":1}]`},
+		},
+	}
+	stub := &stubPrefixRenderer{err: errors.New("render broken")}
+	gen := NewHypothesisGenerator(provider, "test-model", logger).WithPipeline(stub, "sess")
+
+	_, err := gen.Generate(context.Background(), "topic", nil, nil)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	systems := provider.capturedSystems()
+	if len(systems) != 1 || systems[0] != hypothesisSystemPrompt {
+		t.Errorf("expected legacy fallback on pipeline err, got %q", systems[0])
+	}
+}
+
+func TestExperimentRunner_PipelinePrefixPrepended(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	provider := &mockProvider{
+		chatResponses: []llm.ChatResponse{
+			{Content: `investigated. {"findings":"f","evidence":"e","confidence":"high","supported":true}`},
+		},
+	}
+	stub := &stubPrefixRenderer{prefix: "You are Elnath.\nMission: Research."}
+	er := NewExperimentRunner(provider, tools.NewRegistry(), "test-model", logger).WithPipeline(stub, "sess-123")
+
+	_, err := er.Run(context.Background(), Hypothesis{ID: "H1", Statement: "s", TestPlan: "p"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	systems := provider.capturedSystems()
+	if len(systems) == 0 {
+		t.Fatal("no systems captured")
+	}
+	got := systems[0]
+	want := "You are Elnath.\nMission: Research.\n\n" + experimentSystemPrompt
+	if got != want {
+		t.Errorf("system prompt mismatch\n got: %q\nwant: %q", got, want)
+	}
+	if !strings.HasSuffix(got, experimentSystemPrompt) {
+		t.Errorf("system should end with legacy experimentSystemPrompt, got: %q", got)
+	}
+	if stages := stub.stages(); len(stages) != 1 || stages[0] != StageExperiment {
+		t.Errorf("stages = %v, want [%s]", stages, StageExperiment)
+	}
+}
+
+func TestExperimentRunner_NilPipelineUsesLegacy(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	provider := &mockProvider{
+		chatResponses: []llm.ChatResponse{
+			{Content: `{"findings":"f","evidence":"e","confidence":"medium","supported":false}`},
+		},
+	}
+	er := NewExperimentRunner(provider, tools.NewRegistry(), "test-model", logger)
+
+	_, err := er.Run(context.Background(), Hypothesis{ID: "H1", Statement: "s", TestPlan: "p"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	systems := provider.capturedSystems()
+	if len(systems) == 0 || systems[0] != experimentSystemPrompt {
+		t.Errorf("expected legacy prompt, got %q", systems)
+	}
+}
+
+func TestExperimentRunner_PipelineErrorFallsBackToLegacy(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	provider := &mockProvider{
+		chatResponses: []llm.ChatResponse{
+			{Content: `{"findings":"f","evidence":"e","confidence":"low","supported":false}`},
+		},
+	}
+	stub := &stubPrefixRenderer{err: errors.New("render broken")}
+	er := NewExperimentRunner(provider, tools.NewRegistry(), "test-model", logger).WithPipeline(stub, "sess")
+
+	_, err := er.Run(context.Background(), Hypothesis{ID: "H1", Statement: "s", TestPlan: "p"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	systems := provider.capturedSystems()
+	if len(systems) == 0 || systems[0] != experimentSystemPrompt {
+		t.Errorf("expected legacy fallback on pipeline err, got %q", systems)
+	}
+}
+
+func TestLoopSummarize_PipelinePrefixPrepended(t *testing.T) {
+	ctx := context.Background()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	stub := &stubPrefixRenderer{prefix: "You are Elnath.\nMission: Research."}
+
+	provider := &mockProvider{
+		chatResponses: []llm.ChatResponse{
+			{Content: `[{"id":"H1","statement":"s","rationale":"r","test_plan":"p","priority":1}]`},
+			{Content: `{"findings":"f","evidence":"e","confidence":"high","supported":true}`},
+			{Content: "summary text"},
+		},
+	}
+	loop := &Loop{
+		hypothesizer: NewHypothesisGenerator(provider, "test-model", logger).WithPipeline(stub, "s"),
+		experimenter: NewExperimentRunner(provider, tools.NewRegistry(), "test-model", logger).WithPipeline(stub, "s"),
+		wikiIndex:    &mockSearcher{},
+		wikiStore:    newTestWikiStore(t),
+		usageTracker: newTestUsageTracker(t),
+		provider:     provider,
+		model:        "test-model",
+		sessionID:    "s",
+		maxRounds:    1,
+		costCapUSD:   100.0,
+		logger:       logger,
+		sink:         event.NopSink{},
+		pipeline:     stub,
+	}
+
+	_, err := loop.Run(ctx, "topic")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	systems := provider.capturedSystems()
+	// Last request is the summarize Chat call.
+	got := systems[len(systems)-1]
+	want := "You are Elnath.\nMission: Research.\n\n" + summarizeSystemPrompt
+	if got != want {
+		t.Errorf("summarize system mismatch\n got: %q\nwant: %q", got, want)
+	}
+	if !strings.HasSuffix(got, summarizeSystemPrompt) {
+		t.Errorf("summarize system should end with legacy prompt, got: %q", got)
+	}
+
+	stages := stub.stages()
+	var summarizeSeen bool
+	for _, st := range stages {
+		if st == StageSummarize {
+			summarizeSeen = true
+			break
+		}
+	}
+	if !summarizeSeen {
+		t.Errorf("expected StageSummarize invocation, stages=%v", stages)
+	}
+}
+
+func TestLoopSummarize_NilPipelineUsesLegacy(t *testing.T) {
+	ctx := context.Background()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	provider := &mockProvider{
+		chatResponses: []llm.ChatResponse{
+			{Content: `[{"id":"H1","statement":"s","rationale":"r","test_plan":"p","priority":1}]`},
+			{Content: `{"findings":"f","evidence":"e","confidence":"high","supported":true}`},
+			{Content: "summary text"},
+		},
+	}
+	loop := &Loop{
+		hypothesizer: NewHypothesisGenerator(provider, "test-model", logger),
+		experimenter: NewExperimentRunner(provider, tools.NewRegistry(), "test-model", logger),
+		wikiIndex:    &mockSearcher{},
+		wikiStore:    newTestWikiStore(t),
+		usageTracker: newTestUsageTracker(t),
+		provider:     provider,
+		model:        "test-model",
+		sessionID:    "s",
+		maxRounds:    1,
+		costCapUSD:   100.0,
+		logger:       logger,
+		sink:         event.NopSink{},
+	}
+
+	_, err := loop.Run(ctx, "topic")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	systems := provider.capturedSystems()
+	got := systems[len(systems)-1]
+	if got != summarizeSystemPrompt {
+		t.Errorf("expected legacy summarize prompt, got %q", got)
+	}
+}
+
+func (s *stubPrefixRenderer) sessionIDs() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, len(s.invocations))
+	for i, inv := range s.invocations {
+		out[i] = inv.SessionID
+	}
+	return out
 }

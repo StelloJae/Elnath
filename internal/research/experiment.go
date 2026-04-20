@@ -25,12 +25,14 @@ type ExperimentResult struct {
 
 // ExperimentRunner executes hypothesis test plans via the agent loop.
 type ExperimentRunner struct {
-	provider llm.Provider
-	tools    *tools.Registry
-	executor tools.Executor
-	model    string
-	logger   *slog.Logger
-	sink     event.Sink
+	provider  llm.Provider
+	tools     *tools.Registry
+	executor  tools.Executor
+	model     string
+	logger    *slog.Logger
+	sink      event.Sink
+	pipeline  PromptPrefixRenderer
+	sessionID string
 }
 
 // NewExperimentRunner creates an ExperimentRunner.
@@ -55,6 +57,16 @@ func (r *ExperimentRunner) WithToolExecutor(exec tools.Executor) *ExperimentRunn
 	return r
 }
 
+// WithPipeline wires a PromptPrefixRenderer and session scope so Run
+// prepends a base-prompt prefix to the hardcoded experiment instruction
+// before invoking the agent loop. Nil pipeline preserves the legacy
+// behaviour. Returns r for chaining.
+func (r *ExperimentRunner) WithPipeline(p PromptPrefixRenderer, sessionID string) *ExperimentRunner {
+	r.pipeline = p
+	r.sessionID = sessionID
+	return r
+}
+
 const experimentSystemPrompt = `You are a research experiment executor. Test the following hypothesis by gathering evidence using available tools. Investigate thoroughly, then provide your findings.
 
 After investigation, you MUST end your final message with this exact JSON format on its own line:
@@ -74,27 +86,35 @@ func (r *ExperimentRunner) Run(ctx context.Context, hyp Hypothesis) (*Experiment
 		"statement", hyp.Statement,
 	)
 
-	a := agent.New(
-		r.provider,
-		r.tools,
-		agent.WithModel(r.model),
-		agent.WithSystemPrompt(experimentSystemPrompt),
-		agent.WithMaxIterations(20),
-		agent.WithLogger(r.logger),
-	)
-	if r.executor != nil {
-		a = agent.New(
-			r.provider,
-			r.tools,
-			agent.WithModel(r.model),
-			agent.WithSystemPrompt(experimentSystemPrompt),
-			agent.WithMaxIterations(20),
-			agent.WithLogger(r.logger),
-			agent.WithToolExecutor(r.executor),
-		)
+	userMsg := fmt.Sprintf("Hypothesis: %s\n\nTest Plan: %s\n\nExecute this test plan and report results.", hyp.Statement, hyp.TestPlan)
+
+	systemPrompt := experimentSystemPrompt
+	if r.pipeline != nil {
+		prefix, perr := r.pipeline.RenderPromptPrefix(ctx, Invocation{
+			SessionID: r.sessionID,
+			Stage:     StageExperiment,
+			UserInput: userMsg,
+		})
+		switch {
+		case perr != nil:
+			r.logger.Warn("research: experiment pipeline prefix render failed; using legacy fallback",
+				"error", perr, "hypothesis_id", hyp.ID)
+		case prefix != "":
+			systemPrompt = prefix + "\n\n" + experimentSystemPrompt
+		}
 	}
 
-	userMsg := fmt.Sprintf("Hypothesis: %s\n\nTest Plan: %s\n\nExecute this test plan and report results.", hyp.Statement, hyp.TestPlan)
+	agentOpts := []agent.Option{
+		agent.WithModel(r.model),
+		agent.WithSystemPrompt(systemPrompt),
+		agent.WithMaxIterations(20),
+		agent.WithLogger(r.logger),
+	}
+	if r.executor != nil {
+		agentOpts = append(agentOpts, agent.WithToolExecutor(r.executor))
+	}
+	a := agent.New(r.provider, r.tools, agentOpts...)
+
 	messages := []llm.Message{llm.NewUserMessage(userMsg)}
 
 	result, err := a.Run(ctx, messages, r.sink)

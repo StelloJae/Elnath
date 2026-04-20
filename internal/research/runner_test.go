@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stello/elnath/internal/daemon"
@@ -213,4 +214,57 @@ func TestTaskRunnerApplyLearningStoresLessonsWithoutSelfState(t *testing.T) {
 func TestTaskRunnerApplyLearningNoopsWhenStoreMissing(t *testing.T) {
 	r := NewTaskRunner(nil, "test-model", nil, nil, nil, slog.Default())
 	r.applyLearning(&ResearchResult{Topic: "topic-a"})
+}
+
+func TestTaskRunner_WithRunnerPipelinePropagatesToAllStages(t *testing.T) {
+	stub := &stubPrefixRenderer{prefix: "You are Elnath.\nMission: Research."}
+
+	provider := &mockProvider{
+		chatResponses: []llm.ChatResponse{
+			{Content: `[{"id":"H1","statement":"s","rationale":"r","test_plan":"p","priority":1}]`},
+			{Content: `{"findings":"f","evidence":"e","confidence":"high","supported":true}`},
+			{Content: "summary text"},
+		},
+	}
+	r := NewTaskRunner(
+		provider,
+		"test-model",
+		&mockSearcher{},
+		newTestWikiStore(t),
+		newTestUsageTracker(t),
+		slog.Default(),
+		WithRunnerMaxRounds(1),
+		WithRunnerPipeline(stub),
+	)
+
+	_, err := r.Run(context.Background(), daemon.TaskPayload{Prompt: "topic", SessionID: "sess-runner"}, event.NopSink{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	stages := stub.stages()
+	seen := map[string]bool{}
+	for _, st := range stages {
+		seen[st] = true
+	}
+	for _, want := range []string{StageHypothesis, StageExperiment, StageSummarize} {
+		if !seen[want] {
+			t.Errorf("pipeline invocation missing for stage %q (observed: %v)", want, stages)
+		}
+	}
+
+	systems := provider.capturedSystems()
+	if len(systems) < 3 {
+		t.Fatalf("expected >=3 Chat/Stream requests, got %d", len(systems))
+	}
+	for i, s := range systems {
+		if !strings.HasPrefix(s, "You are Elnath.\nMission: Research.\n\n") {
+			t.Errorf("system[%d] missing pipeline prefix; got %q", i, s)
+		}
+	}
+	for _, sid := range stub.sessionIDs() {
+		if sid != "sess-runner" {
+			t.Errorf("invocation SessionID = %q, want sess-runner", sid)
+		}
+	}
 }

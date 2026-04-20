@@ -32,6 +32,7 @@ type Loop struct {
 	costCapUSD   float64
 	logger       *slog.Logger
 	sink         event.Sink
+	pipeline     PromptPrefixRenderer
 }
 
 // LoopOption configures a Loop.
@@ -55,6 +56,13 @@ func WithSessionID(id string) LoopOption {
 // WithSink sets the event sink for streaming research progress.
 func WithSink(s event.Sink) LoopOption {
 	return func(l *Loop) { l.sink = s }
+}
+
+// WithLoopPipeline wires a PromptPrefixRenderer so Loop.summarize prepends
+// a base-prompt prefix to the hardcoded summarize instruction. Nil
+// pipeline preserves the legacy behaviour.
+func WithLoopPipeline(p PromptPrefixRenderer) LoopOption {
+	return func(l *Loop) { l.pipeline = p }
 }
 
 // NewLoop creates a research Loop with sensible defaults.
@@ -217,11 +225,29 @@ func (l *Loop) summarize(ctx context.Context, topic string, rounds []RoundResult
 		fmt.Fprintf(&b, "- Confidence: %s\n", rr.Result.Confidence)
 		fmt.Fprintf(&b, "- Findings: %s\n\n", rr.Result.Findings)
 	}
+	userMsg := b.String()
+
+	systemPrompt := summarizeSystemPrompt
+	if l.pipeline != nil {
+		prefix, perr := l.pipeline.RenderPromptPrefix(ctx, Invocation{
+			SessionID: l.sessionID,
+			Stage:     StageSummarize,
+			Topic:     topic,
+			UserInput: userMsg,
+		})
+		switch {
+		case perr != nil:
+			l.logger.Warn("research: summarize pipeline prefix render failed; using legacy fallback",
+				"error", perr)
+		case prefix != "":
+			systemPrompt = prefix + "\n\n" + summarizeSystemPrompt
+		}
+	}
 
 	resp, err := l.provider.Chat(ctx, llm.ChatRequest{
 		Model:       l.model,
-		System:      summarizeSystemPrompt,
-		Messages:    []llm.Message{llm.NewUserMessage(b.String())},
+		System:      systemPrompt,
+		Messages:    []llm.Message{llm.NewUserMessage(userMsg)},
 		MaxTokens:   1024,
 		Temperature: 0.3,
 	})

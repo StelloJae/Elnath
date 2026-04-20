@@ -19,6 +19,38 @@ import (
 
 var _ daemon.TaskRunner = (*TaskRunner)(nil)
 
+// Stage identifies which research 3-stage agent is invoking the prompt
+// pipeline. Renderers may use this to tailor RenderState (e.g., wiki-RAG
+// query scope) per stage, though the canonical adapter treats all stages
+// uniformly.
+const (
+	StageHypothesis = "hypothesis"
+	StageExperiment = "experiment"
+	StageSummarize  = "summarize"
+)
+
+// Invocation carries the per-call context a PromptPrefixRenderer may
+// consult when assembling a system-prompt prefix for a research stage.
+// All fields are optional; renderers must tolerate zero values so each
+// stage can pass only what it has.
+type Invocation struct {
+	SessionID string
+	Stage     string
+	Topic     string
+	UserInput string
+}
+
+// PromptPrefixRenderer returns a system-prompt prefix prepended to the
+// research stage's own instruction. Implementations typically wrap a
+// prompt.Builder together with identity / persona / wiki-RAG RenderState
+// so research stages inherit the same base context as other agent paths.
+// The research package keeps this boundary narrow (no prompt import) to
+// avoid an import cycle. Returning an empty string or a non-nil error
+// triggers the legacy fallback (stage prompt only).
+type PromptPrefixRenderer interface {
+	RenderPromptPrefix(ctx context.Context, inv Invocation) (string, error)
+}
+
 type TaskRunner struct {
 	provider      llm.Provider
 	model         string
@@ -32,6 +64,7 @@ type TaskRunner struct {
 	costCapUSD    float64
 	learningStore *learning.Store
 	selfState     *self.SelfState
+	pipeline      PromptPrefixRenderer
 }
 
 type TaskRunnerOption func(*TaskRunner)
@@ -77,6 +110,16 @@ func WithRunnerLearning(store *learning.Store) TaskRunnerOption {
 func WithRunnerSelfState(s *self.SelfState) TaskRunnerOption {
 	return func(r *TaskRunner) {
 		r.selfState = s
+	}
+}
+
+// WithRunnerPipeline wires a PromptPrefixRenderer so the hypothesis,
+// experiment, and summarize stages prepend a base-prompt prefix carrying
+// identity / persona / wiki-RAG context to their hardcoded instructions.
+// Nil preserves the legacy behaviour (stage prompt used as-is).
+func WithRunnerPipeline(p PromptPrefixRenderer) TaskRunnerOption {
+	return func(r *TaskRunner) {
+		r.pipeline = p
 	}
 }
 
@@ -129,8 +172,8 @@ func (r *TaskRunner) Run(ctx context.Context, payload daemon.TaskPayload, sink e
 		toolReg = tools.NewRegistry()
 	}
 
-	hg := NewHypothesisGenerator(r.provider, r.model, r.logger)
-	er := NewExperimentRunner(r.provider, toolReg, r.model, r.logger).WithSink(sink)
+	hg := NewHypothesisGenerator(r.provider, r.model, r.logger).WithPipeline(r.pipeline, sessionID)
+	er := NewExperimentRunner(r.provider, toolReg, r.model, r.logger).WithSink(sink).WithPipeline(r.pipeline, sessionID)
 	if r.toolExec != nil {
 		er.WithToolExecutor(r.toolExec)
 	}
@@ -147,6 +190,7 @@ func (r *TaskRunner) Run(ctx context.Context, payload daemon.TaskPayload, sink e
 		WithCostCap(r.costCapUSD),
 		WithSink(sink),
 		WithSessionID(sessionID),
+		WithLoopPipeline(r.pipeline),
 	)
 
 	result, err := loop.Run(ctx, topic)

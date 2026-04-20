@@ -38,9 +38,11 @@ type ResearchResult struct {
 
 // HypothesisGenerator produces hypotheses from wiki knowledge and prior results.
 type HypothesisGenerator struct {
-	provider llm.Provider
-	model    string
-	logger   *slog.Logger
+	provider  llm.Provider
+	model     string
+	logger    *slog.Logger
+	pipeline  PromptPrefixRenderer
+	sessionID string
 }
 
 // NewHypothesisGenerator creates a HypothesisGenerator.
@@ -50,6 +52,15 @@ func NewHypothesisGenerator(provider llm.Provider, model string, logger *slog.Lo
 		model:    model,
 		logger:   logger,
 	}
+}
+
+// WithPipeline wires a PromptPrefixRenderer and session scope so Generate
+// prepends a base-prompt prefix to the hardcoded hypothesis instruction.
+// Nil pipeline preserves the legacy behaviour. Returns g for chaining.
+func (g *HypothesisGenerator) WithPipeline(p PromptPrefixRenderer, sessionID string) *HypothesisGenerator {
+	g.pipeline = p
+	g.sessionID = sessionID
+	return g
 }
 
 const hypothesisSystemPrompt = `You are a research hypothesis generator. Given a topic and existing knowledge, generate 1-3 testable hypotheses. Each hypothesis must be specific, falsifiable, and include a concrete test plan.
@@ -71,9 +82,26 @@ func (g *HypothesisGenerator) Generate(ctx context.Context, topic string, knowle
 		"prior_rounds", len(prior),
 	)
 
+	systemPrompt := hypothesisSystemPrompt
+	if g.pipeline != nil {
+		prefix, perr := g.pipeline.RenderPromptPrefix(ctx, Invocation{
+			SessionID: g.sessionID,
+			Stage:     StageHypothesis,
+			Topic:     topic,
+			UserInput: userMsg,
+		})
+		switch {
+		case perr != nil:
+			g.logger.Warn("research: hypothesis pipeline prefix render failed; using legacy fallback",
+				"error", perr)
+		case prefix != "":
+			systemPrompt = prefix + "\n\n" + hypothesisSystemPrompt
+		}
+	}
+
 	resp, err := g.provider.Chat(ctx, llm.ChatRequest{
 		Model:       g.model,
-		System:      hypothesisSystemPrompt,
+		System:      systemPrompt,
 		Messages:    []llm.Message{llm.NewUserMessage(userMsg)},
 		MaxTokens:   2048,
 		Temperature: 0.7,
