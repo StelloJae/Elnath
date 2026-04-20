@@ -398,6 +398,184 @@ func TestExecuteHonorsPermissionAndHooks(t *testing.T) {
 	})
 }
 
+type stubPipeline struct {
+	prefix     string
+	err        error
+	calls      int
+	lastInvoke SkillInvocation
+}
+
+func (s *stubPipeline) RenderPromptPrefix(_ context.Context, inv SkillInvocation) (string, error) {
+	s.calls++
+	s.lastInvoke = inv
+	return s.prefix, s.err
+}
+
+func TestExecutePrependsPipelinePrefix(t *testing.T) {
+	t.Parallel()
+
+	var capturedSystem string
+	provider := &mockProvider{streamFn: func(_ context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
+		capturedSystem = req.System
+		cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: "ok"})
+		cb(llm.StreamEvent{Type: llm.EventDone})
+		return nil
+	}}
+
+	pipeline := &stubPipeline{prefix: "You are Elnath.\nMission: Build."}
+
+	reg := NewRegistry()
+	reg.Add(&Skill{Name: "pipeline-skill", Prompt: "Audit repo."})
+
+	_, err := reg.Execute(context.Background(), ExecuteParams{
+		SkillName: "pipeline-skill",
+		Provider:  provider,
+		ToolReg:   tools.NewRegistry(),
+		Pipeline:  pipeline,
+		SessionID: "sess-1",
+		UserInput: "/pipeline-skill",
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	want := "You are Elnath.\nMission: Build.\n\nAudit repo."
+	if capturedSystem != want {
+		t.Fatalf("system prompt = %q, want %q", capturedSystem, want)
+	}
+	if pipeline.calls != 1 {
+		t.Fatalf("pipeline calls = %d, want 1", pipeline.calls)
+	}
+	if pipeline.lastInvoke.SkillName != "pipeline-skill" {
+		t.Fatalf("invocation.SkillName = %q, want %q", pipeline.lastInvoke.SkillName, "pipeline-skill")
+	}
+	if pipeline.lastInvoke.SessionID != "sess-1" {
+		t.Fatalf("invocation.SessionID = %q, want %q", pipeline.lastInvoke.SessionID, "sess-1")
+	}
+	if pipeline.lastInvoke.UserInput != "/pipeline-skill" {
+		t.Fatalf("invocation.UserInput = %q, want %q", pipeline.lastInvoke.UserInput, "/pipeline-skill")
+	}
+}
+
+func TestExecutePipelineNilUsesSkillPromptOnly(t *testing.T) {
+	t.Parallel()
+
+	var capturedSystem string
+	provider := &mockProvider{streamFn: func(_ context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
+		capturedSystem = req.System
+		cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: "ok"})
+		cb(llm.StreamEvent{Type: llm.EventDone})
+		return nil
+	}}
+
+	reg := NewRegistry()
+	reg.Add(&Skill{Name: "legacy-skill", Prompt: "Just skill body."})
+
+	_, err := reg.Execute(context.Background(), ExecuteParams{
+		SkillName: "legacy-skill",
+		Provider:  provider,
+		ToolReg:   tools.NewRegistry(),
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if capturedSystem != "Just skill body." {
+		t.Fatalf("system prompt = %q, want skill body only", capturedSystem)
+	}
+}
+
+func TestExecutePipelineErrorFallsBackToSkillPrompt(t *testing.T) {
+	t.Parallel()
+
+	var capturedSystem string
+	provider := &mockProvider{streamFn: func(_ context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
+		capturedSystem = req.System
+		cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: "ok"})
+		cb(llm.StreamEvent{Type: llm.EventDone})
+		return nil
+	}}
+
+	pipeline := &stubPipeline{err: fmt.Errorf("builder failed")}
+
+	reg := NewRegistry()
+	reg.Add(&Skill{Name: "err-skill", Prompt: "Body."})
+
+	_, err := reg.Execute(context.Background(), ExecuteParams{
+		SkillName: "err-skill",
+		Provider:  provider,
+		ToolReg:   tools.NewRegistry(),
+		Pipeline:  pipeline,
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if capturedSystem != "Body." {
+		t.Fatalf("system prompt = %q, want legacy fallback", capturedSystem)
+	}
+}
+
+func TestExecutePipelineEmptyPrefixUsesSkillPromptOnly(t *testing.T) {
+	t.Parallel()
+
+	var capturedSystem string
+	provider := &mockProvider{streamFn: func(_ context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
+		capturedSystem = req.System
+		cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: "ok"})
+		cb(llm.StreamEvent{Type: llm.EventDone})
+		return nil
+	}}
+
+	pipeline := &stubPipeline{prefix: ""}
+
+	reg := NewRegistry()
+	reg.Add(&Skill{Name: "empty-skill", Prompt: "Body only."})
+
+	_, err := reg.Execute(context.Background(), ExecuteParams{
+		SkillName: "empty-skill",
+		Provider:  provider,
+		ToolReg:   tools.NewRegistry(),
+		Pipeline:  pipeline,
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if capturedSystem != "Body only." {
+		t.Fatalf("system prompt = %q, want skill body only when prefix empty", capturedSystem)
+	}
+}
+
+func TestExecutePipelinePrefixPlusLocaleDirective(t *testing.T) {
+	t.Parallel()
+
+	var capturedSystem string
+	provider := &mockProvider{streamFn: func(_ context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
+		capturedSystem = req.System
+		cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: "ok"})
+		cb(llm.StreamEvent{Type: llm.EventDone})
+		return nil
+	}}
+
+	pipeline := &stubPipeline{prefix: "Identity section."}
+
+	reg := NewRegistry()
+	reg.Add(&Skill{Name: "ko-skill", Prompt: "Do it."})
+
+	_, err := reg.Execute(context.Background(), ExecuteParams{
+		SkillName: "ko-skill",
+		Provider:  provider,
+		ToolReg:   tools.NewRegistry(),
+		Pipeline:  pipeline,
+		Locale:    "ko",
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	want := "Identity section.\n\nDo it.\n\nRespond in Korean."
+	if capturedSystem != want {
+		t.Fatalf("system prompt = %q, want %q", capturedSystem, want)
+	}
+}
+
 func TestExecuteAppendsLocaleDirective(t *testing.T) {
 	t.Parallel()
 

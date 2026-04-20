@@ -140,6 +140,28 @@ func FilterRegistry(full *tools.Registry, allowList []string) *tools.Registry {
 	return filtered
 }
 
+// SkillInvocation carries the per-call context a PromptPrefixRenderer may
+// consult when assembling a system-prompt prefix. All fields are optional;
+// renderers must tolerate zero values so the invocation site can pass only
+// what it has.
+type SkillInvocation struct {
+	SkillName string
+	SessionID string
+	UserInput string
+}
+
+// PromptPrefixRenderer returns a system-prompt prefix prepended to the
+// skill's own instruction. Implementations typically wrap a prompt.Builder
+// together with identity / persona / wiki-RAG RenderState so executed
+// skills inherit the same base context as other agent paths. The skill
+// package keeps this boundary narrow (no prompt import) to avoid the
+// prompt → skill → prompt cycle that SkillCatalogNode would create.
+// Returning an empty string or a non-nil error triggers the legacy
+// fallback (skill prompt only).
+type PromptPrefixRenderer interface {
+	RenderPromptPrefix(ctx context.Context, inv SkillInvocation) (string, error)
+}
+
 type ExecuteParams struct {
 	SkillName  string
 	Args       map[string]string
@@ -154,6 +176,17 @@ type ExecuteParams struct {
 	// locales append locale.ResponseDirective so skill output honors the
 	// user's language preference without re-running the prompt builder.
 	Locale string
+	// Pipeline, when non-nil, renders a base-prompt prefix that is
+	// prepended to the skill's own instruction so executed skills inherit
+	// the identity / persona / wiki-RAG context that the rest of the
+	// agent pipeline enjoys (Phase 7.1 GAP-SKILL-01). Nil preserves the
+	// legacy behaviour where the skill prompt is used as-is.
+	Pipeline PromptPrefixRenderer
+	// SessionID and UserInput are forwarded to the Pipeline renderer so
+	// it can populate session-scoped RenderState fields (wiki-RAG, session
+	// summary, etc.). Ignored when Pipeline is nil.
+	SessionID string
+	UserInput string
 }
 
 type ExecuteResult struct {
@@ -169,6 +202,22 @@ func (r *Registry) Execute(ctx context.Context, params ExecuteParams) (*ExecuteR
 	}
 
 	rendered := skill.RenderPrompt(params.Args)
+	if params.Pipeline != nil {
+		prefix, err := params.Pipeline.RenderPromptPrefix(ctx, SkillInvocation{
+			SkillName: params.SkillName,
+			SessionID: params.SessionID,
+			UserInput: params.UserInput,
+		})
+		switch {
+		case err != nil:
+			slog.Warn("skill pipeline prefix render failed; using legacy fallback",
+				"error", err,
+				"skill", params.SkillName,
+			)
+		case prefix != "":
+			rendered = prefix + "\n\n" + rendered
+		}
+	}
 	if directive := locale.ResponseDirective(params.Locale); directive != "" {
 		rendered = rendered + "\n\n" + directive
 	}

@@ -1069,6 +1069,42 @@ func (rt *executionRuntime) recordSetupOutcome(
 	}
 }
 
+// skillPromptPipeline adapts prompt.Builder + session-scoped RenderState
+// to the skill.PromptPrefixRenderer contract. The skill package cannot
+// import internal/prompt (SkillCatalogNode already pulls prompt → skill),
+// so runtime materialises the RenderState here on behalf of each skill
+// invocation.
+type skillPromptPipeline struct {
+	builder      *prompt.Builder
+	self         *self.SelfState
+	wikiIdx      *wiki.Index
+	personaExtra string
+	providerName string
+	model        string
+	workDir      string
+	daemonMode   bool
+	principal    identity.Principal
+}
+
+func (p *skillPromptPipeline) RenderPromptPrefix(ctx context.Context, inv skill.SkillInvocation) (string, error) {
+	if p == nil || p.builder == nil {
+		return "", nil
+	}
+	state := &prompt.RenderState{
+		SessionID:    inv.SessionID,
+		UserInput:    inv.UserInput,
+		Self:         p.self,
+		Principal:    p.principal,
+		WikiIdx:      p.wikiIdx,
+		PersonaExtra: p.personaExtra,
+		Model:        p.model,
+		Provider:     p.providerName,
+		WorkDir:      p.workDir,
+		DaemonMode:   p.daemonMode,
+	}
+	return p.builder.Build(ctx, state)
+}
+
 func (rt *executionRuntime) trySkillExecution(
 	ctx context.Context,
 	sess *agent.Session,
@@ -1092,6 +1128,18 @@ func (rt *executionRuntime) trySkillExecution(
 	rt.app.Logger.Info("executing skill", "name", skillName, "args", args)
 	bus.Emit(event.TextDeltaEvent{Base: event.NewBase(), Content: fmt.Sprintf("Executing skill: %s\n", skillName)})
 
+	pipeline := &skillPromptPipeline{
+		builder:      rt.promptBuilder,
+		self:         rt.selfState,
+		wikiIdx:      rt.wikiIdx,
+		personaExtra: rt.personaExtra,
+		providerName: rt.provider.Name(),
+		model:        rt.wfCfg.Model,
+		workDir:      rt.workDir,
+		daemonMode:   rt.daemonMode,
+		principal:    rt.principal,
+	}
+
 	result, err := rt.skillReg.Execute(ctx, skill.ExecuteParams{
 		SkillName:  skillName,
 		Args:       args,
@@ -1102,6 +1150,9 @@ func (rt *executionRuntime) trySkillExecution(
 		Permission: rt.wfCfg.Permission,
 		Hooks:      rt.wfCfg.Hooks,
 		Locale:     rt.mgr.LastLocale(sess.ID),
+		Pipeline:   pipeline,
+		SessionID:  sess.ID,
+		UserInput:  input,
 	})
 	if err != nil {
 		rt.recordSkillUsage(sess.ID, skillName, false)

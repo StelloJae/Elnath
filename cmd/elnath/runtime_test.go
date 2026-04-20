@@ -1724,8 +1724,11 @@ func TestExecutionRuntimeRunTaskExecutesSkillSlashCommand(t *testing.T) {
 	if provider.streamCalls != 1 {
 		t.Fatalf("streamCalls = %d, want 1", provider.streamCalls)
 	}
-	if provider.lastSystem != "Review PR #42" {
-		t.Fatalf("system prompt = %q, want %q", provider.lastSystem, "Review PR #42")
+	if !strings.HasSuffix(provider.lastSystem, "Review PR #42") {
+		t.Fatalf("system prompt = %q, want suffix %q (skill body last section)", provider.lastSystem, "Review PR #42")
+	}
+	if !strings.Contains(provider.lastSystem, "You are Elnath.") {
+		t.Fatalf("system prompt missing pipeline identity prefix: %q", provider.lastSystem)
 	}
 	if !strings.Contains(streamed.String(), "Executing skill: pr-review\n") {
 		t.Fatalf("streamed = %q, want execution banner", streamed.String())
@@ -1784,8 +1787,11 @@ func TestExecutionRuntimeRunTaskPersistsFullSkillTranscript(t *testing.T) {
 	if summary != "skill output" {
 		t.Fatalf("summary = %q, want %q", summary, "skill output")
 	}
-	if provider.lastSystem != "Search hello world" {
-		t.Fatalf("system prompt = %q, want %q", provider.lastSystem, "Search hello world")
+	if !strings.HasSuffix(provider.lastSystem, "Search hello world") {
+		t.Fatalf("system prompt = %q, want suffix %q (skill body last section)", provider.lastSystem, "Search hello world")
+	}
+	if !strings.Contains(provider.lastSystem, "You are Elnath.") {
+		t.Fatalf("system prompt missing pipeline identity prefix: %q", provider.lastSystem)
 	}
 	if len(messages) != 4 {
 		t.Fatalf("messages len = %d, want 4", len(messages))
@@ -1837,8 +1843,11 @@ func TestExecutionRuntimeRunTaskExecutesPrefixedSkillSlashCommand(t *testing.T) 
 	if provider.streamCalls != 1 {
 		t.Fatalf("streamCalls = %d, want 1", provider.streamCalls)
 	}
-	if provider.lastSystem != "Review PR #42" {
-		t.Fatalf("system prompt = %q, want %q", provider.lastSystem, "Review PR #42")
+	if !strings.HasSuffix(provider.lastSystem, "Review PR #42") {
+		t.Fatalf("system prompt = %q, want suffix %q (skill body last section)", provider.lastSystem, "Review PR #42")
+	}
+	if !strings.Contains(provider.lastSystem, "You are Elnath.") {
+		t.Fatalf("system prompt missing pipeline identity prefix: %q", provider.lastSystem)
 	}
 	stats, err := rt.skillTracker.UsageStats()
 	if err != nil {
