@@ -21,6 +21,16 @@ type OutcomeRecord struct {
 	ExistingCode   bool      `json:"existing_code,omitempty"`
 	PreferenceUsed bool      `json:"preference_used,omitempty"`
 	Timestamp      time.Time `json:"timestamp"`
+
+	// FU-LearningObservability schema extension (2026-04-20). All fields are
+	// omitempty so older scorecard code and legacy records continue to read
+	// cleanly; the daemon self-analysis lens relies on them being populated
+	// going forward.
+	MaxIterations int             `json:"max_iterations,omitempty"`
+	InputTokens   int             `json:"input_tokens,omitempty"`
+	OutputTokens  int             `json:"output_tokens,omitempty"`
+	ToolStats     []AgentToolStat `json:"tool_stats,omitempty"`
+	SessionID     string          `json:"session_id,omitempty"`
 }
 
 func IsSuccessful(finishReason string) bool {

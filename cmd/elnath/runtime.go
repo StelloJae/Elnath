@@ -742,22 +742,38 @@ func (rt *executionRuntime) runTask(
 	result, err := wf.Run(ctx, input)
 	elapsed := time.Since(wfStart)
 	if err != nil {
-		rt.recordOutcome(routeCtx, intent, wf.Name(), "error", false, elapsed, 0, userInput, pref != nil)
+		rt.recordOutcome(outcomeInput{
+			routeCtx:       routeCtx,
+			intent:         intent,
+			workflow:       wf.Name(),
+			finishReason:   "error",
+			success:        false,
+			elapsed:        elapsed,
+			userInput:      userInput,
+			preferenceUsed: pref != nil,
+			sessionID:      sess.ID,
+			maxIterations:  rt.wfCfg.MaxIterations,
+		})
 		return nil, "", fmt.Errorf("workflow %s: %w", wf.Name(), err)
 	}
 
 	if learning.ShouldRecord(result.FinishReason) {
-		rt.recordOutcome(
-			routeCtx,
-			intent,
-			result.Workflow,
-			result.FinishReason,
-			learning.IsSuccessful(result.FinishReason),
-			elapsed,
-			result.Iterations,
-			userInput,
-			pref != nil,
-		)
+		rt.recordOutcome(outcomeInput{
+			routeCtx:       routeCtx,
+			intent:         intent,
+			workflow:       result.Workflow,
+			finishReason:   result.FinishReason,
+			success:        learning.IsSuccessful(result.FinishReason),
+			elapsed:        elapsed,
+			iterations:     result.Iterations,
+			userInput:      userInput,
+			preferenceUsed: pref != nil,
+			sessionID:      sess.ID,
+			maxIterations:  rt.wfCfg.MaxIterations,
+			inputTokens:    result.Usage.InputTokens,
+			outputTokens:   result.Usage.OutputTokens,
+			toolStats:      result.ToolStats,
+		})
 	}
 
 	if usage := llm.FormatUsageSummary(rt.wfCfg.Model, result.Usage); usage != "" {
@@ -774,33 +790,48 @@ func (rt *executionRuntime) runTask(
 // recordOutcome appends a learning outcome and, on success, asks the routing
 // advisor for an updated preference. Safe to call with a nil outcomeStore or an
 // empty ProjectID; both make the call a no-op so error paths stay cheap.
-func (rt *executionRuntime) recordOutcome(
-	routeCtx *orchestrator.RoutingContext,
-	intent conversation.Intent,
-	workflow string,
-	finishReason string,
-	success bool,
-	elapsed time.Duration,
-	iterations int,
-	userInput string,
-	preferenceUsed bool,
-) {
-	if rt.outcomeStore == nil || routeCtx.ProjectID == "" {
+// outcomeInput aggregates the fields recordOutcome writes to outcomes.jsonl.
+// Using a struct keeps the arg list manageable now that the P3 learning-
+// observability extension adds session/usage/tool telemetry.
+type outcomeInput struct {
+	routeCtx       *orchestrator.RoutingContext
+	intent         conversation.Intent
+	workflow       string
+	finishReason   string
+	success        bool
+	elapsed        time.Duration
+	iterations     int
+	userInput      string
+	preferenceUsed bool
+	sessionID      string
+	maxIterations  int
+	inputTokens    int
+	outputTokens   int
+	toolStats      []agent.ToolStat
+}
+
+func (rt *executionRuntime) recordOutcome(in outcomeInput) {
+	if rt.outcomeStore == nil || in.routeCtx == nil || in.routeCtx.ProjectID == "" {
 		return
 	}
 	record := learning.OutcomeRecord{
-		ProjectID:      routeCtx.ProjectID,
-		Intent:         string(intent),
-		Workflow:       workflow,
-		FinishReason:   finishReason,
-		Success:        success,
-		Duration:       elapsed.Seconds(),
+		ProjectID:      in.routeCtx.ProjectID,
+		Intent:         string(in.intent),
+		Workflow:       in.workflow,
+		FinishReason:   in.finishReason,
+		Success:        in.success,
+		Duration:       in.elapsed.Seconds(),
 		Cost:           0,
-		Iterations:     iterations,
-		InputSnippet:   runeSnippet(userInput, 100),
-		EstimatedFiles: routeCtx.EstimatedFiles,
-		ExistingCode:   routeCtx.ExistingCode,
-		PreferenceUsed: preferenceUsed,
+		Iterations:     in.iterations,
+		InputSnippet:   runeSnippet(in.userInput, 100),
+		EstimatedFiles: in.routeCtx.EstimatedFiles,
+		ExistingCode:   in.routeCtx.ExistingCode,
+		PreferenceUsed: in.preferenceUsed,
+		SessionID:      in.sessionID,
+		MaxIterations:  in.maxIterations,
+		InputTokens:    in.inputTokens,
+		OutputTokens:   in.outputTokens,
+		ToolStats:      agentToolStatsToLearning(in.toolStats),
 	}
 	if appendErr := rt.outcomeStore.Append(record); appendErr != nil {
 		rt.app.Logger.Warn("outcome store: append failed", "error", appendErr)
@@ -808,19 +839,38 @@ func (rt *executionRuntime) recordOutcome(
 	if rotErr := rt.outcomeStore.AutoRotateIfNeeded(300); rotErr != nil {
 		rt.app.Logger.Warn("outcome store: auto-rotate failed", "error", rotErr)
 	}
-	if !success {
+	if !in.success {
 		return
 	}
 	if rt.routingAdvisor == nil {
 		return
 	}
-	advPref, advErr := rt.routingAdvisor.Advise(routeCtx.ProjectID)
+	advPref, advErr := rt.routingAdvisor.Advise(in.routeCtx.ProjectID)
 	if advErr != nil || advPref == nil {
 		return
 	}
-	if saveErr := wiki.SaveWorkflowPreference(rt.wikiStore, routeCtx.ProjectID, advPref); saveErr != nil {
+	if saveErr := wiki.SaveWorkflowPreference(rt.wikiStore, in.routeCtx.ProjectID, advPref); saveErr != nil {
 		rt.app.Logger.Warn("routing advisor: wiki save failed", "error", saveErr)
 	}
+}
+
+// agentToolStatsToLearning converts the agent-level tool-stat type into the
+// learning-package type stored in outcomes.jsonl. Returns nil when the input
+// has no entries so the JSON encoder honors omitempty on the outcome field.
+func agentToolStatsToLearning(src []agent.ToolStat) []learning.AgentToolStat {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make([]learning.AgentToolStat, len(src))
+	for i, s := range src {
+		dst[i] = learning.AgentToolStat{
+			Name:      s.Name,
+			Calls:     s.Calls,
+			Errors:    s.Errors,
+			TotalTime: s.TotalTime,
+		}
+	}
+	return dst
 }
 
 // recordSetupOutcome logs a failure outcome for daemon-task setup errors

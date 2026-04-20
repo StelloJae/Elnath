@@ -24,10 +24,10 @@ type AgentResultInfo struct {
 }
 
 type AgentToolStat struct {
-	Name      string
-	Calls     int
-	Errors    int
-	TotalTime time.Duration
+	Name      string        `json:"name"`
+	Calls     int           `json:"calls"`
+	Errors    int           `json:"errors,omitempty"`
+	TotalTime time.Duration `json:"total_time_ns,omitempty"`
 }
 
 const (
