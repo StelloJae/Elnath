@@ -428,3 +428,110 @@ func emitScriptedMessage(cb func(llm.StreamEvent), msg llm.Message) {
 		}
 	}
 }
+
+// partialFailProvider drives the team workflow with one subtask whose
+// stream raises a non-retryable error, while the remaining subtasks
+// succeed. It captures the synthesiser prompt so tests can assert that
+// successful subtask outputs and the failed subtask's identity both
+// reach the synthesiser.
+type partialFailProvider struct {
+	mu                 sync.Mutex
+	planner            string
+	synth              string
+	failingInstruction string
+	failingErr         error
+	successResults     map[string]string
+	synthPrompt        string
+}
+
+func (p *partialFailProvider) Name() string            { return "test" }
+func (p *partialFailProvider) Models() []llm.ModelInfo { return nil }
+func (p *partialFailProvider) Chat(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+	return &llm.ChatResponse{}, nil
+}
+
+func (p *partialFailProvider) Stream(_ context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
+	firstUser := firstUserText(req.Messages)
+	lastText := ""
+	if len(req.Messages) > 0 {
+		lastText = req.Messages[len(req.Messages)-1].Text()
+	}
+
+	switch {
+	case strings.HasPrefix(firstUser, "You are a task planner."):
+		cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: p.planner})
+		cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{InputTokens: 10, OutputTokens: 5}})
+		return nil
+	case strings.HasPrefix(lastText, "You have been given the results of parallel subtasks."):
+		p.mu.Lock()
+		p.synthPrompt = lastText
+		p.mu.Unlock()
+		cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: p.synth})
+		cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{InputTokens: 10, OutputTokens: 5}})
+		return nil
+	}
+
+	if firstUser == p.failingInstruction {
+		if p.failingErr != nil {
+			return p.failingErr
+		}
+		return errors.New("simulated subtask stream failure")
+	}
+	if text, ok := p.successResults[firstUser]; ok {
+		cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: text})
+		cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{InputTokens: 10, OutputTokens: 5}})
+		return nil
+	}
+	return errors.New("partialFailProvider: unscripted subtask: " + firstUser)
+}
+
+func TestTeamWorkflow_PartialFailure_DoesNotAbort(t *testing.T) {
+	ctx := context.Background()
+
+	plannerJSON := `[
+		{"id":1,"title":"Step A","instruction":"do step A"},
+		{"id":2,"title":"Step B","instruction":"do step B"},
+		{"id":3,"title":"Step C","instruction":"do step C"}
+	]`
+
+	provider := &partialFailProvider{
+		planner:            plannerJSON,
+		synth:              "synthesised answer covering A and C, with B unavailable",
+		failingInstruction: "do step B",
+		successResults: map[string]string{
+			"do step A": "result A",
+			"do step C": "result C",
+		},
+	}
+
+	wf := NewTeamWorkflow()
+	input := testInput("execute three steps", provider)
+
+	result, err := wf.Run(ctx, input)
+	if err != nil {
+		t.Fatalf("a single failed subtask must not abort the parent task; got error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result on partial subtask failure")
+	}
+	if !strings.Contains(result.Summary, "synthesised") {
+		t.Fatalf("result.Summary should contain the synthesised answer; got %q", result.Summary)
+	}
+
+	provider.mu.Lock()
+	synthPrompt := provider.synthPrompt
+	provider.mu.Unlock()
+
+	if synthPrompt == "" {
+		t.Fatal("synthesiser was never called; expected partial-failure flow to still synthesise")
+	}
+	if !strings.Contains(synthPrompt, "Step B") {
+		t.Fatalf("synthesiser prompt must mention the failed subtask (Step B); got:\n%s", synthPrompt)
+	}
+	if !strings.Contains(synthPrompt, "result A") {
+		t.Fatalf("synthesiser prompt must include subtask A output; got:\n%s", synthPrompt)
+	}
+	if !strings.Contains(synthPrompt, "result C") {
+		t.Fatalf("synthesiser prompt must include subtask C output; got:\n%s", synthPrompt)
+	}
+}

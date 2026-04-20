@@ -92,6 +92,10 @@ func (w *TeamWorkflow) Run(ctx context.Context, input WorkflowInput) (*WorkflowR
 	finishReasons := make([]string, 0, len(results))
 	totalIter := 0
 	for _, r := range results {
+		if r.result == nil {
+			finishReasons = append(finishReasons, string(agent.FinishReasonError))
+			continue
+		}
 		toolStatSlices = append(toolStatSlices, toAgentToolStats(r.result.ToolStats))
 		finishReasons = append(finishReasons, string(r.result.FinishReason))
 		totalIter += r.result.Iterations
@@ -327,9 +331,15 @@ func (w *TeamWorkflow) runSubtasks(ctx context.Context, input WorkflowInput, sub
 
 	var results []subtaskResult
 	totalUsage := llm.UsageStats{}
+	successCount := 0
 	for r := range resultCh {
 		if r.err != nil {
-			return nil, llm.UsageStats{}, fmt.Errorf("subtask %d %q: %w", r.subtask.ID, r.subtask.Title, r.err)
+			safeInput.Sink.Emit(event.TextDeltaEvent{
+				Base:    event.NewBase(),
+				Content: fmt.Sprintf("[team] subtask %d failed: %s — %v\n", r.subtask.ID, r.subtask.Title, r.err),
+			})
+			results = append(results, r)
+			continue
 		}
 		safeInput.Sink.Emit(event.TextDeltaEvent{Base: event.NewBase(), Content: fmt.Sprintf("[team] completed subtask %d: %s\n", r.subtask.ID, r.subtask.Title)})
 		if r.stream != "" {
@@ -343,11 +353,20 @@ func (w *TeamWorkflow) runSubtasks(ctx context.Context, input WorkflowInput, sub
 		totalUsage.CacheRead += r.result.Usage.CacheRead
 		totalUsage.CacheWrite += r.result.Usage.CacheWrite
 		results = append(results, r)
+		successCount++
 	}
 
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].subtask.ID < results[j].subtask.ID
 	})
+
+	// All subtasks failed — preserve original fail-fast surface so the user
+	// sees the underlying error rather than a hollow synthesis. Partial
+	// failures (≥1 success) flow through to synthesise as error context.
+	if successCount == 0 && len(results) > 0 {
+		first := results[0]
+		return nil, llm.UsageStats{}, fmt.Errorf("subtask %d %q: %w", first.subtask.ID, first.subtask.Title, first.err)
+	}
 
 	return results, totalUsage, nil
 }
@@ -415,6 +434,10 @@ func (w *TeamWorkflow) synthesise(ctx context.Context, input WorkflowInput, resu
 
 	for _, r := range results {
 		sb.WriteString(fmt.Sprintf("\n--- Subtask %d: %s ---\n", r.subtask.ID, r.subtask.Title))
+		if r.err != nil {
+			sb.WriteString(fmt.Sprintf("(failed: %v)\n", r.err))
+			continue
+		}
 		answer := extractSummary(r.result.Messages)
 		if answer == "" {
 			answer = "(no output)"
