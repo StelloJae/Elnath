@@ -61,3 +61,33 @@ func TestExecuteCommand_ErrorsHelp(t *testing.T) {
 		t.Fatalf("stdout = %q, want errors help text", stdout)
 	}
 }
+
+// TestPrintCommandHelp_DaemonMatchesDispatcher guards against help-text drift.
+// cmdDaemon accepts start/submit/status/stop/install; the extended help must
+// not advertise subcommands the dispatcher rejects (like "task submit",
+// "task list", "task cancel") or the user hits "unknown daemon subcommand:
+// task" when copy-pasting from help.
+func TestPrintCommandHelp_DaemonMatchesDispatcher(t *testing.T) {
+	stdout, stderr := captureOutput(t, func() {
+		if err := printCommandHelp("daemon"); err != nil {
+			t.Fatalf("printCommandHelp(daemon) error = %v", err)
+		}
+	})
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+
+	mustContain := []string{"USAGE", "start", "submit", "status", "stop", "install"}
+	for _, term := range mustContain {
+		if !strings.Contains(stdout, term) {
+			t.Fatalf("daemon help missing expected subcommand %q; got:\n%s", term, stdout)
+		}
+	}
+
+	mustNotContain := []string{"task submit", "task list", "task cancel"}
+	for _, term := range mustNotContain {
+		if strings.Contains(stdout, term) {
+			t.Fatalf("daemon help advertises drifted term %q that cmdDaemon rejects; got:\n%s", term, stdout)
+		}
+	}
+}

@@ -264,12 +264,10 @@ DESCRIPTION
 
 SUBCOMMANDS
   start             Start the daemon in the background
-  stop              Stop a running daemon
-  status            Show daemon status and active task count
-  logs              Stream daemon logs to stdout
-  task submit       Submit a task to the running daemon
-  task list         List submitted tasks and their statuses
-  task cancel <id>  Cancel a pending or running task
+  submit <task>     Submit a task to the running daemon
+  status            Show queued and running tasks
+  stop              Gracefully stop a running daemon
+  install           Install launchd plist for auto-start
 
 FLAGS
   --config <path>   Use an alternative config file
@@ -279,14 +277,14 @@ EXAMPLES
   # Start the daemon
   $ elnath daemon start
 
+  # Submit a task
+  $ elnath daemon submit "summarise the latest PRs"
+
   # Check daemon status
   $ elnath daemon status
 
-  # Submit a task
-  $ elnath daemon task submit "summarise the latest PRs"
-
-  # Stream daemon logs
-  $ elnath daemon logs
+  # Install launchd auto-start
+  $ elnath daemon install
 
   # Stop the daemon
   $ elnath daemon stop
