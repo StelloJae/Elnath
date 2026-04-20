@@ -72,6 +72,27 @@ func (g *PathGuard) EnsureSessionWorkDir(sessionID string) (string, error) {
 	return dir, nil
 }
 
+// PurgeSessionWorkDir removes the per-session subdir and its contents. The
+// call is idempotent: empty session ids and missing directories are no-ops.
+// As a safety net the resolved path must live under <root>/sessions/; any
+// resolved path that escapes (e.g. via a malformed sanitize result) is
+// refused so a stray sid can never wipe the project root.
+func (g *PathGuard) PurgeSessionWorkDir(sessionID string) error {
+	if sessionID == "" {
+		return nil
+	}
+	dir := g.SessionWorkDir(sessionID)
+	sessionsRoot := filepath.Join(g.workDir, sessionWorkDirSubdir)
+	rel, err := filepath.Rel(sessionsRoot, dir)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		return fmt.Errorf("refusing to purge %q: outside session root %q", dir, sessionsRoot)
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return fmt.Errorf("purge session workspace %q: %w", dir, err)
+	}
+	return nil
+}
+
 // sanitizeSessionID strips path separators and traversal segments so the
 // returned id is always a single, safe directory name.
 func sanitizeSessionID(sessionID string) string {

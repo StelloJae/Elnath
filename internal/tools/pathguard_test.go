@@ -225,6 +225,66 @@ func TestPathGuard_EnsureSessionWorkDir_EmptyReturnsRoot(t *testing.T) {
 	}
 }
 
+func TestPathGuard_PurgeSessionWorkDir_RemovesContents(t *testing.T) {
+	root := t.TempDir()
+	g := NewPathGuard(root, nil)
+	dir, err := g.EnsureSessionWorkDir("alpha")
+	if err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "marker.txt"), []byte("hi"), 0o644); err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+
+	if err := g.PurgeSessionWorkDir("alpha"); err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("session dir should be gone, stat err=%v", err)
+	}
+}
+
+func TestPathGuard_PurgeSessionWorkDir_EmptyIsNoop(t *testing.T) {
+	root := t.TempDir()
+	g := NewPathGuard(root, nil)
+	if err := g.PurgeSessionWorkDir(""); err != nil {
+		t.Fatalf("empty purge should be a noop, got %v", err)
+	}
+	if _, err := os.Stat(root); err != nil {
+		t.Fatalf("root must remain intact: %v", err)
+	}
+}
+
+func TestPathGuard_PurgeSessionWorkDir_MissingDirIsOk(t *testing.T) {
+	root := t.TempDir()
+	g := NewPathGuard(root, nil)
+	if err := g.PurgeSessionWorkDir("never-existed"); err != nil {
+		t.Fatalf("purging a missing session dir should be safe, got %v", err)
+	}
+}
+
+func TestPathGuard_PurgeSessionWorkDir_LeavesSiblingSessions(t *testing.T) {
+	root := t.TempDir()
+	g := NewPathGuard(root, nil)
+	keepDir, err := g.EnsureSessionWorkDir("keep")
+	if err != nil {
+		t.Fatalf("ensure keep: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(keepDir, "k.txt"), []byte("k"), 0o644); err != nil {
+		t.Fatalf("write keep: %v", err)
+	}
+	if _, err := g.EnsureSessionWorkDir("drop"); err != nil {
+		t.Fatalf("ensure drop: %v", err)
+	}
+
+	if err := g.PurgeSessionWorkDir("drop"); err != nil {
+		t.Fatalf("purge drop: %v", err)
+	}
+	if _, err := os.Stat(keepDir); err != nil {
+		t.Fatalf("keep session dir must survive sibling purge: %v", err)
+	}
+}
+
 func TestPathGuard_EnsureSessionWorkDir_IsolatesSessions(t *testing.T) {
 	root := t.TempDir()
 	g := NewPathGuard(root, nil)

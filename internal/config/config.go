@@ -86,6 +86,12 @@ type DaemonConfig struct {
 	ScheduledTasksPath string   `yaml:"scheduled_tasks_path"`
 	WorkDir            string   `yaml:"work_dir"`
 	ProtectedPaths     []string `yaml:"protected_paths"`
+	// WorkspaceRetention controls per-session workspace cleanup after a task
+	// completes. "" or "immediate" deletes <work_dir>/sessions/<sid>/ as soon
+	// as the task ends (default — prevents cross-session contamination and
+	// disk creep). "keep" leaves the subdir in place so a follow-up task
+	// resuming the same sessionID can still see prior tool artifacts.
+	WorkspaceRetention string `yaml:"workspace_retention"`
 }
 
 type FaultInjectionConfig struct {

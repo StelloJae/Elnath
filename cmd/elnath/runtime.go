@@ -817,6 +817,28 @@ func (rt *executionRuntime) sessionRenderWorkDir(sess *agent.Session) string {
 	return dir
 }
 
+// maybePurgeSessionWorkspace removes the per-session workspace subdir after a
+// daemon task finishes. Default policy is "immediate" — the dir is wiped to
+// prevent cross-session contamination and unbounded disk growth. Setting
+// cfg.Daemon.WorkspaceRetention to "keep" disables the purge so a follow-up
+// task resuming the same sessionID can still see prior tool artifacts.
+// Failures are logged, never returned: cleanup must not mask the task result.
+func (rt *executionRuntime) maybePurgeSessionWorkspace(sess *agent.Session) {
+	if rt == nil || rt.guard == nil || sess == nil {
+		return
+	}
+	retention := strings.TrimSpace(rt.app.Config.Daemon.WorkspaceRetention)
+	if retention != "" && retention != "immediate" {
+		return
+	}
+	if err := rt.guard.PurgeSessionWorkDir(sess.ID); err != nil {
+		rt.app.Logger.Warn("session workspace purge failed",
+			"session", sess.ID,
+			"error", err,
+		)
+	}
+}
+
 // recordOutcome appends a learning outcome and, on success, asks the routing
 // advisor for an updated preference. Safe to call with a nil outcomeStore or an
 // empty ProjectID; both make the call a no-op so error paths stay cheap.
@@ -1120,6 +1142,8 @@ func (rt *executionRuntime) newDaemonTaskRunner() daemon.AgentTaskRunner {
 				return daemon.TaskResult{}, fmt.Errorf("create session: %w", err)
 			}
 		}
+
+		defer rt.maybePurgeSessionWorkspace(sess)
 
 		messages, summary, err := rt.runTask(ctx, sess, messages, userInput, orchestrationOutput{
 			OnProgress: daemonProgressFromSink(sink),
