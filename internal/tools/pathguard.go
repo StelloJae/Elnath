@@ -40,6 +40,50 @@ func NewPathGuard(workDir string, protectedPaths []string) *PathGuard {
 // WorkDir returns the guard's default working directory.
 func (g *PathGuard) WorkDir() string { return g.workDir }
 
+// sessionWorkDirSubdir is the subdirectory under the root WorkDir that holds
+// per-session workspaces. Keeping sessions under a dedicated subdir keeps the
+// root cleanly separable from legacy files and per-project artifacts.
+const sessionWorkDirSubdir = "sessions"
+
+// SessionWorkDir returns the workspace path for a given session. An empty
+// sessionID falls back to the root WorkDir, preserving legacy callers. The
+// session id is sanitized so a malicious id cannot escape the root.
+//
+// This is a pure path computation; use EnsureSessionWorkDir when the directory
+// must exist on disk.
+func (g *PathGuard) SessionWorkDir(sessionID string) string {
+	if sessionID == "" {
+		return g.workDir
+	}
+	return filepath.Join(g.workDir, sessionWorkDirSubdir, sanitizeSessionID(sessionID))
+}
+
+// EnsureSessionWorkDir returns the session workspace path and creates the
+// directory (with parents) if it does not yet exist. An empty sessionID
+// returns the root WorkDir without touching the filesystem.
+func (g *PathGuard) EnsureSessionWorkDir(sessionID string) (string, error) {
+	dir := g.SessionWorkDir(sessionID)
+	if sessionID == "" {
+		return dir, nil
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("create session workspace %q: %w", dir, err)
+	}
+	return dir, nil
+}
+
+// sanitizeSessionID strips path separators and traversal segments so the
+// returned id is always a single, safe directory name.
+func sanitizeSessionID(sessionID string) string {
+	cleaned := filepath.Base(sessionID)
+	cleaned = strings.ReplaceAll(cleaned, "..", "")
+	cleaned = strings.TrimSpace(cleaned)
+	if cleaned == "" || cleaned == "." {
+		return "_invalid"
+	}
+	return cleaned
+}
+
 // Resolve expands ~ and converts rawPath to an absolute, cleaned path.
 // Relative paths are resolved against the guard's working directory.
 func (g *PathGuard) Resolve(rawPath string) (string, error) {

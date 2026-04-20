@@ -158,6 +158,95 @@ func TestPathGuard_WorkDir(t *testing.T) {
 	}
 }
 
+func TestPathGuard_SessionWorkDir_PerSession(t *testing.T) {
+	g := NewPathGuard("/work", nil)
+	a := g.SessionWorkDir("session-A")
+	b := g.SessionWorkDir("session-B")
+	if a == b {
+		t.Fatalf("expected distinct paths per session, got both %q", a)
+	}
+	if !strings.HasPrefix(a, "/work/") {
+		t.Errorf("session A path %q should be under /work", a)
+	}
+	if !strings.HasPrefix(b, "/work/") {
+		t.Errorf("session B path %q should be under /work", b)
+	}
+	if a != g.SessionWorkDir("session-A") {
+		t.Errorf("same session id must yield deterministic path")
+	}
+}
+
+func TestPathGuard_SessionWorkDir_EmptyFallsBackToRoot(t *testing.T) {
+	g := NewPathGuard("/work", nil)
+	if got := g.SessionWorkDir(""); got != "/work" {
+		t.Errorf("empty session id should fall back to root WorkDir, got %q", got)
+	}
+}
+
+func TestPathGuard_SessionWorkDir_RejectsPathSeparators(t *testing.T) {
+	g := NewPathGuard("/work", nil)
+	got := g.SessionWorkDir("../escape")
+	if strings.Contains(got, "..") {
+		t.Errorf("session id traversal not contained: %q", got)
+	}
+	if !strings.HasPrefix(got, "/work/") {
+		t.Errorf("escape attempt should still resolve under /work, got %q", got)
+	}
+}
+
+func TestPathGuard_EnsureSessionWorkDir_CreatesDir(t *testing.T) {
+	root := t.TempDir()
+	g := NewPathGuard(root, nil)
+	dir, err := g.EnsureSessionWorkDir("abc-123")
+	if err != nil {
+		t.Fatalf("EnsureSessionWorkDir: %v", err)
+	}
+	if !strings.HasPrefix(dir, root) {
+		t.Errorf("dir %q must be under root %q", dir, root)
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat session dir: %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("session path %q is not a directory", dir)
+	}
+}
+
+func TestPathGuard_EnsureSessionWorkDir_EmptyReturnsRoot(t *testing.T) {
+	root := t.TempDir()
+	g := NewPathGuard(root, nil)
+	dir, err := g.EnsureSessionWorkDir("")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dir != root {
+		t.Errorf("empty session id should return root %q, got %q", root, dir)
+	}
+}
+
+func TestPathGuard_EnsureSessionWorkDir_IsolatesSessions(t *testing.T) {
+	root := t.TempDir()
+	g := NewPathGuard(root, nil)
+	dirA, err := g.EnsureSessionWorkDir("alpha")
+	if err != nil {
+		t.Fatalf("alpha: %v", err)
+	}
+	dirB, err := g.EnsureSessionWorkDir("beta")
+	if err != nil {
+		t.Fatalf("beta: %v", err)
+	}
+	if dirA == dirB {
+		t.Fatalf("expected isolation between sessions, both got %q", dirA)
+	}
+	if err := os.WriteFile(filepath.Join(dirA, "marker.txt"), []byte("a"), 0o644); err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dirB, "marker.txt")); !os.IsNotExist(err) {
+		t.Fatalf("marker should not be visible from session beta, err=%v", err)
+	}
+}
+
 func TestExpandHome(t *testing.T) {
 	home := "/Users/test"
 	tests := []struct {
