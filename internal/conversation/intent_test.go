@@ -307,7 +307,9 @@ func TestLLMClassifierClassify_AllIntents(t *testing.T) {
 		{`{"intent":"question","confidence":0.9}`, "msg", IntentQuestion},
 		{`{"intent":"simple_task","confidence":0.8}`, "msg", IntentSimpleTask},
 		{`{"intent":"complex_task","confidence":0.7}`, "msg", IntentComplexTask},
-		{`{"intent":"project","confidence":0.6}`, "msg", IntentProject},
+		// Project must carry an imperative verb to pass the FU-RouterImperativeGate
+		// and avoid demotion to chat.
+		{`{"intent":"project","confidence":0.6}`, "Build me a habit tracker app.", IntentProject},
 		// Research must carry an investigation keyword to pass the depth
 		// gate introduced in Phase 7.5 (3a) and avoid demotion to question.
 		{`{"intent":"research","confidence":0.95}`, "Compare and analyze the tradeoffs between PostgreSQL and MySQL for our specific workload pattern.", IntentResearch},
@@ -404,5 +406,102 @@ func TestClassificationPromptBoundaryGuidance(t *testing.T) {
 		if !strings.Contains(classificationPrompt, needle) {
 			t.Fatalf("classificationPrompt missing %q", needle)
 		}
+	}
+}
+
+// TestLLMClassifierDemotesProjectWithoutImperative guards FU-RouterImperativeGate:
+// the LLM (primed by ongoing session history about a project) cheerfully labels
+// declarative briefing statements as "project", which routes them to the
+// autopilot workflow and triggers unwanted code generation. Mirrors the Phase
+// 7.5 depth gate on research intent — declarative project claims without a
+// creation imperative verb must be demoted to chat so a briefing message does
+// not silently fire autopilot.
+//
+// Dogfood repro (2026-04-20, session 11, tasks #297-#299):
+//   - "Core features: daily habit check-in, weekly review, streak tracking."
+//   - "The name of the app is HabitForge."
+//   - "Primary platform: iOS, with a web companion later."
+// All three classified intent=project → autopilot → Ruby codegen → failure.
+func TestLLMClassifierDemotesProjectWithoutImperative(t *testing.T) {
+	cases := []struct {
+		name    string
+		message string
+		want    Intent
+	}{
+		{
+			name:    "declarative_features_list_demoted",
+			message: "Core features: daily habit check-in, weekly review, streak tracking.",
+			want:    IntentChat,
+		},
+		{
+			name:    "declarative_app_name_demoted",
+			message: "The name of the app is HabitForge.",
+			want:    IntentChat,
+		},
+		{
+			name:    "declarative_platform_demoted",
+			message: "Primary platform: iOS, with a web companion later.",
+			want:    IntentChat,
+		},
+		{
+			name:    "english_imperative_build_keeps_project",
+			message: "Build me a habit tracker app.",
+			want:    IntentProject,
+		},
+		{
+			name:    "korean_imperative_keeps_project",
+			message: "습관 추적 앱 만들어줘",
+			want:    IntentProject,
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			classifier := NewLLMClassifier()
+			provider := &mockProvider{
+				chatFn: func(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+					return &llm.ChatResponse{Content: `{"intent":"project","confidence":0.9}`}, nil
+				},
+			}
+			got, err := classifier.Classify(context.Background(), provider, tc.message, nil)
+			if err != nil {
+				t.Fatalf("Classify: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("intent for %q = %q, want %q", tc.message, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestHasProjectImperative(t *testing.T) {
+	cases := []struct {
+		name    string
+		message string
+		want    bool
+	}{
+		{"english_build", "Build me a habit tracker app.", true},
+		{"english_create", "Let's create a new onboarding flow.", true},
+		{"english_implement", "Implement the payment retry queue.", true},
+		{"english_make_with_space", "Make a REST API skeleton.", true},
+		{"english_start_with_space", "Start a new feature branch tooling.", true},
+		{"korean_mandel", "습관 추적 앱 만들어줘", true},
+		{"korean_implement", "결제 재시도 큐 구현해", true},
+		{"declarative_features", "Core features: daily habit check-in, weekly review, streak tracking.", false},
+		{"declarative_name", "The name of the app is HabitForge.", false},
+		{"declarative_platform", "Primary platform: iOS, with a web companion later.", false},
+		{"question_without_verb", "What's the app name?", false},
+		{"empty", "", false},
+		{"whitespace_only", "   \t\n  ", false},
+		{"makefile_noun_not_imperative", "The makefile is broken.", false},
+		{"starter_noun_not_imperative", "This starter template is great.", false},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			if got := hasProjectImperative(tc.message); got != tc.want {
+				t.Errorf("hasProjectImperative(%q) = %v, want %v", tc.message, got, tc.want)
+			}
+		})
 	}
 }

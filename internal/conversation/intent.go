@@ -131,7 +131,51 @@ func (c *LLMClassifier) Classify(ctx context.Context, provider llm.Provider, mes
 		return IntentQuestion, nil
 	}
 
+	// FU-RouterImperativeGate: the LLM, primed by a session's prior turns
+	// about a project, labels follow-up declarative briefings ("Core
+	// features: X, Y, Z.", "The name of the app is Z.") as "project",
+	// which then fires the autopilot workflow and generates unwanted code.
+	// Require an explicit creation imperative verb for project intent;
+	// otherwise demote to chat so briefing sentences stay conversational.
+	if result.Intent == IntentProject && !hasProjectImperative(message) {
+		c.logger.Debug("imperative gate: demoting project → chat",
+			"message_len", len(message),
+		)
+		return IntentChat, nil
+	}
+
 	return result.Intent, nil
+}
+
+// hasProjectImperative reports whether the user message carries an explicit
+// creation-intent verb. Used as a post-LLM gate to prevent declarative
+// briefings ("Core features: …", "The name of the app is …") — which the
+// LLM over-labels as "project" when primed by session history — from firing
+// the autopilot workflow.
+func hasProjectImperative(message string) bool {
+	trimmed := strings.TrimSpace(message)
+	if trimmed == "" {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	for _, kw := range projectImperativeKeywords {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// projectImperativeKeywords lists the creation verbs that qualify a user
+// message for project intent. Multi-word forms with trailing spaces (e.g.,
+// "make ", "start ") avoid false positives like "makefile" or "starter".
+// Korean entries are stems so conjugations ("만들어줘", "만드니까") still match.
+var projectImperativeKeywords = []string{
+	// English creation verbs
+	"build", "create", "implement", "ship ", "develop", "launch",
+	"make ", "start ",
+	// Korean creation verbs
+	"만들", "구현", "새로", "빌드", "시작해", "론칭",
 }
 
 // isComplexEnoughForResearch reports whether the user message carries enough
