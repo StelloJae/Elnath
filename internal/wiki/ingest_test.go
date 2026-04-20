@@ -12,10 +12,15 @@ import (
 	"github.com/stello/elnath/internal/llm"
 )
 
-// mockLLMProvider is a minimal Provider that returns a fixed summary.
-type mockLLMProvider struct{}
+// mockLLMProvider is a minimal Provider that returns a fixed summary and
+// captures every Chat request so tests can inspect the rendered prompt for
+// each stage (e.g. summarise vs knowledge extraction).
+type mockLLMProvider struct {
+	requests []llm.ChatRequest
+}
 
-func (m *mockLLMProvider) Chat(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+func (m *mockLLMProvider) Chat(_ context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	m.requests = append(m.requests, req)
 	return &llm.ChatResponse{Content: "Summary bullet points"}, nil
 }
 
@@ -25,6 +30,18 @@ func (m *mockLLMProvider) Stream(_ context.Context, _ llm.ChatRequest, _ func(ll
 
 func (m *mockLLMProvider) Name() string            { return "mock" }
 func (m *mockLLMProvider) Models() []llm.ModelInfo { return nil }
+
+func (m *mockLLMProvider) promptAt(idx int) string {
+	if idx < 0 || idx >= len(m.requests) {
+		return ""
+	}
+	for _, msg := range m.requests[idx].Messages {
+		if text := msg.TextContent(); text != "" {
+			return text
+		}
+	}
+	return ""
+}
 
 // gitInDir runs a git command inside dir and fails the test on error.
 func gitInDir(t *testing.T, dir string, args ...string) {
@@ -276,6 +293,53 @@ func TestIngestSessionWithProvider(t *testing.T) {
 	}
 	if !slicesEqual(page.Tags, []string{"session", "task_completed"}) {
 		t.Fatalf("tags = %v, want session/task_completed", page.Tags)
+	}
+}
+
+// TestIngestSessionSummarisePromptIncludesEventContext verifies that the
+// summarise call receives Principal, Reason, StartedAt, and Duration context
+// plus structured section guidance so generated summaries are anchored in
+// topic/time/principal rather than being free-floating bullet points.
+func TestIngestSessionSummarisePromptIncludesEventContext(t *testing.T) {
+	store := newTestStore(t)
+	provider := &mockLLMProvider{}
+	ing := NewIngester(store, provider)
+
+	startedAt := time.Date(2026, time.April, 20, 14, 5, 0, 0, time.UTC)
+	event := IngestEvent{
+		SessionID: "sess-ctx",
+		Messages: []llm.Message{
+			llm.NewUserMessage("Wire the spine summary quality fix."),
+			llm.NewAssistantMessage("Drafting Phase 7.1 change."),
+		},
+		Reason:    "task_completed",
+		Principal: "telegram:12345",
+		StartedAt: startedAt,
+		Duration:  3*time.Minute + 40*time.Second,
+	}
+
+	if err := ing.IngestSession(context.Background(), event); err != nil {
+		t.Fatalf("IngestSession: %v", err)
+	}
+
+	prompt := provider.promptAt(0)
+	if prompt == "" {
+		t.Fatal("expected summarise request to carry a prompt, got empty")
+	}
+
+	wantSubstrings := []string{
+		"telegram:12345",
+		"task_completed",
+		startedAt.Format(time.RFC3339),
+		"3m40s",
+		"Topic",
+		"Decisions",
+		"Outcomes",
+	}
+	for _, want := range wantSubstrings {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("summarise prompt missing %q; got:\n%s", want, prompt)
+		}
 	}
 }
 

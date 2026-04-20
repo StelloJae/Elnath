@@ -58,7 +58,7 @@ func (ing *Ingester) IngestSession(ctx context.Context, event IngestEvent) error
 	transcript := renderTranscript(event.Messages)
 	summary := ""
 	if ing.provider != nil {
-		if generated, err := ing.summarise(ctx, transcript); err == nil {
+		if generated, err := ing.summarise(ctx, event, transcript); err == nil {
 			summary = strings.TrimSpace(generated)
 		}
 	}
@@ -257,9 +257,12 @@ func sessionTags(event IngestEvent) []string {
 	return tags
 }
 
-// summarise calls the LLM provider to produce a brief summary of a transcript.
-func (ing *Ingester) summarise(ctx context.Context, transcript string) (string, error) {
-	prompt := "Summarise the following conversation in 3-5 bullet points:\n\n" + transcript
+// summarise calls the LLM provider to produce a brief, structured summary of
+// a session transcript. The prompt embeds session context (principal, reason,
+// started_at, duration) so the generated summary is anchored in topic/time
+// rather than being free-floating bullets.
+func (ing *Ingester) summarise(ctx context.Context, event IngestEvent, transcript string) (string, error) {
+	prompt := buildSummarisePrompt(event, transcript)
 	resp, err := ing.provider.Chat(ctx, llm.ChatRequest{
 		Messages:  []llm.Message{llm.NewUserMessage(prompt)},
 		MaxTokens: 512,
@@ -268,6 +271,37 @@ func (ing *Ingester) summarise(ctx context.Context, transcript string) (string, 
 		return "", fmt.Errorf("wiki ingest: summarise: %w", err)
 	}
 	return resp.Content, nil
+}
+
+// buildSummarisePrompt renders the session context plus structured-output
+// instructions in front of the transcript. Missing metadata lines are
+// omitted so the prompt stays tight for shorter or system-triggered events.
+func buildSummarisePrompt(event IngestEvent, transcript string) string {
+	var sb strings.Builder
+	sb.WriteString("You are summarising a completed session for the Elnath wiki.\n")
+	sb.WriteString("Anchor the summary in the session context below before reading the transcript.\n\n")
+	sb.WriteString("## Session Context\n")
+	if principal := strings.TrimSpace(event.Principal); principal != "" {
+		fmt.Fprintf(&sb, "- Principal: %s\n", principal)
+	}
+	if reason := strings.TrimSpace(event.Reason); reason != "" {
+		fmt.Fprintf(&sb, "- Reason: %s\n", reason)
+	}
+	if !event.StartedAt.IsZero() {
+		fmt.Fprintf(&sb, "- Started: %s\n", event.StartedAt.UTC().Format(time.RFC3339))
+	}
+	if event.Duration > 0 {
+		fmt.Fprintf(&sb, "- Duration: %s\n", event.Duration)
+	}
+	sb.WriteString("\n## Instructions\n")
+	sb.WriteString("Write a compact markdown summary with exactly three labelled sections:\n")
+	sb.WriteString("- **Topic**: one sentence naming what the session was about.\n")
+	sb.WriteString("- **Decisions**: up to 3 bullets capturing concrete decisions or commitments (write `- none` if no firm decision was made).\n")
+	sb.WriteString("- **Outcomes**: up to 3 bullets capturing changed artifacts, follow-ups, or unresolved items.\n")
+	sb.WriteString("Keep bullets atomic. Do not restate the session ID or transcript verbatim.\n\n")
+	sb.WriteString("## Transcript\n")
+	sb.WriteString(transcript)
+	return sb.String()
 }
 
 // IngestFile reads a file and creates a wiki page of type "source".
