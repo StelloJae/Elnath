@@ -4,21 +4,68 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/stello/elnath/internal/identity"
 	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
+	"github.com/stello/elnath/internal/prompt"
+	"github.com/stello/elnath/internal/self"
+	"github.com/stello/elnath/internal/wiki"
 )
 
 const chatSystemPrompt = "You are a personal AI assistant. Respond naturally in the user's language.\n" +
 	"Be concise, helpful, and conversational. Use 한국어 when the user speaks Korean."
+
+// defaultChatHistoryTurns caps how many past turns are hydrated from the
+// bound session into the chat prompt. Kept small so the chat path stays
+// "immediate" (no queue) and stays under the provider context window for
+// the typical 1024-token max-output chat mode.
+const defaultChatHistoryTurns = 20
 
 // OutcomeAppender is the minimum surface of learning.OutcomeStore required
 // to record chat outcomes. Keeping the interface small lets tests substitute
 // a fake without pulling in the full store.
 type OutcomeAppender interface {
 	Append(learning.OutcomeRecord) error
+}
+
+// ChatPromptBuilder is the minimum surface of prompt.Builder needed by the
+// chat path. Using an interface lets tests inject a stub without pulling in
+// the full node registry.
+type ChatPromptBuilder interface {
+	Build(ctx context.Context, state *prompt.RenderState) (string, error)
+}
+
+// ChatHistoryLoader loads past messages for a given session. conversation.Manager
+// satisfies this via its GetHistory method.
+type ChatHistoryLoader interface {
+	GetHistory(ctx context.Context, sessionID string) ([]llm.Message, error)
+}
+
+// ChatSessionLookup resolves a chatID+userID pair to a sessionID.
+// *ChatSessionBinder satisfies this via its Lookup method.
+type ChatSessionLookup interface {
+	Lookup(chatID, userID string) (string, bool)
+}
+
+// ChatPipelineDeps bundles the prompt-pipeline dependencies injected by the
+// runtime so ChatResponder can build system prompts via prompt.Builder and
+// hydrate history from the bound session. When nil, ChatResponder falls back
+// to the legacy hardcoded chatSystemPrompt and a single-message array.
+type ChatPipelineDeps struct {
+	Builder      ChatPromptBuilder
+	Self         *self.SelfState
+	WikiIdx      *wiki.Index
+	History      ChatHistoryLoader
+	Lookup       ChatSessionLookup
+	PersonaExtra string
+	ProviderName string
+	Model        string
+	WorkDir      string
+	DaemonMode   bool
+	MaxHistory   int
 }
 
 type ChatResponder struct {
@@ -28,6 +75,7 @@ type ChatResponder struct {
 	logger       *slog.Logger
 	system       string
 	outcomeStore OutcomeAppender
+	pipeline     *ChatPipelineDeps
 }
 
 // ChatResponderOption configures optional dependencies of ChatResponder.
@@ -37,6 +85,16 @@ type ChatResponderOption func(*ChatResponder)
 // Without this option, ChatResponder runs without touching the outcome store.
 func WithOutcomeStore(store OutcomeAppender) ChatResponderOption {
 	return func(c *ChatResponder) { c.outcomeStore = store }
+}
+
+// WithChatPipeline wires the prompt-pipeline + history hydrate path so chat
+// messages benefit from Elnath identity, persona, lessons, wiki RAG, and
+// past conversation context (Phase 7.1 GAP-TG-01 / GAP-HISTORY-01 fix).
+func WithChatPipeline(deps ChatPipelineDeps) ChatResponderOption {
+	return func(c *ChatResponder) {
+		d := deps
+		c.pipeline = &d
+	}
 }
 
 func NewChatResponder(provider llm.Provider, bot BotClient, chatID string, logger *slog.Logger, opts ...ChatResponderOption) *ChatResponder {
@@ -66,11 +124,16 @@ func (c *ChatResponder) Respond(ctx context.Context, principal identity.Principa
 	sc := NewStreamConsumer(c.bot, c.chatID, logger)
 	sc.Run()
 
+	systemPrompt, history := c.buildPrompt(ctx, principal, userMessage, logger)
+	messages := make([]llm.Message, 0, len(history)+1)
+	messages = append(messages, history...)
+	messages = append(messages, llm.NewUserMessage(userMessage))
+
 	req := llm.ChatRequest{
-		Messages:    []llm.Message{llm.NewUserMessage(userMessage)},
+		Messages:    messages,
 		MaxTokens:   1024,
 		Temperature: 0.7,
-		System:      c.system,
+		System:      systemPrompt,
 	}
 
 	start := time.Now()
@@ -120,6 +183,67 @@ func (c *ChatResponder) recordChatOutcome(principal identity.Principal, userMess
 	if err := c.outcomeStore.Append(record); err != nil {
 		c.logger.Warn("chat responder: outcome append failed", "error", err)
 	}
+}
+
+// buildPrompt assembles the system prompt and hydrates session history when
+// a ChatPipelineDeps is wired. Without the pipeline, returns the legacy
+// hardcoded chatSystemPrompt and no history (caller adds the user message).
+func (c *ChatResponder) buildPrompt(ctx context.Context, principal identity.Principal, userMessage string, logger *slog.Logger) (string, []llm.Message) {
+	if c.pipeline == nil || c.pipeline.Builder == nil {
+		return c.system, nil
+	}
+
+	sessionID := ""
+	if c.pipeline.Lookup != nil {
+		if sid, ok := c.pipeline.Lookup.Lookup(c.chatID, principal.UserID); ok {
+			sessionID = sid
+		}
+	}
+
+	var history []llm.Message
+	if sessionID != "" && c.pipeline.History != nil {
+		if hist, err := c.pipeline.History.GetHistory(ctx, sessionID); err == nil {
+			history = trimChatHistory(hist, c.pipeline.MaxHistory)
+		} else {
+			logger.Warn("chat responder: history load failed, continuing without", "error", err, "session_id", sessionID)
+		}
+	}
+
+	state := &prompt.RenderState{
+		SessionID:    sessionID,
+		UserInput:    userMessage,
+		Self:         c.pipeline.Self,
+		Principal:    principal,
+		Messages:     history,
+		WikiIdx:      c.pipeline.WikiIdx,
+		PersonaExtra: c.pipeline.PersonaExtra,
+		Model:        c.pipeline.Model,
+		Provider:     c.pipeline.ProviderName,
+		WorkDir:      c.pipeline.WorkDir,
+		DaemonMode:   c.pipeline.DaemonMode,
+		ProjectID:    principal.ProjectID,
+		MessageCount: len(history),
+	}
+
+	built, err := c.pipeline.Builder.Build(ctx, state)
+	if err != nil {
+		logger.Warn("chat responder: prompt build failed, using legacy fallback", "error", err)
+		return c.system, history
+	}
+	if strings.TrimSpace(built) == "" {
+		return c.system, history
+	}
+	return built, history
+}
+
+func trimChatHistory(msgs []llm.Message, maxTurns int) []llm.Message {
+	if maxTurns <= 0 {
+		maxTurns = defaultChatHistoryTurns
+	}
+	if len(msgs) <= maxTurns {
+		return msgs
+	}
+	return msgs[len(msgs)-maxTurns:]
 }
 
 // chatSnippet truncates the message at n runes (not bytes) so multi-byte

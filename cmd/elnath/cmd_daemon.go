@@ -292,6 +292,19 @@ func cmdDaemonStart(ctx context.Context) error {
 		)
 		chatResponder := telegram.NewChatResponder(provider, bot, cfg.Telegram.ChatID, app.Logger,
 			telegram.WithOutcomeStore(rt.outcomeStore),
+			telegram.WithChatPipeline(telegram.ChatPipelineDeps{
+				Builder:      rt.promptBuilder,
+				Self:         rt.selfState,
+				WikiIdx:      rt.wikiIdx,
+				History:      rt.mgr,
+				Lookup:       binder,
+				PersonaExtra: rt.personaExtra,
+				ProviderName: rt.provider.Name(),
+				Model:        rt.wfCfg.Model,
+				WorkDir:      rt.workDir,
+				DaemonMode:   true,
+				MaxHistory:   20,
+			}),
 		)
 		classifier := conversation.NewLLMClassifier()
 		shell, shellErr := telegram.NewShell(queue, approvalStore, bot, cfg.Telegram.ChatID, statePath, rt.skillReg,
