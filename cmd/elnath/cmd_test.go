@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stello/elnath/internal/agent"
+	"github.com/stello/elnath/internal/config"
 	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/core"
 	"github.com/stello/elnath/internal/daemon"
@@ -130,6 +132,7 @@ func TestCmdDaemonSubmitWithSession(t *testing.T) {
 	}
 	defer ln.Close()
 
+	receivedSession := make(chan string, 1)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -144,6 +147,13 @@ func TestCmdDaemonSubmitWithSession(t *testing.T) {
 		if err := dec.Decode(&req); err != nil {
 			return
 		}
+		var encoded string
+		if err := json.Unmarshal(req.Payload, &encoded); err != nil {
+			receivedSession <- ""
+			return
+		}
+		parsed := daemon.ParseTaskPayload(encoded)
+		receivedSession <- parsed.SessionID
 		resp := daemon.IPCResponse{
 			OK:   true,
 			Data: map[string]interface{}{"task_id": 99, "existed": false},
@@ -153,11 +163,20 @@ func TestCmdDaemonSubmitWithSession(t *testing.T) {
 	}()
 
 	cfgPath := writeDaemonTestConfig(t, onboarding.En, socketPath)
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load cfg: %v", err)
+	}
+	sess, err := agent.NewSession(cfg.DataDir)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
 	withArgs(t, []string{"elnath", "--config", cfgPath})
 	resetLoadLocaleCache()
 
+	prefix := sess.ID[:13]
 	stdout, _ := captureOutput(t, func() {
-		if err := cmdDaemonSubmit(context.Background(), []string{"--session", "sess-abc", "continue", "work"}); err != nil {
+		if err := cmdDaemonSubmit(context.Background(), []string{"--session", prefix, "continue", "work"}); err != nil {
 			t.Fatalf("cmdDaemonSubmit with session: %v", err)
 		}
 	})
@@ -165,6 +184,10 @@ func TestCmdDaemonSubmitWithSession(t *testing.T) {
 		t.Fatalf("stdout = %q, want enqueued output", stdout)
 	}
 	<-done
+	got := <-receivedSession
+	if got != sess.ID {
+		t.Fatalf("daemon received session_id = %q, want resolved full id %q", got, sess.ID)
+	}
 }
 
 func TestCmdDaemonSubmitDeduplicated(t *testing.T) {

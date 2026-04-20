@@ -147,6 +147,11 @@ func cmdRun(ctx context.Context, args []string) error {
 	var sess *agent.Session
 	var messages []llm.Message
 	if sid := extractSessionFlag(os.Args); sid != "" {
+		resolved, resolveErr := agent.ResolveSessionID(cfg.DataDir, sid)
+		if resolveErr != nil {
+			return fmt.Errorf("resolve --session: %w", resolveErr)
+		}
+		sid = resolved
 		sess, err = rt.mgr.LoadSessionForPrincipal(sid, principal)
 		if err != nil {
 			return fmt.Errorf("resume session %s: %w", sid, err)

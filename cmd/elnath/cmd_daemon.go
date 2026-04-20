@@ -370,6 +370,13 @@ func cmdDaemonSubmit(ctx context.Context, args []string) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+	if sessionID != "" {
+		resolved, err := agent.ResolveSessionID(cfg.DataDir, sessionID)
+		if err != nil {
+			return fmt.Errorf("resolve --session: %w", err)
+		}
+		sessionID = resolved
+	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("get cwd: %w", err)
