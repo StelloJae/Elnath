@@ -26,6 +26,7 @@ import (
 	"github.com/stello/elnath/internal/orchestrator"
 	"github.com/stello/elnath/internal/profile"
 	"github.com/stello/elnath/internal/prompt"
+	"github.com/stello/elnath/internal/research"
 	"github.com/stello/elnath/internal/secret"
 	"github.com/stello/elnath/internal/self"
 	"github.com/stello/elnath/internal/skill"
@@ -1103,6 +1104,56 @@ func (p *skillPromptPipeline) RenderPromptPrefix(ctx context.Context, inv skill.
 		DaemonMode:   p.daemonMode,
 	}
 	return p.builder.Build(ctx, state)
+}
+
+// researchPromptPipeline adapts prompt.Builder + session-scoped RenderState
+// to the research.PromptPrefixRenderer contract. The research package
+// cannot import internal/prompt (the prompt builder pulls research-adjacent
+// nodes), so runtime materialises the RenderState here on behalf of each
+// stage invocation. Phase 7.1 GAP-RESEARCH-01.
+type researchPromptPipeline struct {
+	builder      *prompt.Builder
+	self         *self.SelfState
+	wikiIdx      *wiki.Index
+	personaExtra string
+	providerName string
+	model        string
+	workDir      string
+	daemonMode   bool
+	principal    identity.Principal
+}
+
+func (p *researchPromptPipeline) RenderPromptPrefix(ctx context.Context, inv research.Invocation) (string, error) {
+	if p == nil || p.builder == nil {
+		return "", nil
+	}
+	state := &prompt.RenderState{
+		SessionID:    inv.SessionID,
+		UserInput:    inv.UserInput,
+		Self:         p.self,
+		Principal:    p.principal,
+		WikiIdx:      p.wikiIdx,
+		PersonaExtra: p.personaExtra,
+		Model:        p.model,
+		Provider:     p.providerName,
+		WorkDir:      p.workDir,
+		DaemonMode:   p.daemonMode,
+	}
+	return p.builder.Build(ctx, state)
+}
+
+func (rt *executionRuntime) newResearchPromptPipeline() *researchPromptPipeline {
+	return &researchPromptPipeline{
+		builder:      rt.promptBuilder,
+		self:         rt.selfState,
+		wikiIdx:      rt.wikiIdx,
+		personaExtra: rt.personaExtra,
+		providerName: rt.provider.Name(),
+		model:        rt.wfCfg.Model,
+		workDir:      rt.workDir,
+		daemonMode:   rt.daemonMode,
+		principal:    rt.principal,
+	}
 }
 
 func (rt *executionRuntime) trySkillExecution(

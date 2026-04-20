@@ -196,6 +196,7 @@ func cmdDaemonStart(ctx context.Context) error {
 			research.WithToolRegistry(rt.reg),
 			research.WithRunnerLearning(rt.learningStore),
 			research.WithRunnerSelfState(selfState),
+			research.WithRunnerPipeline(rt.newResearchPromptPipeline()),
 		}
 		if activeScenario != nil && activeScenario.Category == fault.CategoryTool {
 			researchOpts = append(researchOpts, research.WithToolExecutor(fault.NewToolFaultHook(rt.reg, inj, activeScenario)))
