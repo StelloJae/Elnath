@@ -179,7 +179,7 @@ func (c *ChatResponder) Respond(ctx context.Context, principal identity.Principa
 	// setReaction is idempotent; the terminal 👍/😢 overwrites naturally.
 	c.setReaction(ctx, replyToMsgID, "✍")
 
-	systemPrompt, history := c.buildPrompt(ctx, principal, userMessage, logger)
+	systemPrompt, history, sessionID := c.buildPrompt(ctx, principal, userMessage, logger)
 	systemPrompt = c.prependChatHeaders(systemPrompt)
 	messages := make([]llm.Message, 0, len(history)+1)
 	messages = append(messages, history...)
@@ -203,7 +203,7 @@ func (c *ChatResponder) Respond(ctx context.Context, principal identity.Principa
 		sc.Finish()
 		sc.Wait()
 		elapsed := time.Since(start)
-		c.recordChatOutcome(principal, userMessage, false, "error", elapsed, stats)
+		c.recordChatOutcome(principal, userMessage, false, "error", elapsed, stats, sessionID)
 		logger.Warn("chat responder: stream failed", "error", streamErr)
 		c.setReaction(ctx, replyToMsgID, "😢")
 		if sendErr := c.bot.SendMessage(ctx, c.chatID, fmt.Sprintf("⚠️ Error: %s", streamErr.Error())); sendErr != nil {
@@ -213,7 +213,7 @@ func (c *ChatResponder) Respond(ctx context.Context, principal identity.Principa
 	}
 
 	sc.Wait()
-	c.recordChatOutcome(principal, userMessage, true, "stop", time.Since(start), stats)
+	c.recordChatOutcome(principal, userMessage, true, "stop", time.Since(start), stats, sessionID)
 	c.setReaction(ctx, replyToMsgID, "👍")
 
 	if assistantText != "" {
@@ -323,7 +323,12 @@ func (c *ChatResponder) persistChatTurn(ctx context.Context, principal identity.
 // loop fired or the model answered from its knowledge cutoff. ProjectID
 // "" is treated as unknown and skipped, the same policy executionRuntime
 // uses.
-func (c *ChatResponder) recordChatOutcome(principal identity.Principal, userMessage string, success bool, finishReason string, elapsed time.Duration, stats *chatRunStats) {
+//
+// FU-ChatOutcomeSessionID (P3, 2026-04-21 audit C4): sessionID is populated
+// so chat outcomes can be cross-referenced with the session JSONL end to
+// end. Empty when the chat turn was the first one in this Telegram bind
+// and no session had been allocated yet — subsequent turns fill it in.
+func (c *ChatResponder) recordChatOutcome(principal identity.Principal, userMessage string, success bool, finishReason string, elapsed time.Duration, stats *chatRunStats, sessionID string) {
 	if c.outcomeStore == nil || principal.ProjectID == "" {
 		return
 	}
@@ -337,6 +342,7 @@ func (c *ChatResponder) recordChatOutcome(principal identity.Principal, userMess
 		InputSnippet:   chatSnippet(userMessage, 100),
 		PreferenceUsed: false,
 		MaxIterations:  maxChatToolIterations,
+		SessionID:      sessionID,
 	}
 	if stats != nil {
 		record.Iterations = stats.iterations
@@ -352,9 +358,12 @@ func (c *ChatResponder) recordChatOutcome(principal identity.Principal, userMess
 // buildPrompt assembles the system prompt and hydrates session history when
 // a ChatPipelineDeps is wired. Without the pipeline, returns the legacy
 // hardcoded chatSystemPrompt and no history (caller adds the user message).
-func (c *ChatResponder) buildPrompt(ctx context.Context, principal identity.Principal, userMessage string, logger *slog.Logger) (string, []llm.Message) {
+// The returned sessionID (may be empty) is threaded back to the caller so
+// recordChatOutcome can cross-reference the learning record with the
+// session JSONL (FU-ChatOutcomeSessionID / P3).
+func (c *ChatResponder) buildPrompt(ctx context.Context, principal identity.Principal, userMessage string, logger *slog.Logger) (string, []llm.Message, string) {
 	if c.pipeline == nil || c.pipeline.Builder == nil {
-		return c.system, nil
+		return c.system, nil, ""
 	}
 
 	sessionID := ""
@@ -392,12 +401,12 @@ func (c *ChatResponder) buildPrompt(ctx context.Context, principal identity.Prin
 	built, err := c.pipeline.Builder.Build(ctx, state)
 	if err != nil {
 		logger.Warn("chat responder: prompt build failed, using legacy fallback", "error", err)
-		return c.system, history
+		return c.system, history, sessionID
 	}
 	if strings.TrimSpace(built) == "" {
-		return c.system, history
+		return c.system, history, sessionID
 	}
-	return built, history
+	return built, history, sessionID
 }
 
 func trimChatHistory(msgs []llm.Message, maxTurns int) []llm.Message {

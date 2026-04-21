@@ -889,6 +889,54 @@ func TestChatResponder_SkipsReactionWhenReplyToMsgIDZero(t *testing.T) {
 	}
 }
 
+// --- FU-ChatOutcomeSessionID (P3): chat outcomes cross-ref session JSONL ---
+
+func TestChatResponder_OutcomeCarriesSessionIDWhenBound(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{response: "ok"}
+	store := &mockOutcomeAppender{}
+
+	cr := NewChatResponder(provider, bot, "chat-42", nil,
+		WithOutcomeStore(store),
+		WithChatPipeline(ChatPipelineDeps{
+			Builder: &stubChatBuilder{result: "SYS"},
+			Lookup:  &stubSessionLookup{session: "sess-deadbeef", ok: true},
+		}),
+	)
+
+	if err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 1); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	records := store.snapshot()
+	if len(records) != 1 {
+		t.Fatalf("outcomes = %d, want 1", len(records))
+	}
+	if records[0].SessionID != "sess-deadbeef" {
+		t.Errorf("SessionID = %q, want %q (bound chat session propagated to outcome)", records[0].SessionID, "sess-deadbeef")
+	}
+}
+
+func TestChatResponder_OutcomeSessionIDEmptyWhenUnbound(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{response: "ok"}
+	store := &mockOutcomeAppender{}
+
+	cr := NewChatResponder(provider, bot, "chat-42", nil, WithOutcomeStore(store))
+
+	if err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 1); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	records := store.snapshot()
+	if len(records) != 1 {
+		t.Fatalf("outcomes = %d, want 1", len(records))
+	}
+	if records[0].SessionID != "" {
+		t.Errorf("SessionID = %q, want empty (no binder wired → no session lookup)", records[0].SessionID)
+	}
+}
+
 // --- FU-ChatHistorySanitize: strip agent.Loop tool blocks from chat history ---
 
 func TestSanitizeChatHistory_StripsToolBlocksFromSharedSession(t *testing.T) {
