@@ -580,9 +580,12 @@ func TestChatResponder_EntryWritingReactionShownEvenWithoutTool(t *testing.T) {
 }
 
 // TestChatResponder_WritingReactionSetOnlyOnceAcrossIterations asserts the ✍
-// is sent exactly once even when the model emits tool_use across multiple
-// iterations. Spamming SetReaction every iteration would be wasteful and
-// could look flickery to partners.
+// is sent exactly once even when the model fires a tool and then produces
+// the answer in a second iteration. Post-P1 (FU-ChatEntryWorking), ✍ lives
+// at chat-path entry, so the debounce is structural — entry fires once,
+// the later tool-loop iterations never set it again. Shape matches the
+// audit-tightened maxChatToolIterations=2 (M2 FU-ChatToolIterCap): one
+// tool round-trip + one terminating text step.
 func TestChatResponder_WritingReactionSetOnlyOnceAcrossIterations(t *testing.T) {
 	bot := newChatMockBot()
 	provider := &chatMockProvider{
@@ -590,15 +593,11 @@ func TestChatResponder_WritingReactionSetOnlyOnceAcrossIterations(t *testing.T) 
 			{toolUses: []chatProviderToolUse{
 				{id: "tu_1", name: "web_fetch", input: `{"url":"https://a"}`},
 			}},
-			{toolUses: []chatProviderToolUse{
-				{id: "tu_2", name: "web_search", input: `{"q":"b"}`},
-			}},
 			{text: "summary"},
 		},
 	}
 	exec := newChatMockExecutor()
 	exec.setResult("web_fetch", &tools.Result{Output: "a"})
-	exec.setResult("web_search", &tools.Result{Output: "b"})
 
 	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
 		ToolDefs:     []llm.ToolDef{{Name: "web_fetch"}, {Name: "web_search"}},

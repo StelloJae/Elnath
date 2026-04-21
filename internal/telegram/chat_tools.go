@@ -70,7 +70,20 @@ func (s *chatRunStats) toolStatsList() []learning.AgentToolStat {
 	return out
 }
 
-const maxChatToolIterations = 5
+// maxChatToolIterations bounds the chat-only agent-lite loop. Audit
+// 2026-04-21 cell A3 showed 5 × large web_fetch chaining pushed a single
+// chat turn to 38.9s — conversational territory where partners read
+// silence as a stall. Tightened to 2: every realistic chat-tool scenario
+// observed in dogfood (timezone lookup, stock ticker, URL read, single
+// web_search + follow-up) fits in 1–2 iterations. Requests that
+// legitimately need more chained tool steps belong on the task path
+// (simple_task / team), which has proper progress bubbles and the
+// permission gate.
+//
+// Explicit trade-off: a request that actually needs 3+ tool hops now
+// trips "exceeded max iterations" → ⚠️ friendly error. That's the
+// designed behavior — chat is the fast lane, not the deep-research lane.
+const maxChatToolIterations = 2
 
 // chatToolResultCap bounds each tool_result's content before it re-enters
 // the provider history. Audit 2026-04-21 showed web_fetch / web_search
