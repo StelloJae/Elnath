@@ -25,12 +25,28 @@ func NewWebFetchTool() *WebFetchTool {
 	}
 }
 
-func (t *WebFetchTool) Name() string        { return "web_fetch" }
-func (t *WebFetchTool) Description() string { return "Fetch the content of a URL via HTTP GET." }
+func (t *WebFetchTool) Name() string { return "web_fetch" }
+
+// Description follows the Claude Code WebFetchTool upstream wording so
+// Codex/Claude receive matching guidance on when to fire the tool and
+// how the {url, prompt} pair is consumed. Today (Phase A.1) Execute
+// still returns the raw body; Phase A.2+ wires HTML→markdown conversion
+// and a secondary-model extract driven by `prompt`. The description is
+// kept parity-accurate now so the model's tool-use decisions don't
+// flip when the internals upgrade.
+// Reference: /Users/stello/claude-code-src/src/tools/WebFetchTool/prompt.ts:3-21.
+func (t *WebFetchTool) Description() string {
+	return "Fetches content from a specified URL and processes it using an AI model. " +
+		"Takes a URL and a prompt as input, fetches the URL content, converts HTML to " +
+		"markdown, and processes the content with the prompt using a small, fast model. " +
+		"Use this tool when you need to retrieve and analyze web content. HTTP URLs are " +
+		"upgraded to HTTPS automatically."
+}
 
 func (t *WebFetchTool) Schema() json.RawMessage {
 	return Object(map[string]Property{
-		"url": String("The URL to fetch."),
+		"url":    String("The URL to fetch."),
+		"prompt": String("What information to extract from the page. Optional today; required for Phase A.2+ secondary-model extraction."),
 	}, []string{"url"})
 }
 
@@ -49,7 +65,8 @@ func (t *WebFetchTool) Scope(params json.RawMessage) ToolScope {
 }
 
 type webFetchParams struct {
-	URL string `json:"url"`
+	URL    string `json:"url"`
+	Prompt string `json:"prompt,omitempty"`
 }
 
 func (t *WebFetchTool) Execute(ctx context.Context, params json.RawMessage) (*Result, error) {

@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -93,6 +94,61 @@ func TestWebFetchToolExecute(t *testing.T) {
 				t.Errorf("output does not contain %q:\n%s", tc.wantOutput, res.Output)
 			}
 		})
+	}
+}
+
+// TestWebFetchToolSchemaAcceptsPrompt pins the Claude Code parity schema
+// for WebFetchTool: the tool accepts both a url (required) and a prompt
+// (optional today; Phase A.2+ uses it to drive a secondary-model extract
+// over the fetched markdown). Before Phase A the schema carried only
+// {url}; this test guards against regressing that.
+//
+// Reference: /Users/stello/claude-code-src/src/tools/WebFetchTool/
+// WebFetchTool.ts:24-29 (inputSchema with url + prompt).
+func TestWebFetchToolSchemaAcceptsPrompt(t *testing.T) {
+	tool := NewWebFetchTool()
+	schema := tool.Schema()
+
+	var decoded map[string]any
+	if err := json.Unmarshal(schema, &decoded); err != nil {
+		t.Fatalf("Schema() JSON invalid: %v", err)
+	}
+	props, ok := decoded["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf(`schema missing "properties": %v`, decoded)
+	}
+	if _, hasURL := props["url"]; !hasURL {
+		t.Error(`schema properties missing "url" field`)
+	}
+	if _, hasPrompt := props["prompt"]; !hasPrompt {
+		t.Error(`schema properties missing "prompt" field (required for Phase A Claude Code parity)`)
+	}
+}
+
+// TestWebFetchToolExecuteAcceptsPrompt confirms the tool tolerates a
+// {url, prompt} call without Phase A.2+ markdown extraction wired —
+// keeps Phase A.1 backwards-compatible with raw-body callers while
+// unlocking the later-phase plumbing.
+func TestWebFetchToolExecuteAcceptsPrompt(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("page body"))
+	}))
+	defer ts.Close()
+
+	tool := NewWebFetchTool()
+	params := mustMarshal(t, map[string]any{
+		"url":    ts.URL,
+		"prompt": "Summarize the main content.",
+	})
+	res, err := tool.Execute(context.Background(), params)
+	if err != nil {
+		t.Fatalf("Execute returned unexpected Go error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error result: %s", res.Output)
+	}
+	if !strings.Contains(res.Output, "page body") {
+		t.Errorf("output missing page body:\n%s", res.Output)
 	}
 }
 
