@@ -258,9 +258,12 @@ func TestChatResponderHandlesStreamError(t *testing.T) {
 	}
 
 	texts := bot.allSendTexts()
+	// Post-FU-ChatFriendlyError (P4): partner-facing message is a mapped Korean
+	// string marked with ⚠️; raw provider text ("provider unavailable") no
+	// longer leaks. We only verify that an error message was actually delivered.
 	found := false
 	for _, text := range texts {
-		if strings.Contains(text, "Error") && strings.Contains(text, "provider unavailable") {
+		if strings.Contains(text, "⚠️") {
 			found = true
 			break
 		}

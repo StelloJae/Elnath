@@ -217,9 +217,11 @@ func TestChatResponder_EnforcesMaxToolIterations(t *testing.T) {
 	}
 
 	sends := bot.allSendTexts()
+	// Post-FU-ChatFriendlyError (P4): error message is partner-friendly with
+	// ⚠️ marker. Raw "Error:" prefix no longer appears.
 	foundErr := false
 	for _, s := range sends {
-		if strings.Contains(s, "Error") {
+		if strings.Contains(s, "⚠️") {
 			foundErr = true
 			break
 		}
