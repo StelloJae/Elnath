@@ -410,6 +410,52 @@ func TestChatResponder_ToolGuideContainsFactFenceRules(t *testing.T) {
 	}
 }
 
+// TestChatResponder_ToolGuideRequiresSourcesSection asserts that the chat
+// tool guide carries Claude Code's mandatory Sources-citation rule. Both
+// the OpenAI Responses and Anthropic native web_search primitives inject
+// structured {title, url} results into context; without an explicit
+// prompt rule the model drops those references from its reply, leaving
+// partners with unattributed facts that can't be re-verified. Claude
+// Code's upstream WebSearchTool prompt phrases this as "You MUST include
+// a 'Sources:' section" — Elnath mirrors the literal "Sources:" marker
+// (easier to grep + consistent with server-tool output citations)
+// alongside the markdown-hyperlink format requirement.
+//
+// Reference: /Users/stello/claude-code-src/src/tools/WebSearchTool/
+// prompt.ts:14-25 (CRITICAL REQUIREMENT block).
+//
+// TODO(L3): relocate to universal prompt.Builder node together with
+// Fix C-P1 fact-fence rules. Tracked in
+// .omc/plans/l1-universal-message-schema.md.
+func TestChatResponder_ToolGuideRequiresSourcesSection(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{response: "ok"}
+	exec := newChatMockExecutor()
+	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		ToolDefs:     []llm.ToolDef{{Name: "web_search"}, {Name: "web_fetch"}},
+		ToolExecutor: exec,
+	}))
+
+	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	req := provider.capturedRequest(t)
+	wantMarkers := []string{
+		// Literal section header the model must emit
+		"Sources:",
+		// Link format requirement — partners and downstream auditors can
+		// click through without reading raw URLs
+		"markdown hyperlink",
+	}
+	for _, m := range wantMarkers {
+		if !strings.Contains(req.System, m) {
+			t.Errorf("Sources citation rule missing marker %q in System prompt:\n%s", m, req.System)
+		}
+	}
+}
+
 func TestChatResponder_OmitsToolGuideWhenNoExecutor(t *testing.T) {
 	bot := newChatMockBot()
 	provider := &chatMockProvider{response: "ok"}

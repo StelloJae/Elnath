@@ -147,10 +147,18 @@ func chatTimeHeader(now time.Time) string {
 // on sparse Yahoo most-active scrapes. Evidence:
 // .omc/research/fix-c-factcheck.md.
 //
-// TODO(L3): both fact-fence anchors (rule 5 + alternate sources) are
-// chat-specific today; relocate to a universal prompt.Builder node so
-// task and chat paths share the discipline. Plan:
-// .omc/plans/l1-universal-message-schema.md.
+// FU-ChatGuideSourcesCitation (Phase B.3) added rule 6 to require a
+// mandatory "Sources:" section at the end of any answer that used
+// web_search or web_fetch. Both the OpenAI Responses web_search and the
+// Anthropic web_search_20250305 tools (Phase B.1 / B.2) inject
+// structured {title, url} results into context; without this prompt
+// rule the model silently drops those citations. Mirrors the Claude
+// Code upstream prompt (WebSearchTool/prompt.ts:14-25).
+//
+// TODO(L3): all three fact-fence anchors (rule 5 + alternate sources +
+// rule 6 Sources) are chat-specific today; relocate to a universal
+// prompt.Builder node so task and chat paths share the discipline.
+// Plan: .omc/plans/l1-universal-message-schema.md.
 func chatToolGuideHeader() string {
 	return `
 ## 도구 사용 지침
@@ -174,6 +182,11 @@ func chatToolGuideHeader() string {
 3. 도구 결과를 받으면 한국어로 자연스럽게 요약·정리해 답한다.
 4. 일반 지식·간단한 대화처럼 도구 없이 답할 수 있으면 그대로 답한다.
 5. tool_result 가 요청한 대상의 **구체 수치 rows** (종목명·가격·거래량·건수 등) 를 반환하지 못했다면, 사전지식으로 이름·수치를 지어내지 말 것. 대신 (a) 무엇이 추출됐고 무엇이 비어있는지 명시, (b) 아래 대안 소스 시도 또는 파트너에게 재질문.
+6. web_search 나 web_fetch 로 외부 출처를 참고한 답변에는 **반드시 답변 맨 끝에 "Sources:" 섹션** 을 포함하고, 참고한 URL 을 markdown hyperlink (` + "`- [Title](URL)`" + `) 형식으로 나열한다. 예시:
+
+   Sources:
+   - [Yahoo Finance most-active](https://finance.yahoo.com/most-active)
+   - [Naver 거래상위](https://finance.naver.com/sise/sise_quant.naver)
 
 대안 소스 (primary scrape 가 sparse 일 때 순차 시도):
 - US 거래량 상위: https://finance.yahoo.com/most-active → https://query1.finance.yahoo.com/v1/finance/trending/US (JSON) → https://finviz.com/screener.ashx?v=111&s=ta_mostactive
