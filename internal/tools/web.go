@@ -15,6 +15,7 @@ import (
 
 	md "github.com/JohannesKaufmann/html-to-markdown"
 	"github.com/hashicorp/golang-lru/v2/expirable"
+	"github.com/stello/elnath/internal/llm"
 )
 
 const webFetchTimeout = 30 * time.Second
@@ -72,6 +73,14 @@ func withWebFetchCache(cache *expirable.LRU[string, webFetchCacheEntry]) webFetc
 	return func(t *WebFetchTool) { t.cache = cache }
 }
 
+// withSecondary injects the SecondaryModelCaller used in Phase A.5's
+// prompt-driven extract. Tests pass a scripted caller to pin the "prompt
+// present → secondary consulted" contract; production wires the real
+// per-provider caller at daemon/chat setup.
+func withSecondary(caller llm.SecondaryModelCaller) webFetchOption {
+	return func(t *WebFetchTool) { t.secondary = caller }
+}
+
 // Lazy singleton: the html-to-markdown Converter builds a rule table on
 // construction; reusing one instance across Execute calls keeps the hot
 // path allocation-free. Mirrors the Turndown lazy-init in
@@ -91,6 +100,16 @@ func getHTMLConverter() *md.Converter {
 func isHTMLContentType(contentType string) bool {
 	ct := strings.ToLower(contentType)
 	return strings.Contains(ct, "text/html") || strings.Contains(ct, "application/xhtml+xml")
+}
+
+// isMarkdownContentType gates the Phase A.5 fast-path: when a preapproved
+// host serves text/markdown directly and the body is under the 100K cap,
+// the raw markdown is the best answer a documentation query can receive,
+// so the secondary-model extract is skipped. Reference:
+// /Users/stello/claude-code-src/src/tools/WebFetchTool/WebFetchTool.ts:264.
+func isMarkdownContentType(contentType string) bool {
+	ct := strings.ToLower(contentType)
+	return strings.Contains(ct, "text/markdown")
 }
 
 // isSameHostRedirect mirrors Claude Code's isPermittedRedirect — a redirect
@@ -153,8 +172,9 @@ func truncateMarkdown(s string) string {
 
 // WebFetchTool fetches the body of a URL via HTTP GET.
 type WebFetchTool struct {
-	client *http.Client
-	cache  *expirable.LRU[string, webFetchCacheEntry]
+	client    *http.Client
+	cache     *expirable.LRU[string, webFetchCacheEntry]
+	secondary llm.SecondaryModelCaller
 }
 
 func NewWebFetchTool(opts ...webFetchOption) *WebFetchTool {
@@ -163,7 +183,8 @@ func NewWebFetchTool(opts ...webFetchOption) *WebFetchTool {
 			Timeout:       webFetchTimeout,
 			CheckRedirect: sameHostRedirectChecker,
 		},
-		cache: getSharedWebFetchCache(),
+		cache:     getSharedWebFetchCache(),
+		secondary: llm.NewNoopSecondaryModelCaller(),
 	}
 	for _, opt := range opts {
 		opt(t)
@@ -267,8 +288,9 @@ func (t *WebFetchTool) Execute(ctx context.Context, params json.RawMessage) (*Re
 		return ErrorResult(fmt.Sprintf("web_fetch: HTTP %d\n%s", resp.StatusCode, body)), nil
 	}
 
+	contentType := resp.Header.Get("Content-Type")
 	output := string(body)
-	if isHTMLContentType(resp.Header.Get("Content-Type")) {
+	if isHTMLContentType(contentType) {
 		markdown, err := getHTMLConverter().ConvertString(output)
 		if err != nil {
 			return ErrorResult(fmt.Sprintf("web_fetch: html→markdown: %v", err)), nil
@@ -276,6 +298,26 @@ func (t *WebFetchTool) Execute(ctx context.Context, params json.RawMessage) (*Re
 		output = markdown
 	}
 	output = truncateMarkdown(output)
+
+	// Phase A.5: when the caller supplies a prompt, hand the markdown to a
+	// secondary model for focused extraction — unless the Claude Code
+	// fast path fires (preapproved host + server-provided text/markdown +
+	// body under the 100K cap), in which case the raw markdown is the
+	// best answer a documentation query can get. Reference:
+	// /Users/stello/claude-code-src/src/tools/WebFetchTool/WebFetchTool.ts:261-278.
+	// Secondary-model failure surfaces as an error result and keeps the
+	// entry out of the cache so a retry isn't locked into a 15-min miss.
+	if p.Prompt != "" {
+		isPreapproved := isPreapprovedURL(p.URL)
+		fastPath := isPreapproved && isMarkdownContentType(contentType) && len(output) < webFetchMaxMarkdownLen
+		if !fastPath {
+			extracted, err := t.secondary.Extract(ctx, output, p.Prompt, isPreapproved)
+			if err != nil {
+				return ErrorResult(fmt.Sprintf("web_fetch: secondary extract: %v", err)), nil
+			}
+			output = extracted
+		}
+	}
 
 	t.cache.Add(p.URL, webFetchCacheEntry{output: output})
 

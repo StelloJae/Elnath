@@ -3,9 +3,11 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -530,4 +532,223 @@ func (t *rewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	parsed, _ := http.NewRequest(req.Method, t.baseURL+req.URL.Path+"?"+req.URL.RawQuery, req.Body)
 	parsed.Header = req.Header
 	return http.DefaultTransport.RoundTrip(parsed)
+}
+
+// mockSecondaryCaller is the scripted llm.SecondaryModelCaller used in the
+// Phase A.5 R2-R6 suite. It records the argument triple (markdown, prompt,
+// isPreapproved) on every call so tests can pin that the WebFetch Execute
+// path forwards the correct values, and lets each test dial in a canned
+// return value (or error) without standing up a real LLM client.
+type mockSecondaryCaller struct {
+	mu           sync.Mutex
+	calls        int
+	lastMarkdown string
+	lastPrompt   string
+	lastPreapp   bool
+	returnVal    string
+	returnErr    error
+}
+
+func (m *mockSecondaryCaller) Extract(_ context.Context, markdown, prompt string, isPreapproved bool) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls++
+	m.lastMarkdown = markdown
+	m.lastPrompt = prompt
+	m.lastPreapp = isPreapproved
+	if m.returnErr != nil {
+		return "", m.returnErr
+	}
+	return m.returnVal, nil
+}
+
+func (m *mockSecondaryCaller) CallCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.calls
+}
+
+// TestWebFetchTool_SkipsSecondaryWhenPromptEmpty (R2) pins the "no prompt
+// → no secondary round-trip" invariant. Callers that want raw markdown
+// should not pay an LLM hop just because a SecondaryModelCaller is wired.
+func TestWebFetchTool_SkipsSecondaryWhenPromptEmpty(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Write([]byte("body"))
+	}))
+	defer ts.Close()
+
+	mock := &mockSecondaryCaller{returnVal: "must-not-appear"}
+	cache := expirable.NewLRU[string, webFetchCacheEntry](10, nil, 15*time.Minute)
+	tool := NewWebFetchTool(withWebFetchCache(cache), withSecondary(mock))
+
+	res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{"url": ts.URL}))
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error result: %s", res.Output)
+	}
+	if got := mock.CallCount(); got != 0 {
+		t.Errorf("secondary must not be consulted when prompt is empty; calls=%d", got)
+	}
+	if res.Output != "body" {
+		t.Errorf("output should equal raw body; got %q", res.Output)
+	}
+}
+
+// TestWebFetchTool_SkipsSecondaryForNoopCaller (R3) pins the default
+// construction contract: a tool built without an explicit SecondaryModelCaller
+// must behave identically to Phase A.4 even when the caller supplies a
+// prompt. Guards against accidentally wiring a silent LLM call into every
+// web_fetch invocation.
+func TestWebFetchTool_SkipsSecondaryForNoopCaller(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Write([]byte("raw body"))
+	}))
+	defer ts.Close()
+
+	cache := expirable.NewLRU[string, webFetchCacheEntry](10, nil, 15*time.Minute)
+	tool := NewWebFetchTool(withWebFetchCache(cache))
+
+	res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{
+		"url":    ts.URL,
+		"prompt": "extract price",
+	}))
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error result: %s", res.Output)
+	}
+	if res.Output != "raw body" {
+		t.Errorf("default noop caller should return body verbatim; got %q", res.Output)
+	}
+}
+
+// TestWebFetchTool_AppliesPromptViaSecondary (R4) is the core Phase A.5
+// contract: when a prompt is present and the caller wires a real secondary,
+// Execute must hand off post-HTML-convert markdown + the exact prompt +
+// the correctly computed isPreapproved flag, and the caller's return value
+// must replace the raw markdown in res.Output.
+func TestWebFetchTool_AppliesPromptViaSecondary(t *testing.T) {
+	const html = `<html><body><h1>Title</h1><p>AAPL $180</p></body></html>`
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write([]byte(html))
+	}))
+	defer ts.Close()
+
+	mock := &mockSecondaryCaller{returnVal: "AAPL: $180"}
+	cache := expirable.NewLRU[string, webFetchCacheEntry](10, nil, 15*time.Minute)
+	tool := NewWebFetchTool(withWebFetchCache(cache), withSecondary(mock))
+
+	res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{
+		"url":    ts.URL,
+		"prompt": "extract stock prices",
+	}))
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error result: %s", res.Output)
+	}
+	if got := mock.CallCount(); got != 1 {
+		t.Errorf("secondary should be consulted exactly once; calls=%d", got)
+	}
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+	if mock.lastPrompt != "extract stock prices" {
+		t.Errorf("secondary received wrong prompt: %q", mock.lastPrompt)
+	}
+	if !strings.Contains(mock.lastMarkdown, "AAPL $180") {
+		t.Errorf("secondary received wrong markdown (missing body text): %q", mock.lastMarkdown)
+	}
+	if strings.Contains(mock.lastMarkdown, "<h1>") {
+		t.Errorf("secondary should receive post-convert markdown, not raw HTML: %q", mock.lastMarkdown)
+	}
+	if mock.lastPreapp {
+		t.Errorf("httptest host is not preapproved; isPreapproved should be false")
+	}
+	if res.Output != "AAPL: $180" {
+		t.Errorf("output should equal secondary return value; got %q", res.Output)
+	}
+}
+
+// TestWebFetchTool_SecondaryCallerErrorSurfaces (R5) guarantees that a
+// failing secondary bubbles up as an IsError=true result and keeps the
+// entry out of the LRU. Caching a failed extract would freeze every retry
+// for 15 minutes into the same error — worse UX than a fresh re-fetch.
+func TestWebFetchTool_SecondaryCallerErrorSurfaces(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Write([]byte("body"))
+	}))
+	defer ts.Close()
+
+	mock := &mockSecondaryCaller{returnErr: errors.New("budget exceeded")}
+	cache := expirable.NewLRU[string, webFetchCacheEntry](10, nil, 15*time.Minute)
+	tool := NewWebFetchTool(withWebFetchCache(cache), withSecondary(mock))
+
+	res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{
+		"url":    ts.URL,
+		"prompt": "summarize",
+	}))
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("secondary error must surface as IsError=true; output=%q", res.Output)
+	}
+	if !strings.Contains(res.Output, "budget exceeded") {
+		t.Errorf("error result should carry underlying message: %q", res.Output)
+	}
+	if _, ok := cache.Get(ts.URL); ok {
+		t.Error("failed secondary extraction must not leave an entry in the LRU")
+	}
+}
+
+// TestWebFetchTool_PreapprovedMarkdownSkipsSecondary (R6) pins the Claude
+// Code fast path (WebFetchTool.ts:264-269): when a preapproved host
+// serves text/markdown directly under the 100K cap, the secondary is
+// skipped and the raw markdown reaches the caller verbatim — the most
+// faithful answer for a documentation query. The test uses
+// rewriteTransport so the caller-visible hostname stays "go.dev"
+// (preapproved) while the actual bytes come from the local server.
+func TestWebFetchTool_PreapprovedMarkdownSkipsSecondary(t *testing.T) {
+	const markdownBody = "# Hello\n\nPreapproved doc content."
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+		w.Write([]byte(markdownBody))
+	}))
+	defer ts.Close()
+
+	mock := &mockSecondaryCaller{returnVal: "must-not-be-returned"}
+	cache := expirable.NewLRU[string, webFetchCacheEntry](10, nil, 15*time.Minute)
+	tool := NewWebFetchTool(withWebFetchCache(cache), withSecondary(mock))
+	tool.client = &http.Client{
+		Timeout:   webFetchTimeout,
+		Transport: &rewriteTransport{baseURL: ts.URL},
+	}
+
+	res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{
+		"url":    "https://go.dev/doc",
+		"prompt": "what does it say?",
+	}))
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error result: %s", res.Output)
+	}
+	if got := mock.CallCount(); got != 0 {
+		t.Errorf("fast path should skip secondary; calls=%d", got)
+	}
+	if !strings.Contains(res.Output, "Preapproved doc content") {
+		t.Errorf("fast path should return markdown verbatim; got %q", res.Output)
+	}
+	if strings.Contains(res.Output, "must-not-be-returned") {
+		t.Errorf("mock return value leaked into output despite fast path: %q", res.Output)
+	}
 }
