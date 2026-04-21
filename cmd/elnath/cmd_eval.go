@@ -2,10 +2,16 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
+	"math/rand"
 	"path/filepath"
+	"time"
 
+	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/eval"
+	"github.com/stello/elnath/internal/orchestrator"
+	"github.com/stello/elnath/internal/routing"
 )
 
 func cmdEval(_ context.Context, args []string) error {
@@ -25,7 +31,7 @@ Subcommands:
   run-current <plan.json>    Execute a current-system runner plan and write a scorecard
   scaffold-baseline <output.json>     Write a baseline runner scaffold
   scaffold-current <output.json>      Write a current-system runner scaffold
-  run-v2 <corpus.v2.json> <output_dir> Phase 7.3 self-improvement benchmark (stub execution)`)
+  run-v2 <corpus.v2.json> <output_dir> Phase 7.4a self-improvement benchmark (--real-runner to enable production Router)`)
 		return nil
 	}
 
@@ -286,21 +292,33 @@ Subcommands:
 		fmt.Printf("Current scaffold written: %s\n", args[1])
 		return nil
 	case "run-v2":
-		if len(args) < 3 {
-			return fmt.Errorf("usage: elnath eval run-v2 <corpus.v2.json> <output_dir>")
+		fs := flag.NewFlagSet("run-v2", flag.ContinueOnError)
+		realRunner := fs.Bool("real-runner", false, "enable production Router path")
+		epsilon := fs.Float64("epsilon", 0.2, "ε for exploration (benchmark-only)")
+		seed := fs.Int64("seed", 0, "PRNG seed (0 = time-based)")
+		if err := fs.Parse(args[1:]); err != nil {
+			return fmt.Errorf("run-v2: %w", err)
 		}
-		return cmdEvalRunV2(args[1], args[2])
+		positional := fs.Args()
+		if len(positional) < 2 {
+			return fmt.Errorf("usage: elnath eval run-v2 [--real-runner] [--epsilon N] [--seed N] <corpus.v2.json> <output_dir>")
+		}
+		return cmdEvalRunV2(positional[0], positional[1], *realRunner, *epsilon, *seed)
 	default:
 		return fmt.Errorf("unknown eval subcommand: %s", args[0])
 	}
 }
 
-// cmdEvalRunV2 runs one Phase 7.3 benchmark cycle: loads the v2 corpus,
+// cmdEvalRunV2 runs one Phase 7.4a benchmark cycle: loads the v2 corpus,
 // executes 10 training+held-out runs, and writes a timeseries JSON + a
 // human-readable Markdown report under the given output directory. On
 // STRONG_PASS/PASS the function returns nil (exit 0); on FAIL it returns
 // an error so the CLI exits non-zero.
-func cmdEvalRunV2(corpusPath, outputDir string) error {
+//
+// When realRunner is true the production orchestrator.Router is wired in via
+// productionRouterAdapter with ε-greedy exploration at the given epsilon.
+// The effective seed is printed so reruns are reproducible.
+func cmdEvalRunV2(corpusPath, outputDir string, realRunner bool, epsilon float64, seed int64) error {
 	corpus, err := eval.LoadCorpus(corpusPath)
 	if err != nil {
 		return err
@@ -309,16 +327,34 @@ func cmdEvalRunV2(corpusPath, outputDir string) error {
 		return fmt.Errorf("run-v2: corpus version %q is not v2", corpus.Version)
 	}
 
-	series, runErr := eval.RunV2(eval.V2RunOptions{
+	opts := eval.V2RunOptions{
 		Corpus:    corpus,
 		OutputDir: outputDir,
-	})
+	}
+
+	if realRunner {
+		if seed == 0 {
+			seed = time.Now().UnixNano()
+		}
+		fmt.Printf("run-v2: real-runner enabled  seed=%d  epsilon=%.4f\n", seed, epsilon)
+
+		workflows := map[string]orchestrator.Workflow{
+			"single":    &nameOnlyWorkflow{name: "single"},
+			"team":      &nameOnlyWorkflow{name: "team"},
+			"ralph":     &nameOnlyWorkflow{name: "ralph"},
+			"autopilot": &nameOnlyWorkflow{name: "autopilot"},
+			"research":  &nameOnlyWorkflow{name: "research"},
+		}
+		opts.Router = &productionRouterAdapter{router: orchestrator.NewRouter(workflows)}
+		opts.Epsilon = epsilon
+		opts.Rand = rand.New(rand.NewSource(seed))
+	}
+
+	series, runErr := eval.RunV2(opts)
 	if runErr != nil && series == nil {
 		return runErr
 	}
 
-	// Persist timeseries as JSON alongside the report for downstream
-	// tooling (trend analysis, CI step, etc).
 	if err := eval.WriteV2TimeSeries(filepath.Join(outputDir, "timeseries.json"), series); err != nil {
 		return fmt.Errorf("run-v2: write timeseries: %w", err)
 	}
@@ -331,7 +367,7 @@ func cmdEvalRunV2(corpusPath, outputDir string) error {
 		return fmt.Errorf("run-v2: render report: %w", err)
 	}
 
-	fmt.Printf("Phase 7.3 v2 cycle complete\n")
+	fmt.Printf("Phase 7.4a v2 cycle complete\n")
 	fmt.Printf("  verdict:       %s\n", series.Verdict)
 	fmt.Printf("  spearman:      %.4f (is_constant=%t)\n", series.SpearmanCoeff, series.IsConstant)
 	fmt.Printf("  first3 avg:    %.4f\n", series.First3Avg)
@@ -345,6 +381,26 @@ func cmdEvalRunV2(corpusPath, outputDir string) error {
 		return fmt.Errorf("run-v2: FAIL (see report)")
 	}
 	return nil
+}
+
+// nameOnlyWorkflow satisfies orchestrator.Workflow so orchestrator.Router
+// can route against a workflow map without executing anything. The
+// benchmark reads only .Name() on the router's pick; Run() is unreachable.
+type nameOnlyWorkflow struct{ name string }
+
+func (w *nameOnlyWorkflow) Name() string { return w.name }
+func (w *nameOnlyWorkflow) Run(_ context.Context, _ orchestrator.WorkflowInput) (*orchestrator.WorkflowResult, error) {
+	return nil, fmt.Errorf("nameOnlyWorkflow.Run called in benchmark path")
+}
+
+type productionRouterAdapter struct{ router *orchestrator.Router }
+
+func (a *productionRouterAdapter) DecideWorkflow(intent string, pref *routing.WorkflowPreference) string {
+	wf := a.router.Route(conversation.Intent(intent), nil, pref)
+	if wf == nil {
+		return ""
+	}
+	return wf.Name()
 }
 
 func printH1Result(label string, result eval.H1Result) {
