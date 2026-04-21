@@ -469,11 +469,12 @@ func TestChatResponder_EmitsProgressNoteBeforeToolExecution(t *testing.T) {
 
 // --- FU-TgToolReaction: ✍ reaction during chat tool execution ---
 
-// TestChatResponder_NoWritingReactionWhenNoToolFired asserts that the ✍
-// reaction is gated on actual tool_use emission — a chat turn that the model
-// answers without touching any tool should only show the terminal 👍.
-// Otherwise partners would see a "working" signal for every exchange.
-func TestChatResponder_NoWritingReactionWhenNoToolFired(t *testing.T) {
+// TestChatResponder_EntryWritingReactionShownEvenWithoutTool asserts that
+// ✍ is set at chat-path entry (FU-ChatEntryWorking / P1) regardless of
+// whether tool_use fires later in the turn. Audit 2026-04-21 found 87% of
+// chat_direct turns never reach the tool loop; without entry-side ✍ those
+// turns look like 👀 → silence → 👍 to the partner.
+func TestChatResponder_EntryWritingReactionShownEvenWithoutTool(t *testing.T) {
 	bot := newChatMockBot()
 	provider := &chatMockProvider{
 		steps: []chatProviderStep{
@@ -492,8 +493,8 @@ func TestChatResponder_NoWritingReactionWhenNoToolFired(t *testing.T) {
 	}
 
 	rs := bot.allReactions()
-	if len(rs) != 1 || rs[0].emoji != "👍" {
-		t.Errorf("reactions = %+v, want single 👍 (no tool fired → no ✍)", rs)
+	if len(rs) != 2 || rs[0].emoji != "✍" || rs[1].emoji != "👍" {
+		t.Errorf("reactions = %+v, want [✍, 👍] (entry-side ✍ then terminal 👍 even with no tool)", rs)
 	}
 }
 

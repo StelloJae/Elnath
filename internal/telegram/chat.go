@@ -171,6 +171,14 @@ func (c *ChatResponder) Respond(ctx context.Context, principal identity.Principa
 	sc := NewStreamConsumer(c.bot, c.chatID, logger)
 	sc.Run()
 
+	// FU-ChatEntryWorking (P1): once the chat path commits to this turn,
+	// show ✍ immediately — not only when a tool fires. Audit 2026-04-21
+	// showed 87% of chat_direct turns never reach the tool loop, so the
+	// prior tool-only ✍ left partners with 👀→침묵→👍 on plain Q&A. Entry
+	// reaction keeps "working" feedback consistent across every chat turn.
+	// setReaction is idempotent; the terminal 👍/😢 overwrites naturally.
+	c.setReaction(ctx, replyToMsgID, "✍")
+
 	systemPrompt, history := c.buildPrompt(ctx, principal, userMessage, logger)
 	systemPrompt = c.prependChatHeaders(systemPrompt)
 	messages := make([]llm.Message, 0, len(history)+1)

@@ -825,18 +825,25 @@ func TestChatResponder_SetsSuccessReactionOnCompletion(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
+	// FU-ChatEntryWorking (P1): ✍ is now set at chat-path entry, so every
+	// turn ends with [✍, 👍] — entry reaction + terminal success reaction.
 	rs := bot.allReactions()
-	if len(rs) != 1 {
-		t.Fatalf("reactions = %d, want 1 (chat success reaction)", len(rs))
+	if len(rs) != 2 {
+		t.Fatalf("reactions = %d, want 2 (entry ✍ + success 👍)", len(rs))
 	}
-	if rs[0].messageID != 77 {
-		t.Errorf("reaction messageID = %d, want 77 (replyToMsgID)", rs[0].messageID)
+	if rs[0].emoji != "✍" {
+		t.Errorf("reaction[0].emoji = %q, want %q (entry-side ✍)", rs[0].emoji, "✍")
 	}
-	if rs[0].emoji != "👍" {
-		t.Errorf("reaction emoji = %q, want %q", rs[0].emoji, "👍")
+	if rs[1].emoji != "👍" {
+		t.Errorf("reaction[1].emoji = %q, want %q (terminal success)", rs[1].emoji, "👍")
 	}
-	if rs[0].chatID != "chat-42" {
-		t.Errorf("reaction chatID = %q, want %q", rs[0].chatID, "chat-42")
+	for i, r := range rs {
+		if r.messageID != 77 {
+			t.Errorf("reaction[%d].messageID = %d, want 77 (replyToMsgID)", i, r.messageID)
+		}
+		if r.chatID != "chat-42" {
+			t.Errorf("reaction[%d].chatID = %q, want %q", i, r.chatID, "chat-42")
+		}
 	}
 }
 
@@ -850,15 +857,19 @@ func TestChatResponder_SetsFailureReactionOnStreamError(t *testing.T) {
 		t.Fatal("expected error from Respond")
 	}
 
+	// FU-ChatEntryWorking (P1): entry ✍ fires before the stream fails, so
+	// the sequence on failure is [✍, 😢] — entry reaction then 😢 overwrite.
 	rs := bot.allReactions()
-	if len(rs) != 1 {
-		t.Fatalf("reactions = %d, want 1 (chat failure reaction)", len(rs))
+	if len(rs) != 2 {
+		t.Fatalf("reactions = %d, want 2 (entry ✍ + failure 😢)", len(rs))
 	}
-	if rs[0].messageID != 99 {
-		t.Errorf("reaction messageID = %d, want 99 (replyToMsgID)", rs[0].messageID)
+	if rs[0].emoji != "✍" || rs[1].emoji != "😢" {
+		t.Errorf("reactions = [%q, %q], want [✍, 😢]", rs[0].emoji, rs[1].emoji)
 	}
-	if rs[0].emoji != "😢" {
-		t.Errorf("reaction emoji = %q, want %q", rs[0].emoji, "😢")
+	for i, r := range rs {
+		if r.messageID != 99 {
+			t.Errorf("reaction[%d].messageID = %d, want 99", i, r.messageID)
+		}
 	}
 }
 
