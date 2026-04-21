@@ -483,7 +483,7 @@ func TestChatResponder_FallsBackToLegacySystemWhenBuildFails(t *testing.T) {
 	}
 
 	req := provider.capturedRequest(t)
-	if !strings.Contains(req.System, "personal AI assistant") {
+	if !strings.Contains(req.System, "Elnath") {
 		t.Errorf("expected legacy fallback system prompt, got %q", req.System)
 	}
 }
@@ -742,7 +742,7 @@ func TestChatResponder_LegacyPathPreservedWhenNoPipeline(t *testing.T) {
 	}
 
 	req := provider.capturedRequest(t)
-	if !strings.Contains(req.System, "personal AI assistant") {
+	if !strings.Contains(req.System, "Elnath") {
 		t.Errorf("expected legacy system prompt, got %q", req.System)
 	}
 	if len(req.Messages) != 1 {
@@ -889,6 +889,37 @@ func TestChatResponder_SkipsReactionWhenReplyToMsgIDZero(t *testing.T) {
 	rs := bot.allReactions()
 	if len(rs) != 0 {
 		t.Errorf("reactions = %d, want 0 (no user message to react to)", len(rs))
+	}
+}
+
+// --- FU-ChatFallbackVoice (P5): fallback system prompt voice + no "concise" ---
+
+func TestChatSystemPromptFallback_HasPartnerVoiceAndNoConciseDirective(t *testing.T) {
+	// Guards the fallback system prompt used when prompt.Builder is not
+	// wired. Audit 2026-04-21 cell F1: old fallback forced short answers
+	// and dropped identity. The partner prefers detailed, substantiated
+	// replies in Korean, and chat tool loop is meaningful only if the
+	// fallback also reminds the model to actually call tools.
+	wantPresent := []string{
+		"Elnath",      // identity anchored even without prompt.Builder
+		"한국어",         // Korean default
+		"상세",          // substantive / detailed bias
+		"도구",          // tool-use cue preserved even without strong-guide header
+	}
+	for _, want := range wantPresent {
+		if !strings.Contains(chatSystemPrompt, want) {
+			t.Errorf("chatSystemPrompt missing %q; got:\n%s", want, chatSystemPrompt)
+		}
+	}
+
+	wantAbsent := []string{
+		"concise", // the 2-line fallback directive that caused output_tokens 7.6x gap
+		"Concise",
+	}
+	for _, avoid := range wantAbsent {
+		if strings.Contains(chatSystemPrompt, avoid) {
+			t.Errorf("chatSystemPrompt still contains %q (post-FU-ChatFallbackVoice should have removed terse directive)", avoid)
+		}
 	}
 }
 

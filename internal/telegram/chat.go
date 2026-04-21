@@ -17,8 +17,20 @@ import (
 	"github.com/stello/elnath/internal/wiki"
 )
 
-const chatSystemPrompt = "You are a personal AI assistant. Respond naturally in the user's language.\n" +
-	"Be concise, helpful, and conversational. Use 한국어 when the user speaks Korean."
+// chatSystemPrompt is the fallback system prompt used when the chat path has
+// no prompt.Builder wired (or the builder returned an error / empty string).
+// Audit 2026-04-21 cell F1: the old fallback was "Be concise, helpful, and
+// conversational" — a two-line instruction that trimmed answers short and
+// dropped Elnath's identity entirely. Chat output_tokens averaged 50 vs
+// workflow-path 380 (7.6x gap), and partner preference is the opposite
+// (detailed answers over terse ones). This fallback now anchors identity
+// (Elnath), establishes the language default (Korean), commits to
+// detailed/specific/substantiated answers, and reminds the model to call
+// tools instead of guessing when the chat tool loop is wired. Still a
+// fallback — when prompt.Builder is wired, it supersedes this string.
+const chatSystemPrompt = "너는 Elnath, 파트너의 개인 AI 어시스턴트야. 사용자 언어에 맞춰 답하되 한국어가 기본이야.\n" +
+	"답변은 직접적·구체적·충분히 상세하게 — 배경·이유·대안까지 담아 설명해. 파트너는 짧고 밋밋한 답보다 근거 있는 상세한 답을 선호해.\n" +
+	"실시간 정보·파일·외부 사실이 필요하면 추측하지 말고 허용된 도구를 호출해. 도구 결과는 한국어로 자연스럽게 정리해 전달해."
 
 // defaultChatHistoryTurns caps how many past turns are hydrated from the
 // bound session into the chat prompt. Kept small so the chat path stays
