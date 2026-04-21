@@ -6,7 +6,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/hashicorp/golang-lru/v2/expirable"
 )
 
 func TestWebFetchToolMeta(t *testing.T) {
@@ -256,6 +260,78 @@ func TestWebFetchTool_TruncatesLargeMarkdown(t *testing.T) {
 	maxLen := 100_000 + len("\n\n"+marker) + 4
 	if len(res.Output) > maxLen {
 		t.Errorf("output length %d exceeds expected cap %d", len(res.Output), maxLen)
+	}
+}
+
+// TestWebFetchTool_CachesSuccessfulFetch pins Phase A.3: a successful
+// fetch lands in the LRU cache so a repeated identical URL skips the
+// network round-trip. Mirrors Claude Code's URL_CACHE Get/Set pattern
+// in /Users/stello/claude-code-src/src/tools/WebFetchTool/utils.ts:356-481.
+func TestWebFetchTool_CachesSuccessfulFetch(t *testing.T) {
+	var hits int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Write([]byte("cacheable body"))
+	}))
+	defer ts.Close()
+
+	// Isolated cache so the test never leaks into or out of the
+	// process-wide singleton returned by getSharedWebFetchCache.
+	cache := expirable.NewLRU[string, webFetchCacheEntry](10, nil, 15*time.Minute)
+	tool := NewWebFetchTool(withWebFetchCache(cache))
+	params := mustMarshal(t, map[string]any{"url": ts.URL})
+
+	res1, err := tool.Execute(context.Background(), params)
+	if err != nil {
+		t.Fatalf("first Execute error: %v", err)
+	}
+	if res1.IsError {
+		t.Fatalf("first Execute returned error result: %s", res1.Output)
+	}
+	res2, err := tool.Execute(context.Background(), params)
+	if err != nil {
+		t.Fatalf("second Execute error: %v", err)
+	}
+	if res2.IsError {
+		t.Fatalf("second Execute returned error result: %s", res2.Output)
+	}
+
+	if got := atomic.LoadInt32(&hits); got != 1 {
+		t.Errorf("expected 1 upstream hit with cache warm, got %d", got)
+	}
+	if res1.Output != res2.Output {
+		t.Errorf("cached output differs:\n  first:  %q\n  second: %q", res1.Output, res2.Output)
+	}
+}
+
+// TestWebFetchTool_EvictsExpiredEntries guards the TTL behaviour of the
+// cache: once an entry has aged past its TTL, the next call must fall
+// through to the network. Uses a 50 ms TTL so the test runs in well
+// under a second without flakiness.
+func TestWebFetchTool_EvictsExpiredEntries(t *testing.T) {
+	var hits int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Write([]byte("body"))
+	}))
+	defer ts.Close()
+
+	cache := expirable.NewLRU[string, webFetchCacheEntry](10, nil, 50*time.Millisecond)
+	tool := NewWebFetchTool(withWebFetchCache(cache))
+	params := mustMarshal(t, map[string]any{"url": ts.URL})
+
+	if _, err := tool.Execute(context.Background(), params); err != nil {
+		t.Fatalf("warm Execute error: %v", err)
+	}
+	time.Sleep(120 * time.Millisecond) // comfortably past TTL
+	if _, err := tool.Execute(context.Background(), params); err != nil {
+		t.Fatalf("post-expiry Execute error: %v", err)
+	}
+
+	if got := atomic.LoadInt32(&hits); got != 2 {
+		t.Errorf("expected 2 upstream hits after TTL expiry, got %d", got)
 	}
 }
 

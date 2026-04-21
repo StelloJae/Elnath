@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	md "github.com/JohannesKaufmann/html-to-markdown"
+	"github.com/hashicorp/golang-lru/v2/expirable"
 )
 
 const webFetchTimeout = 30 * time.Second
@@ -27,6 +28,42 @@ const (
 	webFetchMaxMarkdownLen   = 100_000
 	webFetchTruncationMarker = "\n\n[Content truncated due to length...]"
 )
+
+// Phase A.3 LRU cache. golang-lru/v2 caps on entry count, not bytes —
+// Claude Code's 50 MiB byte-cap (utils.ts:64-69) maps here to an entry
+// cap sized for typical partner dogfood (Yahoo-class pages at ~40-80 KiB
+// of markdown → ~100 entries lands comfortably under ~8 MiB). TTL is
+// kept at 15 min so repeated reads inside a single chat sprint are free
+// but stale content always ages out before the next conversation.
+const (
+	webFetchCacheSize = 100
+	webFetchCacheTTL  = 15 * time.Minute
+)
+
+type webFetchCacheEntry struct {
+	output string
+}
+
+var (
+	sharedWebFetchCache     *expirable.LRU[string, webFetchCacheEntry]
+	sharedWebFetchCacheOnce sync.Once
+)
+
+func getSharedWebFetchCache() *expirable.LRU[string, webFetchCacheEntry] {
+	sharedWebFetchCacheOnce.Do(func() {
+		sharedWebFetchCache = expirable.NewLRU[string, webFetchCacheEntry](webFetchCacheSize, nil, webFetchCacheTTL)
+	})
+	return sharedWebFetchCache
+}
+
+// webFetchOption customizes a WebFetchTool at construction. Kept package-private
+// — tests inject a short-TTL or isolated cache so suite runs don't share state
+// with the process-wide singleton returned by getSharedWebFetchCache.
+type webFetchOption func(*WebFetchTool)
+
+func withWebFetchCache(cache *expirable.LRU[string, webFetchCacheEntry]) webFetchOption {
+	return func(t *WebFetchTool) { t.cache = cache }
+}
 
 // Lazy singleton: the html-to-markdown Converter builds a rule table on
 // construction; reusing one instance across Execute calls keeps the hot
@@ -66,12 +103,18 @@ func truncateMarkdown(s string) string {
 // WebFetchTool fetches the body of a URL via HTTP GET.
 type WebFetchTool struct {
 	client *http.Client
+	cache  *expirable.LRU[string, webFetchCacheEntry]
 }
 
-func NewWebFetchTool() *WebFetchTool {
-	return &WebFetchTool{
+func NewWebFetchTool(opts ...webFetchOption) *WebFetchTool {
+	t := &WebFetchTool{
 		client: &http.Client{Timeout: webFetchTimeout},
+		cache:  getSharedWebFetchCache(),
 	}
+	for _, opt := range opts {
+		opt(t)
+	}
+	return t
 }
 
 func (t *WebFetchTool) Name() string { return "web_fetch" }
@@ -127,6 +170,10 @@ func (t *WebFetchTool) Execute(ctx context.Context, params json.RawMessage) (*Re
 		return ErrorResult("url must not be empty"), nil
 	}
 
+	if entry, ok := t.cache.Get(p.URL); ok {
+		return &Result{Output: entry.output}, nil
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.URL, nil)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("web_fetch: bad URL: %v", err)), nil
@@ -157,6 +204,8 @@ func (t *WebFetchTool) Execute(ctx context.Context, params json.RawMessage) (*Re
 		output = markdown
 	}
 	output = truncateMarkdown(output)
+
+	t.cache.Add(p.URL, webFetchCacheEntry{output: output})
 
 	return &Result{Output: output}, nil
 }

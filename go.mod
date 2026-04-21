@@ -8,6 +8,7 @@ require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/google/uuid v1.6.0
+	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/mattn/go-isatty v0.0.20
 	golang.org/x/crypto v0.50.0
 	golang.org/x/term v0.42.0
