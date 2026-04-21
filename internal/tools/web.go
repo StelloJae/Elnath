@@ -9,10 +9,59 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
+	"unicode/utf8"
+
+	md "github.com/JohannesKaufmann/html-to-markdown"
 )
 
 const webFetchTimeout = 30 * time.Second
+
+// Phase A.2 parity with Claude Code's MAX_MARKDOWN_LENGTH
+// (/Users/stello/claude-code-src/src/tools/WebFetchTool/utils.ts:128).
+// Keep the cap byte-based for Go string semantics; rune-boundary safe cut
+// is handled in truncateMarkdown so a cut mid-codepoint never corrupts
+// the Korean/emoji content common in partner dogfood.
+const (
+	webFetchMaxMarkdownLen   = 100_000
+	webFetchTruncationMarker = "\n\n[Content truncated due to length...]"
+)
+
+// Lazy singleton: the html-to-markdown Converter builds a rule table on
+// construction; reusing one instance across Execute calls keeps the hot
+// path allocation-free. Mirrors the Turndown lazy-init in
+// /Users/stello/claude-code-src/src/tools/WebFetchTool/utils.ts:91-97.
+var (
+	htmlConverterOnce sync.Once
+	htmlConverter     *md.Converter
+)
+
+func getHTMLConverter() *md.Converter {
+	htmlConverterOnce.Do(func() {
+		htmlConverter = md.NewConverter("", true, nil)
+	})
+	return htmlConverter
+}
+
+func isHTMLContentType(contentType string) bool {
+	ct := strings.ToLower(contentType)
+	return strings.Contains(ct, "text/html") || strings.Contains(ct, "application/xhtml+xml")
+}
+
+// truncateMarkdown enforces the A.2 byte cap but steps back to the nearest
+// UTF-8 rune start before appending the marker. Mid-codepoint cuts would
+// emit U+FFFD on JSON re-encode and break the downstream LLM's reading.
+func truncateMarkdown(s string) string {
+	if len(s) <= webFetchMaxMarkdownLen {
+		return s
+	}
+	cut := webFetchMaxMarkdownLen
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + webFetchTruncationMarker
+}
 
 // WebFetchTool fetches the body of a URL via HTTP GET.
 type WebFetchTool struct {
@@ -99,7 +148,17 @@ func (t *WebFetchTool) Execute(ctx context.Context, params json.RawMessage) (*Re
 		return ErrorResult(fmt.Sprintf("web_fetch: HTTP %d\n%s", resp.StatusCode, body)), nil
 	}
 
-	return &Result{Output: string(body)}, nil
+	output := string(body)
+	if isHTMLContentType(resp.Header.Get("Content-Type")) {
+		markdown, err := getHTMLConverter().ConvertString(output)
+		if err != nil {
+			return ErrorResult(fmt.Sprintf("web_fetch: html→markdown: %v", err)), nil
+		}
+		output = markdown
+	}
+	output = truncateMarkdown(output)
+
+	return &Result{Output: output}, nil
 }
 
 // WebSearchTool searches the web via DuckDuckGo HTML.

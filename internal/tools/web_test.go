@@ -152,6 +152,113 @@ func TestWebFetchToolExecuteAcceptsPrompt(t *testing.T) {
 	}
 }
 
+// TestWebFetchTool_ConvertsHTMLToMarkdown pins Phase A.2: when the
+// server reports text/html, Execute converts the HTML body to markdown
+// before returning. Mirrors Claude Code's Turndown stage
+// (/Users/stello/claude-code-src/src/tools/WebFetchTool/utils.ts:456-458)
+// so the LLM consumes markdown, not raw tags.
+func TestWebFetchTool_ConvertsHTMLToMarkdown(t *testing.T) {
+	const htmlBody = `<html><head><title>Ignored</title></head><body>` +
+		`<h1>Hello</h1>` +
+		`<p>World</p>` +
+		`<a href="https://example.com">link</a>` +
+		`</body></html>`
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write([]byte(htmlBody))
+	}))
+	defer ts.Close()
+
+	tool := NewWebFetchTool()
+	res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{"url": ts.URL}))
+	if err != nil {
+		t.Fatalf("Execute returned unexpected Go error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error result: %s", res.Output)
+	}
+	if strings.Contains(res.Output, "<h1>") || strings.Contains(res.Output, "<p>") {
+		t.Errorf("output still contains raw HTML tags:\n%s", res.Output)
+	}
+	if !strings.Contains(res.Output, "# Hello") {
+		t.Errorf("output missing markdown H1 (# Hello):\n%s", res.Output)
+	}
+	if !strings.Contains(res.Output, "World") {
+		t.Errorf("output missing paragraph text:\n%s", res.Output)
+	}
+	if !strings.Contains(res.Output, "[link](https://example.com)") {
+		t.Errorf("output missing markdown link form:\n%s", res.Output)
+	}
+}
+
+// TestWebFetchTool_PreservesNonHTMLContent pins Phase A.2 scope fence:
+// non-HTML content types (text/plain, JSON, etc.) pass through as-is.
+// Matches Claude Code's else-branch in utils.ts:459-466.
+func TestWebFetchTool_PreservesNonHTMLContent(t *testing.T) {
+	const rawBody = "plain text content, line 1\nline 2"
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Write([]byte(rawBody))
+	}))
+	defer ts.Close()
+
+	tool := NewWebFetchTool()
+	res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{"url": ts.URL}))
+	if err != nil {
+		t.Fatalf("Execute returned unexpected Go error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error result: %s", res.Output)
+	}
+	if res.Output != rawBody {
+		t.Errorf("non-HTML content should be preserved raw:\ngot:  %q\nwant: %q", res.Output, rawBody)
+	}
+}
+
+// TestWebFetchTool_TruncatesLargeMarkdown pins Phase A.2's 100K-char cap
+// (Claude Code MAX_MARKDOWN_LENGTH, utils.ts:128) with the truncation
+// marker appended. Prevents downstream model from blowing its context.
+func TestWebFetchTool_TruncatesLargeMarkdown(t *testing.T) {
+	// Generate HTML whose markdown conversion well exceeds 100 000 bytes.
+	// Each <p> block yields roughly 205 bytes post-conversion
+	// (200 chars + "\n\n"); 700 blocks → ~143 500 bytes of markdown,
+	// comfortably above the cap and under the 1 MiB body limit.
+	var sb strings.Builder
+	sb.WriteString("<html><body>")
+	for i := 0; i < 700; i++ {
+		sb.WriteString("<p>")
+		sb.WriteString(strings.Repeat("abcd ", 40)) // 200 chars
+		sb.WriteString("</p>")
+	}
+	sb.WriteString("</body></html>")
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write([]byte(sb.String()))
+	}))
+	defer ts.Close()
+
+	tool := NewWebFetchTool()
+	res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{"url": ts.URL}))
+	if err != nil {
+		t.Fatalf("Execute returned unexpected Go error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error result: %s", res.Output)
+	}
+	const marker = "[Content truncated due to length...]"
+	if !strings.Contains(res.Output, marker) {
+		t.Errorf("large output missing truncation marker %q, len=%d", marker, len(res.Output))
+	}
+	// 100 000 byte cap + leading "\n\n" + marker text. Allow a small slack
+	// for rune-boundary cuts (at most 3 UTF-8 continuation bytes).
+	maxLen := 100_000 + len("\n\n"+marker) + 4
+	if len(res.Output) > maxLen {
+		t.Errorf("output length %d exceeds expected cap %d", len(res.Output), maxLen)
+	}
+}
+
 func TestWebSearchToolMeta(t *testing.T) {
 	tool := NewWebSearchTool()
 
