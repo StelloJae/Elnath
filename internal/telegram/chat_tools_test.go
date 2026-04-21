@@ -3,6 +3,7 @@ package telegram
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -402,6 +403,84 @@ func TestChatResponder_OmitsToolGuideWhenToolDefsEmpty(t *testing.T) {
 	req := provider.capturedRequest(t)
 	if strings.Contains(req.System, "## 도구 사용 지침") {
 		t.Errorf("Tool guide should be skipped when ToolDefs empty: %q", req.System)
+	}
+}
+
+// --- FU-ChatToolResultCap (P2): tool_result content cap before history append ---
+
+func TestCapChatToolResult(t *testing.T) {
+	t.Run("below cap passes through", func(t *testing.T) {
+		in := strings.Repeat("a", chatToolResultCap-100)
+		if got := capChatToolResult(in); got != in {
+			t.Errorf("below-cap input was modified: len=%d", len(got))
+		}
+	})
+	t.Run("equal to cap passes through", func(t *testing.T) {
+		in := strings.Repeat("a", chatToolResultCap)
+		if got := capChatToolResult(in); got != in {
+			t.Errorf("at-cap input was modified: len=%d", len(got))
+		}
+	})
+	t.Run("above cap truncates and marks", func(t *testing.T) {
+		in := strings.Repeat("a", chatToolResultCap*2+123)
+		got := capChatToolResult(in)
+		if len(got) <= chatToolResultCap {
+			t.Errorf("truncated output len=%d should exceed cap (cap+marker)", len(got))
+		}
+		if !strings.HasPrefix(got, strings.Repeat("a", chatToolResultCap)) {
+			t.Error("truncated prefix did not preserve first cap bytes")
+		}
+		if !strings.Contains(got, "중략") {
+			t.Errorf("marker missing: %q", got[len(got)-120:])
+		}
+		wantOrig := fmt.Sprintf("원본 %d bytes", chatToolResultCap*2+123)
+		if !strings.Contains(got, wantOrig) {
+			t.Errorf("marker should name original size %q; tail=%q", wantOrig, got[len(got)-120:])
+		}
+	})
+	t.Run("empty input passes through", func(t *testing.T) {
+		if got := capChatToolResult(""); got != "" {
+			t.Errorf("empty input was modified: %q", got)
+		}
+	})
+}
+
+func TestChatResponder_CapsLargeToolResultBeforeReinjection(t *testing.T) {
+	bigBody := strings.Repeat("x", chatToolResultCap*3) // 192 KiB
+	bot := newChatMockBot()
+	provider := &chatMockProvider{
+		steps: []chatProviderStep{
+			{toolUses: []chatProviderToolUse{
+				{id: "tu_big", name: "web_fetch", input: `{"url":"https://big.example"}`},
+			}},
+			{text: "요약 답변"},
+		},
+	}
+	exec := newChatMockExecutor()
+	exec.setResult("web_fetch", &tools.Result{Output: bigBody})
+
+	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		ToolDefs:     []llm.ToolDef{{Name: "web_fetch"}},
+		ToolExecutor: exec,
+	}))
+
+	if err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "fetch big", 1); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	reqs := provider.capturedRequests()
+	if len(reqs) < 2 {
+		t.Fatalf("provider stream calls = %d, want >= 2 (tool-loop path)", len(reqs))
+	}
+	tr, ok := findToolResult(reqs[1], "tu_big")
+	if !ok {
+		t.Fatal("expected second request to carry tool_result for tu_big")
+	}
+	if len(tr.Content) >= len(bigBody) {
+		t.Errorf("tool_result content not capped: got %d bytes, input %d bytes", len(tr.Content), len(bigBody))
+	}
+	if !strings.Contains(tr.Content, "중략") {
+		t.Error("tool_result content missing truncation marker")
 	}
 }
 

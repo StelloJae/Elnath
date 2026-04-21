@@ -72,6 +72,37 @@ func (s *chatRunStats) toolStatsList() []learning.AgentToolStat {
 
 const maxChatToolIterations = 5
 
+// chatToolResultCap bounds each tool_result's content before it re-enters
+// the provider history. Audit 2026-04-21 showed web_fetch / web_search
+// outputs accumulating verbatim across iterations, driving chat_direct
+// input_tokens to ~31x the task-path baseline (360k vs 11k) and
+// stretching single turns to 38.9s. 64 KiB (~16k tokens) is wide enough
+// to keep the meaningful extract of a typical web page intact — partner
+// preference is detailed answers, so we cap above the 8–16 KiB bound
+// where aggressive summarisation would start trimming substance — while
+// still halving worst-case input_tokens when two big fetches chain.
+//
+// When truncation happens, capChatToolResult appends a Korean-language
+// ellipsis marker that names the original byte count so the model and
+// any future observer know the result was not the whole document.
+const chatToolResultCap = 64 * 1024
+
+// capChatToolResult truncates content to at most chatToolResultCap bytes
+// and appends an ellipsis marker when truncation occurred. Byte-level
+// (not rune-level) to keep the cap predictable for the provider; the
+// marker text itself is plain ASCII+Hangul so it survives a mid-rune cut
+// when the cut lands inside a multi-byte sequence (the marker follows
+// the cut, and any torn rune at the boundary reads as replacement-char
+// noise — acceptable since this is context for the model, not display
+// text).
+func capChatToolResult(content string) string {
+	if len(content) <= chatToolResultCap {
+		return content
+	}
+	original := len(content)
+	return content[:chatToolResultCap] + fmt.Sprintf("\n\n[… tool_result 중략, 원본 %d bytes (cap=%d) …]", original, chatToolResultCap)
+}
+
 // kstZone fixes Korea Standard Time at UTC+9 (no DST) for the chat-time
 // header. FixedZone avoids tzdata dependency at the cost of locking the
 // chat surface to KST — acceptable while Telegram is the partner's primary
@@ -233,7 +264,7 @@ func (c *ChatResponder) runStreamWithTools(
 			toolStart := time.Now()
 			content, isError := c.executeChatTool(ctx, tc)
 			stats.recordTool(tc.Name, time.Since(toolStart), isError)
-			messages = llm.AppendToolResult(messages, tc.ID, content, isError)
+			messages = llm.AppendToolResult(messages, tc.ID, capChatToolResult(content), isError)
 		}
 	}
 
