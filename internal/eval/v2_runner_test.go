@@ -1,6 +1,7 @@
 package eval
 
 import (
+	"math/rand"
 	"path/filepath"
 	"testing"
 	"time"
@@ -214,6 +215,171 @@ func TestRunV2_UsesRouterWhenConfigured(t *testing.T) {
 	}
 	if !foundBugfix {
 		t.Fatalf("test corpus lacks any bugfix training task; fixture assumption broken")
+	}
+}
+
+// TestRunV2_DeterministicWithSameRand proves that epsilon-greedy +
+// Bernoulli draws consume the injected *rand.Rand in a stable order, so
+// two RunV2 invocations with the same seed (and otherwise identical
+// options) produce byte-identical scratch outcomes. Determinism is a
+// hard prerequisite for CI reproducibility and for the "regenerate
+// fixtures, diff output" check in the plan's §8.
+func TestRunV2_DeterministicWithSameRand(t *testing.T) {
+	corpus := validV2Corpus()
+	clock := func() time.Time { return time.Date(2026, 4, 21, 0, 0, 0, 0, time.UTC) }
+
+	run := func() []learning.OutcomeRecord {
+		outputDir := t.TempDir()
+		fake := &fakeRouter{
+			decisions: map[string]string{
+				"question":     "single",
+				"complex_task": "team",
+				"bugfix":       "single",
+			},
+			fallback: "single",
+		}
+		_, err := RunV2(V2RunOptions{
+			Corpus:         corpus,
+			OutputDir:      outputDir,
+			RunCount:       3,
+			AdvisorFactory: gradualLearningFactory(),
+			Clock:          clock,
+			Router:         fake,
+			Epsilon:        0.5,
+			Rand:           rand.New(rand.NewSource(42)),
+		})
+		if err != nil {
+			t.Fatalf("RunV2: %v", err)
+		}
+		scratch := learning.NewOutcomeStore(filepath.Join(outputDir, "scratch-outcomes.jsonl"))
+		recs, err := scratch.ForProject(V2BenchmarkProjectID, 10_000)
+		if err != nil {
+			t.Fatalf("ForProject: %v", err)
+		}
+		return recs
+	}
+
+	a := run()
+	b := run()
+	if len(a) != len(b) {
+		t.Fatalf("outcome count diverged: %d vs %d", len(a), len(b))
+	}
+	for i := range a {
+		if a[i].Intent != b[i].Intent || a[i].Workflow != b[i].Workflow || a[i].Success != b[i].Success {
+			t.Errorf("outcomes[%d] diverged: %+v vs %+v", i, a[i], b[i])
+		}
+	}
+}
+
+// TestRunV2_EpsilonGreedyOverridesRouterPick asserts that at epsilon=1.0
+// the router's decision is replaced on every training task. The fake
+// router forces every intent to "single"; with full exploration, the
+// scratch store must contain every workflow in the corpus set, not just
+// "single". Without this branch the Phase 7.4 chicken-and-egg problem
+// re-emerges: workflows the router never picks would never appear in
+// outcomes, and the advisor could never learn to prefer them.
+func TestRunV2_EpsilonGreedyOverridesRouterPick(t *testing.T) {
+	corpus := validV2Corpus()
+	fake := &fakeRouter{fallback: "single"}
+	outputDir := t.TempDir()
+	_, err := RunV2(V2RunOptions{
+		Corpus:         corpus,
+		OutputDir:      outputDir,
+		RunCount:       3,
+		AdvisorFactory: gradualLearningFactory(),
+		Clock:          func() time.Time { return time.Date(2026, 4, 21, 0, 0, 0, 0, time.UTC) },
+		Router:         fake,
+		Epsilon:        1.0,
+		Rand:           rand.New(rand.NewSource(42)),
+	})
+	if err != nil {
+		t.Fatalf("RunV2: %v", err)
+	}
+	scratch := learning.NewOutcomeStore(filepath.Join(outputDir, "scratch-outcomes.jsonl"))
+	recs, err := scratch.ForProject(V2BenchmarkProjectID, 10_000)
+	if err != nil {
+		t.Fatalf("ForProject: %v", err)
+	}
+	counts := make(map[string]int)
+	for _, r := range recs {
+		counts[r.Workflow]++
+	}
+	for _, wf := range []string{"single", "team", "ralph"} {
+		if counts[wf] == 0 {
+			t.Errorf("workflow %q never appeared under epsilon=1.0 (counts=%+v)", wf, counts)
+		}
+	}
+}
+
+// TestRunV2_BernoulliSuccessModelShapesOutcomes validates the 0.9/0.3
+// success-rate contract on a large sample. The fake router is tuned so
+// question and complex_task tasks route correctly while bugfix tasks
+// route wrongly (→ "single" instead of the Expected "ralph"). With
+// advisor recommendations suppressed (neverRecommendFactory), the router
+// uses its default table every run, so the correct/wrong partition is
+// stable across all outcomes. Over 30 runs × 12 training = 360 samples,
+// correct-route successes should sit near 0.9 and wrong-route near 0.3.
+// Loose ±0.15 tolerances keep the test robust across PRNG seeds.
+func TestRunV2_BernoulliSuccessModelShapesOutcomes(t *testing.T) {
+	corpus := validV2Corpus()
+	fake := &fakeRouter{
+		decisions: map[string]string{
+			"question":     "single",
+			"complex_task": "team",
+			"bugfix":       "single",
+		},
+		fallback: "single",
+	}
+	outputDir := t.TempDir()
+	_, err := RunV2(V2RunOptions{
+		Corpus:         corpus,
+		OutputDir:      outputDir,
+		RunCount:       30,
+		AdvisorFactory: neverRecommendFactory(),
+		Clock:          func() time.Time { return time.Date(2026, 4, 21, 0, 0, 0, 0, time.UTC) },
+		Router:         fake,
+		Epsilon:        0,
+		Rand:           rand.New(rand.NewSource(42)),
+	})
+	if err != nil {
+		t.Fatalf("RunV2: %v", err)
+	}
+	scratch := learning.NewOutcomeStore(filepath.Join(outputDir, "scratch-outcomes.jsonl"))
+	recs, err := scratch.ForProject(V2BenchmarkProjectID, 100_000)
+	if err != nil {
+		t.Fatalf("ForProject: %v", err)
+	}
+	expectedByIntent := map[string]string{
+		"question":     "single",
+		"complex_task": "team",
+		"bugfix":       "ralph",
+	}
+	var correct, wrong, correctSuccess, wrongSuccess int
+	for _, r := range recs {
+		if r.Workflow == expectedByIntent[r.Intent] {
+			correct++
+			if r.Success {
+				correctSuccess++
+			}
+		} else {
+			wrong++
+			if r.Success {
+				wrongSuccess++
+			}
+		}
+	}
+	if correct == 0 || wrong == 0 {
+		t.Fatalf("partition degenerate: correct=%d wrong=%d", correct, wrong)
+	}
+	correctRate := float64(correctSuccess) / float64(correct)
+	wrongRate := float64(wrongSuccess) / float64(wrong)
+	if correctRate < 0.75 || correctRate > 1.0 {
+		t.Errorf("correct-route success rate = %.3f (%d/%d), want ≈ %.2f ±0.15",
+			correctRate, correctSuccess, correct, synthCorrectSuccessRate)
+	}
+	if wrongRate < 0.15 || wrongRate > 0.45 {
+		t.Errorf("wrong-route success rate = %.3f (%d/%d), want ≈ %.2f ±0.15",
+			wrongRate, wrongSuccess, wrong, synthWrongSuccessRate)
 	}
 }
 

@@ -2,13 +2,48 @@ package eval
 
 import (
 	"fmt"
+	"math/rand"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/routing"
 )
+
+// Phase 7.4a Milestone 2 synthetic success model.
+//
+// Success for a training outcome is drawn from a Bernoulli whose
+// probability depends on whether the routed workflow matches the task's
+// ExpectedWorkflow. The 0.9/0.3 strawman keeps the correctness signal
+// dominant while leaving enough noise that the advisor needs >= a few
+// samples to separate the two. Tune later if learning curves saturate.
+const (
+	synthCorrectSuccessRate = 0.9
+	synthWrongSuccessRate   = 0.3
+)
+
+// uniqueWorkflows returns the corpus's ExpectedWorkflow set in sorted
+// order so the epsilon-greedy sampler has a deterministic, corpus-
+// defined draw space. Empty workflow fields are skipped; duplicates
+// collapse.
+func uniqueWorkflows(corpus *Corpus) []string {
+	seen := make(map[string]struct{})
+	out := make([]string, 0)
+	for _, task := range corpus.Tasks {
+		if task.ExpectedWorkflow == "" {
+			continue
+		}
+		if _, ok := seen[task.ExpectedWorkflow]; ok {
+			continue
+		}
+		seen[task.ExpectedWorkflow] = struct{}{}
+		out = append(out, task.ExpectedWorkflow)
+	}
+	sort.Strings(out)
+	return out
+}
 
 // V2DefaultRunCount is the number of sequential training+held-out runs in
 // one Phase 7.3 cycle. Paired with the Spearman primary metric, 10 runs is
@@ -37,7 +72,20 @@ func DefaultV2AdvisorFactory(store *learning.OutcomeStore) *learning.RoutingAdvi
 // Router is optional (Phase 7.4). When non-nil, each training task is
 // routed through the real decision path and the router's pick is what
 // gets recorded as the outcome's Workflow. When nil, the legacy stub
-// path (Phase 7.3) is used: Workflow is set to task.ExpectedWorkflow.
+// path (Phase 7.3) is used: Workflow is set to task.ExpectedWorkflow
+// and Success is fixed at true.
+//
+// Epsilon (Phase 7.4a Milestone 2) is the per-training-task probability
+// that the router's pick is replaced with a uniform-random draw from
+// the corpus's workflow set. Values outside [0, 1] are clamped. Default
+// 0 disables exploration — the router's decision stands as-is. Epsilon
+// is benchmark-only; production Router never samples randomly.
+//
+// Rand (Phase 7.4a Milestone 2) is the random source consumed by
+// epsilon-greedy and the Bernoulli success model. Tests MUST seed
+// explicitly for determinism. When Router != nil and Rand == nil, RunV2
+// seeds a default source from the clock — acceptable for the CLI path,
+// avoided in tests.
 type V2RunOptions struct {
 	Corpus         *Corpus
 	OutputDir      string
@@ -45,6 +93,8 @@ type V2RunOptions struct {
 	AdvisorFactory V2AdvisorFactory
 	Clock          func() time.Time
 	Router         RealRouter
+	Epsilon        float64
+	Rand           *rand.Rand
 }
 
 // RunV2 executes one full benchmark cycle and returns the V2TimeSeries
@@ -99,10 +149,26 @@ func RunV2(opts V2RunOptions) (*V2TimeSeries, error) {
 		tasksByID[t.ID] = t
 	}
 
+	// Phase 7.4a Milestone 2: epsilon-greedy + Bernoulli success need a
+	// *rand.Rand. Only seed a default when the router path is active and
+	// the caller did not inject one — tests always inject.
+	rng := opts.Rand
+	if opts.Router != nil && rng == nil {
+		rng = rand.New(rand.NewSource(clock().UnixNano()))
+	}
+	epsilon := opts.Epsilon
+	if epsilon < 0 {
+		epsilon = 0
+	}
+	if epsilon > 1 {
+		epsilon = 1
+	}
+	workflowSet := uniqueWorkflows(opts.Corpus)
+
 	results := make([]V2RunResult, 0, runCount)
 	successfulRuns := 0
 	for i := 0; i < runCount; i++ {
-		res, err := runV2SingleRun(store, advisor, opts.Corpus, tasksByID, i+1, clock(), opts.Router)
+		res, err := runV2SingleRun(store, advisor, opts.Corpus, tasksByID, i+1, clock(), opts.Router, rng, epsilon, workflowSet)
 		if err != nil {
 			results = append(results, V2RunResult{
 				RunIndex:  i + 1,
@@ -139,6 +205,9 @@ func runV2SingleRun(
 	runIndex int,
 	now time.Time,
 	router RealRouter,
+	rng *rand.Rand,
+	epsilon float64,
+	workflowSet []string,
 ) (*V2RunResult, error) {
 	// When a router is configured, consult the advisor once before the
 	// training batch so its decisions can reflect whatever preference has
@@ -160,27 +229,40 @@ func runV2SingleRun(
 	// ExpectedWorkflow and Success is always true, so the advisor sees a
 	// tautological "intent X succeeds with workflow Y" signal.
 	//
-	// Real-router path (router != nil, Phase 7.4a Milestone 1): Workflow
-	// is whatever the router picks for this intent + preference combo.
-	// Success is still true in this commit — ε-greedy + the synthetic
-	// Bernoulli success model arrive in the next TDD cycle (Phase 7.4a
-	// Milestone 2). This staged rollout keeps the regression guard for
-	// Phase 7.3 behavior decoupled from the new success model.
+	// Real-router path (router != nil, Phase 7.4a Milestone 2): Workflow
+	// comes from the router, then epsilon-greedy may override it with a
+	// uniform draw from workflowSet, then Bernoulli success is drawn
+	// against synthCorrectSuccessRate or synthWrongSuccessRate depending
+	// on whether the final workflow matches the task's ExpectedWorkflow.
+	// Randomness consumes rng in a strict (epsilon_draw, success_draw)
+	// order so repeat runs with the same seed produce byte-identical
+	// outcome sequences.
 	for _, id := range corpus.TrainingSet {
 		task, ok := tasksByID[id]
 		if !ok {
 			return nil, fmt.Errorf("training task %q missing from corpus", id)
 		}
 		workflow := task.ExpectedWorkflow
+		success := true
 		if router != nil {
 			workflow = router.DecideWorkflow(task.Intent, currentPref)
+			if epsilon > 0 && rng != nil && len(workflowSet) > 0 && rng.Float64() < epsilon {
+				workflow = workflowSet[rng.Intn(len(workflowSet))]
+			}
+			if rng != nil {
+				p := synthWrongSuccessRate
+				if workflow == task.ExpectedWorkflow {
+					p = synthCorrectSuccessRate
+				}
+				success = rng.Float64() < p
+			}
 		}
 		rec := learning.OutcomeRecord{
 			ProjectID:      V2BenchmarkProjectID,
 			Intent:         task.Intent,
 			Workflow:       workflow,
 			FinishReason:   "stop",
-			Success:        true,
+			Success:        success,
 			Duration:       0.01,
 			Iterations:     1,
 			PreferenceUsed: false,
