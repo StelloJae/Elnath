@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -206,7 +207,7 @@ func (c *ChatResponder) Respond(ctx context.Context, principal identity.Principa
 		c.recordChatOutcome(principal, userMessage, false, "error", elapsed, stats, sessionID)
 		logger.Warn("chat responder: stream failed", "error", streamErr)
 		c.setReaction(ctx, replyToMsgID, "😢")
-		if sendErr := c.bot.SendMessage(ctx, c.chatID, fmt.Sprintf("⚠️ Error: %s", streamErr.Error())); sendErr != nil {
+		if sendErr := c.bot.SendMessage(ctx, c.chatID, "⚠️ "+friendlyChatError(streamErr)); sendErr != nil {
 			return fmt.Errorf("chat responder: send error message: %w", sendErr)
 		}
 		return fmt.Errorf("chat responder: stream: %w", streamErr)
@@ -453,6 +454,44 @@ func sanitizeChatHistory(msgs []llm.Message) []llm.Message {
 		out = append(out, llm.Message{Role: m.Role, Content: filtered})
 	}
 	return out
+}
+
+// friendlyChatError maps a raw stream/provider error to a short Korean
+// partner-facing message. Audit 2026-04-21 cell E1: the old path streamed
+// streamErr.Error() verbatim into Telegram, which once produced the raw
+// Codex JSON payload (`codex: status 400: {"error":{"message":"..."}}`)
+// visible to the partner — provider internals leaking into chat UX.
+//
+// The mapping is intentionally coarse: only a handful of buckets the
+// partner can actually act on (retry / simplify / wait / reauthorise).
+// The full streamErr is still logged at Warn level in Respond so operators
+// keep the diagnostic detail, only the user-facing string is sanitised.
+func friendlyChatError(err error) string {
+	if err == nil {
+		return "알 수 없는 문제로 답변하지 못했어요."
+	}
+	switch {
+	case errors.Is(err, context.Canceled):
+		return "요청이 취소됐어요."
+	case errors.Is(err, context.DeadlineExceeded):
+		return "응답이 너무 오래 걸려서 중단했어요. 다시 시도해 주세요."
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "exceeded max iterations"):
+		return "작업이 너무 길어져서 중단했어요. 더 간단히 나눠서 물어봐 주세요."
+	case strings.Contains(msg, "status 429"):
+		return "요청이 몰렸어요 (rate limit). 잠시 후 다시 시도해 주세요."
+	case strings.Contains(msg, "status 401"), strings.Contains(msg, "status 403"):
+		return "인증 문제로 답변할 수 없어요. 관리자 확인이 필요해요."
+	case strings.Contains(msg, "status 400"):
+		return "요청 형식 문제로 실패했어요. 새 메시지로 다시 시도해 보세요."
+	case strings.Contains(msg, "status 5"):
+		return "모델 서버가 일시적으로 문제예요. 잠시 후 다시 시도해 주세요."
+	case strings.Contains(msg, "codex:"), strings.Contains(msg, "anthropic:"), strings.Contains(msg, "openai:"):
+		return "모델 쪽에서 예상치 못한 응답을 받았어요. 다시 시도해 주세요."
+	}
+	return "내부에서 문제가 발생했어요. 잠시 후 다시 시도해 주세요."
 }
 
 // chatSnippet truncates the message at n runes (not bytes) so multi-byte

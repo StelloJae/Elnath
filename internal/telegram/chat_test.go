@@ -889,6 +889,74 @@ func TestChatResponder_SkipsReactionWhenReplyToMsgIDZero(t *testing.T) {
 	}
 }
 
+// --- FU-ChatFriendlyError (P4): raw provider JSON not leaked to partner ---
+
+func TestFriendlyChatError(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"nil", nil, "알 수 없는 문제"},
+		{"context canceled", context.Canceled, "취소"},
+		{"deadline exceeded", context.DeadlineExceeded, "오래"},
+		{"max iterations", fmt.Errorf("chat tool loop exceeded max iterations (5)"), "간단히"},
+		{"rate limit", fmt.Errorf("codex: status 429: rate limited"), "몰렸"},
+		{"auth 401", fmt.Errorf("codex: status 401: unauthorized"), "인증"},
+		{"auth 403", fmt.Errorf("anthropic: status 403: forbidden"), "인증"},
+		{"bad request", fmt.Errorf("codex: status 400: no tool call found"), "다시 시도"},
+		{"server error", fmt.Errorf("openai: status 503: overloaded"), "모델 서버"},
+		{"generic codex", fmt.Errorf("codex: unexpected stream end"), "모델 쪽"},
+		{"unknown", fmt.Errorf("something broke"), "내부에서"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := friendlyChatError(tc.err)
+			if got == "" {
+				t.Fatalf("friendlyChatError returned empty string")
+			}
+			if !strings.Contains(got, tc.want) {
+				t.Errorf("friendlyChatError(%v) = %q; missing %q", tc.err, got, tc.want)
+			}
+			// Never leak raw JSON or HTTP status noise
+			if strings.Contains(got, "{") || strings.Contains(got, "status 4") || strings.Contains(got, "status 5") {
+				t.Errorf("friendlyChatError leaked provider detail: %q", got)
+			}
+		})
+	}
+}
+
+func TestChatResponder_SendsFriendlyErrorMessageNotRawProviderJSON(t *testing.T) {
+	bot := newChatMockBot()
+	// Simulate the exact Codex 400 shape dogfood hit 2026-04-21 15:16 —
+	// raw JSON payload that must never reach the partner.
+	rawCodex := `codex: status 400: {
+  "error": {
+    "message": "No tool call found for function call output with call_id call_wH9JVxyuUUHiADnStfgOacFM.",
+    "type": "invalid_request_error"
+  }
+}`
+	provider := &chatMockProvider{streamErr: fmt.Errorf("%s", rawCodex)}
+	cr := NewChatResponder(provider, bot, "chat-42", nil)
+
+	if err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 99); err == nil {
+		t.Fatal("expected error from Respond")
+	}
+
+	sends := bot.allSendTexts()
+	if len(sends) == 0 {
+		t.Fatal("no message sent to partner")
+	}
+	for _, s := range sends {
+		if strings.Contains(s, "{") || strings.Contains(s, "call_id") || strings.Contains(s, "invalid_request_error") {
+			t.Errorf("raw provider JSON leaked into user-facing message: %q", s)
+		}
+		if !strings.Contains(s, "⚠️") {
+			t.Errorf("user-facing message missing ⚠️ marker: %q", s)
+		}
+	}
+}
+
 // --- FU-ChatOutcomeSessionID (P3): chat outcomes cross-ref session JSONL ---
 
 func TestChatResponder_OutcomeCarriesSessionIDWhenBound(t *testing.T) {
