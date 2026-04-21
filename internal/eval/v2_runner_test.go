@@ -383,6 +383,96 @@ func TestRunV2_BernoulliSuccessModelShapesOutcomes(t *testing.T) {
 	}
 }
 
+// preferenceAwareFakeRouter extends fakeRouter so the advisor's learned
+// preference takes effect once it has enough samples. When the incoming
+// WorkflowPreference carries a recommendation for the intent, that beats
+// the static decisions table — mirroring orchestrator.Router.Route which
+// also folds in the advisor preference before consulting its own table.
+// Without this, the chicken-and-egg never resolves: the router ignores the
+// advisor's "bugfix → ralph" signal and keeps returning "single", so
+// held-out hit rate stays flat regardless of ε-greedy exploration.
+type preferenceAwareFakeRouter struct {
+	fakeRouter
+}
+
+func (r *preferenceAwareFakeRouter) DecideWorkflow(intent string, pref *routing.WorkflowPreference) string {
+	if pw := pref.PreferredWorkflow(intent); pw != "" {
+		return pw
+	}
+	return r.fakeRouter.DecideWorkflow(intent, pref)
+}
+
+// TestRunV2_EpsilonGreedyEnablesAdvisorLearning is the Phase 7.4a Milestone 3
+// end-to-end integration test. It proves that ε-greedy exploration resolves
+// the chicken-and-egg problem: the production Router has no "bugfix" case
+// (falls through to "single"), so without exploration the advisor never sees
+// a "ralph" outcome and cannot learn to prefer it for bugfix tasks. With
+// ε=0.2, exploratory "ralph" outcomes accumulate until the advisor crosses
+// minSamples=3, its preference map gains "bugfix → ralph", and the
+// preference-aware router starts routing bugfix tasks correctly — lifting
+// the held-out hit rate over the course of 10 runs.
+func TestRunV2_EpsilonGreedyEnablesAdvisorLearning(t *testing.T) {
+	corpus := validV2Corpus()
+	// The static table is correct for question and complex_task but wrong for
+	// bugfix (returns "single" instead of expected "ralph"). This mirrors the
+	// production router's missing "bugfix" intent case.
+	fake := &preferenceAwareFakeRouter{
+		fakeRouter: fakeRouter{
+			decisions: map[string]string{
+				"question":     "single",
+				"complex_task": "team",
+				"bugfix":       "single",
+			},
+			fallback: "single",
+		},
+	}
+	fixedClock := func() time.Time {
+		return time.Date(2026, 4, 21, 12, 0, 0, 0, time.UTC)
+	}
+
+	series, err := RunV2(V2RunOptions{
+		Corpus:         corpus,
+		OutputDir:      t.TempDir(),
+		RunCount:       V2DefaultRunCount,
+		AdvisorFactory: DefaultV2AdvisorFactory,
+		Clock:          fixedClock,
+		Router:         fake,
+		Epsilon:        0.2,
+		Rand:           rand.New(rand.NewSource(42)),
+	})
+	if err != nil {
+		t.Fatalf("RunV2 = %v, want success", err)
+	}
+	if len(series.Runs) != V2DefaultRunCount {
+		t.Fatalf("len(Runs) = %d, want %d", len(series.Runs), V2DefaultRunCount)
+	}
+
+	// Log the full hit-rate trajectory and Spearman for future tuning.
+	hitRates := make([]float64, len(series.Runs))
+	for i, r := range series.Runs {
+		hitRates[i] = r.HeldOutHitRate
+		t.Logf("run[%d] hit_rate=%.3f", i+1, r.HeldOutHitRate)
+	}
+	t.Logf("spearman=%.4f first_run=%.3f last_run=%.3f verdict=%s",
+		series.SpearmanCoeff, hitRates[0], hitRates[len(hitRates)-1], series.Verdict)
+
+	// Loose integration assertions: either the hit rate improved by ≥0.10
+	// across the cycle, or Spearman shows a positive trend (≥0.3). Both
+	// are sufficient to prove the advisor actually learned something.
+	firstRun := hitRates[0]
+	lastRun := hitRates[len(hitRates)-1]
+	hitRateGain := lastRun - firstRun
+	spearmanOK := series.SpearmanCoeff >= 0.3
+	hitRateOK := hitRateGain >= 0.10
+
+	if !hitRateOK && !spearmanOK {
+		t.Errorf("no learning signal detected: first_run=%.3f last_run=%.3f gain=%.3f spearman=%.4f; "+
+			"want either gain≥0.10 OR spearman≥0.3 — advisor may not be crossing minSamples "+
+			"or preference never emerging (check routing_advisor.go gap≥0.20 threshold)",
+			firstRun, lastRun, hitRateGain, series.SpearmanCoeff)
+	}
+}
+
 // TestRunV2_RejectsV1Corpus guards the brownfield contract: RunV2 must not
 // silently accept a v1 corpus. The spec dedicates v2 to self-improvement
 // benchmarks; running v1 through it would produce meaningless outcomes.
