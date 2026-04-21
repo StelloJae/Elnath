@@ -194,7 +194,7 @@ func (c *ChatResponder) runStreamWithTools(
 		stats.iterations++
 		req := llm.ChatRequest{
 			Messages:    messages,
-			MaxTokens:   1024,
+			MaxTokens:   chatMaxTokens,
 			Temperature: 0.7,
 			System:      systemPrompt,
 			Tools:       c.pipeline.ToolDefs,

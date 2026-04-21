@@ -21,9 +21,16 @@ const chatSystemPrompt = "You are a personal AI assistant. Respond naturally in 
 
 // defaultChatHistoryTurns caps how many past turns are hydrated from the
 // bound session into the chat prompt. Kept small so the chat path stays
-// "immediate" (no queue) and stays under the provider context window for
-// the typical 1024-token max-output chat mode.
+// "immediate" (no queue) and stays under the provider context window.
 const defaultChatHistoryTurns = 20
+
+// chatMaxTokens caps the provider's per-step max_tokens for chat requests.
+// The original 1024 left no headroom for a tool-loop step that has to both
+// narrate the tool_result and finish the answer in one turn; dogfood
+// showed replies truncating mid-sentence after web_fetch results. 4096
+// matches Anthropic/Codex sane defaults for conversational surfaces without
+// blowing context on routine chat.
+const chatMaxTokens = 4096
 
 // OutcomeAppender is the minimum surface of learning.OutcomeStore required
 // to record chat outcomes. Keeping the interface small lets tests substitute
@@ -218,7 +225,7 @@ func (c *ChatResponder) useToolLoop() bool {
 func (c *ChatResponder) runLegacyStream(ctx context.Context, messages []llm.Message, systemPrompt string, sc *StreamConsumer) (string, *chatRunStats, error) {
 	req := llm.ChatRequest{
 		Messages:    messages,
-		MaxTokens:   1024,
+		MaxTokens:   chatMaxTokens,
 		Temperature: 0.7,
 		System:      systemPrompt,
 	}

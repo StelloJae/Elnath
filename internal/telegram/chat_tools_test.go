@@ -405,6 +405,60 @@ func TestChatResponder_OmitsToolGuideWhenToolDefsEmpty(t *testing.T) {
 	}
 }
 
+// --- FU-ChatMaxTokens: per-step max_tokens is the expanded constant ---
+
+func TestChatResponder_UsesExpandedMaxTokens_LegacyPath(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{response: "ok"}
+	cr := NewChatResponder(provider, bot, "chat-42", nil)
+
+	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	req := provider.capturedRequest(t)
+	if req.MaxTokens != chatMaxTokens {
+		t.Errorf("legacy path MaxTokens = %d, want %d (chatMaxTokens)", req.MaxTokens, chatMaxTokens)
+	}
+	if chatMaxTokens < 4096 {
+		t.Errorf("chatMaxTokens = %d, want >= 4096 (FU-ChatMaxTokens floor)", chatMaxTokens)
+	}
+}
+
+func TestChatResponder_UsesExpandedMaxTokens_ToolLoopPath(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{
+		steps: []chatProviderStep{
+			{toolUses: []chatProviderToolUse{
+				{id: "tu_1", name: "web_fetch", input: `{"url":"https://example.com"}`},
+			}},
+			{text: "done"},
+		},
+	}
+	exec := newChatMockExecutor()
+	exec.setResult("web_fetch", &tools.Result{Output: "body"})
+
+	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		ToolDefs:     []llm.ToolDef{{Name: "web_fetch"}},
+		ToolExecutor: exec,
+	}))
+
+	if err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "fetch", 1); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	reqs := provider.capturedRequests()
+	if len(reqs) < 2 {
+		t.Fatalf("provider stream calls = %d, want >= 2 (tool-loop path)", len(reqs))
+	}
+	for i, r := range reqs {
+		if r.MaxTokens != chatMaxTokens {
+			t.Errorf("tool-loop step %d MaxTokens = %d, want %d", i, r.MaxTokens, chatMaxTokens)
+		}
+	}
+}
+
 // --- FU-ChatObs: chat outcome carries iterations + tool stats ---
 
 func TestChatResponder_OutcomeRecordsToolLoopStats(t *testing.T) {
