@@ -185,7 +185,7 @@ func (c *ChatResponder) Respond(ctx context.Context, principal identity.Principa
 	)
 
 	if c.useToolLoop() {
-		assistantText, stats, streamErr = c.runStreamWithTools(ctx, messages, systemPrompt, sc)
+		assistantText, stats, streamErr = c.runStreamWithTools(ctx, messages, systemPrompt, sc, replyToMsgID)
 		sc.Finish()
 	} else {
 		assistantText, stats, streamErr = c.runLegacyStream(ctx, messages, systemPrompt, sc)
@@ -197,7 +197,7 @@ func (c *ChatResponder) Respond(ctx context.Context, principal identity.Principa
 		elapsed := time.Since(start)
 		c.recordChatOutcome(principal, userMessage, false, "error", elapsed, stats)
 		logger.Warn("chat responder: stream failed", "error", streamErr)
-		c.setCompletionReaction(ctx, replyToMsgID, "😢")
+		c.setReaction(ctx, replyToMsgID, "😢")
 		if sendErr := c.bot.SendMessage(ctx, c.chatID, fmt.Sprintf("⚠️ Error: %s", streamErr.Error())); sendErr != nil {
 			return fmt.Errorf("chat responder: send error message: %w", sendErr)
 		}
@@ -206,7 +206,7 @@ func (c *ChatResponder) Respond(ctx context.Context, principal identity.Principa
 
 	sc.Wait()
 	c.recordChatOutcome(principal, userMessage, true, "stop", time.Since(start), stats)
-	c.setCompletionReaction(ctx, replyToMsgID, "👍")
+	c.setReaction(ctx, replyToMsgID, "👍")
 
 	if assistantText != "" {
 		c.persistChatTurn(ctx, principal,
@@ -252,11 +252,13 @@ func (c *ChatResponder) runLegacyStream(ctx context.Context, messages []llm.Mess
 	return assistantText.String(), stats, err
 }
 
-// setCompletionReaction updates the reaction on the user's original message to
-// signal chat outcome. Skipped when replyToMsgID is 0 (no originating message
-// to react to). Errors from the Telegram API are logged at debug level rather
-// than propagated — reactions are UX polish, not load-bearing for chat flow.
-func (c *ChatResponder) setCompletionReaction(ctx context.Context, replyToMsgID int64, emoji string) {
+// setReaction updates the reaction on the user's original message. Used for
+// both mid-flight progress signals (✍ when the chat tool loop starts
+// executing a tool) and terminal outcomes (👍 on success, 😢 on failure).
+// Skipped when replyToMsgID is 0 (no originating message to react to).
+// Errors from the Telegram API are logged at debug level rather than
+// propagated — reactions are UX polish, not load-bearing for chat flow.
+func (c *ChatResponder) setReaction(ctx context.Context, replyToMsgID int64, emoji string) {
 	if replyToMsgID <= 0 {
 		return
 	}

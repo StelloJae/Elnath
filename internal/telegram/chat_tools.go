@@ -172,9 +172,16 @@ func FilterChatToolDefs(defs []llm.ToolDef, allowlist []string) []llm.ToolDef {
 // runStreamWithTools drives the chat-only agent-lite loop:
 //
 //  1. Stream the provider with current messages + curated ToolDefs.
-//  2. If the model emits tool_use blocks, execute each via ToolExecutor and
-//     append a tool_result; then re-stream with the updated history.
+//  2. If the model emits tool_use blocks, set a ✍ reaction on the user's
+//     message (FU-TgToolReaction — visible "working on it" signal so the
+//     partner doesn't read the silence as a stall), execute each tool via
+//     ToolExecutor, and append a tool_result; then re-stream with the
+//     updated history.
 //  3. Stop when no tool_use is requested OR maxChatToolIterations is reached.
+//
+// Respond replaces ✍ with 👍 / 😢 on terminal outcome. The ✍ is set only
+// once per call (idempotent; avoids re-sending the same reaction on every
+// iteration).
 //
 // The caller owns sc lifecycle; this helper writes deltas via sc.Send but
 // never calls sc.Finish — Respond closes the consumer after we return.
@@ -183,12 +190,16 @@ func (c *ChatResponder) runStreamWithTools(
 	initialMessages []llm.Message,
 	systemPrompt string,
 	sc *StreamConsumer,
+	replyToMsgID int64,
 ) (string, *chatRunStats, error) {
 	messages := make([]llm.Message, 0, len(initialMessages)+2*maxChatToolIterations)
 	messages = append(messages, initialMessages...)
 	stats := newChatRunStats()
 
-	var fullText strings.Builder
+	var (
+		fullText             strings.Builder
+		writingReactionShown bool
+	)
 
 	for iter := 0; iter < maxChatToolIterations; iter++ {
 		stats.iterations++
@@ -208,6 +219,11 @@ func (c *ChatResponder) runStreamWithTools(
 
 		if len(toolCalls) == 0 {
 			return fullText.String(), stats, nil
+		}
+
+		if !writingReactionShown {
+			c.setReaction(ctx, replyToMsgID, "✍")
+			writingReactionShown = true
 		}
 
 		var textParts []string

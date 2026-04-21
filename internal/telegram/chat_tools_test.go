@@ -125,8 +125,8 @@ func TestChatResponder_ExecutesToolUseAndReinjects(t *testing.T) {
 	}
 
 	rs := bot.allReactions()
-	if len(rs) != 1 || rs[0].emoji != "👍" {
-		t.Errorf("reactions = %+v, want single 👍", rs)
+	if len(rs) != 2 || rs[0].emoji != "✍" || rs[1].emoji != "👍" {
+		t.Errorf("reactions = %+v, want [✍, 👍] (writing then complete)", rs)
 	}
 }
 
@@ -174,8 +174,8 @@ func TestChatResponder_HandlesToolExecutionError(t *testing.T) {
 		t.Errorf("final bot text = %q, want recovery text", last)
 	}
 	rs := bot.allReactions()
-	if len(rs) != 1 || rs[0].emoji != "👍" {
-		t.Errorf("reactions = %+v, want single 👍 (chat completed normally despite tool failure)", rs)
+	if len(rs) != 2 || rs[0].emoji != "✍" || rs[1].emoji != "👍" {
+		t.Errorf("reactions = %+v, want [✍, 👍] — tool fired (so ✍) and chat completed normally (so 👍) despite tool IsError", rs)
 	}
 }
 
@@ -211,8 +211,8 @@ func TestChatResponder_EnforcesMaxToolIterations(t *testing.T) {
 	}
 
 	rs := bot.allReactions()
-	if len(rs) != 1 || rs[0].emoji != "😢" {
-		t.Errorf("reactions = %+v, want single 😢", rs)
+	if len(rs) != 2 || rs[0].emoji != "✍" || rs[1].emoji != "😢" {
+		t.Errorf("reactions = %+v, want [✍, 😢] — tool fired (so ✍) then iteration cap tripped (so 😢)", rs)
 	}
 
 	sends := bot.allSendTexts()
@@ -402,6 +402,81 @@ func TestChatResponder_OmitsToolGuideWhenToolDefsEmpty(t *testing.T) {
 	req := provider.capturedRequest(t)
 	if strings.Contains(req.System, "## 도구 사용 지침") {
 		t.Errorf("Tool guide should be skipped when ToolDefs empty: %q", req.System)
+	}
+}
+
+// --- FU-TgToolReaction: ✍ reaction during chat tool execution ---
+
+// TestChatResponder_NoWritingReactionWhenNoToolFired asserts that the ✍
+// reaction is gated on actual tool_use emission — a chat turn that the model
+// answers without touching any tool should only show the terminal 👍.
+// Otherwise partners would see a "working" signal for every exchange.
+func TestChatResponder_NoWritingReactionWhenNoToolFired(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{
+		steps: []chatProviderStep{
+			{text: "direct answer, no tools."},
+		},
+	}
+	exec := newChatMockExecutor()
+
+	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		ToolDefs:     []llm.ToolDef{{Name: "web_fetch"}},
+		ToolExecutor: exec,
+	}))
+
+	if err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 1); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rs := bot.allReactions()
+	if len(rs) != 1 || rs[0].emoji != "👍" {
+		t.Errorf("reactions = %+v, want single 👍 (no tool fired → no ✍)", rs)
+	}
+}
+
+// TestChatResponder_WritingReactionSetOnlyOnceAcrossIterations asserts the ✍
+// is sent exactly once even when the model emits tool_use across multiple
+// iterations. Spamming SetReaction every iteration would be wasteful and
+// could look flickery to partners.
+func TestChatResponder_WritingReactionSetOnlyOnceAcrossIterations(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{
+		steps: []chatProviderStep{
+			{toolUses: []chatProviderToolUse{
+				{id: "tu_1", name: "web_fetch", input: `{"url":"https://a"}`},
+			}},
+			{toolUses: []chatProviderToolUse{
+				{id: "tu_2", name: "web_search", input: `{"q":"b"}`},
+			}},
+			{text: "summary"},
+		},
+	}
+	exec := newChatMockExecutor()
+	exec.setResult("web_fetch", &tools.Result{Output: "a"})
+	exec.setResult("web_search", &tools.Result{Output: "b"})
+
+	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		ToolDefs:     []llm.ToolDef{{Name: "web_fetch"}, {Name: "web_search"}},
+		ToolExecutor: exec,
+	}))
+
+	if err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "multi", 1); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rs := bot.allReactions()
+	writingCount := 0
+	for _, r := range rs {
+		if r.emoji == "✍" {
+			writingCount++
+		}
+	}
+	if writingCount != 1 {
+		t.Errorf("✍ reaction count = %d, want 1 (debounced across iterations). reactions = %+v", writingCount, rs)
+	}
+	if len(rs) == 0 || rs[len(rs)-1].emoji != "👍" {
+		t.Errorf("final reaction = %+v, want ending with 👍", rs)
 	}
 }
 
