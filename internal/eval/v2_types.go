@@ -5,7 +5,20 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/stello/elnath/internal/routing"
 )
+
+// RealRouter decides which workflow name to use for a given intent when
+// the v2 benchmark runs against the real decision path. Production
+// adapters wrap the orchestrator's Router; tests inject fakes. Workflow
+// is returned as a bare string so this interface does not drag the full
+// orchestrator.Workflow tree into the eval package.
+//
+// Consumed by runV2SingleRun when V2RunOptions.Router is non-nil.
+type RealRouter interface {
+	DecideWorkflow(intent string, pref *routing.WorkflowPreference) string
+}
 
 // WriteV2TimeSeries persists the series as pretty-printed JSON, creating
 // parent directories as needed. Intended for the `elnath eval run-v2`

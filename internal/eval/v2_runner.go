@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/stello/elnath/internal/learning"
+	"github.com/stello/elnath/internal/routing"
 )
 
 // V2DefaultRunCount is the number of sequential training+held-out runs in
@@ -32,12 +33,18 @@ func DefaultV2AdvisorFactory(store *learning.OutcomeStore) *learning.RoutingAdvi
 // V2RunOptions configure one benchmark cycle. AdvisorFactory defaults to
 // DefaultV2AdvisorFactory, RunCount to V2DefaultRunCount, Clock to
 // time.Now; tests may override all three for determinism.
+//
+// Router is optional (Phase 7.4). When non-nil, each training task is
+// routed through the real decision path and the router's pick is what
+// gets recorded as the outcome's Workflow. When nil, the legacy stub
+// path (Phase 7.3) is used: Workflow is set to task.ExpectedWorkflow.
 type V2RunOptions struct {
 	Corpus         *Corpus
 	OutputDir      string
 	RunCount       int
 	AdvisorFactory V2AdvisorFactory
 	Clock          func() time.Time
+	Router         RealRouter
 }
 
 // RunV2 executes one full benchmark cycle and returns the V2TimeSeries
@@ -95,7 +102,7 @@ func RunV2(opts V2RunOptions) (*V2TimeSeries, error) {
 	results := make([]V2RunResult, 0, runCount)
 	successfulRuns := 0
 	for i := 0; i < runCount; i++ {
-		res, err := runV2SingleRun(store, advisor, opts.Corpus, tasksByID, i+1, clock())
+		res, err := runV2SingleRun(store, advisor, opts.Corpus, tasksByID, i+1, clock(), opts.Router)
 		if err != nil {
 			results = append(results, V2RunResult{
 				RunIndex:  i + 1,
@@ -131,21 +138,47 @@ func runV2SingleRun(
 	tasksByID map[string]Task,
 	runIndex int,
 	now time.Time,
+	router RealRouter,
 ) (*V2RunResult, error) {
-	// Training pass: append synthetic outcomes so the advisor has fresh
-	// samples. Each outcome records the task's ExpectedWorkflow as the
-	// successful workflow — stub execution means every training task
-	// succeeds, so the advisor sees a clean signal that "intent X succeeds
-	// with workflow Y".
+	// When a router is configured, consult the advisor once before the
+	// training batch so its decisions can reflect whatever preference has
+	// accumulated through prior runs. First run returns a nil preference
+	// (empty store) — the router must tolerate that and fall back to its
+	// default table.
+	var currentPref *routing.WorkflowPreference
+	if router != nil {
+		pref, err := advisor.Advise(V2BenchmarkProjectID)
+		if err != nil {
+			return nil, fmt.Errorf("pre-training advise: %w", err)
+		}
+		currentPref = pref
+	}
+
+	// Training pass: append one outcome per training task.
+	//
+	// Legacy path (router == nil, Phase 7.3 stub): Workflow is the task's
+	// ExpectedWorkflow and Success is always true, so the advisor sees a
+	// tautological "intent X succeeds with workflow Y" signal.
+	//
+	// Real-router path (router != nil, Phase 7.4a Milestone 1): Workflow
+	// is whatever the router picks for this intent + preference combo.
+	// Success is still true in this commit — ε-greedy + the synthetic
+	// Bernoulli success model arrive in the next TDD cycle (Phase 7.4a
+	// Milestone 2). This staged rollout keeps the regression guard for
+	// Phase 7.3 behavior decoupled from the new success model.
 	for _, id := range corpus.TrainingSet {
 		task, ok := tasksByID[id]
 		if !ok {
 			return nil, fmt.Errorf("training task %q missing from corpus", id)
 		}
+		workflow := task.ExpectedWorkflow
+		if router != nil {
+			workflow = router.DecideWorkflow(task.Intent, currentPref)
+		}
 		rec := learning.OutcomeRecord{
 			ProjectID:      V2BenchmarkProjectID,
 			Intent:         task.Intent,
-			Workflow:       task.ExpectedWorkflow,
+			Workflow:       workflow,
 			FinishReason:   "stop",
 			Success:        true,
 			Duration:       0.01,

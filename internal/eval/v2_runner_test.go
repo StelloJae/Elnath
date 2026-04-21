@@ -1,11 +1,30 @@
 package eval
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/stello/elnath/internal/learning"
+	"github.com/stello/elnath/internal/routing"
 )
+
+// fakeRouter is a test double for RealRouter. DecideWorkflow looks up the
+// intent in decisions; falls back to fallback if unset. Tests use this to
+// reproduce the Router chicken-and-egg scenario motivating Phase 7.4 D1:
+// set decisions["bugfix"] = "single" to mimic production Router's default
+// for an unknown intent.
+type fakeRouter struct {
+	decisions map[string]string
+	fallback  string
+}
+
+func (f *fakeRouter) DecideWorkflow(intent string, _ *routing.WorkflowPreference) string {
+	if wf, ok := f.decisions[intent]; ok {
+		return wf
+	}
+	return f.fallback
+}
 
 // neverRecommendFactory returns an advisor configured with an unreachable
 // minSamples threshold. For a 12-task training set, no intent ever crosses
@@ -92,6 +111,109 @@ func TestRunV2_ConstantHitRateProducesFail(t *testing.T) {
 	}
 	if series.Verdict != V2VerdictFail {
 		t.Errorf("verdict = %q, want FAIL", series.Verdict)
+	}
+}
+
+// TestRunV2_LegacyBehaviorPreservedWhenRouterNil is the Phase 7.4
+// regression guard: when V2RunOptions.Router is nil, outcomes must carry
+// the task's ExpectedWorkflow — the Phase 7.3 stub invariant. A broken
+// default branch would silently change the training signal shape and
+// invalidate every Phase 7.3 verdict.
+func TestRunV2_LegacyBehaviorPreservedWhenRouterNil(t *testing.T) {
+	outputDir := t.TempDir()
+	corpus := validV2Corpus()
+	_, err := RunV2(V2RunOptions{
+		Corpus:         corpus,
+		OutputDir:      outputDir,
+		RunCount:       1,
+		AdvisorFactory: gradualLearningFactory(),
+		Clock:          func() time.Time { return time.Date(2026, 4, 21, 0, 0, 0, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatalf("RunV2: %v", err)
+	}
+
+	scratch := learning.NewOutcomeStore(filepath.Join(outputDir, "scratch-outcomes.jsonl"))
+	records, err := scratch.ForProject(V2BenchmarkProjectID, 1_000)
+	if err != nil {
+		t.Fatalf("ForProject: %v", err)
+	}
+	if len(records) != len(corpus.TrainingSet) {
+		t.Fatalf("outcomes count = %d, want %d", len(records), len(corpus.TrainingSet))
+	}
+	byID := make(map[string]Task, len(corpus.Tasks))
+	for _, tk := range corpus.Tasks {
+		byID[tk.ID] = tk
+	}
+	for i, rec := range records {
+		id := corpus.TrainingSet[i]
+		expected := byID[id].ExpectedWorkflow
+		if rec.Workflow != expected {
+			t.Errorf("outcomes[%d].Workflow = %q, want %q (ExpectedWorkflow)", i, rec.Workflow, expected)
+		}
+	}
+}
+
+// TestRunV2_UsesRouterWhenConfigured verifies that V2RunOptions.Router,
+// when set, actually shapes the recorded outcomes. This is the positive
+// side of the Phase 7.4a Milestone-1 cut: the router's pick — not the
+// task's ExpectedWorkflow — flows into the scratch store. The scenario
+// mirrors the Phase 7.4 chicken-and-egg problem: fakeRouter is stuck on
+// "single" for every intent, so a bugfix training task (ExpectedWorkflow
+// = "ralph") must end up recorded as "single", not "ralph".
+func TestRunV2_UsesRouterWhenConfigured(t *testing.T) {
+	outputDir := t.TempDir()
+	corpus := validV2Corpus()
+	fake := &fakeRouter{
+		decisions: map[string]string{
+			"question":     "single",
+			"complex_task": "team",
+			"bugfix":       "single",
+		},
+		fallback: "single",
+	}
+	_, err := RunV2(V2RunOptions{
+		Corpus:         corpus,
+		OutputDir:      outputDir,
+		RunCount:       1,
+		AdvisorFactory: gradualLearningFactory(),
+		Router:         fake,
+		Clock:          func() time.Time { return time.Date(2026, 4, 21, 0, 0, 0, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatalf("RunV2: %v", err)
+	}
+
+	scratch := learning.NewOutcomeStore(filepath.Join(outputDir, "scratch-outcomes.jsonl"))
+	records, err := scratch.ForProject(V2BenchmarkProjectID, 1_000)
+	if err != nil {
+		t.Fatalf("ForProject: %v", err)
+	}
+	if len(records) != len(corpus.TrainingSet) {
+		t.Fatalf("outcomes count = %d, want %d", len(records), len(corpus.TrainingSet))
+	}
+	for i, rec := range records {
+		want := fake.decisions[rec.Intent]
+		if rec.Workflow != want {
+			t.Errorf("outcomes[%d] intent=%q Workflow = %q, want %q (fake router decision)",
+				i, rec.Intent, rec.Workflow, want)
+		}
+	}
+	// The bugfix-specific assertion is the real test: outcomes for bugfix
+	// tasks must NOT carry Workflow="ralph" (the ExpectedWorkflow). If
+	// this fails, the router branch never fired and runV2SingleRun
+	// silently fell through to the legacy stub path.
+	foundBugfix := false
+	for _, rec := range records {
+		if rec.Intent == "bugfix" {
+			foundBugfix = true
+			if rec.Workflow == "ralph" {
+				t.Errorf("bugfix outcome recorded as Workflow=ralph despite router forcing single; router branch did not fire")
+			}
+		}
+	}
+	if !foundBugfix {
+		t.Fatalf("test corpus lacks any bugfix training task; fixture assumption broken")
 	}
 }
 
