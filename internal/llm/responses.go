@@ -289,6 +289,23 @@ func (p *ResponsesProvider) buildRequest(req ChatRequest, stream bool) map[strin
 	if len(req.Tools) > 0 {
 		tools := make([]map[string]interface{}, 0, len(req.Tools))
 		for _, t := range req.Tools {
+			// Native server-side tools: the Responses API executes these itself
+			// and injects results into the model's context, so the tool
+			// definition carries only type + config — no name/parameters.
+			// Reference: /Users/stello/codex/codex-rs/tools/src/tool_spec.rs:39-51
+			// (WebSearch variant with external_web_access / search_context_size).
+			// Without this branch every Elnath tool, including web_search, ships
+			// as a function-typed tool → the model routes queries through
+			// Elnath's DDG-scrape fallback instead of the OpenAI search
+			// primitive the partner observed working natively in Codex CLI.
+			if t.Name == "web_search" {
+				tools = append(tools, map[string]interface{}{
+					"type":                "web_search",
+					"external_web_access": true,
+					"search_context_size": "medium",
+				})
+				continue
+			}
 			tool := map[string]interface{}{
 				"type":        "function",
 				"name":        t.Name,

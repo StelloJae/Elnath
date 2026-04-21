@@ -320,6 +320,82 @@ func TestResponsesBuildRequestDefaultInstructions(t *testing.T) {
 	}
 }
 
+// TestResponsesBuildRequest_WebSearchEmitsNativeSchema pins the native-tool
+// emission rule for the Responses API. When any ChatRequest tool carries
+// Name=="web_search", the wire payload must include a
+// {"type":"web_search", "external_web_access":true, "search_context_size":"medium"}
+// entry instead of the generic {"type":"function", "name":"web_search", ...}
+// form — otherwise OpenAI will execute Elnath's own DDG-scrape fallback
+// instead of the server-side search primitive the partner actually saw
+// working in the upstream Codex CLI.
+//
+// Reference: /Users/stello/codex/codex-rs/tools/src/tool_spec.rs:39-51
+// (WebSearch variant with external_web_access / filters / user_location /
+// search_context_size / search_content_types fields). Elnath only emits the
+// two most load-bearing fields here; filters/user_location are Phase B.2+.
+//
+// TODO(Phase B.2 live probe): Codex comment at tool_spec.rs:33 warns that
+// some model/API combinations reject "web_search"; see plan §6 open #1.
+func TestResponsesBuildRequest_WebSearchEmitsNativeSchema(t *testing.T) {
+	p := newResponsesProvider("http://localhost")
+
+	req := ChatRequest{
+		Model:    "gpt-5.4",
+		Messages: []Message{NewUserMessage("search something")},
+		Tools: []ToolDef{
+			{Name: "bash", Description: "run shell", InputSchema: json.RawMessage(`{"type":"object"}`)},
+			{Name: "web_search", Description: "search the web", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		},
+	}
+	body := p.buildRequest(req, true)
+
+	tools, ok := body["tools"].([]map[string]interface{})
+	if !ok {
+		t.Fatalf("tools type = %T, want []map[string]interface{}", body["tools"])
+	}
+	if len(tools) != 2 {
+		t.Fatalf("tools len = %d, want 2", len(tools))
+	}
+
+	var bashTool, webSearchTool map[string]interface{}
+	for _, tool := range tools {
+		switch tool["type"] {
+		case "function":
+			if tool["name"] == "bash" {
+				bashTool = tool
+			}
+		case "web_search":
+			webSearchTool = tool
+		}
+	}
+
+	if bashTool == nil {
+		t.Fatalf("function-typed bash tool missing; tools = %v", tools)
+	}
+	if webSearchTool == nil {
+		t.Fatalf("native web_search tool missing (still emitted as function?); tools = %v", tools)
+	}
+
+	// Native web_search should NOT carry function-style metadata — those
+	// fields are meaningless to the server tool and leaking them invalidates
+	// the contract with the Responses API. Partner-facing: preserving
+	// "name"/"parameters" here has historically led to silent fallback to the
+	// Elnath DDG scrape implementation.
+	if _, hasName := webSearchTool["name"]; hasName {
+		t.Errorf(`web_search tool has "name" field; native server tool should only carry type + config`)
+	}
+	if _, hasParams := webSearchTool["parameters"]; hasParams {
+		t.Errorf(`web_search tool has "parameters" field; native server tool should only carry type + config`)
+	}
+
+	if got, want := webSearchTool["external_web_access"], true; got != want {
+		t.Errorf("external_web_access = %v, want %v (live web access)", got, want)
+	}
+	if got, want := webSearchTool["search_context_size"], "medium"; got != want {
+		t.Errorf("search_context_size = %v, want %q", got, want)
+	}
+}
+
 // --- Provider metadata ---
 
 func TestResponsesProviderMetadata(t *testing.T) {
