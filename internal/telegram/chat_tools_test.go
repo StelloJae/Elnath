@@ -369,6 +369,47 @@ func TestChatResponder_ToolGuideContainsStrongInstructionBlock(t *testing.T) {
 	}
 }
 
+// TestChatResponder_ToolGuideContainsFactFenceRules asserts the Fix C-P1
+// anchors landed in chatToolGuideHeader: (gamma) refuse to inject
+// prior-knowledge names/numbers when tool_result lacks concrete rows,
+// and (alpha) try alternate sources before giving up on sparse scrapes.
+// The 2026-04-21 dogfood showed hedged-hallucination (NVDA/TSLA/AAPL
+// named without volume rows) when the primary Yahoo most-active scrape
+// came back empty; see .omc/research/fix-c-factcheck.md for evidence.
+//
+// TODO(L3): relocate both anchors to a universal prompt.Builder node so
+// chat and task paths share the discipline. Tracked in
+// .omc/plans/l1-universal-message-schema.md.
+func TestChatResponder_ToolGuideContainsFactFenceRules(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{response: "ok"}
+	exec := newChatMockExecutor()
+	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		ToolDefs:     []llm.ToolDef{{Name: "web_fetch"}, {Name: "web_search"}},
+		ToolExecutor: exec,
+	}))
+
+	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	req := provider.capturedRequest(t)
+	wantMarkers := []string{
+		// gamma: refusal rule when tool_result lacks concrete rows
+		"구체 수치",
+		"사전지식",
+		// alpha: alternate-source hints for sparse-scrape cases
+		"finance.yahoo.com/most-active",
+		"finviz.com",
+	}
+	for _, m := range wantMarkers {
+		if !strings.Contains(req.System, m) {
+			t.Errorf("fact-fence rules missing marker %q in System prompt:\n%s", m, req.System)
+		}
+	}
+}
+
 func TestChatResponder_OmitsToolGuideWhenNoExecutor(t *testing.T) {
 	bot := newChatMockBot()
 	provider := &chatMockProvider{response: "ok"}
