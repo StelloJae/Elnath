@@ -105,10 +105,21 @@ type ChatResponder struct {
 	system       string
 	outcomeStore OutcomeAppender
 	pipeline     *ChatPipelineDeps
+	nowFunc      func() time.Time
 }
 
 // ChatResponderOption configures optional dependencies of ChatResponder.
 type ChatResponderOption func(*ChatResponder)
+
+// WithChatNow injects a custom clock for the chat-time header. Tests use this
+// to pin a deterministic timestamp in the system prompt.
+func WithChatNow(f func() time.Time) ChatResponderOption {
+	return func(c *ChatResponder) {
+		if f != nil {
+			c.nowFunc = f
+		}
+	}
+}
 
 // WithOutcomeStore enables outcome recording for each Respond call.
 // Without this option, ChatResponder runs without touching the outcome store.
@@ -136,6 +147,7 @@ func NewChatResponder(provider llm.Provider, bot BotClient, chatID string, logge
 		chatID:   chatID,
 		logger:   logger,
 		system:   chatSystemPrompt,
+		nowFunc:  time.Now,
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -153,6 +165,7 @@ func (c *ChatResponder) Respond(ctx context.Context, principal identity.Principa
 	sc.Run()
 
 	systemPrompt, history := c.buildPrompt(ctx, principal, userMessage, logger)
+	systemPrompt = c.prependChatHeaders(systemPrompt)
 	messages := make([]llm.Message, 0, len(history)+1)
 	messages = append(messages, history...)
 	messages = append(messages, llm.NewUserMessage(userMessage))

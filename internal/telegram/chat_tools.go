@@ -5,11 +5,52 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/stello/elnath/internal/llm"
 )
 
 const maxChatToolIterations = 5
+
+// kstZone fixes Korea Standard Time at UTC+9 (no DST) for the chat-time
+// header. FixedZone avoids tzdata dependency at the cost of locking the
+// chat surface to KST — acceptable while Telegram is the partner's primary
+// surface and the daemon runs locally in Korea.
+var kstZone = time.FixedZone("KST", 9*60*60)
+
+// chatTimeHeader formats the current wall-clock time for inclusion at the
+// top of the chat system prompt. Anchors the model's notion of "now" so
+// time/date questions don't need a tool round-trip and so cutoff-bound
+// reasoning ("today", "this week") aligns with the user's actual context.
+func chatTimeHeader(now time.Time) string {
+	return fmt.Sprintf("현재 시간 (KST): %s\n", now.In(kstZone).Format("2006-01-02 15:04"))
+}
+
+// chatToolGuideHeader is appended to the system prompt only when the tool
+// loop is active. Codex/gpt-5.4 in chat mode is conservative about emitting
+// tool_use without an explicit cue; without this nudge the model answers
+// from its knowledge cutoff (the FU-CR2b loop never fires). The phrasing
+// names the actual allowlisted verbs so the model has concrete vocabulary
+// to plan around.
+func chatToolGuideHeader() string {
+	return "외부 정보 (실시간 데이터, 뉴스, 특정 URL 내용, 현재 환경)가 필요하면 추측하지 말고 사용 가능한 도구 (web_fetch, web_search, read_file, glob, grep)를 호출해서 답하세요. 도구 결과를 받은 뒤 사용자에게 자연스럽게 한국어로 정리해 답하세요.\n"
+}
+
+// prependChatHeaders prepends the time header (always) and the tool guide
+// (only when the chat tool loop is active) to whatever systemPrompt the
+// builder/legacy fallback produced. Pre-pending keeps the headers at the
+// most salient position; the builder's persona/identity/wiki content
+// follows.
+func (c *ChatResponder) prependChatHeaders(systemPrompt string) string {
+	header := chatTimeHeader(c.nowFunc())
+	if c.useToolLoop() {
+		header += chatToolGuideHeader()
+	}
+	if systemPrompt == "" {
+		return strings.TrimRight(header, "\n")
+	}
+	return header + "\n" + systemPrompt
+}
 
 // DefaultChatToolAllowlist is the read-only subset of tool names safe to expose
 // in the Telegram chat path. Destructive tools (bash, write_file, edit_file,

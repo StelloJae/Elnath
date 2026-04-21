@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stello/elnath/internal/identity"
 	"github.com/stello/elnath/internal/llm"
@@ -280,6 +281,91 @@ func toolNames(defs []llm.ToolDef) []string {
 		out[i] = d.Name
 	}
 	return out
+}
+
+// --- FU-PromptNow + FU-ChatToolGuide: chat system prompt anchors ---
+
+func TestChatResponder_PrependsCurrentTimeHeader(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{response: "ok"}
+	fixedNow := time.Date(2026, 4, 21, 0, 50, 0, 0, time.UTC)
+	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatNow(func() time.Time { return fixedNow }))
+
+	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	req := provider.capturedRequest(t)
+	if !strings.Contains(req.System, "현재 시간 (KST):") {
+		t.Errorf("System prompt missing time header: %q", req.System)
+	}
+	// 00:50 UTC = 09:50 KST
+	if !strings.Contains(req.System, "2026-04-21 09:50") {
+		t.Errorf("System prompt missing KST timestamp 2026-04-21 09:50: %q", req.System)
+	}
+}
+
+func TestChatResponder_PrependsToolGuideWhenLoopActive(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{response: "ok"}
+	exec := newChatMockExecutor()
+	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		ToolDefs:     []llm.ToolDef{{Name: "web_fetch"}},
+		ToolExecutor: exec,
+	}))
+
+	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	req := provider.capturedRequest(t)
+	if !strings.Contains(req.System, "외부 정보") {
+		t.Errorf("System prompt missing tool guide when loop is active: %q", req.System)
+	}
+	if !strings.Contains(req.System, "web_fetch") {
+		t.Errorf("Tool guide should name allowlisted tools (web_fetch): %q", req.System)
+	}
+}
+
+func TestChatResponder_OmitsToolGuideWhenNoExecutor(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{response: "ok"}
+	cr := NewChatResponder(provider, bot, "chat-42", nil)
+
+	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	req := provider.capturedRequest(t)
+	if strings.Contains(req.System, "외부 정보") {
+		t.Errorf("System prompt should not include tool guide when no executor wired: %q", req.System)
+	}
+	if !strings.Contains(req.System, "현재 시간 (KST):") {
+		t.Errorf("Time header should still be present even without tool loop: %q", req.System)
+	}
+}
+
+func TestChatResponder_OmitsToolGuideWhenToolDefsEmpty(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{response: "ok"}
+	exec := newChatMockExecutor()
+	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		ToolExecutor: exec,
+		// ToolDefs intentionally empty
+	}))
+
+	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	req := provider.capturedRequest(t)
+	if strings.Contains(req.System, "외부 정보") {
+		t.Errorf("Tool guide should be skipped when ToolDefs empty: %q", req.System)
+	}
 }
 
 func TestChatResponder_LegacyPathUnchangedWhenExecutorMissing(t *testing.T) {

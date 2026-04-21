@@ -440,8 +440,8 @@ func TestChatResponder_UsesPromptPipelineWhenWired(t *testing.T) {
 	}
 
 	req := provider.capturedRequest(t)
-	if req.System != "CUSTOM-SYSTEM" {
-		t.Errorf("System prompt: got %q, want %q", req.System, "CUSTOM-SYSTEM")
+	if !strings.Contains(req.System, "CUSTOM-SYSTEM") {
+		t.Errorf("System prompt should contain builder result: got %q", req.System)
 	}
 	if len(req.Messages) != 3 {
 		t.Errorf("Messages len: got %d, want 3 (2 history + 1 current)", len(req.Messages))
