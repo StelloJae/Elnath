@@ -137,7 +137,6 @@ func NewChatResponder(provider llm.Provider, bot BotClient, chatID string, logge
 }
 
 func (c *ChatResponder) Respond(ctx context.Context, principal identity.Principal, userMessage string, replyToMsgID int64) error {
-	_ = replyToMsgID
 	logger := c.logger.With(
 		"principal_user_id", principal.UserID,
 		"principal_project_id", principal.ProjectID,
@@ -178,6 +177,7 @@ func (c *ChatResponder) Respond(ctx context.Context, principal identity.Principa
 		elapsed := time.Since(start)
 		c.recordChatOutcome(principal, userMessage, false, "error", elapsed)
 		logger.Warn("chat responder: stream failed", "error", streamErr)
+		c.setCompletionReaction(ctx, replyToMsgID, "😢")
 		if sendErr := c.bot.SendMessage(ctx, c.chatID, fmt.Sprintf("⚠️ Error: %s", streamErr.Error())); sendErr != nil {
 			return fmt.Errorf("chat responder: send error message: %w", sendErr)
 		}
@@ -186,6 +186,7 @@ func (c *ChatResponder) Respond(ctx context.Context, principal identity.Principa
 
 	sc.Wait()
 	c.recordChatOutcome(principal, userMessage, true, "stop", time.Since(start))
+	c.setCompletionReaction(ctx, replyToMsgID, "👍")
 
 	if assistantText.Len() > 0 {
 		c.persistChatTurn(ctx, principal,
@@ -195,6 +196,19 @@ func (c *ChatResponder) Respond(ctx context.Context, principal identity.Principa
 		)
 	}
 	return nil
+}
+
+// setCompletionReaction updates the reaction on the user's original message to
+// signal chat outcome. Skipped when replyToMsgID is 0 (no originating message
+// to react to). Errors from the Telegram API are logged at debug level rather
+// than propagated — reactions are UX polish, not load-bearing for chat flow.
+func (c *ChatResponder) setCompletionReaction(ctx context.Context, replyToMsgID int64, emoji string) {
+	if replyToMsgID <= 0 {
+		return
+	}
+	if err := c.bot.SetReaction(ctx, c.chatID, replyToMsgID, emoji); err != nil {
+		c.logger.Debug("chat responder: set reaction failed", "error", err, "emoji", emoji)
+	}
 }
 
 // persistChatTurn writes the user+assistant pair to the session-bound JSONL

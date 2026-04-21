@@ -38,10 +38,11 @@ func (m *mockOutcomeAppender) snapshot() []learning.OutcomeRecord {
 }
 
 type chatMockBot struct {
-	mu     sync.Mutex
-	sends  []chatMockSend
-	edits  []chatMockEdit
-	nextID int64
+	mu        sync.Mutex
+	sends     []chatMockSend
+	edits     []chatMockEdit
+	reactions []chatMockReaction
+	nextID    int64
 }
 
 type chatMockSend struct {
@@ -53,6 +54,12 @@ type chatMockEdit struct {
 	chatID    string
 	messageID int64
 	text      string
+}
+
+type chatMockReaction struct {
+	chatID    string
+	messageID int64
+	emoji     string
 }
 
 func newChatMockBot() *chatMockBot {
@@ -81,8 +88,19 @@ func (m *chatMockBot) EditMessage(_ context.Context, chatID string, messageID in
 	return nil
 }
 
-func (m *chatMockBot) SetReaction(_ context.Context, _ string, _ int64, _ string) error {
+func (m *chatMockBot) SetReaction(_ context.Context, chatID string, messageID int64, emoji string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.reactions = append(m.reactions, chatMockReaction{chatID: chatID, messageID: messageID, emoji: emoji})
 	return nil
+}
+
+func (m *chatMockBot) allReactions() []chatMockReaction {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]chatMockReaction, len(m.reactions))
+	copy(out, m.reactions)
+	return out
 }
 
 func (m *chatMockBot) GetUpdates(_ context.Context, _ int64, _ int) ([]Update, error) {
@@ -739,5 +757,70 @@ func TestChatResponder_NoToolsWhenToolDefsEmpty(t *testing.T) {
 	req := provider.capturedRequest(t)
 	if len(req.Tools) != 0 {
 		t.Errorf("Tools: got %d entries, want 0 (pipeline present, ToolDefs empty)", len(req.Tools))
+	}
+}
+
+// --- FU-TgReactions: chat completion reactions on user message ---
+
+func TestChatResponder_SetsSuccessReactionOnCompletion(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{response: "Hello!"}
+	cr := NewChatResponder(provider, bot, "chat-42", nil)
+
+	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 77)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rs := bot.allReactions()
+	if len(rs) != 1 {
+		t.Fatalf("reactions = %d, want 1 (chat success reaction)", len(rs))
+	}
+	if rs[0].messageID != 77 {
+		t.Errorf("reaction messageID = %d, want 77 (replyToMsgID)", rs[0].messageID)
+	}
+	if rs[0].emoji != "👍" {
+		t.Errorf("reaction emoji = %q, want %q", rs[0].emoji, "👍")
+	}
+	if rs[0].chatID != "chat-42" {
+		t.Errorf("reaction chatID = %q, want %q", rs[0].chatID, "chat-42")
+	}
+}
+
+func TestChatResponder_SetsFailureReactionOnStreamError(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{streamErr: fmt.Errorf("provider unavailable")}
+	cr := NewChatResponder(provider, bot, "chat-42", nil)
+
+	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 99)
+	if err == nil {
+		t.Fatal("expected error from Respond")
+	}
+
+	rs := bot.allReactions()
+	if len(rs) != 1 {
+		t.Fatalf("reactions = %d, want 1 (chat failure reaction)", len(rs))
+	}
+	if rs[0].messageID != 99 {
+		t.Errorf("reaction messageID = %d, want 99 (replyToMsgID)", rs[0].messageID)
+	}
+	if rs[0].emoji != "😢" {
+		t.Errorf("reaction emoji = %q, want %q", rs[0].emoji, "😢")
+	}
+}
+
+func TestChatResponder_SkipsReactionWhenReplyToMsgIDZero(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{response: "ok"}
+	cr := NewChatResponder(provider, bot, "chat-42", nil)
+
+	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rs := bot.allReactions()
+	if len(rs) != 0 {
+		t.Errorf("reactions = %d, want 0 (no user message to react to)", len(rs))
 	}
 }
