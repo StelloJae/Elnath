@@ -271,8 +271,17 @@ func (c *ChatResponder) runStreamWithTools(
 
 		for _, tc := range toolCalls {
 			if note := chatToolProgressNote(tc.Name, tc.Input); note != "" {
+				// Display-only: note is a "working on it" banner that goes to
+				// the partner's stream bubble while the tool runs. We do NOT
+				// append it to fullText because fullText is what lands in
+				// session JSONL via persistChatTurn and in learning outcomes
+				// via output-tokens inference. Dogfood 2026-04-21 17:46 KST
+				// showed that persisting notes pollutes chat history (low
+				// signal once the turn is done) and, worst case, leaves a
+				// stored assistantText consisting only of progress banners
+				// when the final-step LLM text isn't captured for unrelated
+				// reasons. Session should mirror the model's answer.
 				sc.Send(note)
-				fullText.WriteString(note)
 			}
 			toolStart := time.Now()
 			content, isError := c.executeChatTool(ctx, tc)

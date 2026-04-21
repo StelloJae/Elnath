@@ -486,6 +486,55 @@ func TestChatResponder_CapsLargeToolResultBeforeReinjection(t *testing.T) {
 	}
 }
 
+// --- FU-ChatProgressNotePersistFix: progress note must not leak into session persist ---
+
+func TestChatResponder_ProgressNoteNotPersistedIntoAssistantMessage(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{
+		steps: []chatProviderStep{
+			{toolUses: []chatProviderToolUse{
+				{id: "tu_1", name: "web_fetch", input: `{"url":"https://example.com/foo"}`},
+			}},
+			{text: "최종 답변 본문"},
+		},
+	}
+	exec := newChatMockExecutor()
+	exec.setResult("web_fetch", &tools.Result{Output: "fetched"})
+
+	persister := &stubChatPersister{}
+	lookup := &stubSessionLookup{session: "sess-persist", ok: true}
+
+	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		Builder:      &stubChatBuilder{result: "SYS"},
+		Lookup:       lookup,
+		Persister:    persister,
+		ToolDefs:     []llm.ToolDef{{Name: "web_fetch"}},
+		ToolExecutor: exec,
+	}))
+
+	if err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "fetch it", 1); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	appends := persister.snapshot()
+	if len(appends) != 1 {
+		t.Fatalf("expected 1 AppendChatTurn call, got %d", len(appends))
+	}
+	saved := appends[0].assistant.Text()
+	if strings.Contains(saved, "읽는 중") || strings.Contains(saved, "📄") {
+		t.Errorf("persisted assistant message contains progress note (should be display-only): %q", saved)
+	}
+	if !strings.Contains(saved, "최종 답변 본문") {
+		t.Errorf("persisted assistant message missing the real answer text: %q", saved)
+	}
+
+	// Sanity: the live Telegram bubble (sc.Send path) still carries the note
+	last := bot.lastText()
+	if !strings.Contains(last, "읽는 중") {
+		t.Errorf("live bubble should still show progress note, got: %q", last)
+	}
+}
+
 // --- FU-ChatProgressNote: "doing X" note streamed before each tool call ---
 
 func TestChatToolProgressNote_FormatsByTool(t *testing.T) {
