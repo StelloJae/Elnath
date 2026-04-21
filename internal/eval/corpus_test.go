@@ -254,3 +254,33 @@ func TestCorpusValidateV1RegressionPublicCorpus(t *testing.T) {
 		t.Fatal("public corpus has zero tasks; test setup broken")
 	}
 }
+
+// TestLoadV2SeedCorpus guards the Phase 7.4 prerequisite: the v2 seed corpus
+// on disk must load and validate. The v2 harness is useless without an
+// actual corpus file — Phase 7.3 specified the seed but shipped only the
+// in-memory validV2Corpus() helper, leaving the disk-loading path untested.
+func TestLoadV2SeedCorpus(t *testing.T) {
+	corpus, err := LoadCorpus("../../benchmarks/self-improvement.v2.json")
+	if err != nil {
+		t.Fatalf("LoadCorpus(self-improvement.v2.json) = %v", err)
+	}
+	if corpus.Version != "v2" {
+		t.Fatalf("seed corpus version = %q, want v2", corpus.Version)
+	}
+	if len(corpus.TrainingSet) < v2TrainingMin || len(corpus.TrainingSet) > v2TrainingMax {
+		t.Errorf("training_set size %d outside [%d, %d]",
+			len(corpus.TrainingSet), v2TrainingMin, v2TrainingMax)
+	}
+	if len(corpus.HeldOutSet) < v2HeldOutMin || len(corpus.HeldOutSet) > v2HeldOutMax {
+		t.Errorf("held_out_set size %d outside [%d, %d]",
+			len(corpus.HeldOutSet), v2HeldOutMin, v2HeldOutMax)
+	}
+	for _, task := range corpus.Tasks {
+		if task.Intent == "" {
+			t.Errorf("task %q has empty Intent", task.ID)
+		}
+		if task.ExpectedWorkflow == "" {
+			t.Errorf("task %q has empty ExpectedWorkflow", task.ID)
+		}
+	}
+}
