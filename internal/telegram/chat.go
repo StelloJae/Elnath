@@ -359,7 +359,7 @@ func (c *ChatResponder) buildPrompt(ctx context.Context, principal identity.Prin
 	var history []llm.Message
 	if sessionID != "" && c.pipeline.History != nil {
 		if hist, err := c.pipeline.History.GetHistory(ctx, sessionID); err == nil {
-			history = trimChatHistory(hist, c.pipeline.MaxHistory)
+			history = sanitizeChatHistory(trimChatHistory(hist, c.pipeline.MaxHistory))
 		} else {
 			logger.Warn("chat responder: history load failed, continuing without", "error", err, "session_id", sessionID)
 		}
@@ -400,6 +400,42 @@ func trimChatHistory(msgs []llm.Message, maxTurns int) []llm.Message {
 		return msgs
 	}
 	return msgs[len(msgs)-maxTurns:]
+}
+
+// sanitizeChatHistory strips ToolUseBlock and ToolResultBlock entries from
+// every message before the chat path hands them to the provider. Telegram
+// binds one session JSONL per chat ID, and that JSONL is shared with every
+// workflow the partner triggers — agent.Loop (simple_task/team/etc)
+// persists its tool_use/tool_result blocks verbatim there. When chat_direct
+// reloads that session as history, those blocks ride along as orphans: the
+// current conversation has no matching function_call for the tool_result's
+// call_id, and the Codex Responses API rejects the request with HTTP 400
+// "No tool call found for function call output with call_id ...".
+//
+// Dropping just the tool blocks (instead of whole messages) preserves any
+// surrounding dialogue text, so the partner's conversational context
+// survives. Messages that become empty after stripping are omitted so the
+// provider never sees zero-block turns.
+func sanitizeChatHistory(msgs []llm.Message) []llm.Message {
+	if len(msgs) == 0 {
+		return msgs
+	}
+	out := make([]llm.Message, 0, len(msgs))
+	for _, m := range msgs {
+		filtered := make([]llm.ContentBlock, 0, len(m.Content))
+		for _, b := range m.Content {
+			switch b.(type) {
+			case llm.ToolUseBlock, llm.ToolResultBlock:
+				continue
+			}
+			filtered = append(filtered, b)
+		}
+		if len(filtered) == 0 {
+			continue
+		}
+		out = append(out, llm.Message{Role: m.Role, Content: filtered})
+	}
+	return out
 }
 
 // chatSnippet truncates the message at n runes (not bytes) so multi-byte

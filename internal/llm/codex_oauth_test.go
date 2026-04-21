@@ -89,6 +89,67 @@ func TestBuildCodexRequestUsesCallIDForFunctionHistory(t *testing.T) {
 	}
 }
 
+// TestBuildCodexRequest_ToolUseResultPairStructure inspects the exact
+// payload structure produced when the chat tool loop re-submits an
+// assistant tool_use followed by its tool_result. Dogfood 2026-04-21
+// 15:16 hit a Codex 400 "No tool call found for function call output
+// with call_id ..." — this test pins the serialisation so a regression
+// in call_id propagation or item ordering fails here first.
+func TestBuildCodexRequest_ToolUseResultPairStructure(t *testing.T) {
+	const wantCallID = "call_wH9JVxyuUUHiADnStfgOacFM"
+	body, err := buildCodexRequest(ChatRequest{
+		Model: "gpt-5.4",
+		Messages: []Message{
+			NewUserMessage("오늘 미국 주식 인기종목 3개 알아봐줘"),
+			{Role: RoleAssistant, Content: []ContentBlock{
+				ToolUseBlock{
+					ID:    wantCallID,
+					Name:  "web_search",
+					Input: json.RawMessage(`{"query":"today US popular stocks"}`),
+				},
+			}},
+			NewToolResultMessage(wantCallID, "AAPL, MSFT, NVDA rankings", false),
+		},
+	}, "gpt-5.4")
+	if err != nil {
+		t.Fatalf("buildCodexRequest: %v", err)
+	}
+
+	var payload struct {
+		Input []map[string]any `json:"input"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v; raw=%s", err, body)
+	}
+
+	t.Logf("codex input payload:")
+	for i, item := range payload.Input {
+		b, _ := json.Marshal(item)
+		t.Logf("  [%d] %s", i, b)
+	}
+
+	var callIdx, outputIdx = -1, -1
+	for i, item := range payload.Input {
+		typ, _ := item["type"].(string)
+		cid, _ := item["call_id"].(string)
+		if typ == "function_call" && cid == wantCallID {
+			callIdx = i
+		}
+		if typ == "function_call_output" && cid == wantCallID {
+			outputIdx = i
+		}
+	}
+	if callIdx < 0 {
+		t.Fatalf("function_call item with call_id=%s missing from payload: %s", wantCallID, body)
+	}
+	if outputIdx < 0 {
+		t.Fatalf("function_call_output item with call_id=%s missing from payload: %s", wantCallID, body)
+	}
+	if callIdx >= outputIdx {
+		t.Fatalf("function_call (idx=%d) must precede function_call_output (idx=%d)", callIdx, outputIdx)
+	}
+}
+
 func TestParseCodexSSE_AllowsLargeLines(t *testing.T) {
 	longDelta := strings.Repeat("a", 70_000)
 	stream := strings.NewReader(

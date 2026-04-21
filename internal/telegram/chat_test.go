@@ -877,3 +877,67 @@ func TestChatResponder_SkipsReactionWhenReplyToMsgIDZero(t *testing.T) {
 		t.Errorf("reactions = %d, want 0 (no user message to react to)", len(rs))
 	}
 }
+
+// --- FU-ChatHistorySanitize: strip agent.Loop tool blocks from chat history ---
+
+func TestSanitizeChatHistory_StripsToolBlocksFromSharedSession(t *testing.T) {
+	msgs := []llm.Message{
+		llm.NewUserMessage("안녕"),
+		llm.NewAssistantMessage("안녕하세요"),
+		// agent.Loop artefact 1: assistant message carrying only a tool_use
+		{Role: "assistant", Content: []llm.ContentBlock{
+			llm.ToolUseBlock{ID: "call_old_1", Name: "web_fetch", Input: []byte(`{"url":"x"}`)},
+		}},
+		// Paired tool_result on user role
+		{Role: "user", Content: []llm.ContentBlock{
+			llm.ToolResultBlock{ToolUseID: "call_old_1", Content: "fetched body"},
+		}},
+		// Mixed assistant turn: text + stray tool_use — text must survive
+		{Role: "assistant", Content: []llm.ContentBlock{
+			llm.TextBlock{Text: "잠깐만요"},
+			llm.ToolUseBlock{ID: "call_old_2", Name: "web_fetch", Input: []byte(`{}`)},
+		}},
+		llm.NewUserMessage("다른 질문"),
+	}
+
+	got := sanitizeChatHistory(msgs)
+
+	if len(got) != 4 {
+		t.Fatalf("sanitized len = %d, want 4 (2 orphan turns dropped). got=%+v", len(got), got)
+	}
+
+	for i, m := range got {
+		for _, b := range m.Content {
+			switch b.(type) {
+			case llm.ToolUseBlock, llm.ToolResultBlock:
+				t.Errorf("message[%d] (role=%s) still carries %T after sanitize", i, m.Role, b)
+			}
+		}
+	}
+
+	// Mixed turn (was index 4; now index 2 after two drops) keeps its text.
+	mixed := got[2]
+	if mixed.Role != "assistant" || len(mixed.Content) != 1 {
+		t.Fatalf("mixed turn not stripped to text-only: %+v", mixed)
+	}
+	tb, ok := mixed.Content[0].(llm.TextBlock)
+	if !ok || tb.Text != "잠깐만요" {
+		t.Errorf("mixed turn text = %+v, want TextBlock{잠깐만요}", mixed.Content[0])
+	}
+
+	// Final message preserves the fresh user question.
+	last := got[3]
+	if last.Role != "user" || last.Text() != "다른 질문" {
+		t.Errorf("last sanitized message = %+v, want user:다른 질문", last)
+	}
+}
+
+func TestSanitizeChatHistory_EmptyInputs(t *testing.T) {
+	if got := sanitizeChatHistory(nil); got != nil {
+		t.Errorf("sanitize(nil) = %+v, want nil", got)
+	}
+	empty := []llm.Message{}
+	if got := sanitizeChatHistory(empty); len(got) != 0 {
+		t.Errorf("sanitize(empty) = %+v, want empty", got)
+	}
+}
