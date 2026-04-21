@@ -293,6 +293,7 @@ func cmdDaemonStart(ctx context.Context) error {
 			telegram.WithSinkBinder(binder),
 			telegram.WithRedactor(secret.NewDetector().RedactString),
 		)
+		chatToolDefs := telegram.FilterChatToolDefs(rt.reg.ToolDefs(), telegram.DefaultChatToolAllowlist)
 		chatResponder := telegram.NewChatResponder(provider, bot, cfg.Telegram.ChatID, app.Logger,
 			telegram.WithOutcomeStore(rt.outcomeStore),
 			telegram.WithChatPipeline(telegram.ChatPipelineDeps{
@@ -309,6 +310,8 @@ func cmdDaemonStart(ctx context.Context) error {
 				WorkDir:      rt.workDir,
 				DaemonMode:   true,
 				MaxHistory:   20,
+				ToolDefs:     chatToolDefs,
+				ToolExecutor: rt.reg,
 			}),
 		)
 		classifier := conversation.NewLLMClassifier()

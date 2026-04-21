@@ -129,22 +129,61 @@ func (m *chatMockBot) allSendTexts() []string {
 	return out
 }
 
+type chatProviderToolUse struct {
+	id    string
+	name  string
+	input string // JSON
+}
+
+type chatProviderStep struct {
+	text     string
+	toolUses []chatProviderToolUse
+	err      error
+}
+
 type chatMockProvider struct {
 	response  string
 	streamErr error
 
-	mu      sync.Mutex
-	lastReq *llm.ChatRequest
+	steps []chatProviderStep
+
+	mu           sync.Mutex
+	callCount    int
+	lastReq      *llm.ChatRequest
+	capturedReqs []llm.ChatRequest
 }
 
 func (p *chatMockProvider) Stream(_ context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
 	p.mu.Lock()
 	copied := req
 	p.lastReq = &copied
-	p.mu.Unlock()
+	p.capturedReqs = append(p.capturedReqs, copied)
 	if p.streamErr != nil {
+		p.mu.Unlock()
 		return p.streamErr
 	}
+	if len(p.steps) > 0 {
+		idx := p.callCount
+		p.callCount++
+		p.mu.Unlock()
+		if idx >= len(p.steps) {
+			return fmt.Errorf("chatMockProvider: no scripted step for call %d (have %d)", idx, len(p.steps))
+		}
+		step := p.steps[idx]
+		if step.err != nil {
+			return step.err
+		}
+		for _, r := range step.text {
+			cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: string(r)})
+		}
+		for _, tu := range step.toolUses {
+			cb(llm.StreamEvent{Type: llm.EventToolUseStart, ToolCall: &llm.ToolUseEvent{ID: tu.id, Name: tu.name}})
+			cb(llm.StreamEvent{Type: llm.EventToolUseDone, ToolCall: &llm.ToolUseEvent{ID: tu.id, Name: tu.name, Input: tu.input}})
+		}
+		cb(llm.StreamEvent{Type: llm.EventDone})
+		return nil
+	}
+	p.mu.Unlock()
 	for _, r := range p.response {
 		cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: string(r)})
 	}
@@ -160,6 +199,20 @@ func (p *chatMockProvider) capturedRequest(t *testing.T) llm.ChatRequest {
 		t.Fatal("expected provider to capture a ChatRequest")
 	}
 	return *p.lastReq
+}
+
+func (p *chatMockProvider) capturedRequests() []llm.ChatRequest {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]llm.ChatRequest, len(p.capturedReqs))
+	copy(out, p.capturedReqs)
+	return out
+}
+
+func (p *chatMockProvider) callCountSnapshot() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.callCount
 }
 
 func (p *chatMockProvider) Chat(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {

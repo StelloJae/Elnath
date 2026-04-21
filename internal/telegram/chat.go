@@ -12,6 +12,7 @@ import (
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/prompt"
 	"github.com/stello/elnath/internal/self"
+	"github.com/stello/elnath/internal/tools"
 	"github.com/stello/elnath/internal/wiki"
 )
 
@@ -85,9 +86,15 @@ type ChatPipelineDeps struct {
 	// ToolDefs, when non-empty, is forwarded to the provider as ChatRequest.Tools
 	// so the chat path exposes a curated tool subset. Filtering lives at the wire
 	// site; ChatResponder trusts the caller to supply only safe, chat-appropriate
-	// defs. Tool execution (tool_use → tool_result loop) is not yet implemented
-	// here — FU-CR2b wires that. Leaving ToolDefs nil preserves legacy behavior.
+	// defs.
 	ToolDefs []llm.ToolDef
+	// ToolExecutor, when set together with non-empty ToolDefs, activates the
+	// chat tool_use → tool_result loop (FU-CR2b). Without an executor, ToolDefs
+	// are still forwarded but the model's tool_use blocks are silently dropped —
+	// useful only for measuring whether the model would have wanted tools.
+	// Chat bypasses the agent loop's permission gate, so the executor MUST be
+	// fed only allowlisted, side-effect-free tools (see FilterChatToolDefs).
+	ToolExecutor tools.Executor
 }
 
 type ChatResponder struct {
@@ -150,27 +157,19 @@ func (c *ChatResponder) Respond(ctx context.Context, principal identity.Principa
 	messages = append(messages, history...)
 	messages = append(messages, llm.NewUserMessage(userMessage))
 
-	req := llm.ChatRequest{
-		Messages:    messages,
-		MaxTokens:   1024,
-		Temperature: 0.7,
-		System:      systemPrompt,
-	}
-	if c.pipeline != nil && len(c.pipeline.ToolDefs) > 0 {
-		req.Tools = c.pipeline.ToolDefs
+	start := time.Now()
+	var (
+		assistantText string
+		streamErr     error
+	)
+
+	if c.useToolLoop() {
+		assistantText, streamErr = c.runStreamWithTools(ctx, messages, systemPrompt, sc)
+		sc.Finish()
+	} else {
+		assistantText, streamErr = c.runLegacyStream(ctx, messages, systemPrompt, sc)
 	}
 
-	var assistantText strings.Builder
-	start := time.Now()
-	streamErr := c.provider.Stream(ctx, req, func(ev llm.StreamEvent) {
-		switch ev.Type {
-		case llm.EventTextDelta:
-			sc.Send(ev.Content)
-			assistantText.WriteString(ev.Content)
-		case llm.EventDone:
-			sc.Finish()
-		}
-	})
 	if streamErr != nil {
 		sc.Finish()
 		sc.Wait()
@@ -188,14 +187,42 @@ func (c *ChatResponder) Respond(ctx context.Context, principal identity.Principa
 	c.recordChatOutcome(principal, userMessage, true, "stop", time.Since(start))
 	c.setCompletionReaction(ctx, replyToMsgID, "👍")
 
-	if assistantText.Len() > 0 {
+	if assistantText != "" {
 		c.persistChatTurn(ctx, principal,
 			llm.NewUserMessage(userMessage),
-			llm.NewAssistantMessage(assistantText.String()),
+			llm.NewAssistantMessage(assistantText),
 			logger,
 		)
 	}
 	return nil
+}
+
+func (c *ChatResponder) useToolLoop() bool {
+	return c.pipeline != nil && c.pipeline.ToolExecutor != nil && len(c.pipeline.ToolDefs) > 0
+}
+
+func (c *ChatResponder) runLegacyStream(ctx context.Context, messages []llm.Message, systemPrompt string, sc *StreamConsumer) (string, error) {
+	req := llm.ChatRequest{
+		Messages:    messages,
+		MaxTokens:   1024,
+		Temperature: 0.7,
+		System:      systemPrompt,
+	}
+	if c.pipeline != nil && len(c.pipeline.ToolDefs) > 0 {
+		req.Tools = c.pipeline.ToolDefs
+	}
+
+	var assistantText strings.Builder
+	err := c.provider.Stream(ctx, req, func(ev llm.StreamEvent) {
+		switch ev.Type {
+		case llm.EventTextDelta:
+			sc.Send(ev.Content)
+			assistantText.WriteString(ev.Content)
+		case llm.EventDone:
+			sc.Finish()
+		}
+	})
+	return assistantText.String(), err
 }
 
 // setCompletionReaction updates the reaction on the user's original message to
