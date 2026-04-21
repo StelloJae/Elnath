@@ -89,11 +89,36 @@ func chatTimeHeader(now time.Time) string {
 // chatToolGuideHeader is appended to the system prompt only when the tool
 // loop is active. Codex/gpt-5.4 in chat mode is conservative about emitting
 // tool_use without an explicit cue; without this nudge the model answers
-// from its knowledge cutoff (the FU-CR2b loop never fires). The phrasing
-// names the actual allowlisted verbs so the model has concrete vocabulary
-// to plan around.
+// from its knowledge cutoff (the FU-CR2b loop never fires).
+//
+// FU-ChatToolGuideStrong expanded this from a one-liner nudge into a
+// structured instruction block (triggers, tool catalog, execution rules) so
+// the model has concrete decision rules for when to emit tool_use and what
+// to do with the results. Markdown H2 heading anchors the section visually
+// for both Anthropic and Codex/OpenAI providers.
 func chatToolGuideHeader() string {
-	return "외부 정보 (실시간 데이터, 뉴스, 특정 URL 내용, 현재 환경)가 필요하면 추측하지 말고 사용 가능한 도구 (web_fetch, web_search, read_file, glob, grep)를 호출해서 답하세요. 도구 결과를 받은 뒤 사용자에게 자연스럽게 한국어로 정리해 답하세요.\n"
+	return `
+## 도구 사용 지침
+
+아래 상황에서는 반드시 도구를 호출하세요 (추측·지식 cutoff 답변 금지):
+- "지금/오늘/최근/최신" 등 현재 시점 정보 (시세·뉴스·릴리즈·트렌드)
+- 특정 URL의 내용 확인이 필요한 질문
+- 로컬 파일·코드 내용 확인이 필요한 질문
+- 외부 사실 검증이 필요한 주장
+
+사용 가능한 도구:
+- web_search: 최신 정보 검색 (뉴스·가격·트렌드)
+- web_fetch: 주어진 URL 내용 가져오기
+- read_file: 프로젝트 파일 내용 읽기
+- glob: 파일 경로 패턴 매칭
+- grep: 파일 내용에서 문자열 검색
+
+실행 규칙:
+1. 위 상황에 해당하면 먼저 도구를 호출한 뒤 답한다.
+2. 서로 독립적인 조회 여러 개는 한 번에 병렬 tool_use 블록으로 발행한다.
+3. 도구 결과를 받으면 한국어로 자연스럽게 요약·정리해 답한다.
+4. 일반 지식·간단한 대화처럼 도구 없이 답할 수 있으면 그대로 답한다.
+`
 }
 
 // prependChatHeaders prepends the time header (always) and the tool guide

@@ -321,11 +321,48 @@ func TestChatResponder_PrependsToolGuideWhenLoopActive(t *testing.T) {
 	}
 
 	req := provider.capturedRequest(t)
-	if !strings.Contains(req.System, "외부 정보") {
-		t.Errorf("System prompt missing tool guide when loop is active: %q", req.System)
+	if !strings.Contains(req.System, "## 도구 사용 지침") {
+		t.Errorf("System prompt missing tool guide section header when loop is active: %q", req.System)
 	}
 	if !strings.Contains(req.System, "web_fetch") {
 		t.Errorf("Tool guide should name allowlisted tools (web_fetch): %q", req.System)
+	}
+}
+
+// TestChatResponder_ToolGuideContainsStrongInstructionBlock asserts the
+// structured markers introduced by FU-ChatToolGuideStrong: mandatory-call
+// trigger vocabulary, the numbered execution rules, and the parallel-tool_use
+// cue. These specific anchors guard against silent regressions to a weaker
+// one-liner nudge.
+func TestChatResponder_ToolGuideContainsStrongInstructionBlock(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{response: "ok"}
+	exec := newChatMockExecutor()
+	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		ToolDefs:     []llm.ToolDef{{Name: "web_fetch"}, {Name: "web_search"}},
+		ToolExecutor: exec,
+	}))
+
+	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	req := provider.capturedRequest(t)
+	wantMarkers := []string{
+		"반드시 도구를 호출",
+		"\"지금/오늘/최근/최신\"",
+		"실행 규칙:",
+		"병렬 tool_use",
+		"web_search",
+		"read_file",
+		"glob",
+		"grep",
+	}
+	for _, m := range wantMarkers {
+		if !strings.Contains(req.System, m) {
+			t.Errorf("strong instruction block missing marker %q in System prompt:\n%s", m, req.System)
+		}
 	}
 }
 
@@ -340,7 +377,7 @@ func TestChatResponder_OmitsToolGuideWhenNoExecutor(t *testing.T) {
 	}
 
 	req := provider.capturedRequest(t)
-	if strings.Contains(req.System, "외부 정보") {
+	if strings.Contains(req.System, "## 도구 사용 지침") {
 		t.Errorf("System prompt should not include tool guide when no executor wired: %q", req.System)
 	}
 	if !strings.Contains(req.System, "현재 시간 (KST):") {
@@ -363,7 +400,7 @@ func TestChatResponder_OmitsToolGuideWhenToolDefsEmpty(t *testing.T) {
 	}
 
 	req := provider.capturedRequest(t)
-	if strings.Contains(req.System, "외부 정보") {
+	if strings.Contains(req.System, "## 도구 사용 지침") {
 		t.Errorf("Tool guide should be skipped when ToolDefs empty: %q", req.System)
 	}
 }
