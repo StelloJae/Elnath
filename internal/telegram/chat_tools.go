@@ -233,6 +233,10 @@ func (c *ChatResponder) runStreamWithTools(
 		messages = append(messages, llm.BuildAssistantMessage(textParts, toolCalls))
 
 		for _, tc := range toolCalls {
+			if note := chatToolProgressNote(tc.Name, tc.Input); note != "" {
+				sc.Send(note)
+				fullText.WriteString(note)
+			}
 			toolStart := time.Now()
 			content, isError := c.executeChatTool(ctx, tc)
 			stats.recordTool(tc.Name, time.Since(toolStart), isError)
@@ -287,6 +291,86 @@ func (c *ChatResponder) streamOneStep(ctx context.Context, req llm.ChatRequest, 
 		}
 	})
 	return stepText.String(), toolCalls, err
+}
+
+// chatToolProgressNote produces a one-line "I'm doing X" note that the chat
+// stream emits just before blocking on a tool call (FU-ChatProgressNote). The
+// chat path does not flow through sink.go / progress_reporter, so without
+// this the partner sees only a ✍ reaction and silence during the 2–4s
+// web_fetch / web_search window — then text suddenly appears once the
+// second stream produces its first delta. This keeps the text pipe warm
+// with a visible hint so silence never exceeds the tool's own latency.
+//
+// Returns "" when the tool name is unknown so we never ship a blank note;
+// the caller treats empty as "skip".
+func chatToolProgressNote(name, inputJSON string) string {
+	emoji := chatToolNoteEmoji(name)
+	hint := chatToolNoteHint(name, inputJSON)
+	if emoji == "" && hint == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s `%s` %s\n\n", emoji, name, hint)
+}
+
+func chatToolNoteEmoji(name string) string {
+	switch name {
+	case "web_search":
+		return "🔍"
+	case "web_fetch", "read_file":
+		return "📄"
+	case "glob", "grep":
+		return "🔎"
+	default:
+		return "🔧"
+	}
+}
+
+// chatToolNoteHint peeks at the tool arguments to include a short, partner-
+// facing snippet of what's being looked up (URL, query, file path, pattern).
+// Silent fallback to a generic verb when arguments are missing or
+// un-parseable — progress notes are UX polish, not structured data.
+func chatToolNoteHint(name, inputJSON string) string {
+	var args map[string]any
+	if inputJSON != "" {
+		_ = json.Unmarshal([]byte(inputJSON), &args)
+	}
+	pick := func(keys ...string) string {
+		for _, k := range keys {
+			if v, ok := args[k].(string); ok && v != "" {
+				return v
+			}
+		}
+		return ""
+	}
+	switch name {
+	case "web_search":
+		if q := pick("query", "q"); q != "" {
+			return fmt.Sprintf("로 `%s` 검색 중…", chatSnippet(q, 40))
+		}
+		return "로 최신 정보 확인 중…"
+	case "web_fetch":
+		if u := pick("url"); u != "" {
+			return fmt.Sprintf("로 `%s` 읽는 중…", chatSnippet(u, 60))
+		}
+		return "로 URL 읽는 중…"
+	case "read_file":
+		if p := pick("path", "file_path"); p != "" {
+			return fmt.Sprintf("로 `%s` 읽는 중…", chatSnippet(p, 60))
+		}
+		return "로 파일 읽는 중…"
+	case "glob":
+		if p := pick("pattern"); p != "" {
+			return fmt.Sprintf("로 `%s` 탐색 중…", chatSnippet(p, 40))
+		}
+		return "로 파일 탐색 중…"
+	case "grep":
+		if p := pick("pattern"); p != "" {
+			return fmt.Sprintf("로 `%s` 검색 중…", chatSnippet(p, 40))
+		}
+		return "로 내용 검색 중…"
+	default:
+		return "실행 중…"
+	}
 }
 
 func (c *ChatResponder) executeChatTool(ctx context.Context, tc llm.CompletedToolCall) (string, bool) {

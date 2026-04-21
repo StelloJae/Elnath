@@ -405,6 +405,68 @@ func TestChatResponder_OmitsToolGuideWhenToolDefsEmpty(t *testing.T) {
 	}
 }
 
+// --- FU-ChatProgressNote: "doing X" note streamed before each tool call ---
+
+func TestChatToolProgressNote_FormatsByTool(t *testing.T) {
+	cases := []struct {
+		name     string
+		input    string
+		wantSubs []string
+	}{
+		{"web_search", `{"query":"today popular stocks"}`, []string{"🔍", "web_search", "today popular stocks"}},
+		{"web_fetch", `{"url":"https://naver.com"}`, []string{"📄", "web_fetch", "naver.com"}},
+		{"read_file", `{"path":"/etc/hosts"}`, []string{"📄", "read_file", "/etc/hosts"}},
+		{"glob", `{"pattern":"**/*.go"}`, []string{"🔎", "glob", "**/*.go"}},
+		{"grep", `{"pattern":"TODO"}`, []string{"🔎", "grep", "TODO"}},
+		{"web_fetch", `{}`, []string{"📄", "web_fetch", "URL"}},
+		{"web_fetch", `not-json`, []string{"📄", "web_fetch", "URL"}},
+		{"web_search", "", []string{"🔍", "web_search"}},
+		{"unknown_tool", `{}`, []string{"🔧", "unknown_tool"}},
+	}
+	for _, tc := range cases {
+		got := chatToolProgressNote(tc.name, tc.input)
+		if got == "" {
+			t.Errorf("chatToolProgressNote(%q, %q) returned empty", tc.name, tc.input)
+			continue
+		}
+		for _, want := range tc.wantSubs {
+			if !strings.Contains(got, want) {
+				t.Errorf("chatToolProgressNote(%q, %q) = %q; missing %q", tc.name, tc.input, got, want)
+			}
+		}
+	}
+}
+
+func TestChatResponder_EmitsProgressNoteBeforeToolExecution(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{
+		steps: []chatProviderStep{
+			{toolUses: []chatProviderToolUse{
+				{id: "tu_1", name: "web_fetch", input: `{"url":"https://example.com/foo"}`},
+			}},
+			{text: "답변 완료."},
+		},
+	}
+	exec := newChatMockExecutor()
+	exec.setResult("web_fetch", &tools.Result{Output: "body"})
+
+	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		ToolDefs:     []llm.ToolDef{{Name: "web_fetch"}},
+		ToolExecutor: exec,
+	}))
+
+	if err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "fetch it", 1); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	last := bot.lastText()
+	for _, want := range []string{"web_fetch", "example.com/foo", "답변 완료"} {
+		if !strings.Contains(last, want) {
+			t.Errorf("final bot text missing %q — got:\n%s", want, last)
+		}
+	}
+}
+
 // --- FU-TgToolReaction: ✍ reaction during chat tool execution ---
 
 // TestChatResponder_NoWritingReactionWhenNoToolFired asserts that the ✍
