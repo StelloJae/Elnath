@@ -572,6 +572,108 @@ func TestBuildAnthropicRequest(t *testing.T) {
 	}
 }
 
+// TestBuildAnthropicRequest_WebSearchEmitsNativeSchema pins the native-tool
+// emission rule for the Anthropic Messages API. When a ChatRequest tool
+// carries Name=="web_search", the wire payload must include a server tool
+// entry {"type":"web_search_20250305", "name":"web_search", "max_uses":8}
+// instead of the generic {name, description, input_schema} function tool —
+// otherwise Claude runs Elnath's own DDG-scrape fallback instead of the
+// hosted search primitive.
+//
+// Reference: /Users/stello/claude-code-src/src/tools/WebSearchTool/WebSearchTool.ts:76-84
+// (makeToolSchema returning BetaWebSearchTool20250305 with max_uses=8).
+//
+// TODO(Phase B.3): forward ChatRequest allowed_domains/blocked_domains
+// once the wire type carries them; today we emit only the baseline schema.
+func TestBuildAnthropicRequest_WebSearchEmitsNativeSchema(t *testing.T) {
+	req := Request{
+		Model:     "claude-sonnet-4-6",
+		MaxTokens: 1024,
+		Messages:  []Message{NewUserMessage("search something")},
+		Tools: []ToolDef{
+			{
+				Name:        "bash",
+				Description: "run shell",
+				InputSchema: json.RawMessage(`{"type":"object"}`),
+			},
+			{
+				Name:        "web_search",
+				Description: "search the web",
+				InputSchema: json.RawMessage(`{"type":"object"}`),
+			},
+		},
+	}
+
+	raw, err := buildAnthropicRequest(req, "claude-default")
+	if err != nil {
+		t.Fatalf("buildAnthropicRequest() error: %v", err)
+	}
+
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &root); err != nil {
+		t.Fatalf("unmarshal root: %v", err)
+	}
+
+	var tools []map[string]json.RawMessage
+	if err := json.Unmarshal(root["tools"], &tools); err != nil {
+		t.Fatalf("unmarshal tools: %v", err)
+	}
+	if len(tools) != 2 {
+		t.Fatalf("tools len = %d, want 2", len(tools))
+	}
+
+	var bashTool, webSearchTool map[string]json.RawMessage
+	for _, tool := range tools {
+		var name string
+		if err := json.Unmarshal(tool["name"], &name); err != nil {
+			continue
+		}
+		switch name {
+		case "bash":
+			bashTool = tool
+		case "web_search":
+			webSearchTool = tool
+		}
+	}
+
+	if bashTool == nil {
+		t.Fatalf("function-typed bash tool missing; tools = %v", tools)
+	}
+	if _, hasType := bashTool["type"]; hasType {
+		t.Errorf(`bash tool has unexpected "type" field; function tools rely on absence of type`)
+	}
+	if _, hasInputSchema := bashTool["input_schema"]; !hasInputSchema {
+		t.Errorf(`bash tool missing "input_schema" field`)
+	}
+
+	if webSearchTool == nil {
+		t.Fatalf("native web_search tool missing; tools = %v", tools)
+	}
+
+	var webSearchType string
+	if err := json.Unmarshal(webSearchTool["type"], &webSearchType); err != nil {
+		t.Fatalf(`web_search "type" field: %v`, err)
+	}
+	if webSearchType != "web_search_20250305" {
+		t.Errorf(`web_search type = %q, want "web_search_20250305"`, webSearchType)
+	}
+
+	var maxUses int
+	if err := json.Unmarshal(webSearchTool["max_uses"], &maxUses); err != nil {
+		t.Fatalf(`web_search "max_uses" field: %v`, err)
+	}
+	if maxUses != 8 {
+		t.Errorf("max_uses = %d, want 8", maxUses)
+	}
+
+	if _, hasInputSchema := webSearchTool["input_schema"]; hasInputSchema {
+		t.Errorf(`web_search tool should not carry "input_schema"; server tool uses only type + max_uses`)
+	}
+	if _, hasDescription := webSearchTool["description"]; hasDescription {
+		t.Errorf(`web_search tool should not carry "description"; server tool uses only type + max_uses`)
+	}
+}
+
 // TestBuildAnthropicRequestDefaults verifies that an empty model falls back to
 // the defaultModel argument and that max_tokens defaults to 8192.
 func TestBuildAnthropicRequestDefaults(t *testing.T) {

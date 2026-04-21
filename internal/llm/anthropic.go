@@ -161,10 +161,17 @@ type anthropicMessage struct {
 }
 
 type anthropicTool struct {
+	// Type labels server-side native tools (e.g. "web_search_20250305"); left
+	// empty for the default function-style tool path, in which case the
+	// Messages API infers a custom tool from {name, description, input_schema}.
+	Type         string          `json:"type,omitempty"`
 	Name         string          `json:"name"`
 	Description  string          `json:"description,omitempty"`
-	InputSchema  json.RawMessage `json:"input_schema"`
-	CacheControl *cacheControl   `json:"cache_control,omitempty"`
+	InputSchema  json.RawMessage `json:"input_schema,omitempty"`
+	// MaxUses caps server-side tool invocations (currently only native
+	// web_search, which Claude Code hardcodes to 8).
+	MaxUses      *int          `json:"max_uses,omitempty"`
+	CacheControl *cacheControl `json:"cache_control,omitempty"`
 }
 
 type cacheControl struct {
@@ -219,6 +226,27 @@ func buildAnthropicRequest(req Request, defaultModel string) ([]byte, error) {
 	}
 
 	for i, t := range req.Tools {
+		// Native server-side tools: the Messages API executes these itself
+		// and injects results into the model's context, so the tool carries
+		// only type + server-specific config — no description/input_schema.
+		// Reference: /Users/stello/claude-code-src/src/tools/WebSearchTool/
+		// WebSearchTool.ts:76-84 (makeToolSchema, max_uses=8 hardcoded).
+		// Without this branch Claude routes queries through Elnath's own
+		// DDG-scrape fallback instead of the hosted search primitive.
+		if t.Name == "web_search" {
+			maxUses := 8
+			tool := anthropicTool{
+				Type:    "web_search_20250305",
+				Name:    "web_search",
+				MaxUses: &maxUses,
+			}
+			if req.EnableCache && i == len(req.Tools)-1 {
+				tool.CacheControl = &cacheControl{Type: "ephemeral"}
+			}
+			ar.Tools = append(ar.Tools, tool)
+			continue
+		}
+
 		schema := t.InputSchema
 		if len(schema) == 0 {
 			schema = defaultInputSchema
