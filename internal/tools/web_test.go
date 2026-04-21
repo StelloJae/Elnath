@@ -335,6 +335,122 @@ func TestWebFetchTool_EvictsExpiredEntries(t *testing.T) {
 	}
 }
 
+// TestWebFetchTool_FollowsSameHostRedirect is a regression guard for Phase A.4:
+// even after CheckRedirect adds a same-host policy, a 302 between two paths
+// on the same origin must still be followed transparently so the caller sees
+// the final body. Mirrors the happy path of Claude Code's isPermittedRedirect
+// (/Users/stello/claude-code-src/src/tools/WebFetchTool/utils.ts:212-243).
+//
+// Note: before the CheckRedirect hook lands, Go's default http.Client already
+// follows same-host redirects — so on RED this passes by accident. It is kept
+// so the new hook cannot regress by over-rejecting legitimate same-host hops.
+func TestWebFetchTool_FollowsSameHostRedirect(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/start", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/final", http.StatusFound)
+	})
+	mux.HandleFunc("/final", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Write([]byte("final content"))
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	cache := expirable.NewLRU[string, webFetchCacheEntry](10, nil, 15*time.Minute)
+	tool := NewWebFetchTool(withWebFetchCache(cache))
+	res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{"url": ts.URL + "/start"}))
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error result: %s", res.Output)
+	}
+	if !strings.Contains(res.Output, "final content") {
+		t.Errorf("same-host redirect should surface final body:\n%s", res.Output)
+	}
+}
+
+// TestWebFetchTool_BlocksCrossHostRedirect is the true RED for Phase A.4:
+// without a CheckRedirect hook, Go's default http.Client transparently
+// follows a cross-host 302 and returns serverB's body. The expected Phase
+// A.4 behaviour is to abort at the 302, never touch serverB, and surface a
+// structured "cross-host redirect blocked" message so the caller can decide
+// whether to fetch the new host explicitly. The blocked result must also
+// stay out of the LRU: caching a non-terminal response would freeze the
+// LLM into refusing every retry for 15 minutes.
+// Reference: /Users/stello/claude-code-src/src/tools/WebFetchTool/utils.ts:262-329
+// (getWithPermittedRedirects returns a RedirectInfo on cross-host hops).
+func TestWebFetchTool_BlocksCrossHostRedirect(t *testing.T) {
+	var serverBHits int32
+	serverB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&serverBHits, 1)
+		w.Write([]byte("should not be reached"))
+	}))
+	defer serverB.Close()
+
+	serverA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, serverB.URL+"/target", http.StatusFound)
+	}))
+	defer serverA.Close()
+
+	cache := expirable.NewLRU[string, webFetchCacheEntry](10, nil, 15*time.Minute)
+	tool := NewWebFetchTool(withWebFetchCache(cache))
+	res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{"url": serverA.URL}))
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("cross-host redirect should surface as non-error result: %s", res.Output)
+	}
+	if strings.Contains(res.Output, "should not be reached") {
+		t.Errorf("cross-host redirect leaked serverB body into output:\n%s", res.Output)
+	}
+	if !strings.Contains(res.Output, "cross-host redirect blocked") {
+		t.Errorf("output missing redirect-blocked marker:\n%s", res.Output)
+	}
+	if !strings.Contains(res.Output, serverA.URL) {
+		t.Errorf("output missing original URL %q:\n%s", serverA.URL, res.Output)
+	}
+	if !strings.Contains(res.Output, serverB.URL) {
+		t.Errorf("output missing target URL %q:\n%s", serverB.URL, res.Output)
+	}
+	if got := atomic.LoadInt32(&serverBHits); got != 0 {
+		t.Errorf("serverB was hit %d times — cross-host redirect was followed", got)
+	}
+	if _, ok := cache.Get(serverA.URL); ok {
+		t.Error("cross-host redirect outcome must not be cached (non-terminal result)")
+	}
+}
+
+// TestIsSameHostRedirect_AllowsWwwCanonicalization pins the stripWww clause
+// of the same-host check: example.com ↔ www.example.com are treated as the
+// same origin, while scheme, port, credentials, and truly different hosts
+// remain rejections. Mirror of
+// /Users/stello/claude-code-src/src/tools/WebFetchTool/utils.ts:220-239.
+func TestIsSameHostRedirect_AllowsWwwCanonicalization(t *testing.T) {
+	cases := []struct {
+		name   string
+		orig   string
+		target string
+		allow  bool
+	}{
+		{"strip www to bare", "https://www.example.com/a", "https://example.com/b", true},
+		{"add www to bare", "https://example.com/a", "https://www.example.com/b", true},
+		{"same host path change", "https://example.com/a", "https://example.com/b", true},
+		{"cross host", "https://example.com/a", "https://evil.com/b", false},
+		{"protocol downgrade", "https://example.com/a", "http://example.com/b", false},
+		{"port change", "https://example.com/a", "https://example.com:8443/b", false},
+		{"credentials injected", "https://example.com/a", "https://user:pass@example.com/b", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isSameHostRedirect(tc.orig, tc.target); got != tc.allow {
+				t.Errorf("isSameHostRedirect(%q, %q) = %v, want %v", tc.orig, tc.target, got, tc.allow)
+			}
+		})
+	}
+}
+
 func TestWebSearchToolMeta(t *testing.T) {
 	tool := NewWebSearchTool()
 

@@ -19,6 +19,13 @@ import (
 
 const webFetchTimeout = 30 * time.Second
 
+// Phase A.4 redirect control. Mirrors Claude Code's MAX_REDIRECTS
+// (/Users/stello/claude-code-src/src/tools/WebFetchTool/utils.ts:268) and the
+// "Do not automatically follow cross-host redirects" guidance (utils.ts:250-254).
+// The hop cap kills malicious 302 loops; the same-host check in
+// isSameHostRedirect enforces the origin boundary on each hop.
+const webFetchMaxRedirectHops = 10
+
 // Phase A.2 parity with Claude Code's MAX_MARKDOWN_LENGTH
 // (/Users/stello/claude-code-src/src/tools/WebFetchTool/utils.ts:128).
 // Keep the cap byte-based for Go string semantics; rune-boundary safe cut
@@ -86,6 +93,50 @@ func isHTMLContentType(contentType string) bool {
 	return strings.Contains(ct, "text/html") || strings.Contains(ct, "application/xhtml+xml")
 }
 
+// isSameHostRedirect mirrors Claude Code's isPermittedRedirect — a redirect
+// is permitted only when it preserves the origin (scheme + port + hostname
+// up to the optional www prefix) and carries no embedded credentials.
+// Reference: /Users/stello/claude-code-src/src/tools/WebFetchTool/utils.ts:212-243.
+func isSameHostRedirect(origURL, redirectURL string) bool {
+	orig, err := url.Parse(origURL)
+	if err != nil {
+		return false
+	}
+	target, err := url.Parse(redirectURL)
+	if err != nil {
+		return false
+	}
+	if orig.Scheme != target.Scheme {
+		return false
+	}
+	if orig.Port() != target.Port() {
+		return false
+	}
+	if target.User != nil {
+		return false
+	}
+	stripWww := func(h string) string { return strings.TrimPrefix(h, "www.") }
+	return stripWww(orig.Hostname()) == stripWww(target.Hostname())
+}
+
+// sameHostRedirectChecker is the CheckRedirect hook installed on
+// WebFetchTool's http.Client. It enforces the Phase A.4 same-host policy:
+// each hop must pass isSameHostRedirect against its immediate predecessor;
+// at most webFetchMaxRedirectHops hops are chained; cross-host transitions
+// return http.ErrUseLastResponse so Execute can surface the block to the
+// caller without ever issuing a request to the new host.
+func sameHostRedirectChecker(req *http.Request, via []*http.Request) error {
+	if len(via) >= webFetchMaxRedirectHops {
+		return fmt.Errorf("too many redirects (exceeded %d)", webFetchMaxRedirectHops)
+	}
+	source := via[len(via)-1].URL.String()
+	next := req.URL.String()
+	if !isSameHostRedirect(source, next) {
+		return http.ErrUseLastResponse
+	}
+	return nil
+}
+
 // truncateMarkdown enforces the A.2 byte cap but steps back to the nearest
 // UTF-8 rune start before appending the marker. Mid-codepoint cuts would
 // emit U+FFFD on JSON re-encode and break the downstream LLM's reading.
@@ -108,8 +159,11 @@ type WebFetchTool struct {
 
 func NewWebFetchTool(opts ...webFetchOption) *WebFetchTool {
 	t := &WebFetchTool{
-		client: &http.Client{Timeout: webFetchTimeout},
-		cache:  getSharedWebFetchCache(),
+		client: &http.Client{
+			Timeout:       webFetchTimeout,
+			CheckRedirect: sameHostRedirectChecker,
+		},
+		cache: getSharedWebFetchCache(),
 	}
 	for _, opt := range opts {
 		opt(t)
@@ -189,6 +243,24 @@ func (t *WebFetchTool) Execute(ctx context.Context, params json.RawMessage) (*Re
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1 MiB cap
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("web_fetch: read body: %v", err)), nil
+	}
+
+	// Phase A.4: a 3xx here means sameHostRedirectChecker returned
+	// ErrUseLastResponse (cross-host hop). Surface the blocked redirect so
+	// the caller can decide whether to re-fetch the new origin explicitly,
+	// and keep this non-terminal result out of the LRU — a 15-min cache hit
+	// on a "blocked" outcome would lock every retry into the same refusal.
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		loc := resp.Header.Get("Location")
+		if loc != "" {
+			target := loc
+			if u, err := resp.Request.URL.Parse(loc); err == nil {
+				target = u.String()
+			}
+			msg := fmt.Sprintf("[web_fetch: cross-host redirect blocked]\nfrom: %s\nto: %s\nstatus: %d",
+				p.URL, target, resp.StatusCode)
+			return &Result{Output: msg}, nil
+		}
 	}
 
 	if resp.StatusCode >= 400 {
