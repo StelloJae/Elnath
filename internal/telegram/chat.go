@@ -173,21 +173,22 @@ func (c *ChatResponder) Respond(ctx context.Context, principal identity.Principa
 	start := time.Now()
 	var (
 		assistantText string
+		stats         *chatRunStats
 		streamErr     error
 	)
 
 	if c.useToolLoop() {
-		assistantText, streamErr = c.runStreamWithTools(ctx, messages, systemPrompt, sc)
+		assistantText, stats, streamErr = c.runStreamWithTools(ctx, messages, systemPrompt, sc)
 		sc.Finish()
 	} else {
-		assistantText, streamErr = c.runLegacyStream(ctx, messages, systemPrompt, sc)
+		assistantText, stats, streamErr = c.runLegacyStream(ctx, messages, systemPrompt, sc)
 	}
 
 	if streamErr != nil {
 		sc.Finish()
 		sc.Wait()
 		elapsed := time.Since(start)
-		c.recordChatOutcome(principal, userMessage, false, "error", elapsed)
+		c.recordChatOutcome(principal, userMessage, false, "error", elapsed, stats)
 		logger.Warn("chat responder: stream failed", "error", streamErr)
 		c.setCompletionReaction(ctx, replyToMsgID, "😢")
 		if sendErr := c.bot.SendMessage(ctx, c.chatID, fmt.Sprintf("⚠️ Error: %s", streamErr.Error())); sendErr != nil {
@@ -197,7 +198,7 @@ func (c *ChatResponder) Respond(ctx context.Context, principal identity.Principa
 	}
 
 	sc.Wait()
-	c.recordChatOutcome(principal, userMessage, true, "stop", time.Since(start))
+	c.recordChatOutcome(principal, userMessage, true, "stop", time.Since(start), stats)
 	c.setCompletionReaction(ctx, replyToMsgID, "👍")
 
 	if assistantText != "" {
@@ -214,7 +215,7 @@ func (c *ChatResponder) useToolLoop() bool {
 	return c.pipeline != nil && c.pipeline.ToolExecutor != nil && len(c.pipeline.ToolDefs) > 0
 }
 
-func (c *ChatResponder) runLegacyStream(ctx context.Context, messages []llm.Message, systemPrompt string, sc *StreamConsumer) (string, error) {
+func (c *ChatResponder) runLegacyStream(ctx context.Context, messages []llm.Message, systemPrompt string, sc *StreamConsumer) (string, *chatRunStats, error) {
 	req := llm.ChatRequest{
 		Messages:    messages,
 		MaxTokens:   1024,
@@ -225,6 +226,9 @@ func (c *ChatResponder) runLegacyStream(ctx context.Context, messages []llm.Mess
 		req.Tools = c.pipeline.ToolDefs
 	}
 
+	stats := newChatRunStats()
+	stats.iterations = 1
+
 	var assistantText strings.Builder
 	err := c.provider.Stream(ctx, req, func(ev llm.StreamEvent) {
 		switch ev.Type {
@@ -232,10 +236,13 @@ func (c *ChatResponder) runLegacyStream(ctx context.Context, messages []llm.Mess
 			sc.Send(ev.Content)
 			assistantText.WriteString(ev.Content)
 		case llm.EventDone:
+			if ev.Usage != nil {
+				stats.recordUsage(*ev.Usage)
+			}
 			sc.Finish()
 		}
 	})
-	return assistantText.String(), err
+	return assistantText.String(), stats, err
 }
 
 // setCompletionReaction updates the reaction on the user's original message to
@@ -294,9 +301,12 @@ func (c *ChatResponder) persistChatTurn(ctx context.Context, principal identity.
 
 // recordChatOutcome synthesises a learning outcome for the chat path. It
 // mirrors the workflow-path outcome schema so Scorecard's outcome_recording
-// axis sees chat events. ProjectID "" is treated as unknown and skipped, the
-// same policy executionRuntime uses.
-func (c *ChatResponder) recordChatOutcome(principal identity.Principal, userMessage string, success bool, finishReason string, elapsed time.Duration) {
+// axis sees chat events, and (post FU-ChatObs) carries iteration/tool/token
+// counters so dogfood probes can tell at a glance whether the chat tool
+// loop fired or the model answered from its knowledge cutoff. ProjectID
+// "" is treated as unknown and skipped, the same policy executionRuntime
+// uses.
+func (c *ChatResponder) recordChatOutcome(principal identity.Principal, userMessage string, success bool, finishReason string, elapsed time.Duration, stats *chatRunStats) {
 	if c.outcomeStore == nil || principal.ProjectID == "" {
 		return
 	}
@@ -309,6 +319,13 @@ func (c *ChatResponder) recordChatOutcome(principal identity.Principal, userMess
 		Duration:       elapsed.Seconds(),
 		InputSnippet:   chatSnippet(userMessage, 100),
 		PreferenceUsed: false,
+		MaxIterations:  maxChatToolIterations,
+	}
+	if stats != nil {
+		record.Iterations = stats.iterations
+		record.InputTokens = stats.inputTokens
+		record.OutputTokens = stats.outputTokens
+		record.ToolStats = stats.toolStatsList()
 	}
 	if err := c.outcomeStore.Append(record); err != nil {
 		c.logger.Warn("chat responder: outcome append failed", "error", err)

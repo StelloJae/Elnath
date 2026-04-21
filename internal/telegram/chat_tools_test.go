@@ -368,6 +368,115 @@ func TestChatResponder_OmitsToolGuideWhenToolDefsEmpty(t *testing.T) {
 	}
 }
 
+// --- FU-ChatObs: chat outcome carries iterations + tool stats ---
+
+func TestChatResponder_OutcomeRecordsToolLoopStats(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{
+		steps: []chatProviderStep{
+			{toolUses: []chatProviderToolUse{
+				{id: "tu_1", name: "web_fetch", input: `{"url":"https://example.com"}`},
+			}},
+			{text: "All done."},
+		},
+	}
+	exec := newChatMockExecutor()
+	exec.setResult("web_fetch", &tools.Result{Output: "fetched"})
+	store := &mockOutcomeAppender{}
+
+	cr := NewChatResponder(provider, bot, "chat-42", nil,
+		WithOutcomeStore(store),
+		WithChatPipeline(ChatPipelineDeps{
+			ToolDefs:     []llm.ToolDef{{Name: "web_fetch"}},
+			ToolExecutor: exec,
+		}),
+	)
+
+	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "fetch", 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	records := store.snapshot()
+	if len(records) != 1 {
+		t.Fatalf("outcome records = %d, want 1", len(records))
+	}
+	r := records[0]
+	if r.Iterations != 2 {
+		t.Errorf("Iterations = %d, want 2 (1 tool step + 1 final text step)", r.Iterations)
+	}
+	if r.MaxIterations != maxChatToolIterations {
+		t.Errorf("MaxIterations = %d, want %d", r.MaxIterations, maxChatToolIterations)
+	}
+	if len(r.ToolStats) != 1 {
+		t.Fatalf("ToolStats len = %d, want 1", len(r.ToolStats))
+	}
+	if r.ToolStats[0].Name != "web_fetch" || r.ToolStats[0].Calls != 1 {
+		t.Errorf("ToolStats[0] = %+v, want {web_fetch, calls:1}", r.ToolStats[0])
+	}
+	if r.ToolStats[0].Errors != 0 {
+		t.Errorf("ToolStats[0].Errors = %d, want 0", r.ToolStats[0].Errors)
+	}
+}
+
+func TestChatResponder_OutcomeRecordsToolErrorCount(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{
+		steps: []chatProviderStep{
+			{toolUses: []chatProviderToolUse{
+				{id: "tu_1", name: "web_fetch", input: `{"url":"https://x"}`},
+			}},
+			{text: "sorry"},
+		},
+	}
+	exec := newChatMockExecutor()
+	exec.setResult("web_fetch", &tools.Result{Output: "boom", IsError: true})
+	store := &mockOutcomeAppender{}
+
+	cr := NewChatResponder(provider, bot, "chat-42", nil,
+		WithOutcomeStore(store),
+		WithChatPipeline(ChatPipelineDeps{
+			ToolDefs:     []llm.ToolDef{{Name: "web_fetch"}},
+			ToolExecutor: exec,
+		}),
+	)
+
+	if err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "x", 1); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	records := store.snapshot()
+	if len(records) != 1 || len(records[0].ToolStats) != 1 {
+		t.Fatalf("expected 1 outcome with 1 ToolStats entry, got %+v", records)
+	}
+	if records[0].ToolStats[0].Errors != 1 {
+		t.Errorf("ToolStats[0].Errors = %d, want 1", records[0].ToolStats[0].Errors)
+	}
+}
+
+func TestChatResponder_OutcomeRecordsLegacyIterationOne(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{response: "hi"}
+	store := &mockOutcomeAppender{}
+
+	cr := NewChatResponder(provider, bot, "chat-42", nil, WithOutcomeStore(store))
+
+	if err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 1); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	records := store.snapshot()
+	if len(records) != 1 {
+		t.Fatalf("outcomes = %d, want 1", len(records))
+	}
+	if records[0].Iterations != 1 {
+		t.Errorf("legacy Iterations = %d, want 1", records[0].Iterations)
+	}
+	if records[0].ToolStats != nil {
+		t.Errorf("legacy ToolStats = %+v, want nil", records[0].ToolStats)
+	}
+}
+
 func TestChatResponder_LegacyPathUnchangedWhenExecutorMissing(t *testing.T) {
 	bot := newChatMockBot()
 	provider := &chatMockProvider{response: "plain reply"}

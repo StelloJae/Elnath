@@ -4,11 +4,71 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
 )
+
+// chatRunStats accumulates per-turn diagnostic counters (iterations, tool
+// calls, token usage) so recordChatOutcome can populate the same fields the
+// workflow path already records. Without this, chat outcomes show
+// iterations=0 / tool_stats=null even when the tool loop actually fired —
+// which is exactly the observability gap that made the FU-CR2b polish
+// smoke ambiguous.
+type chatRunStats struct {
+	iterations   int
+	inputTokens  int
+	outputTokens int
+	toolCalls    map[string]*chatToolStatAcc
+}
+
+type chatToolStatAcc struct {
+	calls  int
+	errors int
+	total  time.Duration
+}
+
+func newChatRunStats() *chatRunStats {
+	return &chatRunStats{toolCalls: map[string]*chatToolStatAcc{}}
+}
+
+func (s *chatRunStats) recordTool(name string, dur time.Duration, hadErr bool) {
+	acc := s.toolCalls[name]
+	if acc == nil {
+		acc = &chatToolStatAcc{}
+		s.toolCalls[name] = acc
+	}
+	acc.calls++
+	if hadErr {
+		acc.errors++
+	}
+	acc.total += dur
+}
+
+func (s *chatRunStats) recordUsage(u llm.UsageStats) {
+	s.inputTokens += u.InputTokens
+	s.outputTokens += u.OutputTokens
+}
+
+func (s *chatRunStats) toolStatsList() []learning.AgentToolStat {
+	if len(s.toolCalls) == 0 {
+		return nil
+	}
+	out := make([]learning.AgentToolStat, 0, len(s.toolCalls))
+	for name, acc := range s.toolCalls {
+		out = append(out, learning.AgentToolStat{
+			Name:      name,
+			Calls:     acc.calls,
+			Errors:    acc.errors,
+			TotalTime: acc.total,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
 
 const maxChatToolIterations = 5
 
@@ -98,13 +158,15 @@ func (c *ChatResponder) runStreamWithTools(
 	initialMessages []llm.Message,
 	systemPrompt string,
 	sc *StreamConsumer,
-) (string, error) {
+) (string, *chatRunStats, error) {
 	messages := make([]llm.Message, 0, len(initialMessages)+2*maxChatToolIterations)
 	messages = append(messages, initialMessages...)
+	stats := newChatRunStats()
 
 	var fullText strings.Builder
 
 	for iter := 0; iter < maxChatToolIterations; iter++ {
+		stats.iterations++
 		req := llm.ChatRequest{
 			Messages:    messages,
 			MaxTokens:   1024,
@@ -113,14 +175,14 @@ func (c *ChatResponder) runStreamWithTools(
 			Tools:       c.pipeline.ToolDefs,
 		}
 
-		stepText, toolCalls, err := c.streamOneStep(ctx, req, sc)
+		stepText, toolCalls, err := c.streamOneStep(ctx, req, sc, stats)
 		if err != nil {
-			return fullText.String(), err
+			return fullText.String(), stats, err
 		}
 		fullText.WriteString(stepText)
 
 		if len(toolCalls) == 0 {
-			return fullText.String(), nil
+			return fullText.String(), stats, nil
 		}
 
 		var textParts []string
@@ -130,15 +192,17 @@ func (c *ChatResponder) runStreamWithTools(
 		messages = append(messages, llm.BuildAssistantMessage(textParts, toolCalls))
 
 		for _, tc := range toolCalls {
+			toolStart := time.Now()
 			content, isError := c.executeChatTool(ctx, tc)
+			stats.recordTool(tc.Name, time.Since(toolStart), isError)
 			messages = llm.AppendToolResult(messages, tc.ID, content, isError)
 		}
 	}
 
-	return fullText.String(), fmt.Errorf("chat tool loop exceeded max iterations (%d)", maxChatToolIterations)
+	return fullText.String(), stats, fmt.Errorf("chat tool loop exceeded max iterations (%d)", maxChatToolIterations)
 }
 
-func (c *ChatResponder) streamOneStep(ctx context.Context, req llm.ChatRequest, sc *StreamConsumer) (string, []llm.CompletedToolCall, error) {
+func (c *ChatResponder) streamOneStep(ctx context.Context, req llm.ChatRequest, sc *StreamConsumer, stats *chatRunStats) (string, []llm.CompletedToolCall, error) {
 	var (
 		stepText     strings.Builder
 		toolCalls    []llm.CompletedToolCall
@@ -174,6 +238,10 @@ func (c *ChatResponder) streamOneStep(ctx context.Context, req llm.ChatRequest, 
 					toolCalls = append(toolCalls, *tc)
 					delete(pendingTools, ev.ToolCall.ID)
 				}
+			}
+		case llm.EventDone:
+			if ev.Usage != nil && stats != nil {
+				stats.recordUsage(*ev.Usage)
 			}
 		}
 	})
