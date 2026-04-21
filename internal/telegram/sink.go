@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stello/elnath/internal/daemon"
 )
@@ -296,7 +297,7 @@ func condenseSummary(raw string) string {
 		}
 		escaped := escapeHTML(line)
 		if totalLen+len(escaped) > maxSummaryLen {
-			result = append(result, escaped[:min(len(escaped), maxSummaryLen-totalLen)]+"…")
+			result = append(result, truncateAtRuneBoundary(escaped, maxSummaryLen-totalLen)+"…")
 			break
 		}
 		result = append(result, escaped)
@@ -304,7 +305,7 @@ func condenseSummary(raw string) string {
 	}
 
 	if len(result) == 0 {
-		return escapeHTML(raw[:min(len(raw), maxSummaryLen)])
+		return escapeHTML(truncateAtRuneBoundary(raw, maxSummaryLen))
 	}
 	return strings.Join(result, "\n")
 }
@@ -314,6 +315,23 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// truncateAtRuneBoundary returns s truncated to at most byteCap bytes, stepping
+// back if byteCap lands inside a multi-byte UTF-8 sequence. Without this,
+// Korean and other multi-byte text renders as U+FFFD on Telegram when a cap
+// falls mid-rune (한 is 3 bytes; 3500 % 3 ≠ 0).
+func truncateAtRuneBoundary(s string, byteCap int) string {
+	if byteCap <= 0 {
+		return ""
+	}
+	if len(s) <= byteCap {
+		return s
+	}
+	for byteCap > 0 && !utf8.RuneStart(s[byteCap]) {
+		byteCap--
+	}
+	return s[:byteCap]
 }
 
 var htmlReplacer = strings.NewReplacer(

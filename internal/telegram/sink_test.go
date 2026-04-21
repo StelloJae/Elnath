@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stello/elnath/internal/daemon"
 )
@@ -551,6 +552,44 @@ func TestFormatElapsed(t *testing.T) {
 			t.Errorf("formatElapsed(%v, %v) = %q, want %q", tt.start, tt.end, got, tt.want)
 		}
 	}
+}
+
+// "한" is 3 bytes in UTF-8; 1200 copies = 3600 bytes, exceeding maxSummaryLen
+// (3500). A byte-level slice at 3500 lands mid-rune and corrupts the output,
+// which Telegram renders as U+FFFD replacement chars on the partner's screen.
+func TestCondenseSummaryPreservesUTF8AtCap(t *testing.T) {
+	raw := strings.Repeat("한", 1200)
+	got := condenseSummary(raw)
+	if !utf8.ValidString(got) {
+		t.Fatalf("condenseSummary produced invalid UTF-8 (len=%d); mid-rune byte cut", len(got))
+	}
+	if strings.ContainsRune(got, utf8.RuneError) {
+		t.Fatalf("condenseSummary output contains U+FFFD replacement char; suffix=%q", lastBytes(got, 12))
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Fatalf("expected trailing ellipsis marker, got suffix=%q", lastBytes(got, 12))
+	}
+}
+
+// Fallback path at sink.go:307 activates when every line is filtered (e.g.
+// starts with "##" or "---"), leaving result empty. That branch independently
+// byte-cuts the raw input and must also preserve rune boundaries.
+func TestCondenseSummaryFallbackPreservesUTF8(t *testing.T) {
+	raw := "## " + strings.Repeat("한", 1200)
+	got := condenseSummary(raw)
+	if !utf8.ValidString(got) {
+		t.Fatalf("condenseSummary fallback produced invalid UTF-8 (len=%d); mid-rune byte cut", len(got))
+	}
+	if strings.ContainsRune(got, utf8.RuneError) {
+		t.Fatalf("condenseSummary fallback output contains U+FFFD; suffix=%q", lastBytes(got, 12))
+	}
+}
+
+func lastBytes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[len(s)-n:]
 }
 
 func contains(s, substr string) bool {
