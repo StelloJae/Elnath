@@ -17,20 +17,13 @@ import (
 	"github.com/stello/elnath/internal/wiki"
 )
 
-// chatSystemPrompt is the fallback system prompt used when the chat path has
-// no prompt.Builder wired (or the builder returned an error / empty string).
-// Audit 2026-04-21 cell F1: the old fallback was "Be concise, helpful, and
-// conversational" — a two-line instruction that trimmed answers short and
-// dropped Elnath's identity entirely. Chat output_tokens averaged 50 vs
-// workflow-path 380 (7.6x gap), and partner preference is the opposite
-// (detailed answers over terse ones). This fallback now anchors identity
-// (Elnath), establishes the language default (Korean), commits to
-// detailed/specific/substantiated answers, and reminds the model to call
-// tools instead of guessing when the chat tool loop is wired. Still a
-// fallback — when prompt.Builder is wired, it supersedes this string.
-const chatSystemPrompt = "너는 Elnath, 파트너의 개인 AI 어시스턴트야. 사용자 언어에 맞춰 답하되 한국어가 기본이야.\n" +
-	"답변은 직접적·구체적·충분히 상세하게 — 배경·이유·대안까지 담아 설명해. 파트너는 짧고 밋밋한 답보다 근거 있는 상세한 답을 선호해.\n" +
-	"실시간 정보·파일·외부 사실이 필요하면 추측하지 말고 허용된 도구를 호출해. 도구 결과는 한국어로 자연스럽게 정리해 전달해."
+// chatPromptBuildFailureMessage is the partner-facing reassurance shown
+// when prompt.Builder fails (pipeline not wired, build error, or empty
+// result). Phase L3.2 made the Builder path mandatory — the old
+// hardcoded chatSystemPrompt fallback that used to paper over these
+// failures is gone, so this message is the single surface the partner
+// sees when the chat prompt cannot be constructed.
+const chatPromptBuildFailureMessage = "대화 준비 중 문제가 생겨서 답을 드리지 못했어요. 잠시 후 다시 시도해 주세요."
 
 // defaultChatHistoryTurns caps how many past turns are hydrated from the
 // bound session into the chat prompt. Kept small so the chat path stays
@@ -129,7 +122,6 @@ type ChatResponder struct {
 	bot          BotClient
 	chatID       string
 	logger       *slog.Logger
-	system       string
 	outcomeStore OutcomeAppender
 	pipeline     *ChatPipelineDeps
 	nowFunc      func() time.Time
@@ -173,7 +165,6 @@ func NewChatResponder(provider llm.Provider, bot BotClient, chatID string, logge
 		bot:      bot,
 		chatID:   chatID,
 		logger:   logger,
-		system:   chatSystemPrompt,
 		nowFunc:  time.Now,
 	}
 	for _, opt := range opts {
@@ -199,7 +190,18 @@ func (c *ChatResponder) Respond(ctx context.Context, principal identity.Principa
 	// setReaction is idempotent; the terminal 👍/😢 overwrites naturally.
 	c.setReaction(ctx, replyToMsgID, "✍")
 
-	systemPrompt, history, sessionID := c.buildPrompt(ctx, principal, userMessage, logger)
+	systemPrompt, history, sessionID, promptErr := c.buildPrompt(ctx, principal, userMessage, logger)
+	if promptErr != nil {
+		sc.Finish()
+		sc.Wait()
+		c.recordChatOutcome(principal, userMessage, false, "error", 0, nil, sessionID)
+		logger.Warn("chat responder: prompt build failed", "error", promptErr)
+		c.setReaction(ctx, replyToMsgID, "😢")
+		if sendErr := c.bot.SendMessage(ctx, c.chatID, "⚠️ "+chatPromptBuildFailureMessage); sendErr != nil {
+			return fmt.Errorf("chat responder: send prompt error message: %w", sendErr)
+		}
+		return fmt.Errorf("chat responder: prompt build: %w", promptErr)
+	}
 	systemPrompt = c.prependChatHeaders(systemPrompt)
 	messages := make([]llm.Message, 0, len(history)+1)
 	messages = append(messages, history...)
@@ -422,15 +424,17 @@ func (c *ChatResponder) recordChatOutcome(principal identity.Principal, userMess
 	}
 }
 
-// buildPrompt assembles the system prompt and hydrates session history when
-// a ChatPipelineDeps is wired. Without the pipeline, returns the legacy
-// hardcoded chatSystemPrompt and no history (caller adds the user message).
-// The returned sessionID (may be empty) is threaded back to the caller so
-// recordChatOutcome can cross-reference the learning record with the
-// session JSONL (FU-ChatOutcomeSessionID / P3).
-func (c *ChatResponder) buildPrompt(ctx context.Context, principal identity.Principal, userMessage string, logger *slog.Logger) (string, []llm.Message, string) {
+// buildPrompt assembles the system prompt and hydrates session history via
+// the wired prompt.Builder. Phase L3.2 removed the legacy hardcoded
+// fallback — any one of (pipeline not wired, Builder error, empty result)
+// now returns an error so Respond can surface a friendly Korean message
+// to the partner instead of silently drifting into an identity-free
+// fallback. The returned sessionID (may be empty) is threaded back to
+// the caller so recordChatOutcome can cross-reference the learning
+// record with the session JSONL (FU-ChatOutcomeSessionID / P3).
+func (c *ChatResponder) buildPrompt(ctx context.Context, principal identity.Principal, userMessage string, logger *slog.Logger) (string, []llm.Message, string, error) {
 	if c.pipeline == nil || c.pipeline.Builder == nil {
-		return c.system, nil, ""
+		return "", nil, "", errors.New("chat: prompt pipeline not wired")
 	}
 
 	sessionID := ""
@@ -469,13 +473,14 @@ func (c *ChatResponder) buildPrompt(ctx context.Context, principal identity.Prin
 
 	built, err := c.pipeline.Builder.Build(ctx, state)
 	if err != nil {
-		logger.Warn("chat responder: prompt build failed, using legacy fallback", "error", err)
-		return c.system, history, sessionID
+		logger.Error("chat responder: prompt build failed", "error", err, "session_id", sessionID)
+		return "", history, sessionID, fmt.Errorf("chat: prompt build: %w", err)
 	}
 	if strings.TrimSpace(built) == "" {
-		return c.system, history, sessionID
+		logger.Error("chat responder: prompt builder returned empty", "session_id", sessionID)
+		return "", history, sessionID, errors.New("chat: prompt build empty")
 	}
-	return built, history, sessionID
+	return built, history, sessionID, nil
 }
 
 func trimChatHistory(msgs []llm.Message, maxTurns int) []llm.Message {

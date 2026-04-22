@@ -225,7 +225,9 @@ func (p *chatMockProvider) Models() []llm.ModelInfo { return nil }
 func TestChatResponderStreamsResponse(t *testing.T) {
 	bot := newChatMockBot()
 	provider := &chatMockProvider{response: "Hello!"}
-	cr := NewChatResponder(provider, bot, "chat-42", nil)
+	cr := NewChatResponder(provider, bot, "chat-42", nil,
+		WithChatPipeline(ChatPipelineDeps{Builder: &stubChatBuilder{result: "SYS"}}),
+	)
 
 	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "Hi there", 1)
 	if err != nil {
@@ -247,7 +249,9 @@ func TestChatResponderStreamsResponse(t *testing.T) {
 func TestChatResponderHandlesStreamError(t *testing.T) {
 	bot := newChatMockBot()
 	provider := &chatMockProvider{streamErr: fmt.Errorf("provider unavailable")}
-	cr := NewChatResponder(provider, bot, "chat-42", nil)
+	cr := NewChatResponder(provider, bot, "chat-42", nil,
+		WithChatPipeline(ChatPipelineDeps{Builder: &stubChatBuilder{result: "SYS"}}),
+	)
 
 	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "Hi", 1)
 	if err == nil {
@@ -276,7 +280,9 @@ func TestChatResponderHandlesStreamError(t *testing.T) {
 func TestChatResponderEmptyResponse(t *testing.T) {
 	bot := newChatMockBot()
 	provider := &chatMockProvider{response: ""}
-	cr := NewChatResponder(provider, bot, "chat-42", nil)
+	cr := NewChatResponder(provider, bot, "chat-42", nil,
+		WithChatPipeline(ChatPipelineDeps{Builder: &stubChatBuilder{result: "SYS"}}),
+	)
 
 	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "Hi", 1)
 	if err != nil {
@@ -288,7 +294,10 @@ func TestChatResponderRecordsSuccessOutcome(t *testing.T) {
 	bot := newChatMockBot()
 	provider := &chatMockProvider{response: "Hi back"}
 	store := &mockOutcomeAppender{}
-	cr := NewChatResponder(provider, bot, "chat-42", nil, WithOutcomeStore(store))
+	cr := NewChatResponder(provider, bot, "chat-42", nil,
+		WithOutcomeStore(store),
+		WithChatPipeline(ChatPipelineDeps{Builder: &stubChatBuilder{result: "SYS"}}),
+	)
 
 	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj-ok", Surface: "telegram"}, "hello", 1)
 	if err != nil {
@@ -327,7 +336,10 @@ func TestChatResponderRecordsErrorOutcome(t *testing.T) {
 	bot := newChatMockBot()
 	provider := &chatMockProvider{streamErr: fmt.Errorf("provider unavailable")}
 	store := &mockOutcomeAppender{}
-	cr := NewChatResponder(provider, bot, "chat-42", nil, WithOutcomeStore(store))
+	cr := NewChatResponder(provider, bot, "chat-42", nil,
+		WithOutcomeStore(store),
+		WithChatPipeline(ChatPipelineDeps{Builder: &stubChatBuilder{result: "SYS"}}),
+	)
 
 	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj-err", Surface: "telegram"}, "hi", 1)
 	if err == nil {
@@ -360,7 +372,10 @@ func TestChatResponderSkipsOutcomeWhenProjectIDEmpty(t *testing.T) {
 	bot := newChatMockBot()
 	provider := &chatMockProvider{response: "hello"}
 	store := &mockOutcomeAppender{}
-	cr := NewChatResponder(provider, bot, "chat-42", nil, WithOutcomeStore(store))
+	cr := NewChatResponder(provider, bot, "chat-42", nil,
+		WithOutcomeStore(store),
+		WithChatPipeline(ChatPipelineDeps{Builder: &stubChatBuilder{result: "SYS"}}),
+	)
 
 	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "", Surface: "telegram"}, "hi", 1)
 	if err != nil {
@@ -468,9 +483,14 @@ func TestChatResponder_UsesPromptPipelineWhenWired(t *testing.T) {
 	}
 }
 
-func TestChatResponder_FallsBackToLegacySystemWhenBuildFails(t *testing.T) {
+// Phase L3.2 flip: the old "falls back to legacy system prompt" contract
+// is replaced by "surface an error loudly". The stream must NOT happen
+// when the builder fails — the partner sees the friendly reassurance,
+// and Respond returns an error instead of papering over the failure
+// with the deleted chatSystemPrompt const.
+func TestChatResponder_RespondRefusesToStreamWhenBuildFails(t *testing.T) {
 	bot := newChatMockBot()
-	provider := &chatMockProvider{response: "ok"}
+	provider := &chatMockProvider{response: "SHOULD-NOT-STREAM"}
 	builder := &stubChatBuilder{err: fmt.Errorf("build failed intentionally")}
 
 	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
@@ -478,13 +498,14 @@ func TestChatResponder_FallsBackToLegacySystemWhenBuildFails(t *testing.T) {
 	}))
 
 	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 1)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err == nil {
+		t.Fatal("expected Respond to return error when Builder.Build fails")
 	}
-
-	req := provider.capturedRequest(t)
-	if !strings.Contains(req.System, "Elnath") {
-		t.Errorf("expected legacy fallback system prompt, got %q", req.System)
+	if !strings.Contains(err.Error(), "build failed intentionally") {
+		t.Errorf("expected wrapped builder error, got %v", err)
+	}
+	if reqs := provider.capturedRequests(); len(reqs) != 0 {
+		t.Errorf("provider Stream calls = %d, want 0 (prompt build failed)", len(reqs))
 	}
 }
 
@@ -782,25 +803,10 @@ func TestChatResponder_PersistsMessagesWithSourceChat(t *testing.T) {
 	}
 }
 
-func TestChatResponder_LegacyPathPreservedWhenNoPipeline(t *testing.T) {
-	bot := newChatMockBot()
-	provider := &chatMockProvider{response: "ok"}
-
-	cr := NewChatResponder(provider, bot, "chat-42", nil)
-
-	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 1)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	req := provider.capturedRequest(t)
-	if !strings.Contains(req.System, "Elnath") {
-		t.Errorf("expected legacy system prompt, got %q", req.System)
-	}
-	if len(req.Messages) != 1 {
-		t.Errorf("Messages len: got %d, want 1 (legacy single-message path)", len(req.Messages))
-	}
-}
+// (TestChatResponder_LegacyPathPreservedWhenNoPipeline removed in Phase
+//  L3.2 — the no-pipeline legacy path is gone. buildPrompt now surfaces
+//  an error in that case; partner-facing behavior is pinned by
+//  TestChatResponder_RespondSendsFriendlyErrorOnPromptFailure.)
 
 // --- FU-CR2a: ChatPipelineDeps.ToolDefs plumbing ---
 
@@ -813,6 +819,7 @@ func TestChatResponder_ForwardsToolDefsToProvider(t *testing.T) {
 	}
 
 	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		Builder:  &stubChatBuilder{result: "SYS"},
 		ToolDefs: wantTools,
 	}))
 
@@ -832,22 +839,10 @@ func TestChatResponder_ForwardsToolDefsToProvider(t *testing.T) {
 	}
 }
 
-func TestChatResponder_NoToolsWhenPipelineAbsent(t *testing.T) {
-	bot := newChatMockBot()
-	provider := &chatMockProvider{response: "ok"}
-
-	cr := NewChatResponder(provider, bot, "chat-42", nil)
-
-	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 1)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	req := provider.capturedRequest(t)
-	if len(req.Tools) != 0 {
-		t.Errorf("Tools: got %d entries, want 0 (legacy path, no pipeline)", len(req.Tools))
-	}
-}
+// (TestChatResponder_NoToolsWhenPipelineAbsent removed in Phase L3.2 —
+//  redundant now with TestChatResponder_NoToolsWhenToolDefsEmpty, which
+//  exercises the same "no tools forwarded" invariant through the
+//  mandatory pipeline path.)
 
 func TestChatResponder_NoToolsWhenToolDefsEmpty(t *testing.T) {
 	bot := newChatMockBot()
@@ -873,7 +868,9 @@ func TestChatResponder_NoToolsWhenToolDefsEmpty(t *testing.T) {
 func TestChatResponder_SetsSuccessReactionOnCompletion(t *testing.T) {
 	bot := newChatMockBot()
 	provider := &chatMockProvider{response: "Hello!"}
-	cr := NewChatResponder(provider, bot, "chat-42", nil)
+	cr := NewChatResponder(provider, bot, "chat-42", nil,
+		WithChatPipeline(ChatPipelineDeps{Builder: &stubChatBuilder{result: "SYS"}}),
+	)
 
 	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 77)
 	if err != nil {
@@ -905,7 +902,9 @@ func TestChatResponder_SetsSuccessReactionOnCompletion(t *testing.T) {
 func TestChatResponder_SetsFailureReactionOnStreamError(t *testing.T) {
 	bot := newChatMockBot()
 	provider := &chatMockProvider{streamErr: fmt.Errorf("provider unavailable")}
-	cr := NewChatResponder(provider, bot, "chat-42", nil)
+	cr := NewChatResponder(provider, bot, "chat-42", nil,
+		WithChatPipeline(ChatPipelineDeps{Builder: &stubChatBuilder{result: "SYS"}}),
+	)
 
 	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 99)
 	if err == nil {
@@ -931,7 +930,9 @@ func TestChatResponder_SetsFailureReactionOnStreamError(t *testing.T) {
 func TestChatResponder_SkipsReactionWhenReplyToMsgIDZero(t *testing.T) {
 	bot := newChatMockBot()
 	provider := &chatMockProvider{response: "ok"}
-	cr := NewChatResponder(provider, bot, "chat-42", nil)
+	cr := NewChatResponder(provider, bot, "chat-42", nil,
+		WithChatPipeline(ChatPipelineDeps{Builder: &stubChatBuilder{result: "SYS"}}),
+	)
 
 	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 0)
 	if err != nil {
@@ -944,38 +945,13 @@ func TestChatResponder_SkipsReactionWhenReplyToMsgIDZero(t *testing.T) {
 	}
 }
 
-// --- FU-ChatFallbackVoice (P5): fallback system prompt voice + no "concise" ---
-
-func TestChatSystemPromptFallback_HasPartnerVoiceAndNoConciseDirective(t *testing.T) {
-	// Guards the fallback system prompt used when prompt.Builder is not
-	// wired. Audit 2026-04-21 cell F1: old fallback forced short answers
-	// and dropped identity. The partner prefers detailed, substantiated
-	// replies in Korean, and chat tool loop is meaningful only if the
-	// fallback also reminds the model to actually call tools.
-	wantPresent := []string{
-		"Elnath",      // identity anchored even without prompt.Builder
-		"한국어",         // Korean default
-		"상세",          // substantive / detailed bias
-		"도구",          // tool-use cue preserved even without strong-guide header
-	}
-	for _, want := range wantPresent {
-		if !strings.Contains(chatSystemPrompt, want) {
-			t.Errorf("chatSystemPrompt missing %q; got:\n%s", want, chatSystemPrompt)
-		}
-	}
-
-	wantAbsent := []string{
-		"concise", // the 2-line fallback directive that caused output_tokens 7.6x gap
-		"Concise",
-	}
-	for _, avoid := range wantAbsent {
-		if strings.Contains(chatSystemPrompt, avoid) {
-			t.Errorf("chatSystemPrompt still contains %q (post-FU-ChatFallbackVoice should have removed terse directive)", avoid)
-		}
-	}
-}
-
 // --- FU-ChatFriendlyError (P4): raw provider JSON not leaked to partner ---
+// (TestChatSystemPromptFallback_* removed in Phase L3.2 — the hardcoded
+//  chatSystemPrompt constant was deleted along with the fallback path.
+//  Identity / Korean / detailed-answer / tool guidance now live in
+//  prompt.ChatSystemPromptNode + prompt.ChatToolGuideNode and are pinned
+//  by their own tests under internal/prompt/.)
+
 
 func TestFriendlyChatError(t *testing.T) {
 	cases := []struct {
@@ -1023,7 +999,9 @@ func TestChatResponder_SendsFriendlyErrorMessageNotRawProviderJSON(t *testing.T)
   }
 }`
 	provider := &chatMockProvider{streamErr: fmt.Errorf("%s", rawCodex)}
-	cr := NewChatResponder(provider, bot, "chat-42", nil)
+	cr := NewChatResponder(provider, bot, "chat-42", nil,
+		WithChatPipeline(ChatPipelineDeps{Builder: &stubChatBuilder{result: "SYS"}}),
+	)
 
 	if err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 99); err == nil {
 		t.Fatal("expected error from Respond")
@@ -1076,7 +1054,10 @@ func TestChatResponder_OutcomeSessionIDEmptyWhenUnbound(t *testing.T) {
 	provider := &chatMockProvider{response: "ok"}
 	store := &mockOutcomeAppender{}
 
-	cr := NewChatResponder(provider, bot, "chat-42", nil, WithOutcomeStore(store))
+	cr := NewChatResponder(provider, bot, "chat-42", nil,
+		WithOutcomeStore(store),
+		WithChatPipeline(ChatPipelineDeps{Builder: &stubChatBuilder{result: "SYS"}}),
+	)
 
 	if err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 1); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1368,7 +1349,9 @@ func TestChatResponder_BuildPromptSetsIsChatAndAvailableTools(t *testing.T) {
 	}))
 
 	principal := identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}
-	_, _, _ = cr.buildPrompt(context.Background(), principal, "hi", cr.logger)
+	if _, _, _, err := cr.buildPrompt(context.Background(), principal, "hi", cr.logger); err != nil {
+		t.Fatalf("buildPrompt returned unexpected error: %v", err)
+	}
 
 	state := builder.capturedState(t)
 	if !state.IsChat {
@@ -1399,7 +1382,9 @@ func TestChatResponder_BuildPromptLeavesAvailableToolsEmptyWhenNoExecutor(t *tes
 	}))
 
 	principal := identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}
-	_, _, _ = cr.buildPrompt(context.Background(), principal, "hi", cr.logger)
+	if _, _, _, err := cr.buildPrompt(context.Background(), principal, "hi", cr.logger); err != nil {
+		t.Fatalf("buildPrompt returned unexpected error: %v", err)
+	}
 
 	state := builder.capturedState(t)
 	if !state.IsChat {
@@ -1407,5 +1392,120 @@ func TestChatResponder_BuildPromptLeavesAvailableToolsEmptyWhenNoExecutor(t *tes
 	}
 	if len(state.AvailableTools) != 0 {
 		t.Errorf("RenderState.AvailableTools = %v, want empty when tool loop inactive", state.AvailableTools)
+	}
+}
+
+// --- Phase L3.2: fallback 제거 + error path (FU-ChatPromptMandatory) ---
+
+// TestChatResponder_BuildPromptReturnsErrorWhenPipelineNil pins L3.2
+// acceptance: without a wired prompt pipeline, buildPrompt must surface
+// a loud error rather than silently drifting into a legacy hardcoded
+// fallback (which was deleted).
+func TestChatResponder_BuildPromptReturnsErrorWhenPipelineNil(t *testing.T) {
+	cr := NewChatResponder(nil, nil, "chat-42", nil)
+
+	principal := identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}
+	built, _, _, err := cr.buildPrompt(context.Background(), principal, "hi", cr.logger)
+	if err == nil {
+		t.Fatal("expected error from buildPrompt when pipeline not wired")
+	}
+	if !strings.Contains(err.Error(), "pipeline") {
+		t.Errorf("expected error to mention pipeline, got %v", err)
+	}
+	if built != "" {
+		t.Errorf("expected empty prompt on error, got %q", built)
+	}
+}
+
+// TestChatResponder_BuildPromptReturnsErrorOnBuildFailure pins L3.2: a
+// Builder.Build error no longer collapses into c.system — it bubbles up
+// wrapped so Respond can record an outcome and show a friendly message.
+func TestChatResponder_BuildPromptReturnsErrorOnBuildFailure(t *testing.T) {
+	boom := fmt.Errorf("builder boom")
+	builder := &stubChatBuilder{err: boom}
+	cr := NewChatResponder(nil, nil, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{Builder: builder}))
+
+	principal := identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}
+	built, _, _, err := cr.buildPrompt(context.Background(), principal, "hi", cr.logger)
+	if err == nil {
+		t.Fatal("expected error from buildPrompt when Builder.Build fails")
+	}
+	if !strings.Contains(err.Error(), "builder boom") {
+		t.Errorf("expected wrapped builder error, got %v", err)
+	}
+	if built != "" {
+		t.Errorf("expected empty prompt on error, got %q", built)
+	}
+}
+
+// TestChatResponder_BuildPromptReturnsErrorOnEmptyResult pins L3.2: a
+// semantically-empty build result is treated as a failure, not papered
+// over with the old legacy prompt.
+func TestChatResponder_BuildPromptReturnsErrorOnEmptyResult(t *testing.T) {
+	builder := &stubChatBuilder{result: "   "}
+	cr := NewChatResponder(nil, nil, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{Builder: builder}))
+
+	principal := identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}
+	built, _, _, err := cr.buildPrompt(context.Background(), principal, "hi", cr.logger)
+	if err == nil {
+		t.Fatal("expected error from buildPrompt when Builder returns empty")
+	}
+	if !strings.Contains(err.Error(), "empty") {
+		t.Errorf("expected error to mention empty, got %v", err)
+	}
+	if built != "" {
+		t.Errorf("expected empty prompt on error, got %q", built)
+	}
+}
+
+// TestChatResponder_RespondSendsFriendlyErrorOnPromptFailure pins the
+// partner-facing L3.2 contract: a prompt build failure yields a ⚠️-
+// marked Korean reassurance + an error-tagged outcome record, and the
+// provider is never streamed (no silent fallback, no leaked error trace).
+func TestChatResponder_RespondSendsFriendlyErrorOnPromptFailure(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{response: "SHOULD-NOT-BE-CALLED"}
+	store := &mockOutcomeAppender{}
+	builder := &stubChatBuilder{err: fmt.Errorf("builder boom")}
+
+	cr := NewChatResponder(provider, bot, "chat-42", nil,
+		WithOutcomeStore(store),
+		WithChatPipeline(ChatPipelineDeps{Builder: builder}),
+	)
+
+	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 1)
+	if err == nil {
+		t.Fatal("expected error from Respond when prompt build fails")
+	}
+
+	// Provider must NOT be called — chat refuses to stream without a
+	// valid prompt.
+	if reqs := provider.capturedRequests(); len(reqs) != 0 {
+		t.Errorf("provider Stream calls = %d, want 0 (prompt build failed)", len(reqs))
+	}
+
+	// Partner sees ⚠️ + the canonical L3.2 reassurance.
+	texts := bot.allSendTexts()
+	found := false
+	for _, text := range texts {
+		if strings.Contains(text, "⚠️") && strings.Contains(text, "잠시 후 다시") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected ⚠️ friendly reassurance sent to partner, got texts: %v", texts)
+	}
+
+	// Outcome records the failure (Success=false, FinishReason=error).
+	records := store.snapshot()
+	if len(records) != 1 {
+		t.Fatalf("outcomes = %d, want 1", len(records))
+	}
+	if records[0].Success {
+		t.Errorf("outcome Success = true, want false for prompt build failure")
+	}
+	if records[0].FinishReason != "error" {
+		t.Errorf("outcome FinishReason = %q, want %q", records[0].FinishReason, "error")
 	}
 }

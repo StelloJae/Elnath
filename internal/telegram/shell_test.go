@@ -840,7 +840,9 @@ func newTestShellWithClassifier(t *testing.T, intent conversation.Intent, classi
 	}
 	bot := &fakeBotClient{}
 	provider := &shellMockProvider{}
-	responder := NewChatResponder(provider, bot, "chat-1", nil)
+	responder := NewChatResponder(provider, bot, "chat-1", nil,
+		WithChatPipeline(ChatPipelineDeps{Builder: &stubChatBuilder{result: "SYS"}}),
+	)
 	classifier := &mockClassifier{intent: intent, err: classifyErr}
 
 	opts := []ShellOption{
@@ -1435,7 +1437,9 @@ func buildShellForClassifierTest(t *testing.T, classifier *mockClassifier, extra
 	}
 	bot := &fakeBotClient{}
 	provider := &shellMockProvider{}
-	responder := NewChatResponder(provider, bot, "chat-1", nil)
+	responder := NewChatResponder(provider, bot, "chat-1", nil,
+		WithChatPipeline(ChatPipelineDeps{Builder: &stubChatBuilder{result: "SYS"}}),
+	)
 
 	opts := []ShellOption{
 		WithChatResponder(responder),

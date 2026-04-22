@@ -84,6 +84,7 @@ func TestChatResponder_ExecutesToolUseAndReinjects(t *testing.T) {
 	exec.setResult("web_fetch", &tools.Result{Output: "<html>example body</html>"})
 
 	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		Builder:      &stubChatBuilder{result: "SYS"},
 		ToolDefs:     []llm.ToolDef{{Name: "web_fetch", Description: "fetch"}},
 		ToolExecutor: exec,
 	}))
@@ -145,6 +146,7 @@ func TestChatResponder_HandlesToolExecutionError(t *testing.T) {
 	exec.setResult("web_fetch", &tools.Result{Output: "fetch failed: HTTP 500", IsError: true})
 
 	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		Builder:      &stubChatBuilder{result: "SYS"},
 		ToolDefs:     []llm.ToolDef{{Name: "web_fetch"}},
 		ToolExecutor: exec,
 	}))
@@ -192,6 +194,7 @@ func TestChatResponder_EnforcesMaxToolIterations(t *testing.T) {
 	exec := newChatMockExecutor()
 
 	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		Builder:      &stubChatBuilder{result: "SYS"},
 		ToolDefs:     []llm.ToolDef{{Name: "web_fetch"}},
 		ToolExecutor: exec,
 	}))
@@ -292,7 +295,10 @@ func TestChatResponder_PrependsCurrentTimeHeader(t *testing.T) {
 	bot := newChatMockBot()
 	provider := &chatMockProvider{response: "ok"}
 	fixedNow := time.Date(2026, 4, 21, 0, 50, 0, 0, time.UTC)
-	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatNow(func() time.Time { return fixedNow }))
+	cr := NewChatResponder(provider, bot, "chat-42", nil,
+		WithChatNow(func() time.Time { return fixedNow }),
+		WithChatPipeline(ChatPipelineDeps{Builder: &stubChatBuilder{result: "SYS"}}),
+	)
 
 	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 1)
 	if err != nil {
@@ -314,6 +320,7 @@ func TestChatResponder_PrependsToolGuideWhenLoopActive(t *testing.T) {
 	provider := &chatMockProvider{response: "ok"}
 	exec := newChatMockExecutor()
 	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		Builder:      &stubChatBuilder{result: "SYS"},
 		ToolDefs:     []llm.ToolDef{{Name: "web_fetch"}},
 		ToolExecutor: exec,
 	}))
@@ -342,6 +349,7 @@ func TestChatResponder_ToolGuideContainsStrongInstructionBlock(t *testing.T) {
 	provider := &chatMockProvider{response: "ok"}
 	exec := newChatMockExecutor()
 	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		Builder:      &stubChatBuilder{result: "SYS"},
 		ToolDefs:     []llm.ToolDef{{Name: "web_fetch"}, {Name: "web_search"}},
 		ToolExecutor: exec,
 	}))
@@ -385,6 +393,7 @@ func TestChatResponder_ToolGuideContainsFactFenceRules(t *testing.T) {
 	provider := &chatMockProvider{response: "ok"}
 	exec := newChatMockExecutor()
 	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		Builder:      &stubChatBuilder{result: "SYS"},
 		ToolDefs:     []llm.ToolDef{{Name: "web_fetch"}, {Name: "web_search"}},
 		ToolExecutor: exec,
 	}))
@@ -432,6 +441,7 @@ func TestChatResponder_ToolGuideRequiresSourcesSection(t *testing.T) {
 	provider := &chatMockProvider{response: "ok"}
 	exec := newChatMockExecutor()
 	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		Builder:      &stubChatBuilder{result: "SYS"},
 		ToolDefs:     []llm.ToolDef{{Name: "web_search"}, {Name: "web_fetch"}},
 		ToolExecutor: exec,
 	}))
@@ -459,7 +469,9 @@ func TestChatResponder_ToolGuideRequiresSourcesSection(t *testing.T) {
 func TestChatResponder_OmitsToolGuideWhenNoExecutor(t *testing.T) {
 	bot := newChatMockBot()
 	provider := &chatMockProvider{response: "ok"}
-	cr := NewChatResponder(provider, bot, "chat-42", nil)
+	cr := NewChatResponder(provider, bot, "chat-42", nil,
+		WithChatPipeline(ChatPipelineDeps{Builder: &stubChatBuilder{result: "SYS"}}),
+	)
 
 	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 1)
 	if err != nil {
@@ -480,6 +492,7 @@ func TestChatResponder_OmitsToolGuideWhenToolDefsEmpty(t *testing.T) {
 	provider := &chatMockProvider{response: "ok"}
 	exec := newChatMockExecutor()
 	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		Builder:      &stubChatBuilder{result: "SYS"},
 		ToolExecutor: exec,
 		// ToolDefs intentionally empty
 	}))
@@ -549,6 +562,7 @@ func TestChatResponder_CapsLargeToolResultBeforeReinjection(t *testing.T) {
 	exec.setResult("web_fetch", &tools.Result{Output: bigBody})
 
 	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		Builder:      &stubChatBuilder{result: "SYS"},
 		ToolDefs:     []llm.ToolDef{{Name: "web_fetch"}},
 		ToolExecutor: exec,
 	}))
@@ -812,6 +826,7 @@ func TestChatResponder_EmitsProgressNoteBeforeToolExecution(t *testing.T) {
 	exec.setResult("web_fetch", &tools.Result{Output: "body"})
 
 	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		Builder:      &stubChatBuilder{result: "SYS"},
 		ToolDefs:     []llm.ToolDef{{Name: "web_fetch"}},
 		ToolExecutor: exec,
 	}))
@@ -845,6 +860,7 @@ func TestChatResponder_EntryWritingReactionShownEvenWithoutTool(t *testing.T) {
 	exec := newChatMockExecutor()
 
 	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		Builder:      &stubChatBuilder{result: "SYS"},
 		ToolDefs:     []llm.ToolDef{{Name: "web_fetch"}},
 		ToolExecutor: exec,
 	}))
@@ -880,6 +896,7 @@ func TestChatResponder_WritingReactionSetOnlyOnceAcrossIterations(t *testing.T) 
 	exec.setResult("web_fetch", &tools.Result{Output: "a"})
 
 	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		Builder:      &stubChatBuilder{result: "SYS"},
 		ToolDefs:     []llm.ToolDef{{Name: "web_fetch"}, {Name: "web_search"}},
 		ToolExecutor: exec,
 	}))
@@ -908,7 +925,9 @@ func TestChatResponder_WritingReactionSetOnlyOnceAcrossIterations(t *testing.T) 
 func TestChatResponder_UsesExpandedMaxTokens_LegacyPath(t *testing.T) {
 	bot := newChatMockBot()
 	provider := &chatMockProvider{response: "ok"}
-	cr := NewChatResponder(provider, bot, "chat-42", nil)
+	cr := NewChatResponder(provider, bot, "chat-42", nil,
+		WithChatPipeline(ChatPipelineDeps{Builder: &stubChatBuilder{result: "SYS"}}),
+	)
 
 	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 1)
 	if err != nil {
@@ -938,6 +957,7 @@ func TestChatResponder_UsesExpandedMaxTokens_ToolLoopPath(t *testing.T) {
 	exec.setResult("web_fetch", &tools.Result{Output: "body"})
 
 	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		Builder:      &stubChatBuilder{result: "SYS"},
 		ToolDefs:     []llm.ToolDef{{Name: "web_fetch"}},
 		ToolExecutor: exec,
 	}))
@@ -976,6 +996,7 @@ func TestChatResponder_OutcomeRecordsToolLoopStats(t *testing.T) {
 	cr := NewChatResponder(provider, bot, "chat-42", nil,
 		WithOutcomeStore(store),
 		WithChatPipeline(ChatPipelineDeps{
+			Builder:      &stubChatBuilder{result: "SYS"},
 			ToolDefs:     []llm.ToolDef{{Name: "web_fetch"}},
 			ToolExecutor: exec,
 		}),
@@ -1025,6 +1046,7 @@ func TestChatResponder_OutcomeRecordsToolErrorCount(t *testing.T) {
 	cr := NewChatResponder(provider, bot, "chat-42", nil,
 		WithOutcomeStore(store),
 		WithChatPipeline(ChatPipelineDeps{
+			Builder:      &stubChatBuilder{result: "SYS"},
 			ToolDefs:     []llm.ToolDef{{Name: "web_fetch"}},
 			ToolExecutor: exec,
 		}),
@@ -1048,7 +1070,10 @@ func TestChatResponder_OutcomeRecordsLegacyIterationOne(t *testing.T) {
 	provider := &chatMockProvider{response: "hi"}
 	store := &mockOutcomeAppender{}
 
-	cr := NewChatResponder(provider, bot, "chat-42", nil, WithOutcomeStore(store))
+	cr := NewChatResponder(provider, bot, "chat-42", nil,
+		WithOutcomeStore(store),
+		WithChatPipeline(ChatPipelineDeps{Builder: &stubChatBuilder{result: "SYS"}}),
+	)
 
 	if err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 1); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1071,6 +1096,7 @@ func TestChatResponder_LegacyPathUnchangedWhenExecutorMissing(t *testing.T) {
 	provider := &chatMockProvider{response: "plain reply"}
 
 	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		Builder:      &stubChatBuilder{result: "SYS"},
 		ToolDefs: []llm.ToolDef{{Name: "web_fetch"}},
 	}))
 
