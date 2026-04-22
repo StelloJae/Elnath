@@ -618,11 +618,19 @@ func TestSession_AppendMessage_PreservesSourceInJSONL(t *testing.T) {
 	}
 }
 
-// TestSession_AppendMessage_LegacySourceStaysEmpty is the backwards-compat
-// guard: when Source is not set by the caller, the persisted record keeps
-// it empty (omitempty) so pre-L1 JSONL round-trips continue to match their
-// original byte shape.
-func TestSession_AppendMessage_LegacySourceStaysEmpty(t *testing.T) {
+// TestSession_AppendMessage_DefaultsEmptySourceToTask (Phase L1.4 /
+// FU-TaskSourceStamp) supersedes the pre-L1.4 LegacySourceStaysEmpty
+// guard. The L1.1 backward-compat contract only covered READ paths —
+// sessions written before L1.1 continue to load back with Source="".
+// On the WRITE path, Phase L1.4 closes the universal-message-schema
+// loop: every task/team message that funnels through
+// Session.AppendMessage now lands with Source=SourceTask when the
+// caller didn't specify one. Chat callers (L1.2) already stamp
+// SourceChat before reaching this boundary, so the default only
+// catches task-origin writers that hadn't been sprinkled individually.
+// This single invariant is what the load-side sanitiser L1.3 relies
+// on: any non-chat Source on disk gets its tool blocks stripped.
+func TestSession_AppendMessage_DefaultsEmptySourceToTask(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 
@@ -637,7 +645,54 @@ func TestSession_AppendMessage_LegacySourceStaysEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadSession: %v", err)
 	}
-	if len(loaded.Messages) != 1 || loaded.Messages[0].Source != "" {
-		t.Errorf("loaded.Messages[0].Source = %q, want empty (legacy caller)", loaded.Messages[0].Source)
+	if len(loaded.Messages) != 1 {
+		t.Fatalf("loaded messages = %d, want 1", len(loaded.Messages))
+	}
+	if got := loaded.Messages[0].Source; got != llm.SourceTask {
+		t.Errorf("loaded.Messages[0].Source = %q, want %q (L1.4 write-side default for empty Source)", got, llm.SourceTask)
+	}
+	// In-memory snapshot must match the persisted shape — otherwise
+	// downstream consumers (sanitize, auditors) would see a different
+	// Source than what LoadSession returns.
+	if got := s.Messages[0].Source; got != llm.SourceTask {
+		t.Errorf("in-memory s.Messages[0].Source = %q, want %q (stamp must be visible pre-reload)", got, llm.SourceTask)
+	}
+}
+
+// TestSession_AppendMessage_PreservesExplicitSource (Phase L1.4) pins
+// the non-override invariant. Callers that set Source to SourceChat
+// (L1.2 chat write-side) or an explicit SourceTask must see that
+// value preserved on disk and in memory. If the write-side default
+// ever started overriding non-empty Source, chat history would
+// collapse into task-origin and the L1.3 sanitiser would strip
+// chat-owned tool blocks again — the exact regression L1.2 + L1.3
+// just closed.
+func TestSession_AppendMessage_PreservesExplicitSource(t *testing.T) {
+	t.Parallel()
+	for _, want := range []string{llm.SourceChat, llm.SourceTask} {
+		want := want
+		t.Run(want, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			s, err := NewSession(dir)
+			if err != nil {
+				t.Fatalf("NewSession: %v", err)
+			}
+			m := llm.NewUserMessage("hi")
+			m.Source = want
+			if err := s.AppendMessage(m); err != nil {
+				t.Fatalf("AppendMessage: %v", err)
+			}
+			loaded, err := LoadSession(dir, s.ID)
+			if err != nil {
+				t.Fatalf("LoadSession: %v", err)
+			}
+			if len(loaded.Messages) != 1 {
+				t.Fatalf("loaded messages = %d, want 1", len(loaded.Messages))
+			}
+			if got := loaded.Messages[0].Source; got != want {
+				t.Errorf("loaded.Messages[0].Source = %q, want %q (explicit caller source must not be overridden)", got, want)
+			}
+		})
 	}
 }

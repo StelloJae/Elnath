@@ -226,9 +226,26 @@ func (s *Session) RecordResume(principal identity.Principal) error {
 // AppendMessage appends a single message to the session file (O_APPEND) and
 // updates the in-memory slice. JSONL lines are small enough that O_APPEND is
 // atomic on POSIX filesystems for reasonable message sizes.
+//
+// Phase L1.4 stamps the universal-message-schema task default: when a
+// caller funnels a message through this boundary without setting
+// Source, we record it as SourceTask. Chat callers (L1.2) already set
+// SourceChat on every message they persist via
+// conversation.Manager.AppendChatTurn, so the default only catches
+// task-origin writers (agent.Loop iterations, orchestrators, the
+// SendMessage user-turn path) that otherwise would have landed as
+// Source="". The load-side sanitiser (L1.3) relies on "non-chat Source
+// ⇒ strip tool blocks", so covering the write-side at the single
+// persistence boundary is both sufficient and minimal — every
+// task/team write goes through here, and we avoid sprinkling Source
+// assignments across ~15 orchestrator call sites.
 func (s *Session) AppendMessage(msg llm.Message) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if msg.Source == "" {
+		msg.Source = llm.SourceTask
+	}
 
 	hash := ""
 	if shouldDedupMessage(msg) {
