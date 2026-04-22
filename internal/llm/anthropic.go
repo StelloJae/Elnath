@@ -12,8 +12,10 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/stello/elnath/internal/llm/promptcache"
 	"github.com/stello/elnath/internal/userfacingerr"
 )
 
@@ -97,6 +99,16 @@ type AnthropicProvider struct {
 	baseURL string
 	model   string
 	client  *http.Client
+
+	// Prompt-cache telemetry: the sink is optional. When set alongside a
+	// non-empty ChatRequest.SessionID, Stream captures a pre-call
+	// PromptState and, after a successful call, records a break report
+	// event via the sink. lastStates remembers the previous turn's
+	// pre-state per session so GapSince attribution measures
+	// turn-to-turn wall-clock (audit.txt §03).
+	promptCacheSink promptcache.EventSink
+	promptCacheMu   sync.Mutex
+	lastStates      map[string]*promptcache.PromptState
 }
 
 // AnthropicOption configures an AnthropicProvider.
@@ -117,18 +129,104 @@ func WithAnthropicTimeout(d time.Duration) AnthropicOption {
 	return func(p *AnthropicProvider) { p.client = &http.Client{Timeout: d} }
 }
 
+// WithAnthropicPromptCacheSink installs a prompt-cache event sink. When
+// set, every successful Stream call that carries a non-empty
+// ChatRequest.SessionID records a BreakReport to the sink. The zero
+// value (no option) leaves telemetry disabled so callers opt in.
+func WithAnthropicPromptCacheSink(sink promptcache.EventSink) AnthropicOption {
+	return func(p *AnthropicProvider) { p.promptCacheSink = sink }
+}
+
 // NewAnthropicProvider constructs an Anthropic provider.
 func NewAnthropicProvider(apiKey, model string, opts ...AnthropicOption) *AnthropicProvider {
 	p := &AnthropicProvider{
-		apiKey:  apiKey,
-		baseURL: anthropicDefaultBaseURL,
-		model:   model,
-		client:  &http.Client{Timeout: anthropicDefaultTimeout},
+		apiKey:     apiKey,
+		baseURL:    anthropicDefaultBaseURL,
+		model:      model,
+		client:     &http.Client{Timeout: anthropicDefaultTimeout},
+		lastStates: make(map[string]*promptcache.PromptState),
 	}
 	for _, o := range opts {
 		o(p)
 	}
 	return p
+}
+
+// effectiveBetas lists the anthropic-beta flags that actually go on the
+// wire for this (apiKey, model) pair. Order matters for sorted-diff
+// attribution; callers feed this into promptcache.RecordPromptState
+// which re-sorts + dedupes.
+func effectiveBetas(apiKey, model string) []string {
+	var betas []string
+	if isAnthropicOAuthToken(apiKey) {
+		betas = append(betas, "claude-code-20250219", "oauth-2025-04-20")
+	}
+	if opts1MContext(model) {
+		betas = append(betas, anthropicContext1MBeta)
+	}
+	return betas
+}
+
+// effortFromThinking projects the ChatRequest.ThinkingBudget integer
+// onto the closed-enum string PromptState.Effort expects. Non-positive
+// budgets map to "off"; positive budgets keep their numeric value so
+// break attribution shows the exact tier flip.
+func effortFromThinking(budget int) string {
+	if budget <= 0 {
+		return "off"
+	}
+	return fmt.Sprintf("%d", budget)
+}
+
+// cacheScopeLabel projects the EnableCache boolean onto the scope
+// string PromptState carries. "ephemeral" matches the cache_control
+// type set in buildAnthropicRequest; empty string denotes no caching.
+func cacheScopeLabel(enableCache bool) string {
+	if enableCache {
+		return "ephemeral"
+	}
+	return ""
+}
+
+// toPromptCacheTools projects []ToolDef onto the []promptcache.Tool
+// shape expected by RecordPromptState. Schema bytes are shared (not
+// copied) because PromptState does not retain the slice beyond hash
+// computation.
+func toPromptCacheTools(tools []ToolDef) []promptcache.Tool {
+	if len(tools) == 0 {
+		return nil
+	}
+	out := make([]promptcache.Tool, 0, len(tools))
+	for _, t := range tools {
+		out = append(out, promptcache.Tool{Name: t.Name, Schema: t.InputSchema})
+	}
+	return out
+}
+
+// recordPromptCacheEvent runs the two-phase break detector and hands the
+// result to the configured sink. lastStates is updated in the same
+// critical section so concurrent Stream calls on different sessions do
+// not race on the map. Sink errors are logged to stderr but do not fail
+// the API call — telemetry must never kill the happy path.
+func (p *AnthropicProvider) recordPromptCacheEvent(ctx context.Context, sessionID string, current *promptcache.PromptState, usage promptcache.Usage, model string) {
+	if p.promptCacheSink == nil || sessionID == "" || current == nil {
+		return
+	}
+	p.promptCacheMu.Lock()
+	prior := p.lastStates[sessionID]
+	p.lastStates[sessionID] = current
+	p.promptCacheMu.Unlock()
+
+	resp := promptcache.RecordResponse(usage, time.Now().UTC())
+	report := promptcache.CheckForCacheBreak(prior, current, resp)
+
+	if err := p.promptCacheSink.Record(ctx, sessionID, promptcache.Event{
+		Timestamp: resp.ReceivedAt,
+		Model:     model,
+		Report:    report,
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "anthropic: prompt-cache sink record failed for session=%s: %v\n", sessionID, err)
+	}
 }
 
 func (p *AnthropicProvider) Name() string { return "anthropic" }
@@ -156,6 +254,22 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req Request, cb func(Str
 	}
 	if opts1MContext(effectiveModel) {
 		appendAnthropicBeta(httpReq.Header, anthropicContext1MBeta)
+	}
+
+	// Pre-call prompt-cache snapshot. Only captured when a sink is wired
+	// AND the caller supplied a SessionID — otherwise telemetry is a
+	// no-op and Stream pays none of the RecordPromptState cost.
+	var preState *promptcache.PromptState
+	if p.promptCacheSink != nil && req.SessionID != "" {
+		preState = promptcache.RecordPromptState(promptcache.Input{
+			Model:      effectiveModel,
+			APIModel:   apiModelID(effectiveModel),
+			System:     req.System,
+			Tools:      toPromptCacheTools(req.Tools),
+			Betas:      effectiveBetas(p.apiKey, effectiveModel),
+			Effort:     effortFromThinking(req.ThinkingBudget),
+			CacheScope: cacheScopeLabel(req.EnableCache),
+		})
 	}
 
 	resp, err := p.client.Do(httpReq)
@@ -193,7 +307,36 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req Request, cb func(Str
 		}
 	}
 
-	return parseAnthropicSSE(resp.Body, cb)
+	// Sniff usage from the stream so the post-call sink record carries
+	// cache-attribution tokens. The wrapper is zero-cost when no sink
+	// was wired (preState is nil → original cb forwarded unchanged).
+	sseCb := cb
+	var capturedUsage promptcache.Usage
+	if preState != nil {
+		sseCb = func(ev StreamEvent) {
+			if ev.Type == EventDone && ev.Usage != nil {
+				capturedUsage = promptcache.Usage{
+					InputTokens:              ev.Usage.InputTokens,
+					OutputTokens:             ev.Usage.OutputTokens,
+					CacheReadInputTokens:     ev.Usage.CacheRead,
+					CacheCreationInputTokens: ev.Usage.CacheWrite,
+				}
+			}
+			cb(ev)
+		}
+	}
+
+	if err := parseAnthropicSSE(resp.Body, sseCb); err != nil {
+		return err
+	}
+
+	// On successful completion, record the prompt-cache event. 429
+	// fallback paths return from the switch above and never reach here,
+	// so we record exactly once per turn (the final successful attempt).
+	if preState != nil {
+		p.recordPromptCacheEvent(ctx, req.SessionID, preState, capturedUsage, effectiveModel)
+	}
+	return nil
 }
 
 // --- request building ---

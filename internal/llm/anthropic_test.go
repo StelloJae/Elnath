@@ -8,7 +8,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+
+	"github.com/stello/elnath/internal/llm/promptcache"
 )
 
 // anthropicSSE joins SSE event blocks with the required double-newline separator.
@@ -946,4 +949,188 @@ func TestAnthropicStream_Opus47_1MRateLimitFallback(t *testing.T) {
 	if m := extractModel(bodies[1]); m != "claude-opus-4-7" {
 		t.Errorf("fallback request model = %q, want %q", m, "claude-opus-4-7")
 	}
+}
+
+// capturingSink is an in-memory promptcache.EventSink implementation
+// that buffers every Record call for assertion. Thread-safe for
+// potential concurrent use by provider goroutines.
+type capturingSink struct {
+	mu     sync.Mutex
+	events []capturedSinkEntry
+}
+
+type capturedSinkEntry struct {
+	SessionID string
+	Event     promptcache.Event
+}
+
+func (c *capturingSink) Record(_ context.Context, sessionID string, ev promptcache.Event) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.events = append(c.events, capturedSinkEntry{SessionID: sessionID, Event: ev})
+	return nil
+}
+
+func (c *capturingSink) snapshot() []capturedSinkEntry {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]capturedSinkEntry, len(c.events))
+	copy(out, c.events)
+	return out
+}
+
+// anthropicUsageSSE builds a minimal successful SSE body with caller-
+// supplied usage numbers. Used to verify the sink captures the right
+// cache attribution tokens.
+func anthropicUsageSSE(creation, read int) string {
+	msgStart := mustJSON(map[string]any{
+		"type": "message_start",
+		"message": map[string]any{
+			"usage": map[string]any{
+				"input_tokens":                10,
+				"cache_creation_input_tokens": creation,
+				"cache_read_input_tokens":     read,
+			},
+		},
+	})
+	msgDelta := mustJSON(map[string]any{
+		"type":  "message_delta",
+		"usage": map[string]any{"output_tokens": 3},
+	})
+	msgStop := mustJSON(map[string]any{"type": "message_stop"})
+	return anthropicSSE(
+		sseEvent("message_start", msgStart),
+		sseEvent("message_delta", msgDelta),
+		sseEvent("message_stop", msgStop),
+	)
+}
+
+func TestAnthropicStream_SinkSkippedWhenSessionIDEmpty(t *testing.T) {
+	sink := &capturingSink{}
+	_, p := newAnthropicTestServer(t, anthropicUsageSSE(0, 3200))
+	p = withSink(p, sink)
+	if _, err := collectEvents(t, p, Request{Messages: []Message{NewUserMessage("hi")}}); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if len(sink.snapshot()) != 0 {
+		t.Errorf("sink received events despite empty session ID: %+v", sink.snapshot())
+	}
+}
+
+func TestAnthropicStream_SinkRecordsHitEvent(t *testing.T) {
+	sink := &capturingSink{}
+	_, p := newAnthropicTestServer(t, anthropicUsageSSE(0, 3200)) // clean hit
+	p = withSink(p, sink)
+	_, err := collectEvents(t, p, Request{
+		SessionID: "sess-hit",
+		System:    "You are Elnath.",
+		Messages:  []Message{NewUserMessage("hi")},
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	entries := sink.snapshot()
+	if len(entries) != 1 {
+		t.Fatalf("sink events = %d, want 1", len(entries))
+	}
+	e := entries[0]
+	if e.SessionID != "sess-hit" {
+		t.Errorf("SessionID = %q, want sess-hit", e.SessionID)
+	}
+	if e.Event.Report == nil {
+		t.Fatal("Report nil")
+	}
+	if e.Event.Report.Happened {
+		t.Errorf("Happened = true, want false (clean hit)")
+	}
+	if e.Event.Report.ReadTokens != 3200 {
+		t.Errorf("ReadTokens = %d, want 3200", e.Event.Report.ReadTokens)
+	}
+}
+
+func TestAnthropicStream_SinkAttributesSystemEditAcrossTurns(t *testing.T) {
+	sink := &capturingSink{}
+	// First call: baseline — no cache activity.
+	srv1, p1 := newAnthropicTestServer(t, anthropicUsageSSE(3000, 0))
+	p1 = withSink(p1, sink)
+	if _, err := collectEvents(t, p1, Request{
+		SessionID: "sess-sys",
+		System:    "You are Elnath.",
+		Messages:  []Message{NewUserMessage("turn1")},
+	}); err != nil {
+		t.Fatalf("turn1 Stream: %v", err)
+	}
+	_ = srv1
+	// Second call: system prompt edited; creation > threshold.
+	srv2, p2 := newAnthropicTestServer(t, anthropicUsageSSE(3500, 0))
+	// Share the sink + keep the same provider's lastStates; using a new
+	// provider would lose the prior-turn state. Re-use p1 for state
+	// continuity, but the srv2 body feeds the response shape.
+	p1.baseURL = srv2.URL
+	_ = p2
+	if _, err := collectEvents(t, p1, Request{
+		SessionID: "sess-sys",
+		System:    "You are Elnath. Cite sources always.",
+		Messages:  []Message{NewUserMessage("turn2")},
+	}); err != nil {
+		t.Fatalf("turn2 Stream: %v", err)
+	}
+	entries := sink.snapshot()
+	if len(entries) != 2 {
+		t.Fatalf("sink events = %d, want 2", len(entries))
+	}
+	r2 := entries[1].Event.Report
+	if r2 == nil || !r2.Happened {
+		t.Fatalf("turn2 report: want Happened=true, got %+v", r2)
+	}
+	gotSystem := false
+	for _, reason := range r2.Reasons {
+		if reason.Reason == promptcache.ReasonSystemPrompt {
+			gotSystem = true
+			break
+		}
+	}
+	if !gotSystem {
+		t.Errorf("turn2 reasons missing system_prompt: %+v", r2.Reasons)
+	}
+}
+
+func TestAnthropicStream_Sink1MFallbackRecordsOnce(t *testing.T) {
+	sink := &capturingSink{}
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(body))
+		if len(bodies) == 1 {
+			http.Error(w, "rate limited", http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, anthropicUsageSSE(3000, 0))
+	}))
+	t.Cleanup(srv.Close)
+
+	p := NewAnthropicProvider("sk-ant-test", "claude-opus-4-7[1m]",
+		WithAnthropicBaseURL(srv.URL),
+		WithAnthropicPromptCacheSink(sink),
+	)
+	if _, err := collectEvents(t, p, Request{SessionID: "sess-429", Messages: []Message{NewUserMessage("hi")}}); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if len(bodies) != 2 {
+		t.Fatalf("bodies = %d, want 2 (initial + fallback)", len(bodies))
+	}
+	entries := sink.snapshot()
+	if len(entries) != 1 {
+		t.Errorf("sink events = %d, want exactly 1 (only successful fallback records)", len(entries))
+	}
+}
+
+// withSink returns a copy of p with the sink option applied. Needed
+// because AnthropicOption mutates the provider in-place, not the
+// constructor's args list.
+func withSink(p *AnthropicProvider, sink promptcache.EventSink) *AnthropicProvider {
+	WithAnthropicPromptCacheSink(sink)(p)
+	return p
 }

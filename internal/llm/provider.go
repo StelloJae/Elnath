@@ -69,6 +69,11 @@ type ChatRequest struct {
 	System         string
 	ThinkingBudget int  // If > 0, enables extended thinking with this token budget.
 	EnableCache    bool // If true, adds prompt caching hints to system + tools.
+	// SessionID scopes provider-side telemetry (prompt-cache event
+	// recording in particular). Empty string means "skip telemetry
+	// sinks" — providers must tolerate callers that do not thread a
+	// session through.
+	SessionID string
 }
 
 // ChatResponse is the complete (non-streaming) response from a provider.
