@@ -17,8 +17,18 @@ func (n *BrownfieldNode) Name() string {
 	return "brownfield"
 }
 
-// CacheBoundary classifies brownfield context as stable: the
-// ExistingCode anchor reflects project posture, not per-turn state.
+// CacheBoundary classifies brownfield context as stable.
+//
+// Stability contract: this classification is defensible only while
+// RenderState.ExistingCode and RenderState.TaskLanguage are treated as
+// session-level immutables. The node's Render output branches on both
+// fields (see Render below: the Go branch vs TypeScript branch), so
+// flipping either mid-session would be a prompt-cache break vector that
+// this metadata says does not exist. Callers constructing RenderState
+// must set these fields once at session start and leave them alone;
+// new sessions should be started to switch project posture.
+// Flagged in the Phase 8.1.7 critic verdict §4 OBSERVATION for future
+// plan-§5 tightening.
 func (n *BrownfieldNode) CacheBoundary() CacheBoundary { return CacheBoundaryStable }
 
 func (n *BrownfieldNode) Priority() int {

@@ -110,6 +110,16 @@ type BreakReport struct {
 // beta flags, scope/TTL, model IDs, effort). If no structural vector
 // explains a real miss, classify by TTL gap; otherwise server_side.
 //
+// Argument semantics — callers MUST preserve:
+//   - `pre` is the PROMPT STATE CAPTURED BEFORE THE **PRIOR TURN's** CALL.
+//     Not the prior response snapshot, not the current call's pre-state.
+//     `GapSince` is computed as `post.CapturedAt - pre.CapturedAt`, so
+//     feeding the current turn as both arguments yields GapSince=0 and
+//     ttl_expiry can never fire. Writers integrating this detector must
+//     cache the prior turn's PromptState per session.
+//   - `post` is the pre-call snapshot for the CURRENT turn.
+//   - `resp` is the response from the current turn.
+//
 // Nil pre/post/resp are tolerated and yield an empty (non-happened) report.
 func CheckForCacheBreak(pre, post *PromptState, resp *Response) *BreakReport {
 	report := &BreakReport{}

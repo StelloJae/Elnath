@@ -286,7 +286,15 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req Request, cb func(Str
 	if resp.StatusCode != http.StatusOK {
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		if dumpPath := os.Getenv("ELNATH_ANTHROPIC_DUMP"); dumpPath != "" {
-			_ = os.WriteFile(dumpPath, append([]byte("REQUEST BODY:\n"), append(body, append([]byte("\n\nRESPONSE:\n"), errBody...)...)...), 0o600)
+			// On a 1M-suffix 429 the handler below recursively re-enters
+			// Stream with the base model; writing both failures to the
+			// same dump path would clobber the [1m] evidence. Append a
+			// .retry suffix once we know a fallback could fire.
+			dumpTarget := dumpPath
+			if resp.StatusCode == 429 && opts1MContext(effectiveModel) {
+				dumpTarget = dumpPath + ".retry"
+			}
+			_ = os.WriteFile(dumpTarget, append([]byte("REQUEST BODY:\n"), append(body, append([]byte("\n\nRESPONSE:\n"), errBody...)...)...), 0o600)
 		}
 		switch resp.StatusCode {
 		case 429:
