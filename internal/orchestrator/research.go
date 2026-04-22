@@ -103,10 +103,11 @@ func (w *ResearchWorkflow) Run(ctx context.Context, input WorkflowInput) (*Workf
 	)
 
 	return &WorkflowResult{
-		Messages: messages,
-		Summary:  result.Summary,
-		Usage:    totalResearchUsage(result),
-		Workflow: w.Name(),
+		Messages:     messages,
+		Summary:      result.Summary,
+		Usage:        totalResearchUsage(result),
+		Workflow:     w.Name(),
+		FinishReason: "stop",
 	}, nil
 }
 

@@ -76,6 +76,15 @@ func TestResearchWorkflow_E2E(t *testing.T) {
 		t.Errorf("workflow = %q, want %q", result.Workflow, "research")
 	}
 
+	// FU-OutcomeDropFix regression guard: research workflow must populate
+	// FinishReason so runtime.recordOutcome (learning.ShouldRecord gate) logs
+	// the outcome. Empty FinishReason silently drops the task from
+	// outcomes.jsonl — V2 smoke repro 2026-04-22 confirmed 100% drop before
+	// this assert was added.
+	if result.FinishReason != "stop" {
+		t.Errorf("FinishReason = %q, want %q (empty causes silent outcome drop)", result.FinishReason, "stop")
+	}
+
 	// hypothesis Chat + experiment Stream + summarize Chat = 3 calls
 	if provider.CallCount() != 3 {
 		t.Errorf("provider calls = %d, want 3", provider.CallCount())
