@@ -312,6 +312,16 @@ func cmdDaemonStart(ctx context.Context) error {
 				MaxHistory:   20,
 				ToolDefs:     chatToolDefs,
 				ToolExecutor: rt.reg,
+				// Phase L2.2: per-turn progress bubble. The factory
+				// owns Run() — Respond only calls Finish + Wait.
+				// chatID here is the closed-over cfg.Telegram.ChatID;
+				// the factory also receives it explicitly so future
+				// multi-chat responder wiring (PR side) stays clean.
+				ProgressFactory: func(chatID string) telegram.ProgressRenderer {
+					pr := telegram.NewProgressReporter(bot, chatID, app.Logger)
+					pr.Run()
+					return pr
+				},
 			}),
 		)
 		classifier := conversation.NewLLMClassifier()

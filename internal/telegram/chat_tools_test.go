@@ -1140,6 +1140,217 @@ func TestChatResponder_LegacyPathUnchangedWhenExecutorMissing(t *testing.T) {
 	}
 }
 
+// --- Phase L2.2: chat tool-loop progress emission (FU-ChatProgressEmit) ---
+
+type chatProgressToolCall struct {
+	name    string
+	preview string
+}
+
+type trackingProgressRenderer struct {
+	mu          sync.Mutex
+	tools       []chatProgressToolCall
+	stages      []string
+	finishCalls int
+	waitCalls   int
+}
+
+func (r *trackingProgressRenderer) ReportTool(name, preview string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.tools = append(r.tools, chatProgressToolCall{name: name, preview: preview})
+}
+
+func (r *trackingProgressRenderer) ReportStage(stage string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.stages = append(r.stages, stage)
+}
+
+func (r *trackingProgressRenderer) Finish() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.finishCalls++
+}
+
+func (r *trackingProgressRenderer) Wait() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.waitCalls++
+}
+
+func (r *trackingProgressRenderer) snapshot() (tools []chatProgressToolCall, finish, wait int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	tools = make([]chatProgressToolCall, len(r.tools))
+	copy(tools, r.tools)
+	return tools, r.finishCalls, r.waitCalls
+}
+
+// TestChatResponder_ReportsEachToolInvocation pins the L2.2 core
+// contract: every tool the chat loop invokes flows through
+// ProgressRenderer.ReportTool with the tool's name + a meaningful
+// preview (URL / query / path / pattern). This is the data the
+// Telegram edit-bubble renders so the partner can see what Elnath is
+// reaching for while the turn is still in flight.
+func TestChatResponder_ReportsEachToolInvocation(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{
+		steps: []chatProviderStep{
+			{toolUses: []chatProviderToolUse{
+				{id: "tu_1", name: "web_fetch", input: `{"url":"https://example.com/path"}`},
+				{id: "tu_2", name: "web_search", input: `{"query":"latest NASDAQ news"}`},
+			}},
+			{text: "done"},
+		},
+	}
+	exec := newChatMockExecutor()
+	exec.setResult("web_fetch", &tools.Result{Output: "<html>body</html>"})
+	exec.setResult("web_search", &tools.Result{Output: "results"})
+	tracker := &trackingProgressRenderer{}
+
+	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		Builder:         &stubChatBuilder{result: "SYS"},
+		ToolDefs:        []llm.ToolDef{{Name: "web_fetch"}, {Name: "web_search"}},
+		ToolExecutor:    exec,
+		ProgressFactory: func(chatID string) ProgressRenderer { return tracker },
+	}))
+
+	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got, _, _ := tracker.snapshot()
+	if len(got) != 2 {
+		t.Fatalf("ReportTool calls = %d, want 2", len(got))
+	}
+	if got[0].name != "web_fetch" || got[0].preview != "https://example.com/path" {
+		t.Errorf("ReportTool[0] = %+v, want name=web_fetch preview=https://example.com/path", got[0])
+	}
+	if got[1].name != "web_search" || got[1].preview != "latest NASDAQ news" {
+		t.Errorf("ReportTool[1] = %+v, want name=web_search preview=latest NASDAQ news", got[1])
+	}
+}
+
+// TestChatResponder_ProgressFactoryReceivesChatID pins that Respond
+// passes its bound chatID to the factory, so per-turn instances
+// address the right Telegram chat bubble.
+func TestChatResponder_ProgressFactoryReceivesChatID(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{
+		steps: []chatProviderStep{{text: "hi back"}},
+	}
+	exec := newChatMockExecutor()
+	var gotChatID string
+
+	cr := NewChatResponder(provider, bot, "chat-424242", nil, WithChatPipeline(ChatPipelineDeps{
+		Builder:      &stubChatBuilder{result: "SYS"},
+		ToolDefs:     []llm.ToolDef{{Name: "web_fetch"}},
+		ToolExecutor: exec,
+		ProgressFactory: func(chatID string) ProgressRenderer {
+			gotChatID = chatID
+			return &trackingProgressRenderer{}
+		},
+	}))
+
+	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotChatID != "chat-424242" {
+		t.Errorf("factory chatID = %q, want %q", gotChatID, "chat-424242")
+	}
+}
+
+// TestChatResponder_ProgressCleanedUpOnSuccess pins the defer-based
+// lifecycle: when the turn completes cleanly, Finish and Wait fire
+// exactly once each so the renderer's goroutine drains before Respond
+// returns. Without this, a per-turn ProgressReporter would leak its
+// loop goroutine on every chat turn.
+func TestChatResponder_ProgressCleanedUpOnSuccess(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{
+		steps: []chatProviderStep{{text: "hi back"}},
+	}
+	exec := newChatMockExecutor()
+	tracker := &trackingProgressRenderer{}
+
+	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		Builder:         &stubChatBuilder{result: "SYS"},
+		ToolDefs:        []llm.ToolDef{{Name: "web_fetch"}},
+		ToolExecutor:    exec,
+		ProgressFactory: func(chatID string) ProgressRenderer { return tracker },
+	}))
+
+	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	_, finish, wait := tracker.snapshot()
+	if finish != 1 {
+		t.Errorf("Finish calls = %d, want 1 (defer cleanup)", finish)
+	}
+	if wait != 1 {
+		t.Errorf("Wait calls = %d, want 1 (defer cleanup)", wait)
+	}
+}
+
+// TestChatResponder_ProgressCleanedUpOnStreamError pins that the
+// Finish + Wait defer fires even when the stream fails mid-turn. A
+// stream error is the riskiest cleanup path — without defer, early
+// return after the friendly-error send would strand the goroutine.
+func TestChatResponder_ProgressCleanedUpOnStreamError(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{streamErr: fmt.Errorf("provider unavailable")}
+	exec := newChatMockExecutor()
+	tracker := &trackingProgressRenderer{}
+
+	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		Builder:         &stubChatBuilder{result: "SYS"},
+		ToolDefs:        []llm.ToolDef{{Name: "web_fetch"}},
+		ToolExecutor:    exec,
+		ProgressFactory: func(chatID string) ProgressRenderer { return tracker },
+	}))
+
+	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 1)
+	if err == nil {
+		t.Fatal("expected stream error from Respond")
+	}
+	_, finish, wait := tracker.snapshot()
+	if finish != 1 {
+		t.Errorf("Finish calls = %d, want 1 (cleanup on error)", finish)
+	}
+	if wait != 1 {
+		t.Errorf("Wait calls = %d, want 1 (cleanup on error)", wait)
+	}
+}
+
+// TestChatResponder_ProgressFactoryNotInvokedForLegacyStream pins the
+// useToolLoop gate: a chat turn with no ToolExecutor runs the legacy
+// single-stream path, which emits nothing to the renderer. Calling
+// the factory at all in that case would allocate a goroutine for a
+// renderer that could never fire, so the code must skip
+// progressRenderer() entirely when useToolLoop() is false.
+func TestChatResponder_ProgressFactoryNotInvokedForLegacyStream(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{response: "ok"}
+
+	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		Builder: &stubChatBuilder{result: "SYS"},
+		// ToolExecutor intentionally nil → legacy single-stream path.
+		ProgressFactory: func(chatID string) ProgressRenderer {
+			t.Fatal("ProgressFactory must not be invoked when useToolLoop() is false (legacy stream has no tools to report)")
+			return noopProgressRenderer{}
+		},
+	}))
+
+	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 // --- Phase L3.3: legacy chatToolGuideHeader / prependChatHeaders tool-guide
 // prepend removal (FU-ChatToolGuideRelocate) ---
 

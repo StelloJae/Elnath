@@ -246,6 +246,22 @@ func (c *ChatResponder) Respond(ctx context.Context, principal identity.Principa
 	messages = append(messages, history...)
 	messages = append(messages, llm.NewUserMessage(userMessage))
 
+	// Per-turn ProgressRenderer. Only the tool-loop path benefits from
+	// progress emission (legacy stream never calls a tool), so the
+	// factory is gated on useToolLoop — that way a plain chat turn
+	// without any tool still pays zero goroutine-allocation cost. The
+	// renderer's edit-bubble is lazy-created on the first ReportTool
+	// flush, so even tool-enabled turns that never actually call a
+	// tool stay bubble-free (plan OQ#1 "lazy-create").
+	var progress ProgressRenderer = noopProgressRenderer{}
+	if c.useToolLoop() {
+		progress = c.progressRenderer()
+		defer func() {
+			progress.Finish()
+			progress.Wait()
+		}()
+	}
+
 	start := time.Now()
 	var (
 		assistantText string
@@ -255,7 +271,7 @@ func (c *ChatResponder) Respond(ctx context.Context, principal identity.Principa
 	)
 
 	if c.useToolLoop() {
-		assistantText, turnMessages, stats, streamErr = c.runStreamWithTools(ctx, messages, systemPrompt, sc, replyToMsgID)
+		assistantText, turnMessages, stats, streamErr = c.runStreamWithTools(ctx, messages, systemPrompt, sc, replyToMsgID, progress)
 		sc.Finish()
 	} else {
 		assistantText, turnMessages, stats, streamErr = c.runLegacyStream(ctx, messages, systemPrompt, sc)

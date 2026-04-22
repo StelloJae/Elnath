@@ -192,6 +192,12 @@ func FilterChatToolDefs(defs []llm.ToolDef, allowlist []string) []llm.ToolDef {
 // future tool-lifecycle reactions; the entry-level ✍ alone satisfies
 // today's UX parity target.
 //
+// progress is the Phase L2.2 emission hook: the chat tool loop reports
+// each tool invocation through progress.ReportTool so the partner sees
+// a batched edit-bubble of "tool name + target" rows while the turn
+// is running, instead of 6-10s of silence. Respond owns progress's
+// lifecycle (Finish + Wait) — this helper only emits.
+//
 // The caller owns sc lifecycle; this helper writes deltas via sc.Send but
 // never calls sc.Finish — Respond closes the consumer after we return.
 func (c *ChatResponder) runStreamWithTools(
@@ -200,8 +206,12 @@ func (c *ChatResponder) runStreamWithTools(
 	systemPrompt string,
 	sc *StreamConsumer,
 	replyToMsgID int64,
+	progress ProgressRenderer,
 ) (string, []llm.Message, *chatRunStats, error) {
 	_ = replyToMsgID // reserved for future tool-lifecycle reactions; entry-side ✍ handles the current UX target.
+	if progress == nil {
+		progress = noopProgressRenderer{}
+	}
 	turnStart := len(initialMessages)
 	messages := make([]llm.Message, 0, len(initialMessages)+2*maxChatToolIterations)
 	messages = append(messages, initialMessages...)
@@ -257,6 +267,12 @@ func (c *ChatResponder) runStreamWithTools(
 		messages = append(messages, llm.BuildAssistantMessage(textParts, toolCalls))
 
 		for _, tc := range toolCalls {
+			// Phase L2.2: emit the tool invocation into the ProgressRenderer
+			// before the display-only banner. The renderer batches / dedups
+			// / throttles internally; bubble creation is lazy (first
+			// ReportTool is what triggers the initial SendMessage), so
+			// zero-tool chat turns stay bubble-free per plan OQ#1.
+			progress.ReportTool(tc.Name, chatToolProgressPreview(tc.Name, tc.Input))
 			if note := chatToolProgressNote(tc.Name, tc.Input); note != "" {
 				// Display-only: note is a "working on it" banner that goes to
 				// the partner's stream bubble while the tool runs. We do NOT
@@ -325,6 +341,42 @@ func (c *ChatResponder) streamOneStep(ctx context.Context, req llm.ChatRequest, 
 		}
 	})
 	return stepText.String(), toolCalls, err
+}
+
+// chatToolProgressPreview extracts the most informative single-value
+// preview for a tool invocation — the URL for web_fetch, the query
+// for web_search, the pattern for glob/grep, the path for read_file.
+// Used by Phase L2.2 ProgressRenderer.ReportTool so the edit-bubble
+// shows "🌐 web_fetch: https://example.com/..." rather than the raw
+// JSON arguments. Silent fallback to an empty string when the tool
+// name is unfamiliar or the JSON is unparseable — the ProgressReporter
+// renderer tolerates blank previews.
+func chatToolProgressPreview(name, inputJSON string) string {
+	var args map[string]any
+	if inputJSON != "" {
+		_ = json.Unmarshal([]byte(inputJSON), &args)
+	}
+	pick := func(keys ...string) string {
+		for _, k := range keys {
+			if v, ok := args[k].(string); ok && v != "" {
+				return v
+			}
+		}
+		return ""
+	}
+	switch name {
+	case "web_search":
+		return pick("query", "q")
+	case "web_fetch":
+		return pick("url")
+	case "read_file":
+		return pick("path", "file_path")
+	case "glob":
+		return pick("pattern")
+	case "grep":
+		return pick("pattern")
+	}
+	return ""
 }
 
 // chatToolProgressNote produces a one-line "I'm doing X" note that the chat
