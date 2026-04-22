@@ -176,6 +176,35 @@ func NewChatResponder(provider llm.Provider, bot BotClient, chatID string, logge
 	return c
 }
 
+// Respond handles a single partner chat turn. Phase L3 fast-lane
+// invariants (see .omc/plans/architecture-commit-2026-04-22.md §3 and
+// .omc/plans/l3-chat-mandatory-pipeline.md §2.3) that MUST hold:
+//
+//  1. **No queue entry.** Chat runs synchronously inside the caller's
+//     goroutine. It must NOT take a dependency on daemon.TaskSubmitter
+//     / Queue / worker pool — the partner types, chat replies in the
+//     same call stack. A future refactor that routes chat through a
+//     task queue would collapse the fast-lane into the task path and
+//     defeat the point of this whole file.
+//
+//  2. **No permission gate.** Chat bypasses agent.Loop's interactive
+//     permission prompt. Safety instead comes from the allowlist:
+//     only side-effect-free tools (DefaultChatToolAllowlist — read_file
+//     / glob / grep / web_fetch / web_search) reach the executor.
+//     Adding a tool to the allowlist without reviewing chat-context
+//     safety is a regression.
+//
+//  3. **Immediate stream.** The first provider token reaches the
+//     partner with sub-second latency; progress is surfaced via the
+//     StreamConsumer and chat-specific reactions (✍ on entry, 👍 /
+//     😢 on terminal outcome). Any new blocking step before
+//     c.provider.Stream compromises the perceived responsiveness
+//     that makes chat feel like "typing with Elnath" instead of
+//     "submitting a task".
+//
+// Phase L3.2 made prompt.Builder mandatory — a build failure here
+// yields the partner-facing ⚠️ chatPromptBuildFailureMessage plus an
+// error-tagged outcome, never a silent fallback to legacy text.
 func (c *ChatResponder) Respond(ctx context.Context, principal identity.Principal, userMessage string, replyToMsgID int64) error {
 	logger := c.logger.With(
 		"principal_user_id", principal.UserID,
