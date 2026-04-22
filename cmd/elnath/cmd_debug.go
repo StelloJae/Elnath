@@ -31,6 +31,8 @@ func cmdDebug(_ context.Context, args []string) error {
 		return debugScorecard(args[1:])
 	case "compact":
 		return debugCompact(context.Background(), args[1:])
+	case "prompt-cache":
+		return debugPromptCache(args[1:])
 	default:
 		return fmt.Errorf("debug: unknown subcommand %q (try: elnath debug help)", args[0])
 	}
@@ -45,6 +47,7 @@ Subcommands:
   consolidation <action>  Lesson consolidation controls (run [--force], help)
   scorecard [--json]      Phase 7.2 maturity scorecard (current snapshot)
   compact <session-id>    Simulate compaction for a session (dry-run; pre/post counts)
+  prompt-cache            Per-turn prompt-cache hit/miss + attribution (--session=<id> [--json])
   help                    Show this help
 `)
 	return nil
