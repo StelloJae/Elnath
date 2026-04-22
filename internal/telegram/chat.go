@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/stello/elnath/internal/daemon"
 	"github.com/stello/elnath/internal/identity"
 	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
@@ -125,6 +126,15 @@ type ChatPipelineDeps struct {
 	// path falls back to noopProgressRenderer so the call sites can
 	// invoke ReportTool/ReportStage/Finish/Wait unconditionally.
 	ProgressFactory func(chatID string) ProgressRenderer
+	// ProgressObserver, when set, receives a structured
+	// daemon.ProgressEvent for every chat tool invocation — same wire
+	// format the task path already uses, so scorecard / audit can
+	// subscribe to chat-path tool telemetry without a second envelope.
+	// Default is nil (off) per plan §4 OQ #5; consumers opt in
+	// explicitly. Unlike ProgressFactory, this hook emits even when
+	// the edit-bubble renderer is noop, so headless observers stay
+	// wired independently of the UI surface.
+	ProgressObserver func(daemon.ProgressEvent)
 }
 
 type ChatResponder struct {

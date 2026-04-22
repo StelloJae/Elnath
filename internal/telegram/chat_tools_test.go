@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stello/elnath/internal/daemon"
 	"github.com/stello/elnath/internal/identity"
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/prompt"
@@ -1348,6 +1349,107 @@ func TestChatResponder_ProgressFactoryNotInvokedForLegacyStream(t *testing.T) {
 	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// --- Phase L2.3: optional ProgressObserver hook ---
+
+// TestChatResponder_ProgressObserverReceivesToolEvents pins the L2.3
+// contract: when ChatPipelineDeps.ProgressObserver is wired, the chat
+// tool loop emits one daemon.ProgressEvent per tool invocation with
+// Kind=tool, ToolName, and Preview populated. This is the structured
+// wire format scorecard / audit subscribe to — identical to the
+// envelope task-path workers already use via daemon.TaskSink, so
+// chat-path and task-path tool telemetry flow through a single type.
+func TestChatResponder_ProgressObserverReceivesToolEvents(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{
+		steps: []chatProviderStep{
+			{toolUses: []chatProviderToolUse{
+				{id: "tu_1", name: "web_fetch", input: `{"url":"https://example.com/a"}`},
+				{id: "tu_2", name: "web_search", input: `{"query":"go modules"}`},
+			}},
+			{text: "done"},
+		},
+	}
+	exec := newChatMockExecutor()
+	exec.setResult("web_fetch", &tools.Result{Output: "ok"})
+	exec.setResult("web_search", &tools.Result{Output: "ok"})
+
+	var (
+		mu     sync.Mutex
+		events []daemon.ProgressEvent
+	)
+	observer := func(ev daemon.ProgressEvent) {
+		mu.Lock()
+		defer mu.Unlock()
+		events = append(events, ev)
+	}
+
+	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		Builder:          &stubChatBuilder{result: "SYS"},
+		ToolDefs:         []llm.ToolDef{{Name: "web_fetch"}, {Name: "web_search"}},
+		ToolExecutor:     exec,
+		ProgressObserver: observer,
+	}))
+
+	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(events) != 2 {
+		t.Fatalf("observer events = %d, want 2", len(events))
+	}
+	for i, want := range []struct {
+		kind    string
+		tool    string
+		preview string
+	}{
+		{daemon.ProgressKindTool, "web_fetch", "https://example.com/a"},
+		{daemon.ProgressKindTool, "web_search", "go modules"},
+	} {
+		if events[i].Kind != want.kind {
+			t.Errorf("events[%d].Kind = %q, want %q", i, events[i].Kind, want.kind)
+		}
+		if events[i].ToolName != want.tool {
+			t.Errorf("events[%d].ToolName = %q, want %q", i, events[i].ToolName, want.tool)
+		}
+		if events[i].Preview != want.preview {
+			t.Errorf("events[%d].Preview = %q, want %q", i, events[i].Preview, want.preview)
+		}
+	}
+}
+
+// TestChatResponder_ProgressObserverNilDoesntPanic pins the default
+// wiring: ProgressObserver is nil unless a consumer opts in. The tool
+// loop must skip observer emission without a nil-deref panic, matching
+// the plan §4 OQ #5 "off by default" decision.
+func TestChatResponder_ProgressObserverNilDoesntPanic(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{
+		steps: []chatProviderStep{
+			{toolUses: []chatProviderToolUse{
+				{id: "tu_1", name: "web_fetch", input: `{"url":"https://example.com"}`},
+			}},
+			{text: "done"},
+		},
+	}
+	exec := newChatMockExecutor()
+	exec.setResult("web_fetch", &tools.Result{Output: "ok"})
+
+	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		Builder:      &stubChatBuilder{result: "SYS"},
+		ToolDefs:     []llm.ToolDef{{Name: "web_fetch"}},
+		ToolExecutor: exec,
+		// ProgressObserver intentionally nil — default wiring.
+	}))
+
+	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 1)
+	if err != nil {
+		t.Fatalf("unexpected error with nil observer: %v", err)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/stello/elnath/internal/daemon"
 	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
 )
@@ -272,7 +273,15 @@ func (c *ChatResponder) runStreamWithTools(
 			// / throttles internally; bubble creation is lazy (first
 			// ReportTool is what triggers the initial SendMessage), so
 			// zero-tool chat turns stay bubble-free per plan OQ#1.
-			progress.ReportTool(tc.Name, chatToolProgressPreview(tc.Name, tc.Input))
+			toolPreview := chatToolProgressPreview(tc.Name, tc.Input)
+			progress.ReportTool(tc.Name, toolPreview)
+			// Phase L2.3: optional structured observer — same envelope the
+			// task path uses (daemon.ToolProgressEvent) so scorecard / audit
+			// can subscribe to chat tool timing without a second wire
+			// format. Off by default (ProgressObserver nil) per plan OQ #5.
+			if obs := c.pipeline.ProgressObserver; obs != nil {
+				obs(daemon.ToolProgressEvent(tc.Name, toolPreview))
+			}
 			if note := chatToolProgressNote(tc.Name, tc.Input); note != "" {
 				// Display-only: note is a "working on it" banner that goes to
 				// the partner's stream bubble while the tool runs. We do NOT
