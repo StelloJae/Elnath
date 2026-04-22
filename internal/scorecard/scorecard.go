@@ -26,6 +26,7 @@ type AxesReport struct {
 	OutcomeRecording     AxisReport `json:"outcome_recording"`
 	LessonExtraction     AxisReport `json:"lesson_extraction"`
 	SynthesisCompounding AxisReport `json:"synthesis_compounding"`
+	RoutingTrendSpearman AxisReport `json:"routing_trend_spearman"`
 }
 
 type SourcesPaths struct {
@@ -54,6 +55,7 @@ func Compute(paths SourcesPaths, now time.Time, elnathVersion string) Report {
 		OutcomeRecording:     computeOutcomeRecording(paths, now),
 		LessonExtraction:     computeLessonExtraction(paths, now),
 		SynthesisCompounding: computeSynthesisCompounding(paths, now),
+		RoutingTrendSpearman: computeRoutingTrendSpearman(paths, now),
 	}
 	return Report{
 		Timestamp:     now,
@@ -73,6 +75,7 @@ func aggregateOverall(a AxesReport) Score {
 		a.OutcomeRecording.Score,
 		a.LessonExtraction.Score,
 		a.SynthesisCompounding.Score,
+		a.RoutingTrendSpearman.Score,
 	}
 	for _, s := range all {
 		if s == ScoreDegraded {

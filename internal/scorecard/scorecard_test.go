@@ -29,12 +29,13 @@ func TestAggregateOverall(t *testing.T) {
 		axes AxesReport
 		want Score
 	}{
-		{"all OK", AxesReport{mk(ScoreOK), mk(ScoreOK), mk(ScoreOK), mk(ScoreOK)}, ScoreOK},
-		{"any DEGRADED wins", AxesReport{mk(ScoreOK), mk(ScoreDegraded), mk(ScoreOK), mk(ScoreOK)}, ScoreDegraded},
-		{"DEGRADED beats UNKNOWN", AxesReport{mk(ScoreDegraded), mk(ScoreUnknown), mk(ScoreOK), mk(ScoreOK)}, ScoreDegraded},
-		{"any UNKNOWN else", AxesReport{mk(ScoreOK), mk(ScoreUnknown), mk(ScoreOK), mk(ScoreOK)}, ScoreUnknown},
-		{"mixed OK/NASCENT", AxesReport{mk(ScoreOK), mk(ScoreNascent), mk(ScoreOK), mk(ScoreNascent)}, ScoreNascent},
-		{"all NASCENT", AxesReport{mk(ScoreNascent), mk(ScoreNascent), mk(ScoreNascent), mk(ScoreNascent)}, ScoreNascent},
+		{"all OK", AxesReport{mk(ScoreOK), mk(ScoreOK), mk(ScoreOK), mk(ScoreOK), mk(ScoreOK)}, ScoreOK},
+		{"any DEGRADED wins", AxesReport{mk(ScoreOK), mk(ScoreDegraded), mk(ScoreOK), mk(ScoreOK), mk(ScoreOK)}, ScoreDegraded},
+		{"DEGRADED beats UNKNOWN", AxesReport{mk(ScoreDegraded), mk(ScoreUnknown), mk(ScoreOK), mk(ScoreOK), mk(ScoreOK)}, ScoreDegraded},
+		{"any UNKNOWN else", AxesReport{mk(ScoreOK), mk(ScoreUnknown), mk(ScoreOK), mk(ScoreOK), mk(ScoreOK)}, ScoreUnknown},
+		{"mixed OK/NASCENT", AxesReport{mk(ScoreOK), mk(ScoreNascent), mk(ScoreOK), mk(ScoreNascent), mk(ScoreOK)}, ScoreNascent},
+		{"all NASCENT", AxesReport{mk(ScoreNascent), mk(ScoreNascent), mk(ScoreNascent), mk(ScoreNascent), mk(ScoreNascent)}, ScoreNascent},
+		{"trend DEGRADED wins too", AxesReport{mk(ScoreOK), mk(ScoreOK), mk(ScoreOK), mk(ScoreOK), mk(ScoreDegraded)}, ScoreDegraded},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -87,6 +88,9 @@ func TestComputeEndToEnd(t *testing.T) {
 	}
 	if r.Axes.SynthesisCompounding.Score != ScoreOK {
 		t.Errorf("synthesis: expected OK, got %v", r.Axes.SynthesisCompounding.Score)
+	}
+	if r.Axes.RoutingTrendSpearman.Score != ScoreNascent {
+		t.Errorf("routing_trend_spearman: expected NASCENT (single-workflow intent), got %v", r.Axes.RoutingTrendSpearman.Score)
 	}
 	if r.Overall != ScoreNascent {
 		t.Errorf("overall: expected NASCENT (mixed OK/NASCENT), got %v", r.Overall)

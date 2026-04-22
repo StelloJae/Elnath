@@ -177,3 +177,126 @@ func TestEvaluateRoutingTrend_ZeroTimestampSkipped(t *testing.T) {
 		t.Fatalf("zero-timestamp noise must not flip verdict: got %v, want OK", got.Verdict)
 	}
 }
+
+func TestDecayedHitRate_FormulaAndEdgeCases(t *testing.T) {
+	now := time.Date(2026, 4, 22, 12, 0, 0, 0, time.UTC)
+	halfLife := 7.0
+
+	if got := decayedHitRate(nil, halfLife, now); got != 0 {
+		t.Fatalf("empty records: got %v, want 0", got)
+	}
+
+	recs := []learning.OutcomeRecord{{Success: true, Timestamp: now}}
+	if got := decayedHitRate(recs, 0, now); got != 0 {
+		t.Fatalf("halfLife=0 guard: got %v, want 0", got)
+	}
+
+	// fresh weight = 1, old (age=14d, halfLife=7d) weight = 0.25.
+	// weightedSuccess = 1*1 + 0.25*0 = 1; weightTotal = 1.25; result = 0.8.
+	fresh := learning.OutcomeRecord{Success: true, Timestamp: now}
+	old := learning.OutcomeRecord{Success: false, Timestamp: now.Add(-14 * 24 * time.Hour)}
+	got := decayedHitRate([]learning.OutcomeRecord{fresh, old}, halfLife, now)
+	if got < 0.79 || got > 0.81 {
+		t.Fatalf("decay weighting: got %.4f, want ~0.8", got)
+	}
+
+	// Clock-skew clamp: future record treated as age=0, weight=1, perfect rate.
+	future := learning.OutcomeRecord{Success: true, Timestamp: now.Add(24 * time.Hour)}
+	if got := decayedHitRate([]learning.OutcomeRecord{future}, halfLife, now); got != 1.0 {
+		t.Fatalf("future record clamp: got %.4f, want 1.0", got)
+	}
+
+	// All failures -> 0 regardless of recency.
+	fail := learning.OutcomeRecord{Success: false, Timestamp: now}
+	if got := decayedHitRate([]learning.OutcomeRecord{fail, fail}, halfLife, now); got != 0 {
+		t.Fatalf("all-fail: got %.4f, want 0", got)
+	}
+}
+
+func TestComputeRoutingTrendSpearman_MissingFile(t *testing.T) {
+	got := computeRoutingTrendSpearman(SourcesPaths{OutcomesPath: "/nonexistent/never.jsonl"}, time.Now())
+	if got.Score != ScoreUnknown {
+		t.Fatalf("missing outcomes file: got %v, want UNKNOWN", got.Score)
+	}
+}
+
+func TestComputeRoutingTrendSpearman_CorpusSnapshot(t *testing.T) {
+	p := "testdata/trend_corpus.jsonl"
+	now := time.Date(2026, 4, 22, 12, 0, 0, 0, time.UTC)
+	got := computeRoutingTrendSpearman(SourcesPaths{OutcomesPath: p}, now)
+
+	if got.Score != ScoreDegraded {
+		t.Fatalf("corpus Score: got %v reason=%q, want DEGRADED", got.Score, got.Reason)
+	}
+	overall, _ := got.Metrics["overall_verdict"].(string)
+	if overall != string(CellVerdictFail) {
+		t.Fatalf("overall_verdict: got %q, want FAIL", overall)
+	}
+	if total, _ := got.Metrics["total_records"].(int); total != 50 {
+		t.Fatalf("total_records: got %d, want 50", total)
+	}
+
+	cells, _ := got.Metrics["cells"].([]map[string]any)
+	if len(cells) != 3 {
+		t.Fatalf("cells count: got %d, want 3", len(cells))
+	}
+	verdicts := map[string]string{}
+	decays := map[string]float64{}
+	ns := map[string]int{}
+	for _, c := range cells {
+		key := c["intent"].(string) + "/" + c["workflow"].(string)
+		verdicts[key] = c["verdict"].(string)
+		decays[key] = c["decayed_rate"].(float64)
+		ns[key] = c["n"].(int)
+	}
+	wantVerdicts := map[string]string{
+		"coding/single": string(CellVerdictOK),
+		"coding/team":   string(CellVerdictFail),
+		"solo/only":     string(CellVerdictInsufficientData),
+	}
+	for k, v := range wantVerdicts {
+		if verdicts[k] != v {
+			t.Fatalf("cell %s verdict: got %q, want %q", k, verdicts[k], v)
+		}
+	}
+	wantN := map[string]int{
+		"coding/single": 15,
+		"coding/team":   15,
+		"solo/only":     20,
+	}
+	for k, v := range wantN {
+		if ns[k] != v {
+			t.Fatalf("cell %s n: got %d, want %d", k, ns[k], v)
+		}
+	}
+	for _, k := range []string{"coding/single", "coding/team"} {
+		d := decays[k]
+		if d < 0 || d > 1 {
+			t.Fatalf("cell %s decayed_rate out of range: %.4f", k, d)
+		}
+	}
+}
+
+func TestComputeRoutingTrendSpearman_DeterministicTwice(t *testing.T) {
+	p := "testdata/trend_corpus.jsonl"
+	now := time.Date(2026, 4, 22, 12, 0, 0, 0, time.UTC)
+	a := computeRoutingTrendSpearman(SourcesPaths{OutcomesPath: p}, now)
+	b := computeRoutingTrendSpearman(SourcesPaths{OutcomesPath: p}, now)
+
+	if a.Score != b.Score {
+		t.Fatalf("determinism: Score diff %v vs %v", a.Score, b.Score)
+	}
+	if a.Reason != b.Reason {
+		t.Fatalf("determinism: Reason diff %q vs %q", a.Reason, b.Reason)
+	}
+	ov1, _ := a.Metrics["overall_verdict"].(string)
+	ov2, _ := b.Metrics["overall_verdict"].(string)
+	if ov1 != ov2 {
+		t.Fatalf("determinism: overall_verdict diff %q vs %q", ov1, ov2)
+	}
+	t1, _ := a.Metrics["total_records"].(int)
+	t2, _ := b.Metrics["total_records"].(int)
+	if t1 != t2 {
+		t.Fatalf("determinism: total_records diff %d vs %d", t1, t2)
+	}
+}

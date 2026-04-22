@@ -2,6 +2,8 @@ package scorecard
 
 import (
 	"fmt"
+	"math"
+	"os"
 	"sort"
 	"time"
 
@@ -10,8 +12,8 @@ import (
 )
 
 // TrendConfig tunes the rolling-Spearman routing-trend axis introduced in
-// Phase 7.4c. Window bucketing, the eligibility gate, and (in Phase 2) the
-// decay-weighted rate all read their parameters from this struct.
+// Phase 7.4c. Window bucketing, the eligibility gate, and the decay-weighted
+// companion rate all read their parameters from this struct.
 type TrendConfig struct {
 	Window               int
 	MinCellSamples       int
@@ -20,7 +22,7 @@ type TrendConfig struct {
 }
 
 // DefaultTrendConfig returns the partner-approved v31 defaults: W=5,
-// minCellSamples=15, diversity≥2, half-life 7 days.
+// minCellSamples=15, diversity>=2, half-life 7 days.
 func DefaultTrendConfig() TrendConfig {
 	return TrendConfig{
 		Window:               5,
@@ -53,6 +55,7 @@ type CellResult struct {
 	Verdict        CellVerdict
 	SpearmanCoeff  float64
 	WindowHitRates []float64
+	DecayedRate    float64
 	Reason         string
 }
 
@@ -66,13 +69,10 @@ type TrendAxisResult struct {
 	InsufficientCells    int
 }
 
-// EvaluateRoutingTrend is the Phase 1 entrypoint: a pure function over a
-// slice of outcome records. Records with zero Timestamp are excluded and
-// counted in SkippedZeroTimestamp (Risk §2 R2). The `now` parameter is
-// retained for Phase 2's decay-weighted rate and is presently unused.
+// EvaluateRoutingTrend is the pure Phase 1/2 entrypoint. Records with zero
+// Timestamp are excluded and counted in SkippedZeroTimestamp (Plan §2 R2).
+// `now` feeds the decay-weighted companion rate.
 func EvaluateRoutingTrend(records []learning.OutcomeRecord, cfg TrendConfig, now time.Time) TrendAxisResult {
-	_ = now
-
 	usable := make([]learning.OutcomeRecord, 0, len(records))
 	skipped := 0
 	for _, r := range records {
@@ -110,7 +110,7 @@ func EvaluateRoutingTrend(records []learning.OutcomeRecord, cfg TrendConfig, now
 	insufficient := 0
 	for _, k := range keys {
 		distinct := len(workflowsByIntent[k.Intent])
-		res := evaluateTrendCell(k, byCell[k], distinct, cfg)
+		res := evaluateTrendCell(k, byCell[k], distinct, cfg, now)
 		cells = append(cells, res)
 		if res.Verdict == CellVerdictInsufficientData {
 			insufficient++
@@ -129,7 +129,7 @@ func EvaluateRoutingTrend(records []learning.OutcomeRecord, cfg TrendConfig, now
 	}
 }
 
-func evaluateTrendCell(k CellKey, records []learning.OutcomeRecord, distinctWorkflowsInIntent int, cfg TrendConfig) CellResult {
+func evaluateTrendCell(k CellKey, records []learning.OutcomeRecord, distinctWorkflowsInIntent int, cfg TrendConfig, now time.Time) CellResult {
 	n := len(records)
 	if distinctWorkflowsInIntent < cfg.MinDistinctWorkflows {
 		return CellResult{
@@ -153,6 +153,8 @@ func evaluateTrendCell(k CellKey, records []learning.OutcomeRecord, distinctWork
 		return sorted[i].Timestamp.Before(sorted[j].Timestamp)
 	})
 
+	decayed := decayedHitRate(sorted, cfg.HalfLifeDays, now)
+
 	rates := bucketTrendHitRates(sorted, cfg.Window)
 	if len(rates) < 3 {
 		return CellResult{
@@ -160,6 +162,7 @@ func evaluateTrendCell(k CellKey, records []learning.OutcomeRecord, distinctWork
 			N:              n,
 			Verdict:        CellVerdictInsufficientData,
 			WindowHitRates: rates,
+			DecayedRate:    decayed,
 			Reason:         fmt.Sprintf("only %d non-empty windows; need >= 3 for Spearman", len(rates)),
 		}
 	}
@@ -172,6 +175,7 @@ func evaluateTrendCell(k CellKey, records []learning.OutcomeRecord, distinctWork
 			Verdict:        CellVerdictDegraded,
 			SpearmanCoeff:  0.0,
 			WindowHitRates: rates,
+			DecayedRate:    decayed,
 			Reason:         "flat hit-rate across all windows",
 		}
 	}
@@ -193,14 +197,15 @@ func evaluateTrendCell(k CellKey, records []learning.OutcomeRecord, distinctWork
 		Verdict:        verdict,
 		SpearmanCoeff:  coeff,
 		WindowHitRates: rates,
+		DecayedRate:    decayed,
 		Reason:         reason,
 	}
 }
 
 // bucketTrendHitRates groups time-sorted records into W equal-count windows
-// and returns per-window hit rate. When n < W the window count collapses to n
-// so every returned bucket is non-empty; callers must check the length for
-// Spearman eligibility (>= 3).
+// and returns per-window hit rate. Callers must check len(rates) >= 3 before
+// feeding Spearman; the caller path already enforces n >= minCellSamples so
+// with W=5 every returned bucket has at least (minCellSamples/W) records.
 func bucketTrendHitRates(sorted []learning.OutcomeRecord, W int) []float64 {
 	n := len(sorted)
 	if W <= 0 || n == 0 {
@@ -227,9 +232,39 @@ func bucketTrendHitRates(sorted []learning.OutcomeRecord, W int) []float64 {
 	return rates
 }
 
+// decayedHitRate computes the exponentially-decayed success rate:
+//
+//	rate = Σ (success_i × w_i) / Σ w_i
+//	w_i  = exp(-ln(2) / halfLife × age_days_i)
+//
+// Records with future timestamps (clock skew) are clamped to age=0 so they
+// don't blow up the weight. Empty input or non-positive halfLife returns 0.
+func decayedHitRate(records []learning.OutcomeRecord, halfLifeDays float64, now time.Time) float64 {
+	if halfLifeDays <= 0 || len(records) == 0 {
+		return 0
+	}
+	lambda := math.Ln2 / halfLifeDays
+	var weightedSuccess, weightTotal float64
+	for _, r := range records {
+		ageDays := now.Sub(r.Timestamp).Hours() / 24.0
+		if ageDays < 0 {
+			ageDays = 0
+		}
+		w := math.Exp(-lambda * ageDays)
+		if r.Success {
+			weightedSuccess += w
+		}
+		weightTotal += w
+	}
+	if weightTotal == 0 {
+		return 0
+	}
+	return weightedSuccess / weightTotal
+}
+
 // worstEligibleTrendVerdict composes the axis-level verdict: FAIL > DEGRADED
 // > OK across eligible cells. Returns INSUFFICIENT_DATA only when no cell is
-// eligible (e.g., single-workflow intents, freshly seeded streams).
+// eligible.
 func worstEligibleTrendVerdict(cells []CellResult) CellVerdict {
 	rank := map[CellVerdict]int{
 		CellVerdictOK:       0,
@@ -251,4 +286,75 @@ func worstEligibleTrendVerdict(cells []CellResult) CellVerdict {
 		return CellVerdictInsufficientData
 	}
 	return worst
+}
+
+// computeRoutingTrendSpearman is the scorecard adapter: loads records from
+// OutcomesPath, evaluates the trend axis, and projects the rich
+// TrendAxisResult into the Score/Metrics/Reason triple the rest of the
+// scorecard consumes. Both FAIL and DEGRADED cells surface as ScoreDegraded
+// — the existing Score enum has no FAIL slot, but the raw verdict stays in
+// Metrics["overall_verdict"] (and per-cell entries) so operators keep the
+// FAIL vs DEGRADED distinction.
+func computeRoutingTrendSpearman(paths SourcesPaths, now time.Time) AxisReport {
+	if _, err := os.Stat(paths.OutcomesPath); err != nil {
+		return AxisReport{
+			Score:   ScoreUnknown,
+			Metrics: map[string]any{},
+			Reason:  fmt.Sprintf("outcomes file missing: %s", paths.OutcomesPath),
+		}
+	}
+	store := learning.NewOutcomeStore(paths.OutcomesPath)
+	outcomes, err := store.Recent(0)
+	if err != nil {
+		return AxisReport{
+			Score:   ScoreUnknown,
+			Metrics: map[string]any{},
+			Reason:  fmt.Sprintf("load outcomes: %v", err),
+		}
+	}
+
+	cfg := DefaultTrendConfig()
+	res := EvaluateRoutingTrend(outcomes, cfg, now)
+
+	score := ScoreUnknown
+	var reason string
+	switch res.OverallVerdict {
+	case CellVerdictOK:
+		score = ScoreOK
+		reason = fmt.Sprintf("%d eligible cell(s) improving or stable", res.EligibleCells)
+	case CellVerdictDegraded:
+		score = ScoreDegraded
+		reason = fmt.Sprintf("%d eligible cell(s) include a DEGRADED (flat) trend", res.EligibleCells)
+	case CellVerdictFail:
+		score = ScoreDegraded
+		reason = fmt.Sprintf("%d eligible cell(s) include a FAIL (declining) trend", res.EligibleCells)
+	case CellVerdictInsufficientData:
+		score = ScoreNascent
+		reason = fmt.Sprintf("no eligible cells (total=%d records, insufficient=%d cells)", res.TotalRecords, res.InsufficientCells)
+	}
+
+	cellSummaries := make([]map[string]any, 0, len(res.Cells))
+	for _, c := range res.Cells {
+		cellSummaries = append(cellSummaries, map[string]any{
+			"intent":         c.Key.Intent,
+			"workflow":       c.Key.Workflow,
+			"n":              c.N,
+			"verdict":        string(c.Verdict),
+			"spearman_coeff": c.SpearmanCoeff,
+			"decayed_rate":   c.DecayedRate,
+			"reason":         c.Reason,
+		})
+	}
+	metrics := map[string]any{
+		"overall_verdict":        string(res.OverallVerdict),
+		"total_records":          res.TotalRecords,
+		"skipped_zero_timestamp": res.SkippedZeroTimestamp,
+		"eligible_cells":         res.EligibleCells,
+		"insufficient_cells":     res.InsufficientCells,
+		"window":                 cfg.Window,
+		"min_cell_samples":       cfg.MinCellSamples,
+		"half_life_days":         cfg.HalfLifeDays,
+		"cells":                  cellSummaries,
+	}
+	return AxisReport{Score: score, Metrics: metrics, Reason: reason}
 }

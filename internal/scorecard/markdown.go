@@ -19,6 +19,7 @@ func RenderMarkdown(r Report) string {
 		{"outcome_recording", r.Axes.OutcomeRecording},
 		{"lesson_extraction", r.Axes.LessonExtraction},
 		{"synthesis_compounding", r.Axes.SynthesisCompounding},
+		{"routing_trend_spearman", r.Axes.RoutingTrendSpearman},
 	}
 	for _, a := range axes {
 		fmt.Fprintf(&b, "  %-24s%-10s%s\n", a.name, a.report.Score, a.report.Reason)

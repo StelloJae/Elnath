@@ -17,6 +17,7 @@ func TestRenderMarkdownContainsAllAxes(t *testing.T) {
 			OutcomeRecording:     AxisReport{Score: ScoreNascent, Reason: "outcomes_total < 5"},
 			LessonExtraction:     AxisReport{Score: ScoreOK, Reason: "12 lessons, 10 superseded"},
 			SynthesisCompounding: AxisReport{Score: ScoreOK, Reason: "2 syntheses, 1 successful run"},
+			RoutingTrendSpearman: AxisReport{Score: ScoreNascent, Reason: "no eligible cells"},
 		},
 		Sources: SourcesPaths{
 			OutcomesPath: "/tmp/outcomes.jsonl",
@@ -34,6 +35,8 @@ func TestRenderMarkdownContainsAllAxes(t *testing.T) {
 		"outcome_recording",
 		"lesson_extraction",
 		"synthesis_compounding",
+		"routing_trend_spearman",
+		"no eligible cells",
 		"2 outcomes",
 		"12 lessons, 10 superseded",
 	} {
