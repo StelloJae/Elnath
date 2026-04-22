@@ -576,3 +576,68 @@ func TestReadSessionHeaderCorruptEmitsELN070(t *testing.T) {
 	_, err := ReadSessionHeader(path)
 	assertELN070(t, err)
 }
+
+// TestSession_AppendMessage_PreservesSourceInJSONL (Phase L1.2 / FU-SessionPersistSource)
+// closes the L1.1 ship gap: Message.Source was added as a persist-only
+// field with a dedicated MarshalPersist, but AppendMessage still marshals
+// via the default json.Marshal (the LLM-wire MarshalJSON that intentionally
+// drops Source). So pre-L1.2 chat/task writes land Source="" on disk even
+// when the caller sets it. The load-side sanitiser L1.3 is about to depend
+// on Source being present, so this round-trip has to hold before the chat
+// write-side commits a "chat" tag.
+func TestSession_AppendMessage_PreservesSourceInJSONL(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	s, err := NewSession(dir)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	userMsg := llm.NewUserMessage("hello")
+	userMsg.Source = llm.SourceChat
+	asstMsg := llm.NewAssistantMessage("world")
+	asstMsg.Source = llm.SourceChat
+	for _, m := range []llm.Message{userMsg, asstMsg} {
+		if err := s.AppendMessage(m); err != nil {
+			t.Fatalf("AppendMessage: %v", err)
+		}
+	}
+
+	loaded, err := LoadSession(dir, s.ID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if len(loaded.Messages) != 2 {
+		t.Fatalf("loaded messages = %d, want 2", len(loaded.Messages))
+	}
+	for i, got := range loaded.Messages {
+		if got.Source != llm.SourceChat {
+			t.Errorf("loaded.Messages[%d].Source = %q, want %q (persist should use MarshalPersist, not MarshalJSON)", i, got.Source, llm.SourceChat)
+		}
+	}
+}
+
+// TestSession_AppendMessage_LegacySourceStaysEmpty is the backwards-compat
+// guard: when Source is not set by the caller, the persisted record keeps
+// it empty (omitempty) so pre-L1 JSONL round-trips continue to match their
+// original byte shape.
+func TestSession_AppendMessage_LegacySourceStaysEmpty(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	s, err := NewSession(dir)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if err := s.AppendMessage(llm.NewUserMessage("plain")); err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+	loaded, err := LoadSession(dir, s.ID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if len(loaded.Messages) != 1 || loaded.Messages[0].Source != "" {
+		t.Errorf("loaded.Messages[0].Source = %q, want empty (legacy caller)", loaded.Messages[0].Source)
+	}
+}

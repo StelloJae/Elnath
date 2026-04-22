@@ -244,7 +244,7 @@ func (s *Session) AppendMessage(msg llm.Message) error {
 		}
 	}
 
-	data, err := json.Marshal(msg)
+	data, err := msg.MarshalPersist()
 	if err != nil {
 		return fmt.Errorf("session: marshal message: %w", err)
 	}
