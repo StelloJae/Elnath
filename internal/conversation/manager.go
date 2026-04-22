@@ -402,29 +402,48 @@ func (m *Manager) EnsureChatSession(_ context.Context, principal identity.Princi
 	return s.ID, nil
 }
 
-// AppendChatTurn persists a user message and its assistant response to the
-// session's JSONL transcript (and to the secondary history store when one
-// is configured). The chat path skips intent classification and context
-// compression that SendMessage performs, because the Telegram chat surface
-// runs outside the task queue with a fixed 1024-token output cap.
+// AppendChatTurn persists a full chat turn to the session's JSONL
+// transcript (and to the secondary history store when one is configured).
+// The slice is written in order, so callers can pass the complete
+// turn sequence — user message, assistant text/tool_use blocks, paired
+// user tool_result blocks, final assistant text — and the transcript
+// reflects the conversation 1:1 rather than the text-only final answer.
+// The chat path skips intent classification and context compression that
+// SendMessage performs, because the Telegram chat surface runs outside
+// the task queue with a fixed output cap.
 //
-// Locale state is refreshed from the user message so subsequent identity/
-// prompt rendering picks up language switches between turns.
-func (m *Manager) AppendChatTurn(_ context.Context, sessionID string, user, assistant llm.Message) error {
+// Locale state is refreshed from the first user message in the slice so
+// subsequent identity/prompt rendering picks up language switches between
+// turns. Empty slices are a no-op — legacy callers that ended up with
+// nothing to persist (e.g., stream produced no final text) shouldn't fail.
+func (m *Manager) AppendChatTurn(_ context.Context, sessionID string, messages []llm.Message) error {
+	if len(messages) == 0 {
+		return nil
+	}
 	s, err := m.LoadSession(sessionID)
 	if err != nil {
 		return fmt.Errorf("conversation: append chat turn: %w", err)
 	}
-	if err := s.AppendMessages([]llm.Message{user, assistant}); err != nil {
+	if err := s.AppendMessages(messages); err != nil {
 		return fmt.Errorf("conversation: persist chat turn: %w", err)
 	}
-	lang, conf := locale.DetectLanguage(user.Text())
-	resolved := locale.Resolve(
-		locale.DetectResult{Lang: lang, Confidence: conf},
-		m.LastLocale(sessionID),
-		m.configuredLocale(),
-	)
-	m.setLastLocale(sessionID, resolved)
+	for _, msg := range messages {
+		if msg.Role != llm.RoleUser {
+			continue
+		}
+		text := msg.Text()
+		if text == "" {
+			continue
+		}
+		lang, conf := locale.DetectLanguage(text)
+		resolved := locale.Resolve(
+			locale.DetectResult{Lang: lang, Confidence: conf},
+			m.LastLocale(sessionID),
+			m.configuredLocale(),
+		)
+		m.setLastLocale(sessionID, resolved)
+		break
+	}
 	return nil
 }
 

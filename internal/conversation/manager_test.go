@@ -1126,7 +1126,7 @@ func TestManagerAppendChatTurn_PersistsUserAndAssistant(t *testing.T) {
 	userMsg := llm.NewUserMessage("what time is it?")
 	asstMsg := llm.NewAssistantMessage("it's 9 pm")
 
-	if err := mgr.AppendChatTurn(context.Background(), sess.ID, userMsg, asstMsg); err != nil {
+	if err := mgr.AppendChatTurn(context.Background(), sess.ID, []llm.Message{userMsg, asstMsg}); err != nil {
 		t.Fatalf("AppendChatTurn: %v", err)
 	}
 
@@ -1151,23 +1151,57 @@ func TestManagerAppendChatTurn_PersistsUserAndAssistant(t *testing.T) {
 	}
 }
 
+// TestManagerAppendChatTurn_PreservesSourceInReload (L1.2 R4) locks in
+// the end-to-end round-trip that closes the universal-message-schema
+// contract: write through AppendChatTurn → session JSONL (MarshalPersist)
+// → LoadSession (UnmarshalJSON) must return the same Source tag the
+// caller set. This is the integration guard that Phase L1.1's unit-level
+// MarshalPersist tests didn't cover, and the whole reason L1.2 is
+// allowed to pull session.AppendMessage from MarshalJSON onto
+// MarshalPersist.
+func TestManagerAppendChatTurn_PreservesSourceInReload(t *testing.T) {
+	sess, dir := newTestSession(t)
+	mgr := NewManager(nil, dir)
+	ctx := context.Background()
+
+	userMsg := llm.NewUserMessage("ping")
+	userMsg.Source = llm.SourceChat
+	asstMsg := llm.NewAssistantMessage("pong")
+	asstMsg.Source = llm.SourceChat
+
+	if err := mgr.AppendChatTurn(ctx, sess.ID, []llm.Message{userMsg, asstMsg}); err != nil {
+		t.Fatalf("AppendChatTurn: %v", err)
+	}
+
+	reloaded, err := mgr.LoadSession(sess.ID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if got := len(reloaded.Messages); got != 2 {
+		t.Fatalf("reloaded messages = %d, want 2", got)
+	}
+	for i, m := range reloaded.Messages {
+		if m.Source != llm.SourceChat {
+			t.Errorf("reloaded.Messages[%d].Source = %q, want %q", i, m.Source, llm.SourceChat)
+		}
+	}
+}
+
 func TestManagerAppendChatTurn_AccumulatesAcrossTurns(t *testing.T) {
 	sess, dir := newTestSession(t)
 	mgr := NewManager(nil, dir)
 	ctx := context.Background()
 
-	if err := mgr.AppendChatTurn(ctx,
-		sess.ID,
+	if err := mgr.AppendChatTurn(ctx, sess.ID, []llm.Message{
 		llm.NewUserMessage("hi"),
 		llm.NewAssistantMessage("hello"),
-	); err != nil {
+	}); err != nil {
 		t.Fatalf("first AppendChatTurn: %v", err)
 	}
-	if err := mgr.AppendChatTurn(ctx,
-		sess.ID,
+	if err := mgr.AppendChatTurn(ctx, sess.ID, []llm.Message{
 		llm.NewUserMessage("what did I just say?"),
 		llm.NewAssistantMessage("you said hi"),
-	); err != nil {
+	}); err != nil {
 		t.Fatalf("second AppendChatTurn: %v", err)
 	}
 

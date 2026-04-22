@@ -546,8 +546,20 @@ func TestChatResponder_TrimsHistoryAtMax(t *testing.T) {
 
 type chatAppend struct {
 	sessionID string
-	user      llm.Message
-	assistant llm.Message
+	messages  []llm.Message
+}
+
+// firstMessageByRole returns the first message in the append whose role
+// matches. Tests used the pre-L1.2 two-argument persister shape and
+// looked at `user` / `assistant` directly; the slice variant keeps the
+// same assertions readable by pulling the paired messages back out.
+func (a chatAppend) firstMessageByRole(role string) (llm.Message, bool) {
+	for _, m := range a.messages {
+		if m.Role == role {
+			return m, true
+		}
+	}
+	return llm.Message{}, false
 }
 
 type stubChatPersister struct {
@@ -572,13 +584,15 @@ func (p *stubChatPersister) EnsureChatSession(_ context.Context, principal ident
 	return p.ensuredSession, nil
 }
 
-func (p *stubChatPersister) AppendChatTurn(_ context.Context, sid string, user, assistant llm.Message) error {
+func (p *stubChatPersister) AppendChatTurn(_ context.Context, sid string, messages []llm.Message) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.appendErr != nil {
 		return p.appendErr
 	}
-	p.appends = append(p.appends, chatAppend{sessionID: sid, user: user, assistant: assistant})
+	copied := make([]llm.Message, len(messages))
+	copy(copied, messages)
+	p.appends = append(p.appends, chatAppend{sessionID: sid, messages: copied})
 	return nil
 }
 
@@ -647,11 +661,13 @@ func TestChatResponder_PersistsTurnToBoundSession(t *testing.T) {
 	if a.sessionID != "sess-bound" {
 		t.Errorf("sessionID = %q, want sess-bound", a.sessionID)
 	}
-	if a.user.Role != llm.RoleUser || a.user.Text() != "hi there" {
-		t.Errorf("user msg = {%q, %q}, want {user, hi there}", a.user.Role, a.user.Text())
+	userMsg, ok := a.firstMessageByRole(llm.RoleUser)
+	if !ok || userMsg.Text() != "hi there" {
+		t.Errorf("user msg = {%q, %q}, want {user, hi there}", userMsg.Role, userMsg.Text())
 	}
-	if a.assistant.Role != llm.RoleAssistant || a.assistant.Text() != "hello back" {
-		t.Errorf("assistant msg = {%q, %q}, want {assistant, hello back}", a.assistant.Role, a.assistant.Text())
+	asstMsg, ok := a.firstMessageByRole(llm.RoleAssistant)
+	if !ok || asstMsg.Text() != "hello back" {
+		t.Errorf("assistant msg = {%q, %q}, want {assistant, hello back}", asstMsg.Role, asstMsg.Text())
 	}
 }
 
@@ -727,6 +743,42 @@ func TestChatResponder_SkipsPersistWhenStreamFails(t *testing.T) {
 	}
 	if remembered := binder.snapshot(); len(remembered) != 0 {
 		t.Errorf("expected 0 Remember calls on stream error, got %d", len(remembered))
+	}
+}
+
+// TestChatResponder_PersistsMessagesWithSourceChat (L1.2 R1) pins the
+// provenance marker the chat-path must stamp on every persisted message.
+// Source="chat" is the contract the L1.3 load-side sanitiser will read
+// to decide which tool blocks to keep (chat-owned) vs strip (task-origin
+// bleed from the shared session JSONL). This test walks the legacy /
+// no-tool-loop path; the tool-loop variant is covered further below.
+func TestChatResponder_PersistsMessagesWithSourceChat(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{response: "hello back"}
+	lookup := &stubSessionLookup{session: "sess-bound", ok: true}
+	persister := &stubChatPersister{}
+
+	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		Builder:   &stubChatBuilder{result: "SYS"},
+		Lookup:    lookup,
+		Persister: persister,
+	}))
+
+	if err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi there", 1); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	appends := persister.snapshot()
+	if len(appends) != 1 {
+		t.Fatalf("expected 1 AppendChatTurn call, got %d", len(appends))
+	}
+	if got := len(appends[0].messages); got != 2 {
+		t.Fatalf("persisted messages = %d, want 2 (user + assistant)", got)
+	}
+	for i, msg := range appends[0].messages {
+		if msg.Source != llm.SourceChat {
+			t.Errorf("messages[%d] Source = %q, want %q", i, msg.Source, llm.SourceChat)
+		}
 	}
 }
 

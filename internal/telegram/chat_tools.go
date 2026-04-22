@@ -264,13 +264,28 @@ func (c *ChatResponder) runStreamWithTools(
 	systemPrompt string,
 	sc *StreamConsumer,
 	replyToMsgID int64,
-) (string, *chatRunStats, error) {
+) (string, []llm.Message, *chatRunStats, error) {
 	_ = replyToMsgID // reserved for future tool-lifecycle reactions; entry-side ✍ handles the current UX target.
+	turnStart := len(initialMessages)
 	messages := make([]llm.Message, 0, len(initialMessages)+2*maxChatToolIterations)
 	messages = append(messages, initialMessages...)
 	stats := newChatRunStats()
 
 	var fullText strings.Builder
+
+	// turnDelta peels off just the messages this run appended — everything
+	// past `turnStart` in the working `messages` slice. Returned alongside
+	// fullText so the persist path (Respond → buildChatPersistTurn) can
+	// write the complete block sequence (assistant[text+tool_use] →
+	// user[tool_result] → ... → assistant[final text]) with Source="chat".
+	turnDelta := func() []llm.Message {
+		if len(messages) <= turnStart {
+			return nil
+		}
+		delta := make([]llm.Message, len(messages)-turnStart)
+		copy(delta, messages[turnStart:])
+		return delta
+	}
 
 	for iter := 0; iter < maxChatToolIterations; iter++ {
 		stats.iterations++
@@ -284,27 +299,35 @@ func (c *ChatResponder) runStreamWithTools(
 
 		stepText, toolCalls, err := c.streamOneStep(ctx, req, sc, stats)
 		if err != nil {
-			return fullText.String(), stats, err
+			return fullText.String(), turnDelta(), stats, err
 		}
 		fullText.WriteString(stepText)
-
-		if len(toolCalls) == 0 {
-			return fullText.String(), stats, nil
-		}
 
 		var textParts []string
 		if stepText != "" {
 			textParts = []string{stepText}
 		}
+
+		if len(toolCalls) == 0 {
+			// Terminal text step: record the final assistant message in
+			// the turn delta so persist sees the answer text, not just the
+			// provider-visible transcript.
+			if stepText != "" {
+				messages = append(messages, llm.BuildAssistantMessage(textParts, nil))
+			}
+			return fullText.String(), turnDelta(), stats, nil
+		}
+
 		messages = append(messages, llm.BuildAssistantMessage(textParts, toolCalls))
 
 		for _, tc := range toolCalls {
 			if note := chatToolProgressNote(tc.Name, tc.Input); note != "" {
 				// Display-only: note is a "working on it" banner that goes to
 				// the partner's stream bubble while the tool runs. We do NOT
-				// append it to fullText because fullText is what lands in
-				// session JSONL via persistChatTurn and in learning outcomes
-				// via output-tokens inference. Dogfood 2026-04-21 17:46 KST
+				// append it to fullText or to the assistant message in the
+				// turn delta because fullText lands in the session JSONL
+				// (via persistChatTurn) and in learning outcomes (via
+				// output-tokens inference). Dogfood 2026-04-21 17:46 KST
 				// showed that persisting notes pollutes chat history (low
 				// signal once the turn is done) and, worst case, leaves a
 				// stored assistantText consisting only of progress banners
@@ -319,7 +342,7 @@ func (c *ChatResponder) runStreamWithTools(
 		}
 	}
 
-	return fullText.String(), stats, fmt.Errorf("chat tool loop exceeded max iterations (%d)", maxChatToolIterations)
+	return fullText.String(), turnDelta(), stats, fmt.Errorf("chat tool loop exceeded max iterations (%d)", maxChatToolIterations)
 }
 
 func (c *ChatResponder) streamOneStep(ctx context.Context, req llm.ChatRequest, sc *StreamConsumer, stats *chatRunStats) (string, []llm.CompletedToolCall, error) {

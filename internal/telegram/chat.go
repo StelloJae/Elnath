@@ -74,9 +74,16 @@ type ChatSessionLookup interface {
 // ChatSessionPersister creates a new chat-bound session (when one is not yet
 // bound) and appends completed chat turns to the session transcript.
 // conversation.Manager satisfies this via EnsureChatSession / AppendChatTurn.
+//
+// AppendChatTurn takes a slice so the chat path can persist a full turn
+// (user message + assistant text/tool_use blocks + paired user tool_result
+// blocks + final assistant text) as a single atomic call. Each message's
+// Source field tags its origin so load-side sanitisers can preserve the
+// chat-owned tool blocks while still stripping task-origin blocks bleeding
+// in from the shared session JSONL.
 type ChatSessionPersister interface {
 	EnsureChatSession(ctx context.Context, principal identity.Principal) (string, error)
-	AppendChatTurn(ctx context.Context, sessionID string, user, assistant llm.Message) error
+	AppendChatTurn(ctx context.Context, sessionID string, messages []llm.Message) error
 }
 
 // ChatSessionRemember records a newly-created chat→session binding so future
@@ -201,15 +208,16 @@ func (c *ChatResponder) Respond(ctx context.Context, principal identity.Principa
 	start := time.Now()
 	var (
 		assistantText string
+		turnMessages  []llm.Message
 		stats         *chatRunStats
 		streamErr     error
 	)
 
 	if c.useToolLoop() {
-		assistantText, stats, streamErr = c.runStreamWithTools(ctx, messages, systemPrompt, sc, replyToMsgID)
+		assistantText, turnMessages, stats, streamErr = c.runStreamWithTools(ctx, messages, systemPrompt, sc, replyToMsgID)
 		sc.Finish()
 	} else {
-		assistantText, stats, streamErr = c.runLegacyStream(ctx, messages, systemPrompt, sc)
+		assistantText, turnMessages, stats, streamErr = c.runLegacyStream(ctx, messages, systemPrompt, sc)
 	}
 
 	if streamErr != nil {
@@ -230,20 +238,38 @@ func (c *ChatResponder) Respond(ctx context.Context, principal identity.Principa
 	c.setReaction(ctx, replyToMsgID, "👍")
 
 	if assistantText != "" {
-		c.persistChatTurn(ctx, principal,
-			llm.NewUserMessage(userMessage),
-			llm.NewAssistantMessage(assistantText),
-			logger,
-		)
+		turn := buildChatPersistTurn(userMessage, turnMessages)
+		c.persistChatTurn(ctx, principal, turn, logger)
 	}
 	return nil
+}
+
+// buildChatPersistTurn composes the persist payload for a chat turn.
+// The turn sequence is: a synthesised user message (the partner's
+// prompt, since the stream path only tracks assistant-side deltas)
+// followed by every message the run produced (legacy: one assistant
+// text message; tool-loop: assistant[text+tool_use] → user[tool_result]
+// → ... → assistant[final text]). Every message is stamped with
+// Source="chat" so L1.3's source-aware sanitiser can preserve the
+// chat-owned tool blocks instead of stripping them as foreign bleed
+// from the shared session JSONL.
+func buildChatPersistTurn(userText string, turnMessages []llm.Message) []llm.Message {
+	userMsg := llm.NewUserMessage(userText)
+	userMsg.Source = llm.SourceChat
+	out := make([]llm.Message, 0, len(turnMessages)+1)
+	out = append(out, userMsg)
+	for _, m := range turnMessages {
+		m.Source = llm.SourceChat
+		out = append(out, m)
+	}
+	return out
 }
 
 func (c *ChatResponder) useToolLoop() bool {
 	return c.pipeline != nil && c.pipeline.ToolExecutor != nil && len(c.pipeline.ToolDefs) > 0
 }
 
-func (c *ChatResponder) runLegacyStream(ctx context.Context, messages []llm.Message, systemPrompt string, sc *StreamConsumer) (string, *chatRunStats, error) {
+func (c *ChatResponder) runLegacyStream(ctx context.Context, messages []llm.Message, systemPrompt string, sc *StreamConsumer) (string, []llm.Message, *chatRunStats, error) {
 	req := llm.ChatRequest{
 		Messages:    messages,
 		MaxTokens:   chatMaxTokens,
@@ -270,7 +296,12 @@ func (c *ChatResponder) runLegacyStream(ctx context.Context, messages []llm.Mess
 			sc.Finish()
 		}
 	})
-	return assistantText.String(), stats, err
+	text := assistantText.String()
+	var turn []llm.Message
+	if text != "" {
+		turn = []llm.Message{llm.NewAssistantMessage(text)}
+	}
+	return text, turn, stats, err
 }
 
 // setReaction updates the reaction on the user's original message. Used for
@@ -288,12 +319,18 @@ func (c *ChatResponder) setReaction(ctx context.Context, replyToMsgID int64, emo
 	}
 }
 
-// persistChatTurn writes the user+assistant pair to the session-bound JSONL
-// transcript so subsequent chats can self-reference prior turns. Missing
-// pipeline deps or append errors are logged but never fail the chat itself —
-// Telegram UX already showed the reply.
-func (c *ChatResponder) persistChatTurn(ctx context.Context, principal identity.Principal, userMsg, assistantMsg llm.Message, logger *slog.Logger) {
+// persistChatTurn writes the assembled turn messages to the session-bound
+// JSONL transcript so subsequent chats can self-reference prior turns.
+// Missing pipeline deps, an empty slice, or append errors are logged but
+// never fail the chat itself — Telegram UX already showed the reply.
+// Callers are expected to have stamped Source on each message before
+// calling; persistChatTurn is intentionally policy-free about provenance
+// to keep the provenance decision close to the write site.
+func (c *ChatResponder) persistChatTurn(ctx context.Context, principal identity.Principal, messages []llm.Message, logger *slog.Logger) {
 	if c.pipeline == nil || c.pipeline.Persister == nil {
+		return
+	}
+	if len(messages) == 0 {
 		return
 	}
 
@@ -321,7 +358,7 @@ func (c *ChatResponder) persistChatTurn(ctx context.Context, principal identity.
 		}
 	}
 
-	if err := c.pipeline.Persister.AppendChatTurn(ctx, sessionID, userMsg, assistantMsg); err != nil {
+	if err := c.pipeline.Persister.AppendChatTurn(ctx, sessionID, messages); err != nil {
 		logger.Warn("chat responder: append chat turn failed",
 			"error", err,
 			"session_id", sessionID,

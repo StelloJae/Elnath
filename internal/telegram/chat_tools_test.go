@@ -607,18 +607,162 @@ func TestChatResponder_ProgressNoteNotPersistedIntoAssistantMessage(t *testing.T
 	if len(appends) != 1 {
 		t.Fatalf("expected 1 AppendChatTurn call, got %d", len(appends))
 	}
-	saved := appends[0].assistant.Text()
-	if strings.Contains(saved, "읽는 중") || strings.Contains(saved, "📄") {
-		t.Errorf("persisted assistant message contains progress note (should be display-only): %q", saved)
+	// Post-L1.2 slice persist: scan every persisted message for stray
+	// progress-note content (display-only banners must not leak into any
+	// block of any message) and confirm the final assistant turn holds
+	// the real answer text.
+	var finalText string
+	for _, msg := range appends[0].messages {
+		if msg.Role != llm.RoleAssistant {
+			continue
+		}
+		for _, b := range msg.Content {
+			tb, ok := b.(llm.TextBlock)
+			if !ok {
+				continue
+			}
+			if strings.Contains(tb.Text, "읽는 중") || strings.Contains(tb.Text, "📄") {
+				t.Errorf("persisted message carries progress note (display-only): %q", tb.Text)
+			}
+			finalText = tb.Text
+		}
 	}
-	if !strings.Contains(saved, "최종 답변 본문") {
-		t.Errorf("persisted assistant message missing the real answer text: %q", saved)
+	if !strings.Contains(finalText, "최종 답변 본문") {
+		t.Errorf("persisted assistant message missing the real answer text: %q", finalText)
 	}
 
 	// Sanity: the live Telegram bubble (sc.Send path) still carries the note
 	last := bot.lastText()
 	if !strings.Contains(last, "읽는 중") {
 		t.Errorf("live bubble should still show progress note, got: %q", last)
+	}
+}
+
+// --- L1.2 R2/R3: tool-loop turns persist full blocks with Source tags ---
+
+// TestChatResponder_ToolLoopPersistsFullTurnWithToolBlocks (L1.2 R2)
+// pins the broad-scope goal of Phase L1.2: tool_use / tool_result blocks
+// emitted during the chat-side agent-lite loop must land in the session
+// JSONL, not just the final answer text. Pre-L1.2 the chat path only
+// persisted `[user, assistant(text)]`, so the entire tool interaction
+// was invisible on disk — the observability gap critic reservation 1
+// in the architecture-commit cited as justification for pulling Fix
+// C-P2 into L1.
+func TestChatResponder_ToolLoopPersistsFullTurnWithToolBlocks(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{
+		steps: []chatProviderStep{
+			{toolUses: []chatProviderToolUse{
+				{id: "tu_1", name: "web_fetch", input: `{"url":"https://example.com"}`},
+			}},
+			{text: "최종 답변"},
+		},
+	}
+	exec := newChatMockExecutor()
+	exec.setResult("web_fetch", &tools.Result{Output: "fetched body"})
+
+	persister := &stubChatPersister{}
+	lookup := &stubSessionLookup{session: "sess-full", ok: true}
+
+	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		Builder:      &stubChatBuilder{result: "SYS"},
+		Lookup:       lookup,
+		Persister:    persister,
+		ToolDefs:     []llm.ToolDef{{Name: "web_fetch"}},
+		ToolExecutor: exec,
+	}))
+
+	if err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "fetch it", 1); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	appends := persister.snapshot()
+	if len(appends) != 1 {
+		t.Fatalf("AppendChatTurn calls = %d, want 1", len(appends))
+	}
+	msgs := appends[0].messages
+
+	var sawUserText, sawToolUse, sawToolResult, sawFinalText bool
+	for _, m := range msgs {
+		for _, b := range m.Content {
+			switch blk := b.(type) {
+			case llm.TextBlock:
+				if m.Role == llm.RoleUser && blk.Text == "fetch it" {
+					sawUserText = true
+				}
+				if m.Role == llm.RoleAssistant && strings.Contains(blk.Text, "최종 답변") {
+					sawFinalText = true
+				}
+			case llm.ToolUseBlock:
+				if m.Role == llm.RoleAssistant && blk.ID == "tu_1" && blk.Name == "web_fetch" {
+					sawToolUse = true
+				}
+			case llm.ToolResultBlock:
+				if m.Role == llm.RoleUser && blk.ToolUseID == "tu_1" && strings.Contains(blk.Content, "fetched body") {
+					sawToolResult = true
+				}
+			}
+		}
+	}
+	if !sawUserText {
+		t.Error("persisted turn missing the user question as a TextBlock")
+	}
+	if !sawToolUse {
+		t.Error("persisted turn missing the assistant tool_use block (tu_1 / web_fetch)")
+	}
+	if !sawToolResult {
+		t.Error("persisted turn missing the paired tool_result block (tu_1)")
+	}
+	if !sawFinalText {
+		t.Error("persisted turn missing the final assistant answer text")
+	}
+}
+
+// TestChatResponder_ToolLoopPersistsSourceChatAcrossAllMessages (L1.2 R3)
+// guards that Source="chat" is stamped on every message the chat path
+// writes, including the user tool_result messages the loop synthesises.
+// Without this, L1.3's source-aware sanitiser would still strip chat-
+// owned tool blocks (because Source=="" decodes as legacy → task in the
+// L1 plan's conservative default), defeating the whole rewire.
+func TestChatResponder_ToolLoopPersistsSourceChatAcrossAllMessages(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{
+		steps: []chatProviderStep{
+			{toolUses: []chatProviderToolUse{
+				{id: "tu_1", name: "web_fetch", input: `{"url":"https://example.com"}`},
+			}},
+			{text: "done"},
+		},
+	}
+	exec := newChatMockExecutor()
+	exec.setResult("web_fetch", &tools.Result{Output: "body"})
+
+	persister := &stubChatPersister{}
+	lookup := &stubSessionLookup{session: "sess-src", ok: true}
+
+	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		Builder:      &stubChatBuilder{result: "SYS"},
+		Lookup:       lookup,
+		Persister:    persister,
+		ToolDefs:     []llm.ToolDef{{Name: "web_fetch"}},
+		ToolExecutor: exec,
+	}))
+
+	if err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "fetch it", 1); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	appends := persister.snapshot()
+	if len(appends) != 1 {
+		t.Fatalf("AppendChatTurn calls = %d, want 1", len(appends))
+	}
+	if got := len(appends[0].messages); got < 3 {
+		t.Fatalf("persisted messages = %d, want >= 3 (user + assistant[text+tool_use] + user[tool_result] + assistant[final])", got)
+	}
+	for i, m := range appends[0].messages {
+		if m.Source != llm.SourceChat {
+			t.Errorf("messages[%d] (role=%q) Source = %q, want %q", i, m.Role, m.Source, llm.SourceChat)
+		}
 	}
 }
 
