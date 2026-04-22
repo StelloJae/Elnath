@@ -118,6 +118,13 @@ type ChatPipelineDeps struct {
 	// Chat bypasses the agent loop's permission gate, so the executor MUST be
 	// fed only allowlisted, side-effect-free tools (see FilterChatToolDefs).
 	ToolExecutor tools.Executor
+	// ProgressFactory, when set, returns a per-turn ProgressRenderer
+	// for the given chatID. Phase L2.1 wires the field; Phase L2.2
+	// calls it from runStreamWithTools to surface tool invocations as
+	// an edit-bubble instead of silent latency. When nil, the chat
+	// path falls back to noopProgressRenderer so the call sites can
+	// invoke ReportTool/ReportStage/Finish/Wait unconditionally.
+	ProgressFactory func(chatID string) ProgressRenderer
 }
 
 type ChatResponder struct {
@@ -318,6 +325,23 @@ func (c *ChatResponder) chatAvailableTools() []string {
 		}
 	}
 	return names
+}
+
+// progressRenderer returns the ProgressRenderer the current chat turn
+// should emit progress events into. When the pipeline has a wired
+// ProgressFactory, a per-turn instance is constructed (bound to this
+// ChatResponder's chatID). Otherwise a noopProgressRenderer stands in
+// so tool-loop call sites (Phase L2.2) never need a nil-check at
+// every ReportTool invocation.
+func (c *ChatResponder) progressRenderer() ProgressRenderer {
+	if c.pipeline == nil || c.pipeline.ProgressFactory == nil {
+		return noopProgressRenderer{}
+	}
+	r := c.pipeline.ProgressFactory(c.chatID)
+	if r == nil {
+		return noopProgressRenderer{}
+	}
+	return r
 }
 
 func (c *ChatResponder) runLegacyStream(ctx context.Context, messages []llm.Message, systemPrompt string, sc *StreamConsumer) (string, []llm.Message, *chatRunStats, error) {
