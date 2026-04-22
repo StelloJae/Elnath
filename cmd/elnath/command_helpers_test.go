@@ -405,7 +405,7 @@ func TestFlagHelpers(t *testing.T) {
 
 func TestHelperBuilders(t *testing.T) {
 	guard := tools.NewPathGuard(t.TempDir(), nil)
-	reg := buildToolRegistry(guard)
+	reg := buildToolRegistry(guard, nil)
 	for _, name := range []string{"bash", "read_file", "write_file", "edit_file", "glob", "grep", "git", "web_fetch"} {
 		if _, ok := reg.Get(name); !ok {
 			t.Fatalf("tool registry missing %q", name)

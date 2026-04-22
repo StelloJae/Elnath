@@ -359,7 +359,7 @@ func registerMCPTools(ctx context.Context, reg *tools.Registry, servers []config
 	}
 }
 
-func buildToolRegistry(guard *tools.PathGuard) *tools.Registry {
+func buildToolRegistry(guard *tools.PathGuard, provider llm.Provider) *tools.Registry {
 	reg := tools.NewRegistry()
 	tracker := tools.NewReadTracker()
 	reg.Register(tools.NewBashTool(guard))
@@ -369,7 +369,7 @@ func buildToolRegistry(guard *tools.PathGuard) *tools.Registry {
 	reg.Register(tools.NewGlobTool(guard))
 	reg.Register(tools.NewGrepTool(guard, tracker))
 	reg.Register(tools.NewGitTool(guard))
-	reg.Register(tools.NewWebFetchTool())
+	reg.Register(tools.NewWebFetchTool(tools.WithSecondaryCaller(llm.NewSecondaryModelCaller(provider))))
 	return reg
 }
 

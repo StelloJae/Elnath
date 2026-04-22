@@ -37,15 +37,69 @@ func NewNoopSecondaryModelCaller() SecondaryModelCaller {
 	return noopCaller{}
 }
 
+// secondaryModelByProvider maps a Provider.Name() value to the small/fast
+// model id that should handle secondary extracts. Ollama intentionally has
+// no entry — local setups lack a reliable "fast" tier, so the noop caller
+// (which passes the markdown through unchanged) stays the safer default.
+// Model ids mirror the ones used elsewhere in Elnath: Anthropic uses the
+// date-less alias introduced by F-5 (2026-04-14 `d58e8bc`), and the OpenAI
+// family — including Codex OAuth — uses gpt-5.4-mini for fast extraction.
+var secondaryModelByProvider = map[string]string{
+	"anthropic":        "claude-haiku-4-5",
+	"codex":            "gpt-5.4-mini",
+	"openai":           "gpt-5.4-mini",
+	"openai-responses": "gpt-5.4-mini",
+}
+
+const secondaryModelMaxTokens = 2048
+
 // NewSecondaryModelCaller selects a SecondaryModelCaller for the supplied
-// Provider. Phase A.5 ships only the interface + noop default — real
-// per-provider dispatch (Anthropic Haiku, OpenAI/Responses mini, Codex
-// OAuth mini) is added at the wire-site once dogfood evidence motivates
-// the extra API round-trip. Nil or unrecognised providers return the
-// no-op so the call path stays byte-for-byte compatible with the Phase
-// A.4 build.
-func NewSecondaryModelCaller(_ Provider) SecondaryModelCaller {
-	return noopCaller{}
+// Provider. The Phase A.5 closure (this function, FU-SecondaryWireUp)
+// inspects Provider.Name() and returns a realCaller that forwards
+// (markdown, prompt, isPreapproved) through makeSecondaryModelPrompt and
+// calls Chat on the small/fast model associated with that provider. Nil
+// providers, Ollama, and any unrecognised provider still receive the noop
+// caller so the WebFetch call path stays byte-for-byte compatible with
+// the Phase A.4 build on those setups.
+func NewSecondaryModelCaller(p Provider) SecondaryModelCaller {
+	if p == nil {
+		return noopCaller{}
+	}
+	model, ok := secondaryModelByProvider[p.Name()]
+	if !ok {
+		return noopCaller{}
+	}
+	return &realCaller{provider: p, model: model, maxTokens: secondaryModelMaxTokens}
+}
+
+// realCaller is the concrete SecondaryModelCaller returned for providers
+// with a known small/fast model. It formats the markdown + user prompt via
+// makeSecondaryModelPrompt (Claude Code prompt.ts:23-46 parity), sends the
+// resulting user-role message to Provider.Chat, and returns the text body
+// of the response. An empty response falls back to the Claude Code
+// "No response from model" string (utils.ts:529 parity) so callers always
+// see a non-empty extract or an explicit error.
+type realCaller struct {
+	provider  Provider
+	model     string
+	maxTokens int
+}
+
+func (c *realCaller) Extract(ctx context.Context, markdown, prompt string, isPreapproved bool) (string, error) {
+	userPrompt := makeSecondaryModelPrompt(markdown, prompt, isPreapproved)
+	req := ChatRequest{
+		Model:     c.model,
+		Messages:  []Message{NewUserMessage(userPrompt)},
+		MaxTokens: c.maxTokens,
+	}
+	resp, err := c.provider.Chat(ctx, req)
+	if err != nil {
+		return "", fmt.Errorf("secondary chat: %w", err)
+	}
+	if resp == nil || resp.Content == "" {
+		return "No response from model", nil
+	}
+	return resp.Content, nil
 }
 
 // makeSecondaryModelPrompt mirrors Claude Code's prompt.ts:23-46 verbatim:

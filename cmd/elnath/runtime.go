@@ -351,7 +351,7 @@ func buildExecutionRuntime(
 		effectiveWorkDir, _ = os.Getwd()
 	}
 	guard := tools.NewPathGuard(effectiveWorkDir, protectedPaths)
-	reg := buildToolRegistry(guard)
+	reg := buildToolRegistry(guard, provider)
 	gitSync, wikiIdx := registerWikiTools(reg, cfg.WikiDir, db.Wiki)
 	reg.Register(conversation.NewConversationSearchTool(historyStore))
 

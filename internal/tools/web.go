@@ -81,6 +81,14 @@ func withSecondary(caller llm.SecondaryModelCaller) webFetchOption {
 	return func(t *WebFetchTool) { t.secondary = caller }
 }
 
+// WithSecondaryCaller is the exported wrapper around the package-private
+// withSecondary option. The wire-site in cmd/elnath calls this at daemon
+// setup to inject the provider-aware secondary dispatcher built by
+// llm.NewSecondaryModelCaller.
+func WithSecondaryCaller(caller llm.SecondaryModelCaller) func(*WebFetchTool) {
+	return func(t *WebFetchTool) { t.secondary = caller }
+}
+
 // Lazy singleton: the html-to-markdown Converter builds a rule table on
 // construction; reusing one instance across Execute calls keeps the hot
 // path allocation-free. Mirrors the Turndown lazy-init in
