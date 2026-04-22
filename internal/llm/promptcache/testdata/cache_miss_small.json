@@ -1,0 +1,14 @@
+{
+  "scenario": "cache_miss_small",
+  "description": "Below-threshold miss (creation < MIN_CACHE_MISS_TOKENS=2K). Expected attribution: no-op, false-positive guard.",
+  "model": "claude-opus-4-7",
+  "betas": ["context-1m-2025-08-07"],
+  "usage": {
+    "input_tokens": 32,
+    "cache_creation_input_tokens": 800,
+    "cache_read_input_tokens": 0,
+    "output_tokens": 64
+  },
+  "received_at": "2026-04-22T12:03:00Z",
+  "notes": "Partner edited message content only; no system/tool change. Detection should suppress attribution."
+}

@@ -1,0 +1,15 @@
+{
+  "scenario": "cache_miss_system_edit",
+  "description": "Above-threshold miss after system-prompt char delta. SystemHash differs between pre- and post-state.",
+  "model": "claude-opus-4-7",
+  "betas": ["context-1m-2025-08-07"],
+  "usage": {
+    "input_tokens": 48,
+    "cache_creation_input_tokens": 3400,
+    "cache_read_input_tokens": 0,
+    "output_tokens": 110
+  },
+  "received_at": "2026-04-22T12:04:00Z",
+  "expected_attribution": "system_prompt",
+  "notes": "Test harness injects an edited system prompt into the pre-state to exercise system_prompt attribution."
+}

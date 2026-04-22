@@ -1,0 +1,15 @@
+{
+  "scenario": "cache_miss_beta_delta",
+  "description": "Above-threshold miss after adding/removing an anthropic-beta flag. Betas slice differs between pre- and post-state.",
+  "model": "claude-opus-4-7",
+  "betas": ["context-1m-2025-08-07", "fast-mode-2026-02-01"],
+  "usage": {
+    "input_tokens": 50,
+    "cache_creation_input_tokens": 3500,
+    "cache_read_input_tokens": 0,
+    "output_tokens": 112
+  },
+  "received_at": "2026-04-22T12:06:00Z",
+  "expected_attribution": "beta_delta",
+  "notes": "Harness adds fast-mode beta relative to pre-state's single 1M beta. audit.txt §03 lists beta header adds/removals as an explicit trigger."
+}

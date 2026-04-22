@@ -1,0 +1,14 @@
+{
+  "scenario": "cache_hit_warm",
+  "description": "Follow-up call within TTL. System+tools unchanged; cache_read_input_tokens carries the hit signal.",
+  "model": "claude-opus-4-7",
+  "betas": ["context-1m-2025-08-07"],
+  "usage": {
+    "input_tokens": 8,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 3200,
+    "output_tokens": 96
+  },
+  "received_at": "2026-04-22T12:01:30Z",
+  "notes": "Received 90s after cache_hit_cold. No break trigger expected."
+}

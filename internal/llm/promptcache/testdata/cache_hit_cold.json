@@ -1,0 +1,14 @@
+{
+  "scenario": "cache_hit_cold",
+  "description": "First call to a new system+tools layout. All input tokens get written to cache; no read yet.",
+  "model": "claude-opus-4-7",
+  "betas": ["context-1m-2025-08-07"],
+  "usage": {
+    "input_tokens": 42,
+    "cache_creation_input_tokens": 3200,
+    "cache_read_input_tokens": 0,
+    "output_tokens": 128
+  },
+  "received_at": "2026-04-22T12:00:00Z",
+  "notes": "Baseline for subsequent cache_hit_warm comparisons. Redacted — message ID / content stripped."
+}

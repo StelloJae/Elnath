@@ -1,0 +1,15 @@
+{
+  "scenario": "cache_miss_ttl_gap",
+  "description": "Same content as cache_hit_cold but received >5min later. Attribution: ttl_expiry (vs server-side cache-flip).",
+  "model": "claude-opus-4-7",
+  "betas": ["context-1m-2025-08-07"],
+  "usage": {
+    "input_tokens": 42,
+    "cache_creation_input_tokens": 3200,
+    "cache_read_input_tokens": 0,
+    "output_tokens": 130
+  },
+  "received_at": "2026-04-22T12:08:15Z",
+  "expected_attribution": "ttl_expiry",
+  "notes": "7min gap after cache_hit_cold. audit.txt §03: >5min suggests TTL expiry; <5min suggests server issue."
+}

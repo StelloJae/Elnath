@@ -1,0 +1,15 @@
+{
+  "scenario": "cache_miss_tool_edit",
+  "description": "Above-threshold miss after a single tool schema edit. Per-tool hash flips while system prompt is stable.",
+  "model": "claude-opus-4-7",
+  "betas": ["context-1m-2025-08-07"],
+  "usage": {
+    "input_tokens": 46,
+    "cache_creation_input_tokens": 3100,
+    "cache_read_input_tokens": 0,
+    "output_tokens": 104
+  },
+  "received_at": "2026-04-22T12:05:00Z",
+  "expected_attribution": "tool_schema:bash",
+  "notes": "Harness flips bash tool schema between pre- and post-state to exercise tool-level attribution."
+}
