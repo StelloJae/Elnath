@@ -38,6 +38,16 @@ type RenderState struct {
 	DaemonMode    bool
 	ProjectID     string
 	MessageCount  int
+	// IsChat is true when rendering the Telegram chat-path prompt so
+	// chat-only nodes (ChatSystemPromptNode / ChatToolGuideNode) gate on
+	// a single explicit boolean instead of re-inferring surface. The task
+	// path leaves this false, which keeps chat content out of task prompts.
+	IsChat bool
+	// AvailableTools enumerates tool names the chat tool loop exposes for
+	// this turn. Populated only when ChatResponder.useToolLoop() is true;
+	// chat legacy stream and task path leave it nil so the chat tool guide
+	// node doesn't render a guide the model cannot act on.
+	AvailableTools []string
 }
 
 // Node is a single prompt contribution rendered into the builder output.

@@ -269,6 +269,23 @@ func (c *ChatResponder) useToolLoop() bool {
 	return c.pipeline != nil && c.pipeline.ToolExecutor != nil && len(c.pipeline.ToolDefs) > 0
 }
 
+// chatAvailableTools returns the tool names the chat tool loop will
+// actually execute this turn — used by prompt.ChatToolGuideNode to gate
+// its guide so the model doesn't see a tool menu it cannot act on. Nil
+// when the legacy stream path is active (no executor wired).
+func (c *ChatResponder) chatAvailableTools() []string {
+	if !c.useToolLoop() {
+		return nil
+	}
+	names := make([]string, 0, len(c.pipeline.ToolDefs))
+	for _, def := range c.pipeline.ToolDefs {
+		if def.Name != "" {
+			names = append(names, def.Name)
+		}
+	}
+	return names
+}
+
 func (c *ChatResponder) runLegacyStream(ctx context.Context, messages []llm.Message, systemPrompt string, sc *StreamConsumer) (string, []llm.Message, *chatRunStats, error) {
 	req := llm.ChatRequest{
 		Messages:    messages,
@@ -433,19 +450,21 @@ func (c *ChatResponder) buildPrompt(ctx context.Context, principal identity.Prin
 	}
 
 	state := &prompt.RenderState{
-		SessionID:    sessionID,
-		UserInput:    userMessage,
-		Self:         c.pipeline.Self,
-		Principal:    principal,
-		Messages:     history,
-		WikiIdx:      c.pipeline.WikiIdx,
-		PersonaExtra: c.pipeline.PersonaExtra,
-		Model:        c.pipeline.Model,
-		Provider:     c.pipeline.ProviderName,
-		WorkDir:      c.pipeline.WorkDir,
-		DaemonMode:   c.pipeline.DaemonMode,
-		ProjectID:    principal.ProjectID,
-		MessageCount: len(history),
+		SessionID:      sessionID,
+		UserInput:      userMessage,
+		Self:           c.pipeline.Self,
+		Principal:      principal,
+		Messages:       history,
+		WikiIdx:        c.pipeline.WikiIdx,
+		PersonaExtra:   c.pipeline.PersonaExtra,
+		Model:          c.pipeline.Model,
+		Provider:       c.pipeline.ProviderName,
+		WorkDir:        c.pipeline.WorkDir,
+		DaemonMode:     c.pipeline.DaemonMode,
+		ProjectID:      principal.ProjectID,
+		MessageCount:   len(history),
+		IsChat:         true,
+		AvailableTools: c.chatAvailableTools(),
 	}
 
 	built, err := c.pipeline.Builder.Build(ctx, state)

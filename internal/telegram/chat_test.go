@@ -1349,3 +1349,63 @@ func TestSanitizeChatHistory_NoOrphanToolResultAfterMixedLoad(t *testing.T) {
 		t.Errorf("task tool_use id=task_call_1 should be stripped")
 	}
 }
+
+// TestChatResponder_BuildPromptSetsIsChatAndAvailableTools pins L3.1 R4:
+// the chat path's buildPrompt must stamp RenderState.IsChat=true and
+// populate AvailableTools from the wired ToolDefs when the tool loop is
+// active, so the chat-only prompt nodes (ChatSystemPromptNode /
+// ChatToolGuideNode) can gate their content without relying on the
+// hardcoded chatSystemPrompt / chatToolGuideHeader fallbacks.
+// L3.2 removes the fallbacks; L3.1 only wires the state.
+func TestChatResponder_BuildPromptSetsIsChatAndAvailableTools(t *testing.T) {
+	builder := &stubChatBuilder{result: "SYS"}
+	exec := newChatMockExecutor()
+
+	cr := NewChatResponder(nil, nil, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		Builder:      builder,
+		ToolDefs:     []llm.ToolDef{{Name: "web_search"}, {Name: "web_fetch"}},
+		ToolExecutor: exec,
+	}))
+
+	principal := identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}
+	_, _, _ = cr.buildPrompt(context.Background(), principal, "hi", cr.logger)
+
+	state := builder.capturedState(t)
+	if !state.IsChat {
+		t.Errorf("RenderState.IsChat = false, want true for chat path")
+	}
+	if len(state.AvailableTools) != 2 {
+		t.Fatalf("RenderState.AvailableTools len = %d, want 2 (web_search + web_fetch)", len(state.AvailableTools))
+	}
+	wantSet := map[string]bool{"web_search": true, "web_fetch": true}
+	for _, name := range state.AvailableTools {
+		if !wantSet[name] {
+			t.Errorf("RenderState.AvailableTools contains unexpected %q", name)
+		}
+	}
+}
+
+// TestChatResponder_BuildPromptLeavesAvailableToolsEmptyWhenNoExecutor pins
+// the "legacy stream, no tool loop" semantic: when ToolExecutor is nil the
+// tool loop never fires, so AvailableTools must stay empty so
+// ChatToolGuideNode doesn't render a guide the model cannot act on.
+func TestChatResponder_BuildPromptLeavesAvailableToolsEmptyWhenNoExecutor(t *testing.T) {
+	builder := &stubChatBuilder{result: "SYS"}
+
+	cr := NewChatResponder(nil, nil, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		Builder:  builder,
+		ToolDefs: []llm.ToolDef{{Name: "web_search"}},
+		// ToolExecutor intentionally nil — legacy stream path.
+	}))
+
+	principal := identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}
+	_, _, _ = cr.buildPrompt(context.Background(), principal, "hi", cr.logger)
+
+	state := builder.capturedState(t)
+	if !state.IsChat {
+		t.Errorf("RenderState.IsChat = false, want true for chat path even without executor")
+	}
+	if len(state.AvailableTools) != 0 {
+		t.Errorf("RenderState.AvailableTools = %v, want empty when tool loop inactive", state.AvailableTools)
+	}
+}

@@ -526,11 +526,13 @@ func buildExecutionRuntime(
 	}
 	b := prompt.NewBuilder()
 	b.Register(prompt.NewIdentityNode(100))
+	b.Register(prompt.NewChatSystemPromptNode(96))
 	b.Register(prompt.NewContextFilesNode(95))
 	b.Register(prompt.NewPersonaNode(90))
 	b.Register(prompt.NewLessonsNode(87, learningStore, 10, 1000))
 	b.Register(prompt.NewSelfStateNode(85))
 	b.Register(prompt.NewToolCatalogNode(80))
+	b.Register(prompt.NewChatToolGuideNode(78))
 	b.Register(prompt.NewModelGuidanceNode(70))
 	b.Register(prompt.NewSkillCatalogNode(65, skillReg))
 	b.Register(prompt.NewSkillGuidanceNode(64))
