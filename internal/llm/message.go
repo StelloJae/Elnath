@@ -9,6 +9,17 @@ const (
 	RoleSystem    = "system"
 )
 
+// Source constants for Message.Source (Phase L1.1 — universal message schema).
+// Source records where the message originated so load-side sanitisers,
+// auditors, and future team workflows can tell chat vs task (vs pre-L1
+// legacy) messages apart without inferring from surrounding structure.
+// The empty string is preserved as "unknown / legacy" — every JSONL
+// record written before L1.1 reads back with Source == "".
+const (
+	SourceChat = "chat"
+	SourceTask = "task"
+)
+
 // NewTextMessage is an alias for NewUserMessage / NewAssistantMessage
 // that accepts a role string, used by agent and session code.
 func NewTextMessage(role, text string) Message {
@@ -65,8 +76,15 @@ func (b ImageBlock) BlockType() string { return "image" }
 
 // Message is a single turn in a conversation.
 // The message array is the ONLY state — no hidden state machines.
+//
+// Source (Phase L1.1) tags the origin of the message (chat/task/"").
+// It is intentionally omitted from the LLM-wire MarshalJSON output below
+// — Anthropic / OpenAI APIs reject unknown top-level fields — and only
+// surfaces on the persistence path via MarshalPersist so session JSONL
+// records keep the provenance that load-side sanitisers need.
 type Message struct {
-	Role    string         `json:"role"` // "user" or "assistant"
+	Role    string         `json:"role"`
+	Source  string         `json:"source,omitempty"`
 	Content []ContentBlock `json:"content"`
 }
 
@@ -104,13 +122,46 @@ func (m Message) Text() string {
 	return out
 }
 
-// MarshalJSON serialises Message, tagging each block with its type field.
+// MarshalJSON serialises Message for the LLM-wire path (Anthropic, OpenAI,
+// Responses). Source is intentionally dropped here — upstream provider
+// APIs reject unknown top-level fields. Persistence callers should use
+// MarshalPersist, which keeps Source in the payload.
 func (m Message) MarshalJSON() ([]byte, error) {
 	type wire struct {
 		Role    string            `json:"role"`
 		Content []json.RawMessage `json:"content"`
 	}
 	w := wire{Role: m.Role}
+	for _, b := range m.Content {
+		tagged, err := marshalBlock(b)
+		if err != nil {
+			return nil, err
+		}
+		w.Content = append(w.Content, tagged)
+	}
+	return json.Marshal(w)
+}
+
+// MarshalPersist serialises Message for session JSONL storage and any
+// other Elnath-internal persistence surface. It mirrors MarshalJSON's
+// content tagging but additionally emits `"source"` when Source is set,
+// so load-side readers (sanitisers, auditors, future team-aware
+// consumers) can tell chat / task / legacy records apart. Empty Source
+// stays omitted via `omitempty`, so pre-L1 callers that haven't yet set
+// the field keep producing byte-for-byte identical output to the
+// legacy MarshalJSON shape.
+//
+// Keeping persistence on its own method (rather than a flag on
+// MarshalJSON) gives the write-side an intent-explicit API and leaves
+// room for future persistence-only fields (schema version, write
+// timestamp, hash chain) without touching the LLM-wire path.
+func (m Message) MarshalPersist() ([]byte, error) {
+	type wire struct {
+		Role    string            `json:"role"`
+		Source  string            `json:"source,omitempty"`
+		Content []json.RawMessage `json:"content"`
+	}
+	w := wire{Role: m.Role, Source: m.Source}
 	for _, b := range m.Content {
 		tagged, err := marshalBlock(b)
 		if err != nil {
@@ -149,9 +200,14 @@ func marshalBlock(b ContentBlock) (json.RawMessage, error) {
 }
 
 // UnmarshalJSON deserialises Message, reconstructing typed ContentBlocks.
+// Accepts both the LLM-wire payload (no source field) and persisted
+// records from MarshalPersist (with source). A missing source field
+// decodes to Source == "" so pre-L1 JSONL records continue to round-trip
+// without surprise, matching the Phase L1.1 backward-compat contract.
 func (m *Message) UnmarshalJSON(data []byte) error {
 	type wire struct {
 		Role    string            `json:"role"`
+		Source  string            `json:"source,omitempty"`
 		Content []json.RawMessage `json:"content"`
 	}
 	var w wire
@@ -159,6 +215,7 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	m.Role = w.Role
+	m.Source = w.Source
 	for _, raw := range w.Content {
 		var peek struct {
 			Type string `json:"type"`
