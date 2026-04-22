@@ -35,7 +35,7 @@ func (w *SingleWorkflow) Run(ctx context.Context, input WorkflowInput) (*Workflo
 	}
 	messages := append(input.Messages, llm.NewUserMessage(input.Message))
 
-	opts := agentOptions(input.Config)
+	opts := agentOptions(input.Config, input.Session)
 	if input.Config.ContextWindow != nil && input.Config.CompressionMaxTokens > 0 {
 		cw := input.Config.ContextWindow
 		budget := input.Config.CompressionMaxTokens
@@ -78,8 +78,11 @@ func (w *SingleWorkflow) Run(ctx context.Context, input WorkflowInput) (*Workflo
 	}, nil
 }
 
-// agentOptions converts a WorkflowConfig into agent.Option slice.
-func agentOptions(cfg WorkflowConfig) []agent.Option {
+// agentOptions converts a WorkflowConfig (+ optional session) into an
+// agent.Option slice. When a session is supplied, its ID is threaded via
+// agent.WithSessionID so provider telemetry can scope per-session
+// (e.g. promptcache FileSink jsonl per session).
+func agentOptions(cfg WorkflowConfig, session *agent.Session) []agent.Option {
 	var opts []agent.Option
 	if cfg.Model != "" {
 		opts = append(opts, agent.WithModel(cfg.Model))
@@ -101,6 +104,9 @@ func agentOptions(cfg WorkflowConfig) []agent.Option {
 	}
 	if cfg.ReflectionEnqueuer != nil {
 		opts = append(opts, agent.WithReflection(cfg.ReflectionEnqueuer))
+	}
+	if session != nil && session.ID != "" {
+		opts = append(opts, agent.WithSessionID(session.ID))
 	}
 	return opts
 }

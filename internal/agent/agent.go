@@ -90,6 +90,10 @@ type Agent struct {
 	contextWindow      int // cached from provider.Models(); 0 = unknown
 	compressFailCount  int // consecutive compressFunc failures in current Run
 	reflectEnqueue     ReflectionEnqueuer
+	// sessionID is threaded into every ChatRequest so provider-level
+	// telemetry sinks (e.g. promptcache FileSink) can scope per-session.
+	// Empty = no per-session correlation; providers treat as no-op.
+	sessionID string
 }
 
 // Option configures an Agent.
@@ -148,6 +152,14 @@ func WithToolExecutor(exec tools.Executor) Option {
 // be non-blocking; see internal/agent/reflection.Pool for the Phase 0 adapter.
 func WithReflection(fn ReflectionEnqueuer) Option {
 	return func(a *Agent) { a.reflectEnqueue = fn }
+}
+
+// WithSessionID threads a session identifier into every outgoing
+// ChatRequest so provider-side telemetry sinks can scope per-session
+// (e.g. the promptcache FileSink emits one jsonl per session).
+// Empty strings are accepted and simply disable per-session scoping.
+func WithSessionID(id string) Option {
+	return func(a *Agent) { a.sessionID = id }
 }
 
 // New creates an Agent with the given provider and tool registry.
@@ -334,6 +346,7 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, sink event.Sink
 			System:      a.systemPrompt,
 			MaxTokens:   defaultMaxTokens,
 			EnableCache: a.provider.Name() == "anthropic",
+			SessionID:   a.sessionID,
 		}
 		if a.hooks != nil {
 			if err := a.hooks.RunPreLLMCall(ctx, &req); err != nil {

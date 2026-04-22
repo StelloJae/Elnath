@@ -164,7 +164,7 @@ Example:
 
 	planMessages := []llm.Message{llm.NewUserMessage(planPrompt)}
 
-	opts := agentOptions(input.Config)
+	opts := agentOptions(input.Config, input.Session)
 	a := agent.New(input.Provider, input.Tools, opts...)
 
 	result, err := a.Run(ctx, planMessages, nil)
@@ -397,7 +397,7 @@ Execution rules:
 		Hooks:         input.Config.Hooks,
 		Permission:    input.Config.Permission,
 		ToolExecutor:  input.Config.ToolExecutor,
-	})
+	}, input.Session)
 	a := agent.New(input.Provider, input.Tools, opts...)
 
 	messages := []llm.Message{llm.NewUserMessage(st.Instruction)}
@@ -455,7 +455,7 @@ func (w *TeamWorkflow) synthesise(ctx context.Context, input WorkflowInput, resu
 
 	synthMessages := append(input.Messages, llm.NewUserMessage(sb.String()))
 
-	opts := agentOptions(input.Config)
+	opts := agentOptions(input.Config, input.Session)
 	a := agent.New(input.Provider, input.Tools, opts...)
 
 	result, err := a.Run(ctx, synthMessages, input.Sink)

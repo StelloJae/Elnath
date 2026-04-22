@@ -211,7 +211,7 @@ Your response must start with PASS, NEEDS_REVISION, or FAIL.`, input.Message, ev
 		Hooks:         input.Config.Hooks,
 		Permission:    input.Config.Permission,
 		ToolExecutor:  input.Config.ToolExecutor,
-	})
+	}, input.Session)
 	a := agent.New(input.Provider, input.Tools, opts...)
 
 	verifyResult, err := a.Run(ctx, verifyMessages, nil)

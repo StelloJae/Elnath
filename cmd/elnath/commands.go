@@ -18,6 +18,7 @@ import (
 	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/core"
 	"github.com/stello/elnath/internal/llm"
+	"github.com/stello/elnath/internal/llm/promptcache"
 	"github.com/stello/elnath/internal/mcp"
 	"github.com/stello/elnath/internal/onboarding"
 	"github.com/stello/elnath/internal/orchestrator"
@@ -121,6 +122,14 @@ func buildProvider(cfg *config.Config) (llm.Provider, string, error) {
 		}
 		if cfg.Anthropic.Timeout > 0 {
 			opts = append(opts, llm.WithAnthropicTimeout(time.Duration(cfg.Anthropic.Timeout)*time.Second))
+		}
+		if cfg.DataDir != "" {
+			// Prompt-cache FileSink lands each turn's BreakReport at
+			// <data-dir>/prompt-cache/<session-id>.jsonl so `elnath debug
+			// prompt-cache --session=<id>` has real data to show. Active
+			// only when the agent threads a non-empty SessionID through
+			// ChatRequest (orchestrator.agentOptions wires this today).
+			opts = append(opts, llm.WithAnthropicPromptCacheSink(promptcache.NewFileSink(cfg.DataDir)))
 		}
 		m := cfg.Anthropic.Model
 		if m == "" {
