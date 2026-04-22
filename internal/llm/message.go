@@ -11,13 +11,16 @@ const (
 
 // Source constants for Message.Source (Phase L1.1 — universal message schema).
 // Source records where the message originated so load-side sanitisers,
-// auditors, and future team workflows can tell chat vs task (vs pre-L1
-// legacy) messages apart without inferring from surrounding structure.
-// The empty string is preserved as "unknown / legacy" — every JSONL
-// record written before L1.1 reads back with Source == "".
+// auditors, and future team workflows can tell chat vs task vs team (vs
+// pre-L1 legacy) messages apart without inferring from surrounding
+// structure. The empty string is preserved as "unknown / legacy" —
+// every JSONL record written before L1.1 reads back with Source == ""
+// and load-side callers should treat that as the conservative task
+// default.
 const (
 	SourceChat = "chat"
 	SourceTask = "task"
+	SourceTeam = "team"
 )
 
 // NewTextMessage is an alias for NewUserMessage / NewAssistantMessage

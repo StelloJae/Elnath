@@ -469,19 +469,28 @@ func trimChatHistory(msgs []llm.Message, maxTurns int) []llm.Message {
 	return msgs[len(msgs)-maxTurns:]
 }
 
-// sanitizeChatHistory strips ToolUseBlock and ToolResultBlock entries from
-// every message before the chat path hands them to the provider. Telegram
-// binds one session JSONL per chat ID, and that JSONL is shared with every
-// workflow the partner triggers — agent.Loop (simple_task/team/etc)
-// persists its tool_use/tool_result blocks verbatim there. When chat_direct
-// reloads that session as history, those blocks ride along as orphans: the
-// current conversation has no matching function_call for the tool_result's
-// call_id, and the Codex Responses API rejects the request with HTTP 400
-// "No tool call found for function call output with call_id ...".
+// sanitizeChatHistory filters tool blocks out of reloaded session
+// history before the chat path hands them to the provider. Telegram
+// binds one session JSONL per chat ID, and that JSONL is shared with
+// every workflow the partner triggers — agent.Loop (simple_task / team)
+// persists its tool_use / tool_result blocks verbatim there. When
+// chat_direct reloads that session as history, foreign-origin blocks
+// ride along as orphans: the current conversation has no matching
+// function_call for the tool_result's call_id, and the Codex Responses
+// API rejects the request with HTTP 400 "No tool call found for
+// function call output with call_id ...".
 //
-// Dropping just the tool blocks (instead of whole messages) preserves any
-// surrounding dialogue text, so the partner's conversational context
-// survives. Messages that become empty after stripping are omitted so the
+// Phase L1.3 makes the filter source-aware. Chat-origin messages
+// (Source == llm.SourceChat) pass through untouched so the partner's
+// own tool loop — which Phase L1.2 started persisting as a full turn —
+// stays visible on the next reload. Non-chat origins (task / team /
+// legacy "") still get their tool_use and tool_result blocks stripped,
+// which keeps the Codex HTTP 400 protection in place for the shared
+// session JSONL. Pre-L1 records read back with Source == "" and
+// resolve to SourceTask, matching the only pre-L1 writer that produced
+// tool blocks.
+//
+// Messages that become empty after stripping are dropped so the
 // provider never sees zero-block turns.
 func sanitizeChatHistory(msgs []llm.Message) []llm.Message {
 	if len(msgs) == 0 {
@@ -489,18 +498,45 @@ func sanitizeChatHistory(msgs []llm.Message) []llm.Message {
 	}
 	out := make([]llm.Message, 0, len(msgs))
 	for _, m := range msgs {
-		filtered := make([]llm.ContentBlock, 0, len(m.Content))
-		for _, b := range m.Content {
-			switch b.(type) {
-			case llm.ToolUseBlock, llm.ToolResultBlock:
-				continue
-			}
-			filtered = append(filtered, b)
+		if resolveChatSource(m.Source) == llm.SourceChat {
+			out = append(out, m)
+			continue
 		}
+		filtered := filterToolBlocks(m.Content)
 		if len(filtered) == 0 {
 			continue
 		}
-		out = append(out, llm.Message{Role: m.Role, Content: filtered})
+		out = append(out, llm.Message{Role: m.Role, Source: m.Source, Content: filtered})
+	}
+	return out
+}
+
+// resolveChatSource maps an on-disk Source value onto the enum used
+// for sanitize decisions. Pre-L1 JSONL records were written without a
+// Source field and decode to "" — the only writer that emitted tool
+// blocks before L1 was the task path (agent.Loop), so the conservative
+// default treats empty as task. Any non-empty value is returned
+// verbatim so future enum additions (e.g. team sub-surfaces) fall
+// through without silently collapsing to chat.
+func resolveChatSource(s string) string {
+	if s == "" {
+		return llm.SourceTask
+	}
+	return s
+}
+
+// filterToolBlocks returns a copy of blocks with every ToolUseBlock and
+// ToolResultBlock removed. The ordering of the remaining blocks is
+// preserved so any surrounding dialogue text still reads naturally on
+// the next turn.
+func filterToolBlocks(blocks []llm.ContentBlock) []llm.ContentBlock {
+	out := make([]llm.ContentBlock, 0, len(blocks))
+	for _, b := range blocks {
+		switch b.(type) {
+		case llm.ToolUseBlock, llm.ToolResultBlock:
+			continue
+		}
+		out = append(out, b)
 	}
 	return out
 }

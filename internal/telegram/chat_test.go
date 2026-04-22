@@ -1154,3 +1154,198 @@ func TestSanitizeChatHistory_EmptyInputs(t *testing.T) {
 		t.Errorf("sanitize(empty) = %+v, want empty", got)
 	}
 }
+
+// --- Phase L1.3 source-aware sanitize (FU-ChatHistorySourceAware) ---
+
+// TestSanitizeChatHistory_PreservesChatOwnToolBlocks (L1.3 R1) pins the
+// core behaviour change introduced by the universal-message-schema:
+// chat-origin tool_use / tool_result blocks survive sanitize so the
+// partner's own tool-loop history is visible on the next turn, while
+// task-origin tool blocks bleeding in via the shared session JSONL are
+// still stripped to avoid Codex HTTP 400 "No tool call found for
+// function call output with call_id ..." on the reload.
+//
+// The mixed session below mirrors what load actually sees: a chat turn
+// that ran the tool loop (user question → assistant text+tool_use →
+// user tool_result → assistant final text) followed by a task turn that
+// persisted its own tool_use / tool_result onto the same session.
+func TestSanitizeChatHistory_PreservesChatOwnToolBlocks(t *testing.T) {
+	chatAssistantToolUse := llm.Message{Role: "assistant", Source: llm.SourceChat, Content: []llm.ContentBlock{
+		llm.TextBlock{Text: "잠깐 시세 확인할게요"},
+		llm.ToolUseBlock{ID: "chat_call_1", Name: "web_fetch", Input: []byte(`{"url":"x"}`)},
+	}}
+	chatUserToolResult := llm.Message{Role: "user", Source: llm.SourceChat, Content: []llm.ContentBlock{
+		llm.ToolResultBlock{ToolUseID: "chat_call_1", Content: "rows..."},
+	}}
+	msgs := []llm.Message{
+		{Role: "user", Source: llm.SourceChat, Content: []llm.ContentBlock{llm.TextBlock{Text: "주식 알려줘"}}},
+		chatAssistantToolUse,
+		chatUserToolResult,
+		{Role: "assistant", Source: llm.SourceChat, Content: []llm.ContentBlock{llm.TextBlock{Text: "정리된 답"}}},
+		// Task-origin turn persisted into the same session JSONL.
+		{Role: "user", Source: llm.SourceTask, Content: []llm.ContentBlock{llm.TextBlock{Text: "요약 태스크"}}},
+		{Role: "assistant", Source: llm.SourceTask, Content: []llm.ContentBlock{
+			llm.ToolUseBlock{ID: "task_call_1", Name: "wiki_search", Input: []byte(`{}`)},
+		}},
+		{Role: "user", Source: llm.SourceTask, Content: []llm.ContentBlock{
+			llm.ToolResultBlock{ToolUseID: "task_call_1", Content: "wiki hit"},
+		}},
+	}
+
+	got := sanitizeChatHistory(msgs)
+
+	// 4 chat messages preserved verbatim + 1 task user text survives
+	// (its tool_use/tool_result companion turns collapse to empty).
+	if len(got) != 5 {
+		t.Fatalf("sanitized len = %d, want 5; got=%+v", len(got), got)
+	}
+
+	// Chat assistant turn retains BOTH TextBlock and ToolUseBlock.
+	ca := got[1]
+	if ca.Role != "assistant" || ca.Source != llm.SourceChat || len(ca.Content) != 2 {
+		t.Fatalf("chat assistant turn not preserved: %+v", ca)
+	}
+	var haveToolUse bool
+	for _, b := range ca.Content {
+		if tu, ok := b.(llm.ToolUseBlock); ok && tu.ID == "chat_call_1" {
+			haveToolUse = true
+		}
+	}
+	if !haveToolUse {
+		t.Errorf("chat own tool_use was stripped, should be preserved; got=%+v", ca.Content)
+	}
+
+	// Chat tool_result block must survive on the user-role message.
+	cr := got[2]
+	if cr.Role != "user" || cr.Source != llm.SourceChat || len(cr.Content) != 1 {
+		t.Fatalf("chat tool_result turn not preserved: %+v", cr)
+	}
+	if _, ok := cr.Content[0].(llm.ToolResultBlock); !ok {
+		t.Errorf("chat own tool_result was stripped, want preserved; got=%T", cr.Content[0])
+	}
+
+	// Task-origin assistant tool_use + user tool_result must be absent
+	// — both turns collapse to empty content and should be dropped.
+	for i, m := range got {
+		if m.Source != llm.SourceTask {
+			continue
+		}
+		for _, b := range m.Content {
+			switch b.(type) {
+			case llm.ToolUseBlock, llm.ToolResultBlock:
+				t.Errorf("got[%d] task tool block leaked after sanitize: %T", i, b)
+			}
+		}
+	}
+}
+
+// TestSanitizeChatHistory_StripsLegacyOriginToolBlocks (L1.3 R2) pins
+// the backwards-compat contract: session records written before L1.1
+// have Source == "" on disk. resolveSource must treat those as
+// task-origin (the only writer that produced tool blocks pre-L1) so the
+// existing Codex HTTP 400 protection keeps holding on legacy history.
+func TestSanitizeChatHistory_StripsLegacyOriginToolBlocks(t *testing.T) {
+	msgs := []llm.Message{
+		// Empty Source == pre-L1 JSONL record.
+		{Role: "assistant", Source: "", Content: []llm.ContentBlock{
+			llm.TextBlock{Text: "구형 턴"},
+			llm.ToolUseBlock{ID: "legacy_1", Name: "web_fetch", Input: []byte(`{}`)},
+		}},
+		{Role: "user", Source: "", Content: []llm.ContentBlock{
+			llm.ToolResultBlock{ToolUseID: "legacy_1", Content: "old body"},
+		}},
+	}
+
+	got := sanitizeChatHistory(msgs)
+
+	if len(got) != 1 {
+		t.Fatalf("sanitized len = %d, want 1 (tool_result orphan turn dropped); got=%+v", len(got), got)
+	}
+	if got[0].Role != "assistant" || len(got[0].Content) != 1 {
+		t.Fatalf("legacy assistant turn shape wrong: %+v", got[0])
+	}
+	if tb, ok := got[0].Content[0].(llm.TextBlock); !ok || tb.Text != "구형 턴" {
+		t.Errorf("legacy text lost: %+v", got[0].Content[0])
+	}
+}
+
+// TestSanitizeChatHistory_StripsTeamOriginToolBlocks (L1.3 R3) pins the
+// Q3 B decision from the L1 plan: chat load strips team-origin tool
+// blocks as well — a chat turn can't meaningfully narrate over tool
+// calls the team orchestrator issued in a different scope, and the
+// Codex-side call-id is still unknown to the chat conversation.
+func TestSanitizeChatHistory_StripsTeamOriginToolBlocks(t *testing.T) {
+	msgs := []llm.Message{
+		{Role: "assistant", Source: llm.SourceTeam, Content: []llm.ContentBlock{
+			llm.TextBlock{Text: "팀 요약"},
+			llm.ToolUseBlock{ID: "team_call_1", Name: "wiki_search", Input: []byte(`{}`)},
+		}},
+		{Role: "user", Source: llm.SourceTeam, Content: []llm.ContentBlock{
+			llm.ToolResultBlock{ToolUseID: "team_call_1", Content: "team result"},
+		}},
+	}
+
+	got := sanitizeChatHistory(msgs)
+
+	if len(got) != 1 {
+		t.Fatalf("sanitized len = %d, want 1 (team tool_result orphan turn dropped); got=%+v", len(got), got)
+	}
+	for _, b := range got[0].Content {
+		switch b.(type) {
+		case llm.ToolUseBlock, llm.ToolResultBlock:
+			t.Errorf("team tool block leaked after sanitize: %T", b)
+		}
+	}
+}
+
+// TestSanitizeChatHistory_NoOrphanToolResultAfterMixedLoad (L1.3 R4) is
+// the Codex HTTP 400 regression guard. After sanitize every surviving
+// tool_result must have a matching tool_use earlier in the filtered
+// history — otherwise the Responses API rejects the turn with
+// "No tool call found for function call output with call_id ...".
+// This invariant holds trivially today because every tool block is
+// stripped, but L1.3 preserves chat-origin blocks so the guard starts
+// doing real work.
+func TestSanitizeChatHistory_NoOrphanToolResultAfterMixedLoad(t *testing.T) {
+	msgs := []llm.Message{
+		{Role: "user", Source: llm.SourceChat, Content: []llm.ContentBlock{llm.TextBlock{Text: "fetch X"}}},
+		{Role: "assistant", Source: llm.SourceChat, Content: []llm.ContentBlock{
+			llm.ToolUseBlock{ID: "chat_call_1", Name: "web_fetch", Input: []byte(`{}`)},
+		}},
+		{Role: "user", Source: llm.SourceChat, Content: []llm.ContentBlock{
+			llm.ToolResultBlock{ToolUseID: "chat_call_1", Content: "fetched"},
+		}},
+		// Task-origin orphan: tool_result whose tool_use we must strip.
+		{Role: "assistant", Source: llm.SourceTask, Content: []llm.ContentBlock{
+			llm.ToolUseBlock{ID: "task_call_1", Name: "wiki_search", Input: []byte(`{}`)},
+		}},
+		{Role: "user", Source: llm.SourceTask, Content: []llm.ContentBlock{
+			llm.ToolResultBlock{ToolUseID: "task_call_1", Content: "wiki"},
+		}},
+	}
+
+	got := sanitizeChatHistory(msgs)
+
+	seenToolUse := make(map[string]struct{})
+	for i, m := range got {
+		for _, b := range m.Content {
+			switch blk := b.(type) {
+			case llm.ToolUseBlock:
+				seenToolUse[blk.ID] = struct{}{}
+			case llm.ToolResultBlock:
+				if _, ok := seenToolUse[blk.ToolUseID]; !ok {
+					t.Errorf("got[%d] orphan tool_result: tool_use_id=%q has no earlier matching tool_use (would trigger Codex HTTP 400)", i, blk.ToolUseID)
+				}
+			}
+		}
+	}
+
+	// Chat call_id survives (R1 overlap — tighter local assertion).
+	if _, ok := seenToolUse["chat_call_1"]; !ok {
+		t.Errorf("chat tool_use id=chat_call_1 should be preserved")
+	}
+	// Task call_id is stripped.
+	if _, ok := seenToolUse["task_call_1"]; ok {
+		t.Errorf("task tool_use id=task_call_1 should be stripped")
+	}
+}
