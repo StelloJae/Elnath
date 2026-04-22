@@ -87,8 +87,11 @@ type ChatSessionRemember interface {
 
 // ChatPipelineDeps bundles the prompt-pipeline dependencies injected by the
 // runtime so ChatResponder can build system prompts via prompt.Builder and
-// hydrate history from the bound session. When nil, ChatResponder falls back
-// to the legacy hardcoded chatSystemPrompt and a single-message array.
+// hydrate history from the bound session. Since Phase L3.2, Builder is
+// effectively mandatory — a nil pipeline (or nil Builder) makes
+// buildPrompt surface an error, which Respond turns into the partner-
+// facing ⚠️ chatPromptBuildFailureMessage instead of silently streaming
+// a degraded prompt.
 type ChatPipelineDeps struct {
 	Builder      ChatPromptBuilder
 	Self         *self.SelfState

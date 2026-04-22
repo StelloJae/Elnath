@@ -7,10 +7,10 @@ import (
 
 // ChatSystemPromptNode renders chat-only identity / locale / detailed-answer
 // guidance. Task paths (IsChat=false) skip this node so the 17-node pipeline
-// stays chat-clean. Content mirrors the legacy
-// internal/telegram.chatSystemPrompt constant (chat.go:31-33); L3.1 keeps
-// the constant alive for dual-path safety, L3.2 removes it once the
-// Builder path is mandatory.
+// stays chat-clean. Since Phase L3.2, chatSystemBody below is the sole
+// source of chat identity/Korean-default/detailed-answer guidance — the
+// legacy chat.go chatSystemPrompt constant has been deleted along with
+// the fallback path that used to read it.
 type ChatSystemPromptNode struct {
 	priority int
 }
