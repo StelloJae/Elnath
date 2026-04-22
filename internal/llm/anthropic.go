@@ -28,6 +28,14 @@ const (
 	anthropicOAuthTokenPrefix = "sk-ant-oat01-"
 	anthropicOAuthBeta        = "claude-code-20250219,oauth-2025-04-20"
 	anthropicOAuthUserAgent   = "claude-cli/2.1.2 (external, cli)"
+
+	// anthropicContext1MBeta unlocks the 1M-token context window on Anthropic
+	// Messages API. audit.txt §01: "1M enabled by beta header context-1m-2025-08-07".
+	anthropicContext1MBeta = "context-1m-2025-08-07"
+	// anthropicModel1MSuffix marks a model ID that opts into the 1M context
+	// beta. The suffix is a Claude Code convention (see migrateOpusToOpus1m);
+	// the API itself receives the base model ID plus the beta header.
+	anthropicModel1MSuffix = "[1m]"
 )
 
 // isAnthropicOAuthToken reports whether key is a Claude Code OAuth access token.
@@ -47,6 +55,40 @@ func setAnthropicAuthHeaders(h http.Header, apiKey string) {
 		return
 	}
 	h.Set("x-api-key", apiKey)
+}
+
+// opts1MContext reports whether the caller's model ID opts into Anthropic's
+// 1M-context beta, per the "[1m]" suffix convention (audit.txt §01).
+// Suppressed when CLAUDE_CODE_DISABLE_1M_CONTEXT=1 (HIPAA parity mirror).
+func opts1MContext(model string) bool {
+	if os.Getenv("CLAUDE_CODE_DISABLE_1M_CONTEXT") == "1" {
+		return false
+	}
+	return strings.HasSuffix(model, anthropicModel1MSuffix)
+}
+
+// apiModelID strips Elnath-internal beta suffixes (e.g. "[1m]") so the
+// Messages API sees only the base model string. The 1M window is enabled
+// via the anthropic-beta header, not the model ID itself.
+func apiModelID(model string) string {
+	return strings.TrimSuffix(model, anthropicModel1MSuffix)
+}
+
+// appendAnthropicBeta merges a beta flag into the anthropic-beta header
+// without clobbering any flags previously set (e.g. OAuth betas).
+func appendAnthropicBeta(h http.Header, beta string) {
+	if beta == "" {
+		return
+	}
+	existing := h.Get("anthropic-beta")
+	switch {
+	case existing == "":
+		h.Set("anthropic-beta", beta)
+	case strings.Contains(existing, beta):
+		return
+	default:
+		h.Set("anthropic-beta", existing+","+beta)
+	}
 }
 
 // AnthropicProvider implements Provider for Anthropic's Messages API.
@@ -108,6 +150,14 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req Request, cb func(Str
 	httpReq.Header.Set("anthropic-version", anthropicAPIVersion)
 	httpReq.Header.Set("Accept", "text/event-stream")
 
+	effectiveModel := req.Model
+	if effectiveModel == "" {
+		effectiveModel = p.model
+	}
+	if opts1MContext(effectiveModel) {
+		appendAnthropicBeta(httpReq.Header, anthropicContext1MBeta)
+	}
+
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
 		var netErr net.Error
@@ -126,6 +176,14 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req Request, cb func(Str
 		}
 		switch resp.StatusCode {
 		case 429:
+			if opts1MContext(effectiveModel) {
+				// Single-shot fallback: retry on base model when the 1M-context
+				// beta is rate-limited. audit.txt §01 treats [1m] as opt-in;
+				// graceful downgrade keeps the session running at 200K.
+				fallbackReq := req
+				fallbackReq.Model = apiModelID(effectiveModel)
+				return p.Stream(ctx, fallbackReq, cb)
+			}
 			inner := fmt.Errorf("anthropic: rate limit (429): %s", errBody)
 			return userfacingerr.Wrap(userfacingerr.ELN080, inner, "anthropic 429")
 		case 529:
@@ -191,7 +249,7 @@ func buildAnthropicRequest(req Request, defaultModel string) ([]byte, error) {
 	}
 
 	ar := anthropicRequest{
-		Model:     model,
+		Model:     apiModelID(model),
 		MaxTokens: maxTokens,
 		Stream:    true,
 	}
@@ -539,6 +597,22 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRes
 
 // anthropicModels lists the supported Anthropic models with approximate pricing.
 var anthropicModels = []ModelInfo{
+	{
+		ID:              "claude-opus-4-7",
+		Name:            "Claude Opus 4.7",
+		MaxTokens:       32000,
+		ContextWindow:   200_000,
+		InputPricePerM:  15.0,
+		OutputPricePerM: 75.0,
+	},
+	{
+		ID:              "claude-opus-4-7" + anthropicModel1MSuffix,
+		Name:            "Claude Opus 4.7 (1M context)",
+		MaxTokens:       32000,
+		ContextWindow:   1_000_000,
+		InputPricePerM:  15.0,
+		OutputPricePerM: 75.0,
+	},
 	{
 		ID:              "claude-opus-4-6",
 		Name:            "Claude Opus 4",

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -717,9 +718,11 @@ func TestAnthropicProviderMetadata(t *testing.T) {
 	}
 
 	wantIDs := map[string]bool{
-		"claude-opus-4-6":   true,
-		"claude-sonnet-4-6": true,
-		"claude-haiku-4-5":  true,
+		"claude-opus-4-7":     true,
+		"claude-opus-4-7[1m]": true,
+		"claude-opus-4-6":     true,
+		"claude-sonnet-4-6":   true,
+		"claude-haiku-4-5":    true,
 	}
 	for _, m := range models {
 		if !wantIDs[m.ID] {
@@ -807,5 +810,140 @@ func TestAnthropicRequestHeaders(t *testing.T) {
 		if got != c.want {
 			t.Errorf("header %q = %q, want %q", c.header, got, c.want)
 		}
+	}
+}
+
+// captureHeaders starts a stub server that records request headers and
+// returns a minimal SSE body so Stream completes cleanly. status lets the
+// caller simulate non-OK outcomes like 429.
+func captureHeaders(t *testing.T, status int) (*httptest.Server, *http.Header) {
+	t.Helper()
+	captured := &http.Header{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		*captured = r.Header.Clone()
+		if status != 0 && status != http.StatusOK {
+			http.Error(w, "rate limited", status)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		msgStop := mustJSON(map[string]any{"type": "message_stop"})
+		fmt.Fprint(w, anthropicSSE(sseEvent("message_stop", msgStop)))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, captured
+}
+
+// TestAnthropicStream_AppendsContext1MBeta verifies the 1M-context beta
+// header is attached when the caller's model ID carries the "[1m]" suffix
+// (non-OAuth path: no prior anthropic-beta value).
+func TestAnthropicStream_AppendsContext1MBeta(t *testing.T) {
+	srv, captured := captureHeaders(t, http.StatusOK)
+	p := NewAnthropicProvider("sk-ant-test", "claude-opus-4-7[1m]", WithAnthropicBaseURL(srv.URL))
+	if _, err := collectEvents(t, p, Request{Messages: []Message{NewUserMessage("hi")}}); err != nil {
+		t.Fatalf("Stream() error: %v", err)
+	}
+	if got := captured.Get("Anthropic-Beta"); got != anthropicContext1MBeta {
+		t.Errorf("anthropic-beta = %q, want %q", got, anthropicContext1MBeta)
+	}
+}
+
+// TestAnthropicStream_Context1MBetaAppendsToOAuthBetas verifies the 1M flag
+// is merged with the OAuth beta list instead of overwriting it.
+func TestAnthropicStream_Context1MBetaAppendsToOAuthBetas(t *testing.T) {
+	srv, captured := captureHeaders(t, http.StatusOK)
+	p := NewAnthropicProvider("sk-ant-oat01-token", "claude-opus-4-7[1m]", WithAnthropicBaseURL(srv.URL))
+	if _, err := collectEvents(t, p, Request{Messages: []Message{NewUserMessage("hi")}}); err != nil {
+		t.Fatalf("Stream() error: %v", err)
+	}
+	got := captured.Get("Anthropic-Beta")
+	if !strings.Contains(got, anthropicOAuthBeta) {
+		t.Errorf("anthropic-beta = %q, missing OAuth beta prefix %q", got, anthropicOAuthBeta)
+	}
+	if !strings.Contains(got, anthropicContext1MBeta) {
+		t.Errorf("anthropic-beta = %q, missing 1M beta %q", got, anthropicContext1MBeta)
+	}
+}
+
+// TestAnthropicStream_Context1MDisabledByEnv verifies the HIPAA-parity env
+// var suppresses the 1M beta header even with the [1m] suffix.
+func TestAnthropicStream_Context1MDisabledByEnv(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_DISABLE_1M_CONTEXT", "1")
+	srv, captured := captureHeaders(t, http.StatusOK)
+	p := NewAnthropicProvider("sk-ant-test", "claude-opus-4-7[1m]", WithAnthropicBaseURL(srv.URL))
+	if _, err := collectEvents(t, p, Request{Messages: []Message{NewUserMessage("hi")}}); err != nil {
+		t.Fatalf("Stream() error: %v", err)
+	}
+	if got := captured.Get("Anthropic-Beta"); strings.Contains(got, anthropicContext1MBeta) {
+		t.Errorf("anthropic-beta = %q, expected %q to be absent when disabled", got, anthropicContext1MBeta)
+	}
+}
+
+// TestBuildAnthropicRequest_Strips1MSuffix verifies the outbound JSON body
+// carries the base model ID, since Anthropic signals 1M via the beta header
+// rather than through the model field.
+func TestBuildAnthropicRequest_Strips1MSuffix(t *testing.T) {
+	req := Request{Model: "claude-opus-4-7[1m]", Messages: []Message{NewUserMessage("hi")}}
+	raw, err := buildAnthropicRequest(req, "claude-default")
+	if err != nil {
+		t.Fatalf("buildAnthropicRequest() error: %v", err)
+	}
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	var model string
+	if err := json.Unmarshal(got["model"], &model); err != nil {
+		t.Fatalf("unmarshal model: %v", err)
+	}
+	if model != "claude-opus-4-7" {
+		t.Errorf("model = %q, want %q (suffix must be stripped)", model, "claude-opus-4-7")
+	}
+}
+
+// TestAnthropicStream_Opus47_1MRateLimitFallback verifies that a 429 on a
+// [1m] model triggers a single-shot retry on the base model. The stub flips
+// to 200 on the second request; we inspect the model field of each body.
+func TestAnthropicStream_Opus47_1MRateLimitFallback(t *testing.T) {
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(body))
+		if len(bodies) == 1 {
+			http.Error(w, "rate limited", http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		msgStop := mustJSON(map[string]any{"type": "message_stop"})
+		fmt.Fprint(w, anthropicSSE(sseEvent("message_stop", msgStop)))
+	}))
+	t.Cleanup(srv.Close)
+
+	p := NewAnthropicProvider("sk-ant-test", "claude-opus-4-7[1m]", WithAnthropicBaseURL(srv.URL))
+	if _, err := collectEvents(t, p, Request{Messages: []Message{NewUserMessage("hi")}}); err != nil {
+		t.Fatalf("Stream() error: %v", err)
+	}
+	if len(bodies) != 2 {
+		t.Fatalf("request count = %d, want 2 (initial + fallback)", len(bodies))
+	}
+
+	extractModel := func(body string) string {
+		t.Helper()
+		var root map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(body), &root); err != nil {
+			t.Fatalf("unmarshal body: %v", err)
+		}
+		var m string
+		if err := json.Unmarshal(root["model"], &m); err != nil {
+			t.Fatalf("unmarshal model: %v", err)
+		}
+		return m
+	}
+	if m := extractModel(bodies[0]); m != "claude-opus-4-7" {
+		t.Errorf("initial request model = %q, want %q (suffix stripped before send)", m, "claude-opus-4-7")
+	}
+	if m := extractModel(bodies[1]); m != "claude-opus-4-7" {
+		t.Errorf("fallback request model = %q, want %q", m, "claude-opus-4-7")
 	}
 }
