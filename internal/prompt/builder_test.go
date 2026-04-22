@@ -12,6 +12,7 @@ type stubNode struct {
 	priority int
 	body     string
 	err      error
+	boundary CacheBoundary
 }
 
 func (n stubNode) Name() string { return n.name }
@@ -24,6 +25,8 @@ func (n stubNode) Render(context.Context, *RenderState) (string, error) {
 	}
 	return n.body, nil
 }
+
+func (n stubNode) CacheBoundary() CacheBoundary { return n.boundary }
 
 func TestBuilderEmpty(t *testing.T) {
 	t.Parallel()

@@ -12,6 +12,10 @@ func NewSkillGuidanceNode(priority int) *SkillGuidanceNode {
 
 func (n *SkillGuidanceNode) Name() string { return "skill_guidance" }
 
+// CacheBoundary classifies skill guidance as volatile: it depends on
+// the session's active skill catalog.
+func (n *SkillGuidanceNode) CacheBoundary() CacheBoundary { return CacheBoundaryVolatile }
+
 func (n *SkillGuidanceNode) Priority() int {
 	if n == nil {
 		return 0

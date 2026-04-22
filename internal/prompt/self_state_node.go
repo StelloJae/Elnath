@@ -19,6 +19,10 @@ func (n *SelfStateNode) Name() string {
 	return "self_state"
 }
 
+// CacheBoundary classifies self-state as volatile: the SelfState
+// snapshot is re-read every turn.
+func (n *SelfStateNode) CacheBoundary() CacheBoundary { return CacheBoundaryVolatile }
+
 func (n *SelfStateNode) Priority() int {
 	if n == nil {
 		return 0

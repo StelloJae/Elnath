@@ -44,6 +44,10 @@ func (n *ContextFilesNode) Name() string {
 	return "context_files"
 }
 
+// CacheBoundary classifies context files as volatile: the files list
+// expands as the session touches new paths.
+func (n *ContextFilesNode) CacheBoundary() CacheBoundary { return CacheBoundaryVolatile }
+
 func (n *ContextFilesNode) Priority() int {
 	if n == nil {
 		return 0

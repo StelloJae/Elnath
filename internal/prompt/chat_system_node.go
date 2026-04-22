@@ -23,6 +23,10 @@ func (n *ChatSystemPromptNode) Name() string {
 	return "chat_system"
 }
 
+// CacheBoundary classifies the chat system prompt as volatile: it
+// re-renders on every turn alongside per-turn state hints.
+func (n *ChatSystemPromptNode) CacheBoundary() CacheBoundary { return CacheBoundaryVolatile }
+
 func (n *ChatSystemPromptNode) Priority() int {
 	if n == nil {
 		return 0

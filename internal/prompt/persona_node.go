@@ -17,6 +17,10 @@ func (n *PersonaNode) Name() string {
 	return "persona"
 }
 
+// CacheBoundary classifies persona as stable: extra persona text is
+// session-scoped config, not per-call state.
+func (n *PersonaNode) CacheBoundary() CacheBoundary { return CacheBoundaryStable }
+
 func (n *PersonaNode) Priority() int {
 	if n == nil {
 		return 0

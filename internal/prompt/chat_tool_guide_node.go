@@ -30,6 +30,10 @@ func (n *ChatToolGuideNode) Name() string {
 	return "chat_tool_guide"
 }
 
+// CacheBoundary classifies the chat tool guide as volatile:
+// AvailableTools varies per tool-loop turn.
+func (n *ChatToolGuideNode) CacheBoundary() CacheBoundary { return CacheBoundaryVolatile }
+
 func (n *ChatToolGuideNode) Priority() int {
 	if n == nil {
 		return 0

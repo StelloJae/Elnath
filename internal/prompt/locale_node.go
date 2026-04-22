@@ -12,6 +12,10 @@ func (n *LocaleInstructionNode) Name() string {
 	return "locale_instruction"
 }
 
+// CacheBoundary classifies locale as stable: RenderState.Locale is
+// session config and does not vary between turns.
+func (n *LocaleInstructionNode) CacheBoundary() CacheBoundary { return CacheBoundaryStable }
+
 func (n *LocaleInstructionNode) Priority() int {
 	return 999
 }

@@ -21,6 +21,10 @@ func (n *SkillCatalogNode) Name() string {
 	return "skill_catalog"
 }
 
+// CacheBoundary classifies skill catalog as volatile: the skill set
+// can shift within a session as new skills land on disk.
+func (n *SkillCatalogNode) CacheBoundary() CacheBoundary { return CacheBoundaryVolatile }
+
 func (n *SkillCatalogNode) Priority() int {
 	if n == nil {
 		return 0

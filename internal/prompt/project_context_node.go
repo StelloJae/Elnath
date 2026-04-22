@@ -22,6 +22,10 @@ func (n *ProjectContextNode) Name() string {
 	return "project_context"
 }
 
+// CacheBoundary classifies project context as volatile: the rendered
+// body depends on WorkDir state and can change as files land.
+func (n *ProjectContextNode) CacheBoundary() CacheBoundary { return CacheBoundaryVolatile }
+
 func (n *ProjectContextNode) Priority() int {
 	if n == nil {
 		return 0

@@ -29,6 +29,10 @@ func (n *IdentityNode) Priority() int {
 	return n.priority
 }
 
+// CacheBoundary classifies identity as stable: self-identity + persona
+// parameters change only on explicit reconfiguration, not per call.
+func (n *IdentityNode) CacheBoundary() CacheBoundary { return CacheBoundaryStable }
+
 func (n *IdentityNode) Render(_ context.Context, state *RenderState) (string, error) {
 	if n == nil || state == nil || state.Self == nil {
 		return "", nil

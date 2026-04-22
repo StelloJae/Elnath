@@ -32,6 +32,10 @@ func NewMemoryContextNode(priority, maxEntries, maxChars int) *MemoryContextNode
 	return &MemoryContextNode{priority: priority, maxEntries: maxEntries, maxChars: maxChars}
 }
 
+// CacheBoundary classifies memory context as volatile: the wiki
+// search result set is driven by per-turn input.
+func (n *MemoryContextNode) CacheBoundary() CacheBoundary { return CacheBoundaryVolatile }
+
 func (n *MemoryContextNode) Name() string {
 	return "memory_context"
 }

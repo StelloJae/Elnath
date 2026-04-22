@@ -43,6 +43,10 @@ func NewLessonsNode(priority int, store LessonLister, maxEntries, maxChars int) 
 
 func (n *LessonsNode) Name() string { return "lessons" }
 
+// CacheBoundary classifies lessons as volatile: the lessons store is
+// append-mutated as the session accumulates reflections.
+func (n *LessonsNode) CacheBoundary() CacheBoundary { return CacheBoundaryVolatile }
+
 func (n *LessonsNode) Priority() int {
 	if n == nil {
 		return 0

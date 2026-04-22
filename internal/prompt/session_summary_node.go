@@ -28,6 +28,10 @@ func (n *SessionSummaryNode) Name() string {
 	return "session_summary"
 }
 
+// CacheBoundary classifies session summary as volatile: it rolls up
+// per-session compaction outputs.
+func (n *SessionSummaryNode) CacheBoundary() CacheBoundary { return CacheBoundaryVolatile }
+
 func (n *SessionSummaryNode) Priority() int {
 	if n == nil {
 		return 0

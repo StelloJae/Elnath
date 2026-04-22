@@ -24,6 +24,10 @@ func (n *WikiRAGNode) Name() string {
 	return "wiki_rag"
 }
 
+// CacheBoundary classifies wiki RAG as volatile: retrievals depend
+// on per-turn user input.
+func (n *WikiRAGNode) CacheBoundary() CacheBoundary { return CacheBoundaryVolatile }
+
 func (n *WikiRAGNode) Priority() int {
 	if n == nil {
 		return 0

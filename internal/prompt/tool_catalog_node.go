@@ -18,6 +18,10 @@ func (n *ToolCatalogNode) Name() string {
 	return "tool_catalog"
 }
 
+// CacheBoundary classifies tool catalog as volatile: ToolNames
+// varies with feature gating and available surfaces.
+func (n *ToolCatalogNode) CacheBoundary() CacheBoundary { return CacheBoundaryVolatile }
+
 func (n *ToolCatalogNode) Priority() int {
 	if n == nil {
 		return 0

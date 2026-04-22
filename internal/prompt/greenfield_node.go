@@ -15,6 +15,10 @@ func NewGreenfieldNode(priority int) *GreenfieldNode {
 
 func (n *GreenfieldNode) Name() string { return "greenfield" }
 
+// CacheBoundary classifies greenfield context as stable: the anchor
+// is a project-posture flag, not per-turn state.
+func (n *GreenfieldNode) CacheBoundary() CacheBoundary { return CacheBoundaryStable }
+
 func (n *GreenfieldNode) Priority() int {
 	if n == nil {
 		return 0

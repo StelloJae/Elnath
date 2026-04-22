@@ -17,6 +17,10 @@ func (n *ModelGuidanceNode) Name() string {
 	return "model_guidance"
 }
 
+// CacheBoundary classifies model guidance as stable: the active model
+// is a session-level selection, not per-turn.
+func (n *ModelGuidanceNode) CacheBoundary() CacheBoundary { return CacheBoundaryStable }
+
 func (n *ModelGuidanceNode) Priority() int {
 	if n == nil {
 		return 0

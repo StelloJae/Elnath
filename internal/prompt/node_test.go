@@ -84,3 +84,69 @@ func TestRenderStatePartialNilSafe(t *testing.T) {
 		t.Fatalf("wiki rag Render = %q, want empty string", rag)
 	}
 }
+
+// TestCacheBoundaryClassification pins the plan §5 step 8.1.5 cache
+// posture for every node in the registry. Plan's canonical split:
+//   - 7 stable: identity, persona, locale, model_guidance, boundary,
+//     brownfield, greenfield.
+//   - 12 volatile: chat_system, chat_tool_guide, context_files, lessons,
+//     memory_context, project_context, self_state, session_summary,
+//     skill_catalog, skill_guidance, tool_catalog, wiki_rag.
+//
+// A future contributor adding a 20th node must update this table so the
+// classification review is explicit rather than silent.
+func TestCacheBoundaryClassification(t *testing.T) {
+	t.Parallel()
+
+	stable := []Node{
+		NewIdentityNode(10),
+		NewPersonaNode(10),
+		&LocaleInstructionNode{},
+		NewModelGuidanceNode(10),
+		NewDynamicBoundaryNode(),
+		NewBrownfieldNode(10),
+		NewGreenfieldNode(10),
+	}
+	volatile := []Node{
+		NewChatSystemPromptNode(10),
+		NewChatToolGuideNode(10),
+		NewContextFilesNode(10),
+		NewLessonsNode(10, nil, 0, 0),
+		NewMemoryContextNode(10, 0, 0),
+		NewProjectContextNode(10),
+		NewSelfStateNode(10),
+		NewSessionSummaryNode(10, 0, 0),
+		NewSkillCatalogNode(10, nil),
+		NewSkillGuidanceNode(10),
+		NewToolCatalogNode(10),
+		NewWikiRAGNode(10, 0),
+	}
+
+	for _, n := range stable {
+		if got := n.CacheBoundary(); got != CacheBoundaryStable {
+			t.Errorf("%s CacheBoundary = %s, want stable", n.Name(), got)
+		}
+	}
+	for _, n := range volatile {
+		if got := n.CacheBoundary(); got != CacheBoundaryVolatile {
+			t.Errorf("%s CacheBoundary = %s, want volatile", n.Name(), got)
+		}
+	}
+
+	if got := len(stable) + len(volatile); got != 19 {
+		t.Errorf("classification set size = %d, want 19 (one row per *_node.go)", got)
+	}
+}
+
+// TestSystemPromptDynamicBoundaryStable pins the exported boundary-marker
+// constant so callers reading it from the public API get the same string
+// the builder emits.
+func TestSystemPromptDynamicBoundaryStable(t *testing.T) {
+	t.Parallel()
+	if SystemPromptDynamicBoundary == "" {
+		t.Fatal("SystemPromptDynamicBoundary must not be empty")
+	}
+	if SystemPromptDynamicBoundary != dynamicBoundary {
+		t.Errorf("SystemPromptDynamicBoundary = %q, want alias of dynamicBoundary (%q)", SystemPromptDynamicBoundary, dynamicBoundary)
+	}
+}

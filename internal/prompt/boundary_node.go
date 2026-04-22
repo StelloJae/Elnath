@@ -21,3 +21,9 @@ func (n *DynamicBoundaryNode) Priority() int {
 func (n *DynamicBoundaryNode) Render(_ context.Context, _ *RenderState) (string, error) {
 	return dynamicBoundary, nil
 }
+
+// CacheBoundary classifies the boundary marker as stable: it terminates
+// the cacheable prefix and itself carries no per-session content.
+func (n *DynamicBoundaryNode) CacheBoundary() CacheBoundary {
+	return CacheBoundaryStable
+}

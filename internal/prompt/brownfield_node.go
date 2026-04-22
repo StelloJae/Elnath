@@ -17,6 +17,10 @@ func (n *BrownfieldNode) Name() string {
 	return "brownfield"
 }
 
+// CacheBoundary classifies brownfield context as stable: the
+// ExistingCode anchor reflects project posture, not per-turn state.
+func (n *BrownfieldNode) CacheBoundary() CacheBoundary { return CacheBoundaryStable }
+
 func (n *BrownfieldNode) Priority() int {
 	if n == nil {
 		return 0
