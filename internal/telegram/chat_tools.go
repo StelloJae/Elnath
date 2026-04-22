@@ -130,80 +130,16 @@ func chatTimeHeader(now time.Time) string {
 	return fmt.Sprintf("현재 시간 (KST): %s\n", now.In(kstZone).Format("2006-01-02 15:04"))
 }
 
-// chatToolGuideHeader is appended to the system prompt only when the tool
-// loop is active. Codex/gpt-5.4 in chat mode is conservative about emitting
-// tool_use without an explicit cue; without this nudge the model answers
-// from its knowledge cutoff (the FU-CR2b loop never fires).
-//
-// FU-ChatToolGuideStrong expanded this from a one-liner nudge into a
-// structured instruction block (triggers, tool catalog, execution rules) so
-// the model has concrete decision rules for when to emit tool_use and what
-// to do with the results. Markdown H2 heading anchors the section visually
-// for both Anthropic and Codex/OpenAI providers.
-//
-// FU-ChatGuideFactFence (Fix C-P1) added rule 5 (refuse prior-knowledge
-// fact injection when tool_result lacks concrete rows) and an alternate-
-// sources section after 2026-04-21 dogfood showed hedged-hallucination
-// on sparse Yahoo most-active scrapes. Evidence:
-// .omc/research/fix-c-factcheck.md.
-//
-// FU-ChatGuideSourcesCitation (Phase B.3) added rule 6 to require a
-// mandatory "Sources:" section at the end of any answer that used
-// web_search or web_fetch. Both the OpenAI Responses web_search and the
-// Anthropic web_search_20250305 tools (Phase B.1 / B.2) inject
-// structured {title, url} results into context; without this prompt
-// rule the model silently drops those citations. Mirrors the Claude
-// Code upstream prompt (WebSearchTool/prompt.ts:14-25).
-//
-// TODO(L3): all three fact-fence anchors (rule 5 + alternate sources +
-// rule 6 Sources) are chat-specific today; relocate to a universal
-// prompt.Builder node so task and chat paths share the discipline.
-// Plan: .omc/plans/l1-universal-message-schema.md.
-func chatToolGuideHeader() string {
-	return `
-## 도구 사용 지침
-
-아래 상황에서는 반드시 도구를 호출하세요 (추측·지식 cutoff 답변 금지):
-- "지금/오늘/최근/최신" 등 현재 시점 정보 (시세·뉴스·릴리즈·트렌드)
-- 특정 URL의 내용 확인이 필요한 질문
-- 로컬 파일·코드 내용 확인이 필요한 질문
-- 외부 사실 검증이 필요한 주장
-
-사용 가능한 도구:
-- web_search: 최신 정보 검색 (뉴스·가격·트렌드)
-- web_fetch: 주어진 URL 내용 가져오기
-- read_file: 프로젝트 파일 내용 읽기
-- glob: 파일 경로 패턴 매칭
-- grep: 파일 내용에서 문자열 검색
-
-실행 규칙:
-1. 위 상황에 해당하면 먼저 도구를 호출한 뒤 답한다.
-2. 서로 독립적인 조회 여러 개는 한 번에 병렬 tool_use 블록으로 발행한다.
-3. 도구 결과를 받으면 한국어로 자연스럽게 요약·정리해 답한다.
-4. 일반 지식·간단한 대화처럼 도구 없이 답할 수 있으면 그대로 답한다.
-5. tool_result 가 요청한 대상의 **구체 수치 rows** (종목명·가격·거래량·건수 등) 를 반환하지 못했다면, 사전지식으로 이름·수치를 지어내지 말 것. 대신 (a) 무엇이 추출됐고 무엇이 비어있는지 명시, (b) 아래 대안 소스 시도 또는 파트너에게 재질문.
-6. web_search 나 web_fetch 로 외부 출처를 참고한 답변에는 **반드시 답변 맨 끝에 "Sources:" 섹션** 을 포함하고, 참고한 URL 을 markdown hyperlink (` + "`- [Title](URL)`" + `) 형식으로 나열한다. 예시:
-
-   Sources:
-   - [Yahoo Finance most-active](https://finance.yahoo.com/most-active)
-   - [Naver 거래상위](https://finance.naver.com/sise/sise_quant.naver)
-
-대안 소스 (primary scrape 가 sparse 일 때 순차 시도):
-- US 거래량 상위: https://finance.yahoo.com/most-active → https://query1.finance.yahoo.com/v1/finance/trending/US (JSON) → https://finviz.com/screener.ashx?v=111&s=ta_mostactive
-- 한국 시장: https://finance.naver.com/sise/sise_quant.naver (코스피) · https://finance.naver.com/sise/sise_quant.naver?sosok=1 (코스닥)
-`
-}
-
-// prependChatHeaders prepends the time header (always) and the tool guide
-// (only when the chat tool loop is active) to whatever systemPrompt the
-// builder/legacy fallback produced. Pre-pending keeps the headers at the
-// most salient position; the builder's persona/identity/wiki content
-// follows.
+// prependChatHeaders prepends the time header to whatever systemPrompt
+// the builder produced. Pre-L3.3 this also prepended the chat tool
+// guide via a now-deleted chatToolGuideHeader() helper; since L3.3 the
+// guide has a single source — prompt.ChatToolGuideNode — which renders
+// inside the Builder output when state.IsChat=true and
+// state.AvailableTools is non-empty. Keeping the time header as a
+// prepend (rather than another node) preserves the sub-minute
+// deterministic value that only Respond can supply.
 func (c *ChatResponder) prependChatHeaders(systemPrompt string) string {
 	header := chatTimeHeader(c.nowFunc())
-	if c.useToolLoop() {
-		header += chatToolGuideHeader()
-	}
 	if systemPrompt == "" {
 		return strings.TrimRight(header, "\n")
 	}

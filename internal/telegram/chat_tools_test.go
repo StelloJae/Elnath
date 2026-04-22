@@ -11,8 +11,21 @@ import (
 
 	"github.com/stello/elnath/internal/identity"
 	"github.com/stello/elnath/internal/llm"
+	"github.com/stello/elnath/internal/prompt"
 	"github.com/stello/elnath/internal/tools"
 )
+
+// chatToolGuideTestBuilder returns a minimal prompt.Builder wired with
+// the production L3.1 ChatToolGuideNode so end-to-end chat tests
+// exercise the same rendering path cmd_daemon.go wires in production.
+// Post-L3.3 the chat tool guide has a single source (the node), so
+// tests that assert guide content must route through a real Builder
+// rather than a stub returning static text.
+func chatToolGuideTestBuilder() ChatPromptBuilder {
+	b := prompt.NewBuilder()
+	b.Register(prompt.NewChatToolGuideNode(78))
+	return b
+}
 
 // --- FU-CR2b: chat-side tool_use → tool_result loop ---
 
@@ -146,7 +159,7 @@ func TestChatResponder_HandlesToolExecutionError(t *testing.T) {
 	exec.setResult("web_fetch", &tools.Result{Output: "fetch failed: HTTP 500", IsError: true})
 
 	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
-		Builder:      &stubChatBuilder{result: "SYS"},
+		Builder:      chatToolGuideTestBuilder(),
 		ToolDefs:     []llm.ToolDef{{Name: "web_fetch"}},
 		ToolExecutor: exec,
 	}))
@@ -194,7 +207,7 @@ func TestChatResponder_EnforcesMaxToolIterations(t *testing.T) {
 	exec := newChatMockExecutor()
 
 	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
-		Builder:      &stubChatBuilder{result: "SYS"},
+		Builder:      chatToolGuideTestBuilder(),
 		ToolDefs:     []llm.ToolDef{{Name: "web_fetch"}},
 		ToolExecutor: exec,
 	}))
@@ -320,7 +333,7 @@ func TestChatResponder_PrependsToolGuideWhenLoopActive(t *testing.T) {
 	provider := &chatMockProvider{response: "ok"}
 	exec := newChatMockExecutor()
 	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
-		Builder:      &stubChatBuilder{result: "SYS"},
+		Builder:      chatToolGuideTestBuilder(),
 		ToolDefs:     []llm.ToolDef{{Name: "web_fetch"}},
 		ToolExecutor: exec,
 	}))
@@ -349,7 +362,7 @@ func TestChatResponder_ToolGuideContainsStrongInstructionBlock(t *testing.T) {
 	provider := &chatMockProvider{response: "ok"}
 	exec := newChatMockExecutor()
 	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
-		Builder:      &stubChatBuilder{result: "SYS"},
+		Builder:      chatToolGuideTestBuilder(),
 		ToolDefs:     []llm.ToolDef{{Name: "web_fetch"}, {Name: "web_search"}},
 		ToolExecutor: exec,
 	}))
@@ -393,7 +406,7 @@ func TestChatResponder_ToolGuideContainsFactFenceRules(t *testing.T) {
 	provider := &chatMockProvider{response: "ok"}
 	exec := newChatMockExecutor()
 	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
-		Builder:      &stubChatBuilder{result: "SYS"},
+		Builder:      chatToolGuideTestBuilder(),
 		ToolDefs:     []llm.ToolDef{{Name: "web_fetch"}, {Name: "web_search"}},
 		ToolExecutor: exec,
 	}))
@@ -441,7 +454,7 @@ func TestChatResponder_ToolGuideRequiresSourcesSection(t *testing.T) {
 	provider := &chatMockProvider{response: "ok"}
 	exec := newChatMockExecutor()
 	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
-		Builder:      &stubChatBuilder{result: "SYS"},
+		Builder:      chatToolGuideTestBuilder(),
 		ToolDefs:     []llm.ToolDef{{Name: "web_search"}, {Name: "web_fetch"}},
 		ToolExecutor: exec,
 	}))
@@ -562,7 +575,7 @@ func TestChatResponder_CapsLargeToolResultBeforeReinjection(t *testing.T) {
 	exec.setResult("web_fetch", &tools.Result{Output: bigBody})
 
 	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
-		Builder:      &stubChatBuilder{result: "SYS"},
+		Builder:      chatToolGuideTestBuilder(),
 		ToolDefs:     []llm.ToolDef{{Name: "web_fetch"}},
 		ToolExecutor: exec,
 	}))
@@ -826,7 +839,7 @@ func TestChatResponder_EmitsProgressNoteBeforeToolExecution(t *testing.T) {
 	exec.setResult("web_fetch", &tools.Result{Output: "body"})
 
 	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
-		Builder:      &stubChatBuilder{result: "SYS"},
+		Builder:      chatToolGuideTestBuilder(),
 		ToolDefs:     []llm.ToolDef{{Name: "web_fetch"}},
 		ToolExecutor: exec,
 	}))
@@ -860,7 +873,7 @@ func TestChatResponder_EntryWritingReactionShownEvenWithoutTool(t *testing.T) {
 	exec := newChatMockExecutor()
 
 	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
-		Builder:      &stubChatBuilder{result: "SYS"},
+		Builder:      chatToolGuideTestBuilder(),
 		ToolDefs:     []llm.ToolDef{{Name: "web_fetch"}},
 		ToolExecutor: exec,
 	}))
@@ -896,7 +909,7 @@ func TestChatResponder_WritingReactionSetOnlyOnceAcrossIterations(t *testing.T) 
 	exec.setResult("web_fetch", &tools.Result{Output: "a"})
 
 	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
-		Builder:      &stubChatBuilder{result: "SYS"},
+		Builder:      chatToolGuideTestBuilder(),
 		ToolDefs:     []llm.ToolDef{{Name: "web_fetch"}, {Name: "web_search"}},
 		ToolExecutor: exec,
 	}))
@@ -957,7 +970,7 @@ func TestChatResponder_UsesExpandedMaxTokens_ToolLoopPath(t *testing.T) {
 	exec.setResult("web_fetch", &tools.Result{Output: "body"})
 
 	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
-		Builder:      &stubChatBuilder{result: "SYS"},
+		Builder:      chatToolGuideTestBuilder(),
 		ToolDefs:     []llm.ToolDef{{Name: "web_fetch"}},
 		ToolExecutor: exec,
 	}))
@@ -1126,3 +1139,42 @@ func TestChatResponder_LegacyPathUnchangedWhenExecutorMissing(t *testing.T) {
 		t.Errorf("final bot text = %q, want 'plain reply'", last)
 	}
 }
+
+// --- Phase L3.3: legacy chatToolGuideHeader / prependChatHeaders tool-guide
+// prepend removal (FU-ChatToolGuideRelocate) ---
+
+// TestChatResponder_ToolGuideRenderedOnceNotDuplicated pins the L3.3
+// single-source-of-truth contract: since L3.1 the ChatToolGuideNode
+// renders the rule-1..6 guide inside the prompt.Builder output. Before
+// L3.3, prependChatHeaders ALSO prepended the same header via the legacy
+// chatToolGuideHeader() function, so every chat turn carried two
+// identical copies of the guide in its system prompt. L3.3 removes the
+// prepend path, leaving the node as the sole renderer.
+func TestChatResponder_ToolGuideRenderedOnceNotDuplicated(t *testing.T) {
+	bot := newChatMockBot()
+	provider := &chatMockProvider{response: "ok"}
+	exec := newChatMockExecutor()
+	cr := NewChatResponder(provider, bot, "chat-42", nil, WithChatPipeline(ChatPipelineDeps{
+		Builder:      chatToolGuideTestBuilder(),
+		ToolDefs:     []llm.ToolDef{{Name: "web_fetch"}},
+		ToolExecutor: exec,
+	}))
+
+	err := cr.Respond(context.Background(), identity.Principal{UserID: "42", ProjectID: "proj", Surface: "telegram"}, "hi", 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	req := provider.capturedRequest(t)
+	if c := strings.Count(req.System, "## 도구 사용 지침"); c != 1 {
+		t.Errorf("tool guide header count = %d, want exactly 1 (L3.3 single source)", c)
+	}
+	// The five tool-allowlist anchors appear exactly once too — a
+	// proxy for "no duplicate rule block" without counting every line.
+	for _, anchor := range []string{"반드시 도구를 호출", "실행 규칙:"} {
+		if c := strings.Count(req.System, anchor); c != 1 {
+			t.Errorf("anchor %q count = %d, want 1", anchor, c)
+		}
+	}
+}
+
