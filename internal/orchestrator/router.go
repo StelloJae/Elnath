@@ -14,9 +14,14 @@ type RoutingContext struct {
 	EstimatedFiles int
 	// ExistingCode indicates the task is clearly about changing an existing codebase.
 	ExistingCode bool
-	// VerificationHint indicates the task explicitly mentions tests, regressions, or validation.
+	// VerificationHint indicates the task explicitly mentions running tests, regressions, or validation.
 	VerificationHint bool
 	BenchmarkMode    bool
+	// ExplicitWorkflow, when non-empty, forces the router to that workflow
+	// regardless of intent/preference. Values: "single", "ralph", "team".
+	// Power-user escape hatch via --workflow=NAME flag or "[NAME] ..." prompt
+	// prefix. BenchmarkMode still wins when true.
+	ExplicitWorkflow string
 }
 
 // Router maps a classified Intent to the appropriate Workflow.
@@ -56,10 +61,13 @@ func NewRouter(workflows map[string]Workflow) *Router {
 //	unclear       -> single  (with clarification prompt injected by caller)
 //	chat          -> single  (no tools)
 func (r *Router) Route(intent conversation.Intent, ctx *RoutingContext, pref *routingpref.WorkflowPreference) Workflow {
-	base := r.routeName(intent, ctx)
 	if ctx != nil && ctx.BenchmarkMode {
-		return r.get(base)
+		return r.get("single")
 	}
+	if ctx != nil && ctx.ExplicitWorkflow != "" {
+		return r.get(ctx.ExplicitWorkflow)
+	}
+	base := r.routeName(intent, ctx)
 	if preferred := pref.PreferredWorkflow(string(intent)); preferred != "" && !pref.Avoids(preferred) {
 		if wf, ok := r.workflows[preferred]; ok {
 			return wf
@@ -83,11 +91,15 @@ func (r *Router) routeName(intent conversation.Intent, ctx *RoutingContext) stri
 	return "single"
 }
 
+// TODO(phase-8-1b): replace phrase-matching with LLM-based intent classifier (Haiku).
 func routeComplexTask(ctx *RoutingContext) string {
 	if ctx != nil && ctx.ExistingCode && ctx.VerificationHint {
 		return "ralph"
 	}
-	if ctx != nil && ctx.ExistingCode && ctx.EstimatedFiles >= 1 {
+	// GPT G2 (Phase 8.1a): threshold raised from >= 1 to >= 4 so small
+	// existing-code tasks (e.g., "Add --json flag to cmd/mytool/status.go")
+	// stay on single path instead of fanning out to team.
+	if ctx != nil && ctx.ExistingCode && ctx.EstimatedFiles >= 4 {
 		return "team"
 	}
 	if ctx != nil && ctx.EstimatedFiles < 4 {

@@ -1224,30 +1224,160 @@ func TestBuildRoutingContextEdgeCases(t *testing.T) {
 		}
 	})
 
-	t.Run("brownfield minimum files", func(t *testing.T) {
+	t.Run("brownfield no run/verify phrase stays hint=false", func(t *testing.T) {
+		// Phase 8.1a Fix 1 (GPT G2): "fix the existing test" contains no
+		// verification phrase ("run tests", "ensure pass", etc.) — the standalone
+		// word "test" is ambiguous (authoring vs running) and no longer triggers
+		// VerificationHint. ExistingCode remains true via "fix"/"existing" cues.
 		ctx := buildRoutingContext("fix the existing test")
 		if !ctx.ExistingCode {
 			t.Fatal("expected ExistingCode = true")
 		}
-		if !ctx.VerificationHint {
-			t.Fatal("expected VerificationHint = true")
-		}
-		if ctx.EstimatedFiles < 2 {
-			t.Fatalf("EstimatedFiles = %d, want >= 2 for brownfield+verification", ctx.EstimatedFiles)
+		if ctx.VerificationHint {
+			t.Fatal("expected VerificationHint = false (no explicit verification phrase)")
 		}
 	})
 
-	t.Run("scaffolding with verification stays greenfield", func(t *testing.T) {
-		// "test" / "module" cues used to flip ExistingCode and route this
-		// to ralph; newWorkCues now override that.
+	t.Run("scaffolding with verification phrase plus newWork override", func(t *testing.T) {
+		// Phase 8.1a Fix 1 (GPT G2): "create a" newWorkPhrase suppresses
+		// VerificationHint even when "go test" verification phrase matches.
+		// ExistingCode is preserved as semantic truth — "module" keyword signals
+		// possible existing module; that truth is not flipped by newWork phrases.
 		ctx := buildRoutingContext("Create a Go module with calc.go and calc_test.go, then run go test")
-		if ctx.ExistingCode {
-			t.Fatal("expected ExistingCode = false (newWork cue overrides existingCode cue)")
+		if !ctx.ExistingCode {
+			t.Fatal("expected ExistingCode = true (module cue preserved per GPT G2)")
 		}
-		if !ctx.VerificationHint {
-			t.Fatal("expected VerificationHint = true")
+		if ctx.VerificationHint {
+			t.Fatal("expected VerificationHint = false (newWorkPhrase 'create a' overrides)")
 		}
 	})
+}
+
+// Phase 8.1a Fix 1 — phrase-aware classifier validation against real probe wording.
+func TestBuildRoutingContextPhraseAware(t *testing.T) {
+	tests := []struct {
+		name                     string
+		input                    string
+		wantExistingCode         bool
+		wantVerificationHint     bool
+		wantExplicitWorkflow     string
+		assertExistingCodeStrict bool
+	}{
+		{
+			name:                     "P07 async rate limiter with unit test",
+			input:                    "Write a reusable async rate limiter (token bucket, configurable requests/sec) that wraps aiohttp.ClientSession. Include a unit test.",
+			wantExistingCode:         false,
+			wantVerificationHint:     false,
+			assertExistingCodeStrict: true,
+		},
+		{
+			name:                     "P16 boto3 unit test mock",
+			input:                    "This function calls boto3.client('s3').list_objects_v2(...). Write a unit test that mocks the client so the test never touches real AWS.",
+			wantVerificationHint:     false,
+			assertExistingCodeStrict: false, // primary assertion is VerificationHint=false; route=single regardless
+		},
+		{
+			name:                     "P19 author ci.yml",
+			input:                    "Author .github/workflows/ci.yml that on push to main: Checks out the repo, Sets up Go 1.22, Runs go test -race.",
+			wantVerificationHint:     false,
+			assertExistingCodeStrict: false,
+		},
+		{
+			name:                     "P06 add --json flag to existing CLI",
+			input:                    "Add a --json flag to an existing CLI subcommand. The status struct is in cmd/mytool/status.go",
+			wantExistingCode:         true,
+			wantVerificationHint:     false,
+			assertExistingCodeStrict: true, // GPT G2: ExistingCode=true preserved (existing/cli cues)
+		},
+		{
+			name:                     "run tests and fix triggers ralph",
+			input:                    "Run the tests and fix failures",
+			wantExistingCode:         true,
+			wantVerificationHint:     true,
+			assertExistingCodeStrict: true,
+		},
+		{
+			name:                     "ensure regression-free after refactor",
+			input:                    "Ensure regression-free after my refactor",
+			wantExistingCode:         true,
+			wantVerificationHint:     true,
+			assertExistingCodeStrict: true,
+		},
+		{
+			name:                     "go test verification phrase",
+			input:                    "Please go test ./internal/foo and fix any failures",
+			wantExistingCode:         true,
+			wantVerificationHint:     true,
+			assertExistingCodeStrict: true,
+		},
+		{
+			name:                     "explicit workflow prefix ralph",
+			input:                    "[ralph] audit all handlers",
+			wantExistingCode:         true,
+			wantVerificationHint:     false,
+			wantExplicitWorkflow:     "ralph",
+			assertExistingCodeStrict: false,
+		},
+		{
+			name:                     "explicit workflow prefix single",
+			input:                    "[single] fix this nit",
+			wantExistingCode:         true,
+			wantVerificationHint:     false,
+			wantExplicitWorkflow:     "single",
+			assertExistingCodeStrict: false,
+		},
+		{
+			name:                     "explicit workflow prefix team",
+			input:                    "[team] refactor the middleware stack",
+			wantExistingCode:         true,
+			wantVerificationHint:     false,
+			wantExplicitWorkflow:     "team",
+			assertExistingCodeStrict: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := buildRoutingContext(tt.input)
+			if tt.assertExistingCodeStrict && ctx.ExistingCode != tt.wantExistingCode {
+				t.Errorf("ExistingCode = %v, want %v", ctx.ExistingCode, tt.wantExistingCode)
+			}
+			if ctx.VerificationHint != tt.wantVerificationHint {
+				t.Errorf("VerificationHint = %v, want %v", ctx.VerificationHint, tt.wantVerificationHint)
+			}
+			if ctx.ExplicitWorkflow != tt.wantExplicitWorkflow {
+				t.Errorf("ExplicitWorkflow = %q, want %q", ctx.ExplicitWorkflow, tt.wantExplicitWorkflow)
+			}
+		})
+	}
+}
+
+func TestParseWorkflowPrefix(t *testing.T) {
+	tests := []struct {
+		input       string
+		wantWf      string
+		wantCleaned string
+	}{
+		{"[ralph] audit all handlers", "ralph", "audit all handlers"},
+		{"[team] refactor stack", "team", "refactor stack"},
+		{"[single] fix this nit", "single", "fix this nit"},
+		{"   [ralph] leading whitespace", "ralph", "leading whitespace"},
+		{"no prefix at all", "", "no prefix at all"},
+		{"middle [ralph] not anchored", "", "middle [ralph] not anchored"},
+		{"[unknown] prefix", "", "[unknown] prefix"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			wf, cleaned := parseWorkflowPrefix(tt.input)
+			if wf != tt.wantWf {
+				t.Errorf("workflow = %q, want %q", wf, tt.wantWf)
+			}
+			if cleaned != tt.wantCleaned {
+				t.Errorf("cleaned = %q, want %q", cleaned, tt.wantCleaned)
+			}
+		})
+	}
 }
 
 // ---------------------------------------------------------------------------

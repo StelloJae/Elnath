@@ -443,26 +443,76 @@ func estimateFiles(input string) int {
 	return count
 }
 
+// parseWorkflowPrefix detects anchored escape-hatch prefixes like
+// "[ralph] ...", "[team] ...", "[single] ..." at the start of the prompt.
+// Returns the chosen workflow (or "" if no prefix) and the cleaned prompt
+// with the prefix stripped. Only prompt-start anchoring is supported —
+// mid-sentence "[team]" does not match.
+func parseWorkflowPrefix(input string) (workflow, cleaned string) {
+	trimmed := strings.TrimLeft(input, " \t")
+	prefixes := []struct {
+		tag  string
+		name string
+	}{
+		{"[ralph]", "ralph"},
+		{"[team]", "team"},
+		{"[single]", "single"},
+	}
+	for _, p := range prefixes {
+		if strings.HasPrefix(trimmed, p.tag) {
+			cleaned := strings.TrimLeft(strings.TrimPrefix(trimmed, p.tag), " \t")
+			return p.name, cleaned
+		}
+	}
+	return "", input
+}
+
+// TODO(phase-8-1b): replace phrase-matching with LLM-based intent classifier (Haiku).
+// Phase 8.1a Fix 1 (GPT G2): phrase-aware matching. newWorkPhrases override
+// VerificationHint only — ExistingCode is preserved as semantic truth so that
+// "Add --json flag to existing CLI" remains ExistingCode=true while still
+// routing to single via the raised team threshold.
 func buildRoutingContext(input string) *orchestrator.RoutingContext {
-	lower := strings.ToLower(input)
+	wf, cleaned := parseWorkflowPrefix(input)
+	lower := strings.ToLower(cleaned)
+
 	existingCodeCues := []string{
 		"existing", "current", "repo", "repository", "module", "handler", "middleware",
-		"regression", "refactor", "fix", "bug", "test", "tests", "coverage",
-		"runtime", "service", "worker", "cli", "command",
+		"refactor", "fix", "bug",
+		"runtime", "service", "worker", "command",
+		// Note: "cli" removed — too short, false-positive on "ClientSession" etc.
+		// Phase 8.1b LLM classifier will replace substring matching with
+		// regex/word-boundary rules per GPT lap #8.
 	}
-	verificationCues := []string{
-		"test", "tests", "verify", "verification", "regression", "coverage", "lint", "build",
+
+	verificationPhrases := []string{
+		"run tests", "run the test", "run the tests", "go test",
+		"pytest", "npm test", "cargo test", "make test",
+		"ensure tests pass", "ensure regression-free", "ensure regression",
+		"verify this", "verify that", "regression check",
+		"make sure tests pass", "make sure it passes",
+		"check coverage", "check the regression", "run lint",
+		"ci passes", "build succeeds", "go build",
+		"tests still pass",
 	}
-	// newWorkCues override existingCodeCues. Without this, prompts like
-	// "Create a Go module with tests" tripped existingCodeCues ("module",
-	// "test") and routed simple scaffolding tasks to ralph (retry-heavy).
-	newWorkCues := []string{
-		"create", "new ", "scaffold", "build a ", "build new",
-		"make a ", "set up", "from scratch", "generate",
+
+	newWorkPhrases := []string{
+		"write a test", "write a unit test", "write tests", "write unit tests",
+		"write a reusable",
+		"add a test", "add tests", "add a unit test",
+		"add a --", "add a flag",
+		"create a test", "create a unit test",
+		"create a ", "generate a ", "scaffold",
+		"include a test", "include a unit test", "include unit tests",
+		"implement a", "author a", "author ci.yml", "author .github",
+		"draft a", "draft a yaml", "draft .github",
+		"new dockerfile", "new workflow", "set up workflow",
+		"from scratch", "build a ", "build new", "make a ", "set up",
 	}
 
 	ctx := &orchestrator.RoutingContext{
-		EstimatedFiles: estimateFiles(input),
+		EstimatedFiles:   estimateFiles(cleaned),
+		ExplicitWorkflow: wf,
 	}
 	for _, cue := range existingCodeCues {
 		if strings.Contains(lower, cue) {
@@ -470,15 +520,19 @@ func buildRoutingContext(input string) *orchestrator.RoutingContext {
 			break
 		}
 	}
-	for _, cue := range newWorkCues {
-		if strings.Contains(lower, cue) {
-			ctx.ExistingCode = false
+	for _, phrase := range verificationPhrases {
+		if strings.Contains(lower, phrase) {
+			ctx.VerificationHint = true
 			break
 		}
 	}
-	for _, cue := range verificationCues {
-		if strings.Contains(lower, cue) {
-			ctx.VerificationHint = true
+	// GPT G2: newWorkPhrases suppress VerificationHint only.
+	// ExistingCode is NOT flipped — semantic truth is preserved so that
+	// legitimate existing-code small tasks stay ExistingCode=true and ride
+	// the raised team threshold (EstimatedFiles >= 4) to single.
+	for _, phrase := range newWorkPhrases {
+		if strings.Contains(lower, phrase) {
+			ctx.VerificationHint = false
 			break
 		}
 	}

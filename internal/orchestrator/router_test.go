@@ -260,3 +260,91 @@ func TestRouteBenchmarkModeIgnoresPreferenceOverride(t *testing.T) {
 		t.Fatalf("got %q, want %q", wf.Name(), "single")
 	}
 }
+
+// Phase 8.1a Fix 1 — ExplicitWorkflow escape hatch + threshold raise tests.
+
+func TestRouteExplicitWorkflowRalph(t *testing.T) {
+	r := newTestRouter()
+	wf := r.Route(conversation.IntentQuestion, &RoutingContext{
+		ExplicitWorkflow: "ralph",
+	}, nil)
+	if wf.Name() != "ralph" {
+		t.Fatalf("got %q, want %q", wf.Name(), "ralph")
+	}
+}
+
+func TestRouteExplicitWorkflowSingle(t *testing.T) {
+	r := newTestRouter()
+	wf := r.Route(conversation.IntentComplexTask, &RoutingContext{
+		EstimatedFiles:   4,
+		ExistingCode:     true,
+		VerificationHint: true,
+		ExplicitWorkflow: "single",
+	}, nil)
+	if wf.Name() != "single" {
+		t.Fatalf("got %q, want %q", wf.Name(), "single")
+	}
+}
+
+func TestRouteExplicitWorkflowTeam(t *testing.T) {
+	r := newTestRouter()
+	wf := r.Route(conversation.IntentQuestion, &RoutingContext{
+		ExplicitWorkflow: "team",
+	}, nil)
+	if wf.Name() != "team" {
+		t.Fatalf("got %q, want %q", wf.Name(), "team")
+	}
+}
+
+func TestRouteExplicitWorkflowBypassesPreference(t *testing.T) {
+	r := newTestRouter()
+	pref := &routingpref.WorkflowPreference{
+		PreferredWorkflows: map[string]string{"question": "research"},
+		AvoidWorkflows:     []string{"ralph"},
+	}
+	wf := r.Route(conversation.IntentQuestion, &RoutingContext{
+		ExplicitWorkflow: "ralph",
+	}, pref)
+	if wf.Name() != "ralph" {
+		t.Fatalf("got %q, want %q (explicit wins over preference avoid)", wf.Name(), "ralph")
+	}
+}
+
+func TestRouteBenchmarkModeOverridesExplicitWorkflow(t *testing.T) {
+	r := newTestRouter()
+	wf := r.Route(conversation.IntentComplexTask, &RoutingContext{
+		ExplicitWorkflow: "ralph",
+		BenchmarkMode:    true,
+	}, nil)
+	if wf.Name() != "single" {
+		t.Fatalf("got %q, want %q (benchmark mode wins)", wf.Name(), "single")
+	}
+}
+
+func TestRouteComplexTaskExistingCodeSmallRoutesSingle(t *testing.T) {
+	// Fix 1 threshold raise (GPT G2): ExistingCode + EstimatedFiles<4 must go single.
+	// P06 wording "Add --json flag to existing CLI, status.go in cmd/mytool" is a
+	// legitimate existing-code task but should NOT fan out to team.
+	r := newTestRouter()
+	wf := r.Route(conversation.IntentComplexTask, &RoutingContext{
+		EstimatedFiles:   1,
+		ExistingCode:     true,
+		VerificationHint: false,
+	}, nil)
+	if wf.Name() != "single" {
+		t.Fatalf("got %q, want %q (threshold raised to >= 4)", wf.Name(), "single")
+	}
+}
+
+func TestRouteComplexTaskExistingCodeFourFilesRoutesTeam(t *testing.T) {
+	// Threshold boundary: ExistingCode + EstimatedFiles=4 triggers team.
+	r := newTestRouter()
+	wf := r.Route(conversation.IntentComplexTask, &RoutingContext{
+		EstimatedFiles:   4,
+		ExistingCode:     true,
+		VerificationHint: false,
+	}, nil)
+	if wf.Name() != "team" {
+		t.Fatalf("got %q, want %q", wf.Name(), "team")
+	}
+}

@@ -429,15 +429,19 @@ func TestHelperBuilders(t *testing.T) {
 		t.Fatalf("estimateFiles = %d, want >= 2", got)
 	}
 
+	// Phase 8.1a Fix 1 (GPT G2): "add tests" is a newWorkPhrase that suppresses
+	// VerificationHint. ExistingCode remains true (fix/regression/existing/handler
+	// cues). This yields route=single for small existing-code tasks rather than
+	// ralph retry loops.
 	ctx := buildRoutingContext("fix regression in existing handler and add tests for middleware.go")
 	if !ctx.ExistingCode {
 		t.Fatal("expected ExistingCode = true")
 	}
-	if !ctx.VerificationHint {
-		t.Fatal("expected VerificationHint = true")
+	if ctx.VerificationHint {
+		t.Fatal("expected VerificationHint = false (newWorkPhrase 'add tests' suppresses it)")
 	}
-	if ctx.EstimatedFiles < 2 {
-		t.Fatalf("expected EstimatedFiles >= 2 for brownfield verification task, got %d", ctx.EstimatedFiles)
+	if ctx.EstimatedFiles < 1 {
+		t.Fatalf("expected EstimatedFiles >= 1, got %d", ctx.EstimatedFiles)
 	}
 }
 
