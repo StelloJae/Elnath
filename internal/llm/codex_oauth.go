@@ -53,7 +53,7 @@ type CodexOAuthOption func(*CodexOAuthProvider)
 
 // WithCodexOAuthTimeout sets the HTTP client timeout.
 func WithCodexOAuthTimeout(d time.Duration) CodexOAuthOption {
-	return func(p *CodexOAuthProvider) { p.client = &http.Client{Timeout: d} }
+	return func(p *CodexOAuthProvider) { p.client = newHTTPClientWithPerHostCap(int(d / time.Second)) }
 }
 
 // DefaultCodexAuthPath returns the default path to the Codex CLI auth file.
