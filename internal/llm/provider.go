@@ -8,6 +8,11 @@ import (
 // StreamEventType identifies the kind of streaming event.
 type StreamEventType string
 
+// EventType is a short alias for StreamEventType, used by provider
+// dispatch maps (anthropic.go, openai.go) so the handler literal
+// `map[EventType]func(StreamEvent)` stays readable.
+type EventType = StreamEventType
+
 const (
 	EventTextDelta    StreamEventType = "content_delta"
 	EventToolUseStart StreamEventType = "tool_use"
