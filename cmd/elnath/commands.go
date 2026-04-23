@@ -111,6 +111,17 @@ func loadLocale() onboarding.Locale {
 
 // ---- helpers ----
 
+// summarizeToolUses sums per-tool aggregates into single-turn totals
+// (calls, errors) for surfacing in FormatUsageSummary. Defined here so
+// both runtime.go execution paths share the same arithmetic.
+func summarizeToolUses(stats []agent.ToolStat) (calls, errors int) {
+	for _, s := range stats {
+		calls += s.Calls
+		errors += s.Errors
+	}
+	return
+}
+
 func buildProvider(cfg *config.Config) (llm.Provider, string, error) {
 	reg := llm.NewRegistry()
 	var model string
@@ -286,7 +297,7 @@ func buildRouter(cfg orchestrator.WorkflowConfig) *orchestrator.Router {
 }
 
 func registerWikiTools(reg *tools.Registry, wikiDir string, wikiDB *sql.DB) (*wiki.GitSync, *wiki.Index) {
-	if wikiDir == "" || wikiDB == nil {
+	if reg == nil || wikiDir == "" || wikiDB == nil {
 		return nil, nil
 	}
 	idx, err := wiki.NewIndex(wikiDB)

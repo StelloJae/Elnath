@@ -308,6 +308,7 @@ func runElnathProbe(p probe, binary string) metrics {
 
 var (
 	tokenLineRE          = regexp.MustCompile(`\[tokens:\s+(\d[\d,]*)\s+in\s*/\s*(\d[\d,]*)\s+out`)
+	toolsSegmentRE       = regexp.MustCompile(`\|\s*tools:\s*(\d+)(?:\s*\((\d+)\s*err\))?`)
 	errorLineRE          = regexp.MustCompile(`(?i)^error:|tool.*error`)
 	cacheAnthropicLineRE = regexp.MustCompile(`cache_read_input_tokens["']?:\s*(\d+)`)
 )
@@ -321,6 +322,14 @@ func parseElnathOutput(m *metrics, body string) {
 			m.Turns++
 			m.InputTokens += atoiComma(mt[1])
 			m.OutputTokens += atoiComma(mt[2])
+			// Tool count rides on the same summary line when the agent
+			// actually invoked tools — `| tools: N` or `| tools: N (M err)`.
+			if mts := toolsSegmentRE.FindStringSubmatch(l); len(mts) >= 2 {
+				m.ToolUses += atoiComma(mts[1])
+				if len(mts) == 3 && mts[2] != "" {
+					m.ToolErrors += atoiComma(mts[2])
+				}
+			}
 		}
 		if errorLineRE.MatchString(l) {
 			m.ToolErrors++

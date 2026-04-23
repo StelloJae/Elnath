@@ -2,9 +2,17 @@ package llm
 
 import "fmt"
 
-// FormatUsageSummary returns a human-readable one-line summary of token usage
-// and estimated cost. Returns "" if there was no usage.
-func FormatUsageSummary(model string, stats UsageStats) string {
+// FormatUsageSummary returns a human-readable one-line summary of token usage,
+// estimated cost, and (optionally) tool-call activity for the same turn.
+// Returns "" if there was no usage. toolCalls/toolErrors default to 0;
+// the tools segment is only emitted when toolCalls > 0 so existing zero-tool
+// turns keep the legacy 3-segment format.
+//
+// The tool count surfaces here (not just in Debug logs) because callers and
+// observability harnesses need a structured signal for "how many tools did
+// this turn use" without having to parse Debug-level traces. Phase 8.1
+// baseline replay relies on this for cross-provider tool-use comparison.
+func FormatUsageSummary(model string, stats UsageStats, toolCalls, toolErrors int) string {
 	if stats.InputTokens == 0 && stats.OutputTokens == 0 {
 		return ""
 	}
@@ -17,7 +25,17 @@ func FormatUsageSummary(model string, stats UsageStats) string {
 		base += fmt.Sprintf(" (cache: %s read, %s write)", formatNumber(stats.CacheRead), formatNumber(stats.CacheWrite))
 	}
 
-	base += fmt.Sprintf(" | cost: $%.2f]", cost)
+	base += fmt.Sprintf(" | cost: $%.2f", cost)
+
+	if toolCalls > 0 {
+		if toolErrors > 0 {
+			base += fmt.Sprintf(" | tools: %d (%d err)", toolCalls, toolErrors)
+		} else {
+			base += fmt.Sprintf(" | tools: %d", toolCalls)
+		}
+	}
+
+	base += "]"
 	return base
 }
 

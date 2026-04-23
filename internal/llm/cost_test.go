@@ -68,7 +68,7 @@ func TestFormatUsageSummary(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := FormatUsageSummary(tt.model, tt.stats)
+			got := FormatUsageSummary(tt.model, tt.stats, 0, 0)
 
 			if tt.name == "zero usage returns empty" {
 				if got != "" {
@@ -94,12 +94,45 @@ func TestFormatUsageSummary(t *testing.T) {
 func TestFormatUsageSummary_CostAccuracy(t *testing.T) {
 	// Sonnet: $3/M in, $15/M out
 	stats := UsageStats{InputTokens: 1_000_000, OutputTokens: 1_000_000}
-	got := FormatUsageSummary("claude-sonnet-4-6", stats)
+	got := FormatUsageSummary("claude-sonnet-4-6", stats, 0, 0)
 
 	// Expected: $3 input + $15 output = $18.00
 	if !strings.Contains(got, "$18.00") {
 		t.Errorf("expected cost $18.00 for 1M in/out sonnet, got %q", got)
 	}
+}
+
+// TestFormatUsageSummary_ToolCounts verifies the new tools segment is
+// emitted only when toolCalls > 0, with an "(N err)" suffix when any
+// errored. Phase 8.1 baseline depends on this exposure for cross-
+// provider tool-use comparison (Codex + Anthropic + others all surface
+// uniformly here).
+func TestFormatUsageSummary_ToolCounts(t *testing.T) {
+	stats := UsageStats{InputTokens: 1000, OutputTokens: 500}
+
+	t.Run("zero tools omits segment", func(t *testing.T) {
+		got := FormatUsageSummary("claude-sonnet-4-6", stats, 0, 0)
+		if strings.Contains(got, "tools:") {
+			t.Errorf("expected no tools segment for zero calls, got %q", got)
+		}
+	})
+
+	t.Run("non-zero clean count", func(t *testing.T) {
+		got := FormatUsageSummary("claude-sonnet-4-6", stats, 4, 0)
+		if !strings.Contains(got, "tools: 4]") {
+			t.Errorf("expected '| tools: 4]' suffix, got %q", got)
+		}
+		if strings.Contains(got, "err") {
+			t.Errorf("clean count should not mention err, got %q", got)
+		}
+	})
+
+	t.Run("with errors", func(t *testing.T) {
+		got := FormatUsageSummary("claude-sonnet-4-6", stats, 7, 2)
+		if !strings.Contains(got, "tools: 7 (2 err)") {
+			t.Errorf("expected 'tools: 7 (2 err)' substring, got %q", got)
+		}
+	})
 }
 
 func TestEstimateCostGPT5Models(t *testing.T) {

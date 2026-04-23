@@ -49,16 +49,25 @@ type orchestrationOutput struct {
 type terminalObserver struct{}
 
 func (terminalObserver) OnEvent(e event.Event) {
-	switch ev := e.(type) {
-	case event.TextDeltaEvent:
-		fmt.Print(ev.Content)
-	case event.WorkflowProgressEvent:
-		fmt.Printf("[%s → %s]\n\n", ev.Intent, ev.Workflow)
-	case event.UsageProgressEvent:
-		fmt.Println()
-		fmt.Println(ev.Summary)
-	case event.ResearchProgressEvent:
-		fmt.Print(ev.Message)
+	terminalEventHandlers := map[string]func(event.Event){
+		event.TextDeltaEvent{}.EventType(): func(e event.Event) {
+			fmt.Print(e.(event.TextDeltaEvent).Content)
+		},
+		event.WorkflowProgressEvent{}.EventType(): func(e event.Event) {
+			ev := e.(event.WorkflowProgressEvent)
+			fmt.Printf("[%s → %s]\n\n", ev.Intent, ev.Workflow)
+		},
+		event.UsageProgressEvent{}.EventType(): func(e event.Event) {
+			ev := e.(event.UsageProgressEvent)
+			fmt.Println()
+			fmt.Println(ev.Summary)
+		},
+		event.ResearchProgressEvent{}.EventType(): func(e event.Event) {
+			fmt.Print(e.(event.ResearchProgressEvent).Message)
+		},
+	}
+	if handler, ok := terminalEventHandlers[e.EventType()]; ok {
+		handler(e)
 	}
 }
 
@@ -69,21 +78,33 @@ type progressObserver struct {
 }
 
 func (p progressObserver) OnEvent(e event.Event) {
-	switch ev := e.(type) {
-	case event.ToolProgressEvent:
-		p.onProgress(daemon.ToolProgressEvent(ev.ToolName, ev.Preview))
-	case event.WorkflowProgressEvent:
-		p.onProgress(daemon.WorkflowProgressEvent(ev.Intent, ev.Workflow))
-	case event.UsageProgressEvent:
-		p.onProgress(daemon.UsageProgressEvent(ev.Summary))
-	case event.TextDeltaEvent:
-		if ev.Content != "" {
-			p.onProgress(daemon.TextProgressEvent(ev.Content))
-		}
-	case event.ResearchProgressEvent:
-		if ev.Message != "" {
-			p.onProgress(daemon.TextProgressEvent(ev.Message))
-		}
+	progressEventHandlers := map[string]func(event.Event){
+		event.ToolProgressEvent{}.EventType(): func(e event.Event) {
+			ev := e.(event.ToolProgressEvent)
+			p.onProgress(daemon.ToolProgressEvent(ev.ToolName, ev.Preview))
+		},
+		event.WorkflowProgressEvent{}.EventType(): func(e event.Event) {
+			ev := e.(event.WorkflowProgressEvent)
+			p.onProgress(daemon.WorkflowProgressEvent(ev.Intent, ev.Workflow))
+		},
+		event.UsageProgressEvent{}.EventType(): func(e event.Event) {
+			p.onProgress(daemon.UsageProgressEvent(e.(event.UsageProgressEvent).Summary))
+		},
+		event.TextDeltaEvent{}.EventType(): func(e event.Event) {
+			ev := e.(event.TextDeltaEvent)
+			if ev.Content != "" {
+				p.onProgress(daemon.TextProgressEvent(ev.Content))
+			}
+		},
+		event.ResearchProgressEvent{}.EventType(): func(e event.Event) {
+			ev := e.(event.ResearchProgressEvent)
+			if ev.Message != "" {
+				p.onProgress(daemon.TextProgressEvent(ev.Message))
+			}
+		},
+	}
+	if handler, ok := progressEventHandlers[e.EventType()]; ok {
+		handler(e)
 	}
 }
 
@@ -131,23 +152,31 @@ type legacyCallbackObserver struct {
 }
 
 func (o legacyCallbackObserver) OnEvent(e event.Event) {
-	switch ev := e.(type) {
-	case event.TextDeltaEvent:
-		if o.onText != nil {
-			o.onText(ev.Content)
-		}
-	case event.WorkflowProgressEvent:
-		if o.onWorkflow != nil {
-			o.onWorkflow(conversation.Intent(ev.Intent), ev.Workflow)
-		}
-	case event.UsageProgressEvent:
-		if o.onUsage != nil {
-			o.onUsage(ev.Summary)
-		}
-	case event.ResearchProgressEvent:
-		if o.onText != nil {
-			o.onText(ev.Message)
-		}
+	legacyEventHandlers := map[string]func(event.Event){
+		event.TextDeltaEvent{}.EventType(): func(e event.Event) {
+			if o.onText != nil {
+				o.onText(e.(event.TextDeltaEvent).Content)
+			}
+		},
+		event.WorkflowProgressEvent{}.EventType(): func(e event.Event) {
+			if o.onWorkflow != nil {
+				ev := e.(event.WorkflowProgressEvent)
+				o.onWorkflow(conversation.Intent(ev.Intent), ev.Workflow)
+			}
+		},
+		event.UsageProgressEvent{}.EventType(): func(e event.Event) {
+			if o.onUsage != nil {
+				o.onUsage(e.(event.UsageProgressEvent).Summary)
+			}
+		},
+		event.ResearchProgressEvent{}.EventType(): func(e event.Event) {
+			if o.onText != nil {
+				o.onText(e.(event.ResearchProgressEvent).Message)
+			}
+		},
+	}
+	if handler, ok := legacyEventHandlers[e.EventType()]; ok {
+		handler(e)
 	}
 }
 
@@ -928,7 +957,8 @@ func (rt *executionRuntime) runTask(
 		})
 	}
 
-	if usage := llm.FormatUsageSummary(rt.wfCfg.Model, result.Usage); usage != "" {
+	calls, errs := summarizeToolUses(result.ToolStats)
+	if usage := llm.FormatUsageSummary(rt.wfCfg.Model, result.Usage, calls, errs); usage != "" {
 		bus.Emit(event.UsageProgressEvent{Base: event.NewBase(), Summary: usage})
 	}
 
@@ -1236,7 +1266,9 @@ func (rt *executionRuntime) trySkillExecution(
 		return nil, "", true, fmt.Errorf("skill %q: %w", skillName, err)
 	}
 	rt.recordSkillUsage(sess.ID, skillName, true)
-	if usage := llm.FormatUsageSummary(rt.wfCfg.Model, result.Usage); usage != "" {
+	// skill.ExecuteResult does not currently surface tool aggregates; pass
+	// zero counts so the tools segment is omitted (no false-zero claim).
+	if usage := llm.FormatUsageSummary(rt.wfCfg.Model, result.Usage, 0, 0); usage != "" {
 		bus.Emit(event.UsageProgressEvent{Base: event.NewBase(), Summary: usage})
 	}
 
