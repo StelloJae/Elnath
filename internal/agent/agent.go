@@ -527,7 +527,6 @@ func (a *Agent) streamWithRetry(ctx context.Context, req llm.Request, sink event
 	for attempt := 0; attempt < retryMaxAttempts; attempt++ {
 		reqForAttempt := currentReq
 		if attempt > 0 {
-			delay = nextJitterDelay(delay)
 			a.logger.Warn("retrying after provider error",
 				"attempt", attempt,
 				"delay", delay,
@@ -538,6 +537,7 @@ func (a *Agent) streamWithRetry(ctx context.Context, req llm.Request, sink event
 				return llm.Message{}, llm.Request{}, llm.UsageStats{}, ctx.Err()
 			case <-time.After(delay):
 			}
+			delay = nextJitterDelay(delay)
 		}
 
 		msg, usage, err := a.stream(ctx, reqForAttempt, sink)
