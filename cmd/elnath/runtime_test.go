@@ -452,7 +452,77 @@ func TestExecutionRuntimeRunTaskInvokesWorkflowAndUsageCallbacks(t *testing.T) {
 	}
 }
 
-func TestExecutionRuntimeRunTaskEmitsStructuredProgressEvents(t *testing.T) {
+func TestProgressObserverDispatchesRepresentativeEventTypesAndIgnoresUnknown(t *testing.T) {
+	var got []daemon.ProgressEvent
+	observer := progressObserver{onProgress: func(ev daemon.ProgressEvent) {
+		got = append(got, ev)
+	}}
+
+	observer.OnEvent(event.WorkflowProgressEvent{Intent: "question", Workflow: "single"})
+	observer.OnEvent(event.ToolProgressEvent{ToolName: "wiki_search", Preview: "looking up docs"})
+	observer.OnEvent(event.TextDeltaEvent{Content: "partial output"})
+	observer.OnEvent(event.UsageProgressEvent{Summary: "tokens: 42"})
+	observer.OnEvent(event.ResearchProgressEvent{Message: "researching"})
+	observer.OnEvent(event.ToolCallEvent{ToolName: "ignored"})
+
+	if len(got) != 5 {
+		t.Fatalf("progress events = %d, want 5", len(got))
+	}
+	if got[0].Kind != daemon.ProgressKindWorkflow || got[0].Intent != "question" || got[0].Workflow != "single" {
+		t.Fatalf("workflow event = %+v, want workflow/question/single", got[0])
+	}
+	if got[1].Kind != daemon.ProgressKindTool || got[1].ToolName != "wiki_search" || got[1].Preview != "looking up docs" {
+		t.Fatalf("tool event = %+v, want tool/wiki_search/looking up docs", got[1])
+	}
+	if got[2].Kind != daemon.ProgressKindText || got[2].Text != "partial output" {
+		t.Fatalf("text event = %+v, want text/partial output", got[2])
+	}
+	if got[3].Kind != daemon.ProgressKindUsage || got[3].UsageSummary != "tokens: 42" {
+		t.Fatalf("usage event = %+v, want usage/tokens: 42", got[3])
+	}
+	if got[4].Kind != daemon.ProgressKindText || got[4].Text != "researching" {
+		t.Fatalf("research event = %+v, want text/researching", got[4])
+	}
+}
+
+func TestLegacyCallbackObserverDispatchesRepresentativeEventTypesAndIgnoresUnknown(t *testing.T) {
+	var (
+		gotIntent   conversation.Intent
+		gotWorkflow string
+		gotText     []string
+		gotUsage    string
+	)
+	observer := legacyCallbackObserver{
+		onWorkflow: func(intent conversation.Intent, workflow string) {
+			gotIntent = intent
+			gotWorkflow = workflow
+		},
+		onText: func(s string) {
+			gotText = append(gotText, s)
+		},
+		onUsage: func(summary string) {
+			gotUsage = summary
+		},
+	}
+
+	observer.OnEvent(event.WorkflowProgressEvent{Intent: "question", Workflow: "single"})
+	observer.OnEvent(event.TextDeltaEvent{Content: "hello"})
+	observer.OnEvent(event.ResearchProgressEvent{Message: "from research"})
+	observer.OnEvent(event.UsageProgressEvent{Summary: "tokens: 42"})
+	observer.OnEvent(event.ToolCallEvent{ToolName: "ignored"})
+
+	if gotIntent != conversation.Intent("question") || gotWorkflow != "single" {
+		t.Fatalf("workflow callback = (%q, %q), want (question, single)", gotIntent, gotWorkflow)
+	}
+	if len(gotText) != 2 || gotText[0] != "hello" || gotText[1] != "from research" {
+		t.Fatalf("text callbacks = %#v, want [hello from research]", gotText)
+	}
+	if gotUsage != "tokens: 42" {
+		t.Fatalf("usage callback = %q, want tokens: 42", gotUsage)
+	}
+}
+
+func TestNewBusDefaultFallbackStillUsesTerminalObserverWithoutLegacyCallbacks(t *testing.T) {
 	provider := &countingProvider{streamText: "hello from runtime"}
 	rt := newTestExecutionRuntime(t, provider)
 
