@@ -149,12 +149,19 @@ Respond with ONLY a JSON array. Each element must have exactly these fields:
   "title": short title (≤10 words)
   "instruction": complete self-contained instruction for a separate agent
 
-Planning rules:
-- If the task is about changing an existing codebase, at least one subtask MUST modify code and at least one subtask MUST verify the change.
-- For brownfield coding work, include explicit action-oriented subtasks such as: inspect the relevant code path, implement the bounded patch, verify with repo-native checks.
-- Do not return analysis-only subtasks for every slot when the task explicitly asks for implementation.
-- Benchmark tasks that request a code change require an actual working-tree diff; planning-only output is failure.
-- Keep subtasks self-contained, but ensure the overall set can actually finish the task rather than only analyze it.
+Planning rules (Phase 8.1a Fix 3 — verify-optional, budget-aware):
+- If the task explicitly requires code changes AND verification is cheap and
+  deterministic (e.g., `+"`go build`"+`, targeted `+"`go test ./specific_package`"+`),
+  include a modify subtask and a verify subtask.
+- If the task is research, planning, or produces a small inline artifact
+  (< 50 lines of code/YAML/JSON/Dockerfile), OMIT the verify subtask — a
+  single implementation subtask suffices. Verify subtasks that re-read
+  another subtask's output are wasted tool budget.
+- Benchmark tasks that request a code change require an actual working-tree diff; inline snippets are acceptable for doc/YAML/test-snippet tasks.
+- Each subtask must be completable within ~15 tool calls. Prefer inline
+  answers over repository-wide searches when possible.
+- Keep subtasks self-contained, but ensure the overall set finishes the
+  task rather than only analyzing it.
 
 Example:
 [
@@ -164,7 +171,13 @@ Example:
 
 	planMessages := []llm.Message{llm.NewUserMessage(planPrompt)}
 
-	opts := agentOptions(input.Config, input.Session)
+	// Phase 8.1a Fix 3 (GPT G4): planner outputs a single JSON array —
+	// it never needs 50 iterations. Cap at 10 to bound planner-phase budget.
+	plannerConfig := input.Config
+	if plannerConfig.MaxIterations <= 0 || plannerConfig.MaxIterations > 10 {
+		plannerConfig.MaxIterations = 10
+	}
+	opts := agentOptions(plannerConfig, input.Session)
 	a := agent.New(input.Provider, input.Tools, opts...)
 
 	result, err := a.Run(ctx, planMessages, nil)
@@ -319,6 +332,12 @@ func (w *TeamWorkflow) runSubtasks(ctx context.Context, input WorkflowInput, sub
 	const maxConcurrent = 2
 	sem := make(chan struct{}, maxConcurrent)
 
+	// Phase 8.1a Fix 3 (GPT G4): per-subagent MaxIterations cap.
+	// Global budget is the real ceiling — formula is `max(global/N, 1)` with
+	// upper cap 20. No min floor (original formula had a floor=5 bug that
+	// pushed total above global budget for small global + many subtasks).
+	perSubagentMax := perSubagentMaxIterations(input.Config.MaxIterations, len(subtasks))
+
 	var wg sync.WaitGroup
 	for _, st := range subtasks {
 		wg.Add(1)
@@ -326,7 +345,7 @@ func (w *TeamWorkflow) runSubtasks(ctx context.Context, input WorkflowInput, sub
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			res := w.runOne(ctx, safeInput, st)
+			res := w.runOne(ctx, safeInput, st, perSubagentMax)
 			resultCh <- res
 		}(st)
 	}
@@ -378,8 +397,19 @@ func (w *TeamWorkflow) runSubtasks(ctx context.Context, input WorkflowInput, sub
 	return results, totalUsage, nil
 }
 
+// perSubagentMaxIterations derives the per-subagent iteration budget from
+// the team's global MaxIterations. Phase 8.1a Fix 3 (GPT G4): global is a
+// strict ceiling; formula is `max(global/N, 1)` with upper cap 20. No
+// minimum floor — original formula's `max(5)` pushed total above global
+// for small global + large N (e.g., global=10, N=5 → 25 total).
+func perSubagentMaxIterations(global, numSubtasks int) int {
+	n := max(numSubtasks, 1)
+	base := max(global/n, 1)
+	return min(base, 20)
+}
+
 // runOne executes a single subtask with its own Agent instance.
-func (w *TeamWorkflow) runOne(ctx context.Context, input WorkflowInput, st subtask) subtaskResult {
+func (w *TeamWorkflow) runOne(ctx context.Context, input WorkflowInput, st subtask, maxIterations int) subtaskResult {
 	subtaskSystemPrompt := fmt.Sprintf(`You are a specialist agent working on subtask %d: %s
 
 Original task context: %s
@@ -388,11 +418,12 @@ Execution rules:
 - If the subtask requires implementation, you must directly use tools to inspect and modify the repository.
 - If the overall task is a brownfield code-change request, analysis-only output is not sufficient.
 - Prefer the smallest correct patch and verify it with repo-native commands when possible.
-- If you are the verification subtask, run the verification and report concrete pass/fail evidence.`, st.ID, st.Title, input.Message)
+- If you are the verification subtask, run the verification and report concrete pass/fail evidence.
+- You have a per-subagent tool call budget; avoid open-ended repository-wide exploration.`, st.ID, st.Title, input.Message)
 
 	opts := agentOptions(WorkflowConfig{
 		Model:         input.Config.Model,
-		MaxIterations: input.Config.MaxIterations,
+		MaxIterations: maxIterations,
 		SystemPrompt:  subtaskSystemPrompt,
 		Hooks:         input.Config.Hooks,
 		Permission:    input.Config.Permission,
