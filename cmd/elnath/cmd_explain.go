@@ -179,6 +179,9 @@ func explainHistory(outcomeStore *learning.OutcomeStore, n int) error {
 
 func finishLabel(success bool, reason string) string {
 	if success {
+		if reason == "unverified_inline" {
+			return "success (unverified inline)"
+		}
 		return "success"
 	}
 	if reason != "" {

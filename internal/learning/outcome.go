@@ -33,8 +33,18 @@ type OutcomeRecord struct {
 	SessionID     string          `json:"session_id,omitempty"`
 }
 
+// IsSuccessful returns true for workflow outcomes that count as completion in
+// the learning store. Ralph's "unverified_inline" is included per Phase 8.1a
+// Fix 2 + partner M3 decision: inline-artifact answers (guard-gated) are
+// honest non-verification completions, not failures. Recording them as
+// failures would train the router to avoid ralph for future inline tasks.
 func IsSuccessful(finishReason string) bool {
-	return finishReason == "stop" || finishReason == "partial_success"
+	switch finishReason {
+	case "stop", "partial_success", "unverified_inline":
+		return true
+	default:
+		return false
+	}
 }
 
 func ShouldRecord(finishReason string) bool {

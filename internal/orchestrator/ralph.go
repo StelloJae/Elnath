@@ -17,10 +17,21 @@ const defaultMaxAttempts = 5
 type VerifyVerdict int
 
 const (
-	VerdictPass          VerifyVerdict = iota
+	VerdictPass VerifyVerdict = iota
 	VerdictNeedsRevision
 	VerdictFail
+	// VerdictInconclusive — Phase 8.1a Fix 2 (GPT G5/G6): output plausibly
+	// completes the task but evidence is insufficient. Handled by dispatch:
+	// if canAcceptUnverifiedInline(prompt, evidence), accept immediately as
+	// unverified_inline; else retry once; else hard fail. Guard prevents
+	// file-modification-required tasks from passing on inline-only output.
+	VerdictInconclusive
 )
+
+// FinishReasonUnverifiedInline marks a ralph completion that passed the
+// inline-artifact guard but produced no mutating tool_use. HARD PASS in
+// benchmark scoring (partner Q1: A), success in learning store (partner M3).
+const FinishReasonUnverifiedInline = "unverified_inline"
 
 // RalphWorkflow runs the SingleWorkflow in a verify-and-retry loop.
 // After each execution it asks the LLM whether the result is complete and
@@ -67,6 +78,9 @@ func (w *RalphWorkflow) Run(ctx context.Context, input WorkflowInput) (*Workflow
 	totalIter := 0
 	attemptsRun := 0
 	verified := false
+	// Phase 8.1a Fix 2 (GPT G5/G6): INCONCLUSIVE handling gets at most one
+	// retry — guard decides immediate accept vs retry vs hard-fail.
+	inconclusiveRetries := 0
 	var finalResult *WorkflowResult
 
 	for a := 1; a <= maxAttempts; a++ {
@@ -125,6 +139,42 @@ func (w *RalphWorkflow) Run(ctx context.Context, input WorkflowInput) (*Workflow
 			return nil, fmt.Errorf("ralph workflow: verifier rejected task as fundamentally incorrect: %s", feedback)
 		case VerdictNeedsRevision:
 			w.logger.Info("ralph workflow: needs revision, retrying", "attempt", a, "feedback", feedback)
+		case VerdictInconclusive:
+			// GPT G5/G6 dispatch: guard-gated immediate accept, else retry once,
+			// else hard fail. Prevents file-modification-required tasks from
+			// slipping through on inline-only output.
+			evidence := buildVerificationEvidence(result.Messages)
+			if canAcceptUnverifiedInline(input.Message, evidence) {
+				w.logger.Info("ralph workflow: unverified_inline accepted", "attempt", a, "retries", inconclusiveRetries)
+				verified = true
+				lastFinishReason = FinishReasonUnverifiedInline
+			} else if inconclusiveRetries < 1 {
+				inconclusiveRetries++
+				w.logger.Info("ralph workflow: inconclusive, retrying once", "attempt", a, "feedback", feedback)
+				// fall through to retry path below
+			} else {
+				w.logger.Warn("ralph workflow: inconclusive after retry and guard blocked accept", "feedback", feedback)
+				if input.Learning != nil {
+					info := learning.AgentResultInfo{
+						Topic:         firstMessageSnippet(input.Message, 80),
+						FinishReason:  "ralph_inconclusive",
+						Iterations:    totalIter,
+						MaxIterations: input.Config.MaxIterations * a,
+						OutputTokens:  totalUsage.OutputTokens,
+						InputTokens:   totalUsage.InputTokens,
+						ToolStats:     learning.MergeAgentToolStats(accToolStatSlices...),
+						RetryCount:    a - 1,
+						Workflow:      "ralph",
+					}
+					var resultMessages []llm.Message
+					if finalResult != nil {
+						resultMessages = finalResult.Messages
+					}
+					mergedStats := toWorkflowToolStats(learning.MergeAgentToolStats(accToolStatSlices...))
+					applyAgentLearning(prepareLearningDeps(input.Learning, input.Session, resultMessages, len(input.Messages), mergedStats), info)
+				}
+				return nil, fmt.Errorf("ralph workflow: inconclusive verdict and inline-accept guard blocked: %s", feedback)
+			}
 		}
 
 		if verified {
@@ -194,14 +244,20 @@ Execution evidence:
 Evaluate against these criteria:
 1. CORRECTNESS: Does the output correctly address the task?
 2. COMPLETENESS: Are all parts of the task addressed?
-3. VERIFICATION: Did the agent verify its work (tests, commands)?
+3. VERIFICATION: Did the agent verify its work?
+   - If the task required runnable code or long-lived files, did the agent create/modify them and run checks?
+   - If the task is an inline artifact (small code snippet, config YAML, test case < 50 lines), an in-message code block IS acceptable evidence.
 
 Respond with exactly one of:
   PASS — all criteria satisfied
   NEEDS_REVISION: <specific feedback> — direction is right but needs fixes
+  INCONCLUSIVE: <reason> — output plausibly completes the task but evidence
+    is insufficient (e.g., no file ops but a reasonable inline answer is
+    present). Use this instead of FAIL when retrying or inline-accepting
+    would be more appropriate.
   FAIL: <reason> — fundamentally wrong approach, retrying won't help
 
-Your response must start with PASS, NEEDS_REVISION, or FAIL.`, input.Message, evidence)
+Your response must start with PASS, NEEDS_REVISION, INCONCLUSIVE, or FAIL.`, input.Message, evidence)
 
 	verifyMessages := []llm.Message{llm.NewUserMessage(verifyPrompt)}
 
@@ -233,6 +289,8 @@ Your response must start with PASS, NEEDS_REVISION, or FAIL.`, input.Message, ev
 		return VerdictPass, "", verifyResult.Usage, nil
 	case strings.HasPrefix(upper, "NEEDS_REVISION"):
 		return VerdictNeedsRevision, extractFeedback(verdict), verifyResult.Usage, nil
+	case strings.HasPrefix(upper, "INCONCLUSIVE"):
+		return VerdictInconclusive, extractFeedback(verdict), verifyResult.Usage, nil
 	case strings.HasPrefix(upper, "FAIL"):
 		return VerdictFail, extractFeedback(verdict), verifyResult.Usage, nil
 	default:
@@ -322,6 +380,11 @@ func buildVerificationEvidence(messages []llm.Message) string {
 
 	reverseStrings(toolEvidence)
 
+	// Phase 8.1a Fix 2 + Fix 4 (GPT G7): evidence tags scoped to final
+	// assistant-authored output (no tool_result contamination). Tags help
+	// verifier distinguish "inline artifact produced" from "no output".
+	tags := computeEvidenceTags(messages, assistantText)
+
 	var sb strings.Builder
 	sb.WriteString("Final assistant answer:\n")
 	sb.WriteString(assistantText)
@@ -329,6 +392,8 @@ func buildVerificationEvidence(messages []llm.Message) string {
 		sb.WriteString("\n\nRecent tool evidence:\n")
 		sb.WriteString(strings.Join(toolEvidence, "\n\n"))
 	}
+	sb.WriteString("\n\n--- Evidence tags ---\n")
+	sb.WriteString(tags.String())
 	return sb.String()
 }
 
@@ -343,4 +408,174 @@ func reverseStrings(values []string) {
 	for i, j := 0, len(values)-1; i < j; i, j = i+1, j-1 {
 		values[i], values[j] = values[j], values[i]
 	}
+}
+
+// Phase 8.1a Fix 2 + Fix 4 — evidence tag computation + guard rail helpers.
+
+// evidenceTags captures structured metadata derived from agent messages so
+// verifier + guard can reason about inline-artifact vs file-modification
+// without relying on free-text heuristics alone.
+type evidenceTags struct {
+	toolUsesTotal   int
+	mutatingFileOps int
+	commandOps      int
+	codeBlocks      int
+	codeLines       int
+	configBlocks    int
+	configLines     int
+	configLang      string
+}
+
+func (t evidenceTags) String() string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "ToolUses: total=%d\n", t.toolUsesTotal)
+	fmt.Fprintf(&sb, "FileOps: mutating_file_ops=%d\n", t.mutatingFileOps)
+	fmt.Fprintf(&sb, "CommandOps: bash_or_shell_ops=%d\n", t.commandOps)
+	if t.codeBlocks > 0 {
+		fmt.Fprintf(&sb, "InlineCode: present, blocks=%d, lines=%d\n", t.codeBlocks, t.codeLines)
+	} else {
+		sb.WriteString("InlineCode: absent\n")
+	}
+	if t.configBlocks > 0 {
+		fmt.Fprintf(&sb, "InlineConfig: present, language=%s, blocks=%d, lines=%d\n", t.configLang, t.configBlocks, t.configLines)
+	} else {
+		sb.WriteString("InlineConfig: absent\n")
+	}
+	return sb.String()
+}
+
+// computeEvidenceTags tallies tool_use kinds across assistant-authored
+// messages (Read/Grep/Bash etc. count as ToolUses; Write/Edit/Create are
+// mutating FileOps; Bash is CommandOps) and scans the final assistant text
+// for fenced code/config blocks. GPT G7: inline-artifact detection is
+// limited to final assistant-authored output to avoid tool_result contamination.
+func computeEvidenceTags(messages []llm.Message, finalAssistantText string) evidenceTags {
+	var t evidenceTags
+	for _, msg := range messages {
+		if msg.Role != llm.RoleAssistant {
+			continue
+		}
+		for _, block := range msg.Content {
+			tu, ok := block.(llm.ToolUseBlock)
+			if !ok {
+				continue
+			}
+			t.toolUsesTotal++
+			name := strings.ToLower(tu.Name)
+			switch {
+			case strings.Contains(name, "write"),
+				strings.Contains(name, "edit"),
+				strings.Contains(name, "multi_edit"),
+				strings.Contains(name, "multiedit"),
+				strings.Contains(name, "create"):
+				t.mutatingFileOps++
+			case strings.Contains(name, "bash"),
+				strings.Contains(name, "shell"):
+				t.commandOps++
+			}
+		}
+	}
+	t.codeBlocks, t.codeLines, t.configBlocks, t.configLines, t.configLang = scanInlineArtifacts(finalAssistantText)
+	return t
+}
+
+// scanInlineArtifacts walks the final assistant text line-by-line and
+// tallies fenced code/config blocks. Language hint after the opening ``` is
+// used to classify a block as config (yaml/json/toml/dockerfile/ini/xml/hcl)
+// vs generic code. Multi-block output is supported; the first config
+// language encountered is reported.
+func scanInlineArtifacts(text string) (codeBlocks, codeLines, configBlocks, configLines int, configLang string) {
+	configLangs := map[string]bool{
+		"yaml": true, "yml": true, "json": true, "toml": true,
+		"dockerfile": true, "ini": true, "xml": true, "hcl": true,
+	}
+	lines := strings.Split(text, "\n")
+	inBlock := false
+	currentLang := ""
+	currentCount := 0
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") {
+			if !inBlock {
+				inBlock = true
+				currentLang = strings.ToLower(strings.TrimSpace(strings.TrimPrefix(trimmed, "```")))
+				currentCount = 0
+			} else {
+				inBlock = false
+				if configLangs[currentLang] {
+					configBlocks++
+					configLines += currentCount
+					if configLang == "" {
+						configLang = currentLang
+					}
+				} else {
+					codeBlocks++
+					codeLines += currentCount
+				}
+			}
+			continue
+		}
+		if inBlock {
+			currentCount++
+		}
+	}
+	return
+}
+
+// canAcceptUnverifiedInline returns true when the INCONCLUSIVE verdict may
+// be treated as completion via the unverified_inline path. Two gates must
+// both pass:
+//  1. Prompt is inline-eligible (inlineFriendly phrases + no file-modification-
+//     required phrases).
+//  2. Evidence shows inline artifact present AND mutating_file_ops == 0.
+//
+// Guard blocks file-modification-required tasks from slipping through with
+// only an inline explanation. Phase 8.1a Fix 2 GPT G5.
+func canAcceptUnverifiedInline(prompt, evidence string) bool {
+	if !isInlineEligibleTask(prompt) {
+		return false
+	}
+	hasInlineArtifact := strings.Contains(evidence, "InlineCode: present") ||
+		strings.Contains(evidence, "InlineConfig: present")
+	noFileOps := strings.Contains(evidence, "FileOps: mutating_file_ops=0")
+	return hasInlineArtifact && noFileOps
+}
+
+// isInlineEligibleTask decides whether a prompt can legitimately complete
+// with an inline answer. File-modification-required phrases (explicit paths,
+// "fix the existing", "update cmd/...") block eligibility. Inline-friendly
+// phrases ("write a unit test", "author ci.yml", etc.) grant it. Default
+// is false — unverified_inline requires positive signal, not absence of a
+// block phrase. Phase 8.1a Fix 2 GPT G5 guard rail.
+func isInlineEligibleTask(prompt string) bool {
+	lower := strings.ToLower(prompt)
+	fileModRequired := []string{
+		"modify cmd/", "modify internal/", "modify src/", "modify pkg/",
+		"update cmd/", "update internal/", "update src/", "update pkg/",
+		"edit cmd/", "edit internal/", "edit src/", "edit pkg/",
+		"fix the existing", "add to cmd/", "add to internal/",
+		"change the existing", "refactor the existing",
+		"apply a patch to", "patch cmd/", "patch internal/",
+	}
+	for _, phrase := range fileModRequired {
+		if strings.Contains(lower, phrase) {
+			return false
+		}
+	}
+	inlineFriendly := []string{
+		"write a test", "write a unit test", "write tests",
+		"write unit tests", "write a reusable",
+		"include a test", "include a unit test", "include unit tests",
+		"add a test", "add tests", "add a unit test",
+		"author ci.yml", "author .github", "author a",
+		"draft a yaml", "draft .github", "draft a dockerfile",
+		"new dockerfile", "new workflow", "set up workflow",
+		"provide a snippet", "show me how",
+	}
+	for _, phrase := range inlineFriendly {
+		if strings.Contains(lower, phrase) {
+			return true
+		}
+	}
+	return false
 }

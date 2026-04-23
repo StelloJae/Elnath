@@ -560,4 +560,208 @@ func TestRalphVerifyPromptUsesExecutionEvidence(t *testing.T) {
 	if !strings.Contains(provider.prompt, "NEEDS_REVISION") {
 		t.Fatalf("verification prompt should include NEEDS_REVISION option:\n%s", provider.prompt)
 	}
+	if !strings.Contains(provider.prompt, "INCONCLUSIVE") {
+		t.Fatalf("verification prompt should include INCONCLUSIVE option (Phase 8.1a Fix 2):\n%s", provider.prompt)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Phase 8.1a Fix 2 — INCONCLUSIVE + inline-artifact guard rail tests.
+// ---------------------------------------------------------------------------
+
+func TestRalphWorkflow_InconclusiveAcceptsUnverifiedInline(t *testing.T) {
+	ctx := context.Background()
+
+	// Inline-eligible prompt ("include a unit test") + code fence in answer +
+	// no tool_use → guard pass → immediate accept as unverified_inline.
+	inlineAnswer := "Here's the snippet:\n```python\nclass TokenBucket:\n    def __init__(self):\n        self.rate = 1.0\n```"
+	provider := newTestProvider(
+		inlineAnswer,                                      // attempt 1
+		"INCONCLUSIVE: inline answer present, no tool_use", // verify 1
+	)
+
+	wf := NewRalphWorkflow()
+	input := testInput("Write a reusable rate limiter. Include a unit test.", provider)
+
+	result, err := wf.Run(ctx, input)
+	if err != nil {
+		t.Fatalf("RalphWorkflow.Run: %v", err)
+	}
+	if result.FinishReason != FinishReasonUnverifiedInline {
+		t.Errorf("FinishReason = %q, want %q", result.FinishReason, FinishReasonUnverifiedInline)
+	}
+	// Immediate accept: 1 attempt + 1 verify = 2 calls (no retry).
+	if provider.CallCount() != 2 {
+		t.Errorf("provider calls = %d, want 2 (immediate accept path)", provider.CallCount())
+	}
+}
+
+func TestRalphWorkflow_InconclusiveGuardBlocksFileModTask(t *testing.T) {
+	ctx := context.Background()
+
+	// Prompt requires file modification ("update cmd/foo.go").
+	// Guard blocks unverified_inline accept. After one retry the guard
+	// blocks again and the workflow hard-fails.
+	inlineAnswer1 := "```go\nfunc Update() {}\n```"
+	inlineAnswer2 := "```go\nfunc UpdateV2() {}\n```"
+	provider := newTestProvider(
+		inlineAnswer1,                    // attempt 1
+		"INCONCLUSIVE: no file ops yet",  // verify 1
+		inlineAnswer2,                    // attempt 2 (retry)
+		"INCONCLUSIVE: still no file ops", // verify 2 (retry exhausted, guard still fails)
+	)
+
+	wf := NewRalphWorkflow()
+	input := testInput("update cmd/foo.go to export the Bar function", provider)
+
+	_, err := wf.Run(ctx, input)
+	if err == nil {
+		t.Fatal("expected error: guard should block inline accept for file-mod task")
+	}
+	if !strings.Contains(err.Error(), "inline-accept guard blocked") {
+		t.Errorf("error = %q, want 'inline-accept guard blocked'", err.Error())
+	}
+	// 2 attempts × (1 execution + 1 verify) = 4 calls (one retry, then fail).
+	if provider.CallCount() != 4 {
+		t.Errorf("provider calls = %d, want 4 (one retry then guard fail)", provider.CallCount())
+	}
+}
+
+func TestRalphWorkflow_InconclusiveRetryThenPass(t *testing.T) {
+	ctx := context.Background()
+
+	// Prompt is file-mod-required so guard blocks immediate accept.
+	// Attempt 2 produces PASS verdict (agent ran tool ops in retry).
+	inlineAnswer := "```go\n// placeholder\n```"
+	provider := newTestProvider(
+		inlineAnswer,                         // attempt 1
+		"INCONCLUSIVE: no file ops",          // verify 1
+		"Now with file ops and verification", // attempt 2
+		"PASS",                               // verify 2
+	)
+
+	wf := NewRalphWorkflow()
+	input := testInput("update cmd/foo.go to fix existing handler", provider)
+
+	result, err := wf.Run(ctx, input)
+	if err != nil {
+		t.Fatalf("RalphWorkflow.Run: %v", err)
+	}
+	// Retry path: not unverified_inline; reverts to whatever result.FinishReason
+	// the second attempt returned (scripted provider returns "stop").
+	if result.FinishReason == FinishReasonUnverifiedInline {
+		t.Errorf("FinishReason = unverified_inline, want non-inline (retry reached PASS)")
+	}
+	if provider.CallCount() != 4 {
+		t.Errorf("provider calls = %d, want 4", provider.CallCount())
+	}
+}
+
+func TestIsInlineEligibleTask(t *testing.T) {
+	tests := []struct {
+		prompt string
+		want   bool
+	}{
+		{"Write a unit test for the rate limiter", true},
+		{"Include a unit test", true},
+		{"Author .github/workflows/ci.yml on push to main", true},
+		{"Add tests to cover edge cases", true},
+		{"write a reusable async rate limiter", true},
+		{"Draft a yaml manifest", true},
+		{"update cmd/foo.go to export Bar", false},
+		{"Fix the existing handler", false},
+		{"modify internal/agent/agent.go", false},
+		{"Refactor the existing team code", false},
+		{"Please review the codebase", false}, // no inline-friendly phrase
+	}
+	for _, tt := range tests {
+		t.Run(tt.prompt, func(t *testing.T) {
+			got := isInlineEligibleTask(tt.prompt)
+			if got != tt.want {
+				t.Errorf("isInlineEligibleTask(%q) = %v, want %v", tt.prompt, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCanAcceptUnverifiedInline(t *testing.T) {
+	const promptEligible = "Write a unit test for the rate limiter"
+	const promptFileMod = "update cmd/foo.go"
+	const evidenceInlineNoOps = "Final assistant answer:\ncode\n\n--- Evidence tags ---\nToolUses: total=0\nFileOps: mutating_file_ops=0\nCommandOps: bash_or_shell_ops=0\nInlineCode: present, blocks=1, lines=4\nInlineConfig: absent\n"
+	const evidenceInlineWithOps = "Final assistant answer:\ncode\n\n--- Evidence tags ---\nToolUses: total=2\nFileOps: mutating_file_ops=1\nCommandOps: bash_or_shell_ops=0\nInlineCode: present, blocks=1, lines=4\nInlineConfig: absent\n"
+	const evidenceNoInline = "Final assistant answer:\ntext only\n\n--- Evidence tags ---\nToolUses: total=0\nFileOps: mutating_file_ops=0\nCommandOps: bash_or_shell_ops=0\nInlineCode: absent\nInlineConfig: absent\n"
+
+	tests := []struct {
+		name     string
+		prompt   string
+		evidence string
+		want     bool
+	}{
+		{"eligible prompt + inline + no ops", promptEligible, evidenceInlineNoOps, true},
+		{"eligible prompt + inline + mutating ops", promptEligible, evidenceInlineWithOps, false},
+		{"eligible prompt + no inline", promptEligible, evidenceNoInline, false},
+		{"file-mod prompt blocks regardless", promptFileMod, evidenceInlineNoOps, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := canAcceptUnverifiedInline(tt.prompt, tt.evidence)
+			if got != tt.want {
+				t.Errorf("canAcceptUnverifiedInline = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestScanInlineArtifacts(t *testing.T) {
+	tests := []struct {
+		name            string
+		input           string
+		wantCodeBlocks  int
+		wantCodeLines   int
+		wantCfgBlocks   int
+		wantCfgLines    int
+		wantConfigLang  string
+	}{
+		{
+			name:           "empty",
+			input:          "",
+			wantCodeBlocks: 0,
+		},
+		{
+			name:           "single code block",
+			input:          "here is code:\n```python\nprint('hi')\nprint('bye')\n```",
+			wantCodeBlocks: 1,
+			wantCodeLines:  2,
+		},
+		{
+			name:           "yaml config block",
+			input:          "conf:\n```yaml\nname: x\non: push\n```",
+			wantCfgBlocks:  1,
+			wantCfgLines:   2,
+			wantConfigLang: "yaml",
+		},
+		{
+			name:           "mixed code + config",
+			input:          "```go\nfunc f() {}\n```\n\n```json\n{}\n```",
+			wantCodeBlocks: 1,
+			wantCodeLines:  1,
+			wantCfgBlocks:  1,
+			wantCfgLines:   1,
+			wantConfigLang: "json",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cb, cl, cfb, cfl, lang := scanInlineArtifacts(tt.input)
+			if cb != tt.wantCodeBlocks || cl != tt.wantCodeLines {
+				t.Errorf("code blocks/lines = %d/%d, want %d/%d", cb, cl, tt.wantCodeBlocks, tt.wantCodeLines)
+			}
+			if cfb != tt.wantCfgBlocks || cfl != tt.wantCfgLines {
+				t.Errorf("config blocks/lines = %d/%d, want %d/%d", cfb, cfl, tt.wantCfgBlocks, tt.wantCfgLines)
+			}
+			if lang != tt.wantConfigLang {
+				t.Errorf("config lang = %q, want %q", lang, tt.wantConfigLang)
+			}
+		})
+	}
 }

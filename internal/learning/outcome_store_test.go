@@ -189,10 +189,14 @@ func TestIsSuccessful(t *testing.T) {
 	}{
 		{"stop", true},
 		{"partial_success", true},
+		{"unverified_inline", true}, // Phase 8.1a Fix 2 + partner M3
 		{"budget_exceeded", false},
 		{"error", false},
 		{"", false},
 		{"ack_loop", false},
+		{"ralph_fail", false},
+		{"ralph_inconclusive", false},
+		{"ralph_cap_exceeded", false},
 	}
 	for _, c := range cases {
 		if got := IsSuccessful(c.reason); got != c.want {
