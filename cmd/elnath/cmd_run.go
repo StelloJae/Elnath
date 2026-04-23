@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -190,30 +191,53 @@ func cmdRun(ctx context.Context, args []string) error {
 		rt.maybeCommitWiki("auto: wiki update")
 	}
 
-	// REPL loop.
-	scanner := bufio.NewScanner(os.Stdin)
-	fmt.Printf("elnath %s  (session %s)\nType your message, empty line to quit.\n\n", version, sess.ID)
-
-	for {
-		fmt.Print("> ")
-		if !scanner.Scan() {
-			break
+	// Non-interactive mode with piped stdin: read the full stdin as a
+	// single multi-line prompt and run one task, then exit. Without this,
+	// the REPL scanner below splits on newlines and terminates at the
+	// first blank line — so any multi-line prompt (code blocks, etc.) is
+	// silently truncated to its first paragraph.
+	stdinIsTTY := isatty.IsTerminal(os.Stdin.Fd()) || isatty.IsCygwinTerminal(os.Stdin.Fd())
+	if nonInteractive {
+		if !stdinIsTTY {
+			raw, readErr := io.ReadAll(os.Stdin)
+			if readErr != nil {
+				return fmt.Errorf("read non-interactive stdin: %w", readErr)
+			}
+			prompt := strings.TrimSpace(string(raw))
+			if prompt != "" {
+				messages, _, err = rt.runTask(ctx, sess, messages, prompt, cliOrchestrationOutput())
+				if err != nil {
+					return err
+				}
+				rt.maybeCommitWiki("auto: wiki update")
+			}
 		}
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			break
+	} else {
+		// REPL loop.
+		scanner := bufio.NewScanner(os.Stdin)
+		fmt.Printf("elnath %s  (session %s)\nType your message, empty line to quit.\n\n", version, sess.ID)
+
+		for {
+			fmt.Print("> ")
+			if !scanner.Scan() {
+				break
+			}
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" {
+				break
+			}
+
+			messages, _, err = rt.runTask(ctx, sess, messages, line, cliOrchestrationOutput())
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				continue
+			}
+			rt.maybeCommitWiki("auto: wiki update")
 		}
 
-		messages, _, err = rt.runTask(ctx, sess, messages, line, cliOrchestrationOutput())
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			continue
+		if err := scanner.Err(); err != nil {
+			return fmt.Errorf("stdin: %w", err)
 		}
-		rt.maybeCommitWiki("auto: wiki update")
-	}
-
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("stdin: %w", err)
 	}
 
 	// StartedAt/Duration omitted: interactive sessions have no bounded execution window.
