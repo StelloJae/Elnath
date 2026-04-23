@@ -32,6 +32,26 @@ type IPCResponse struct {
 	Err  string      `json:"error,omitempty"`
 }
 
+// TaskStatusView is the JSON-safe representation returned by daemon status.
+type TaskStatusView struct {
+	ID          int64  `json:"id"`
+	Payload     string `json:"payload"`
+	SessionID   string `json:"session_id"`
+	Status      string `json:"status"`
+	Progress    string `json:"progress"`
+	Summary     string `json:"summary"`
+	Result      string `json:"result,omitempty"`
+	Completion  any    `json:"completion"`
+	CreatedAt   int64  `json:"created_at"`
+	UpdatedAt   int64  `json:"updated_at"`
+	CompletedAt int64  `json:"completed_at"`
+}
+
+// StatusResponse is the payload returned by daemon status.
+type StatusResponse struct {
+	Tasks []TaskStatusView `json:"tasks"`
+}
+
 // TaskResult is the outcome of executing one queued daemon task.
 type TaskResult struct {
 	Result    string `json:"result"`
@@ -328,23 +348,9 @@ func (d *Daemon) handleStatus(ctx context.Context, conn net.Conn) {
 		return
 	}
 
-	type taskView struct {
-		ID          int64  `json:"id"`
-		Payload     string `json:"payload"`
-		SessionID   string `json:"session_id"`
-		Status      string `json:"status"`
-		Progress    string `json:"progress"`
-		Summary     string `json:"summary"`
-		Result      string `json:"result,omitempty"`
-		Completion  any    `json:"completion"`
-		CreatedAt   int64  `json:"created_at"`
-		UpdatedAt   int64  `json:"updated_at"`
-		CompletedAt int64  `json:"completed_at"`
-	}
-
-	views := make([]taskView, 0, len(tasks))
+	views := make([]TaskStatusView, 0, len(tasks))
 	for _, t := range tasks {
-		views = append(views, taskView{
+		views = append(views, TaskStatusView{
 			ID:          t.ID,
 			Payload:     t.Payload,
 			SessionID:   t.SessionID,
@@ -361,7 +367,7 @@ func (d *Daemon) handleStatus(ctx context.Context, conn net.Conn) {
 
 	d.writeResponse(conn, IPCResponse{
 		OK:   true,
-		Data: map[string]interface{}{"tasks": views},
+		Data: StatusResponse{Tasks: views},
 	})
 }
 

@@ -13,9 +13,9 @@ import (
 
 	"sort"
 
-	"github.com/stello/elnath/internal/ambient"
 	"github.com/stello/elnath/internal/agent"
 	"github.com/stello/elnath/internal/agent/reflection"
+	"github.com/stello/elnath/internal/ambient"
 	"github.com/stello/elnath/internal/config"
 	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/core"
@@ -497,6 +497,14 @@ func cmdDaemonStatus(ctx context.Context, args []string) error {
 		return printSelfHealStatus(cfg)
 	}
 
+	outputMode := extractFlagValue(args, "--output")
+	if hasFlag(args, "--json") {
+		outputMode = "json"
+	}
+	if outputMode == "" {
+		outputMode = "text"
+	}
+
 	req := daemon.IPCRequest{Command: "status"}
 	resp, err := sendIPCRequest(cfg.Daemon.SocketPath, req)
 	if err != nil {
@@ -506,17 +514,17 @@ func cmdDaemonStatus(ctx context.Context, args []string) error {
 		return fmt.Errorf("daemon error: %s", resp.Err)
 	}
 
-	data, _ := json.Marshal(resp.Data)
-	var result struct {
-		Tasks []struct {
-			ID        float64 `json:"id"`
-			Status    string  `json:"status"`
-			Payload   string  `json:"payload"`
-			SessionID string  `json:"session_id"`
-			Progress  string  `json:"progress"`
-			Summary   string  `json:"summary"`
-		} `json:"tasks"`
+	if outputMode == "json" {
+		encoded, err := json.MarshalIndent(resp.Data, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal status output: %w", err)
+		}
+		fmt.Println(string(encoded))
+		return nil
 	}
+
+	data, _ := json.Marshal(resp.Data)
+	var result daemon.StatusResponse
 	if err := json.Unmarshal(data, &result); err != nil {
 		fmt.Printf("Raw response: %s\n", string(data))
 		return nil
@@ -545,7 +553,7 @@ func cmdDaemonStatus(ctx context.Context, args []string) error {
 		if len(summary) > 28 {
 			summary = summary[:25] + "..."
 		}
-		fmt.Printf("%-6.0f  %-12s  %-16s  %-28s  %-28s  %s\n", t.ID, t.Status, sessionID, progress, summary, payload)
+		fmt.Printf("%-6d  %-12s  %-16s  %-28s  %-28s  %s\n", t.ID, t.Status, sessionID, progress, summary, payload)
 	}
 	return nil
 }

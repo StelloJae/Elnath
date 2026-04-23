@@ -1328,6 +1328,117 @@ func TestCmdDaemonStatusMultipleTasks(t *testing.T) {
 // cmdEval scaffold files can be round-tripped
 // ---------------------------------------------------------------------------
 
+func TestCmdDaemonStatusJSONFlag(t *testing.T) {
+	socketPath := testSocketPath(t, "stjson")
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		var req daemon.IPCRequest
+		dec := json.NewDecoder(conn)
+		if err := dec.Decode(&req); err != nil {
+			return
+		}
+		resp := daemon.IPCResponse{
+			OK: true,
+			Data: map[string]any{
+				"tasks": []map[string]any{{
+					"id":         1,
+					"status":     "running",
+					"payload":    "task one",
+					"session_id": "s1",
+					"progress":   "",
+					"summary":    "doing stuff",
+				}},
+			},
+		}
+		enc := json.NewEncoder(conn)
+		_ = enc.Encode(resp)
+	}()
+
+	cfgPath := writeDaemonTestConfig(t, onboarding.En, socketPath)
+	withArgs(t, []string{"elnath", "--config", cfgPath})
+	resetLoadLocaleCache()
+
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdDaemonStatus(context.Background(), []string{"--json"}); err != nil {
+			t.Fatalf("cmdDaemonStatus: %v", err)
+		}
+	})
+	if strings.Contains(stdout, "STATUS") || strings.Contains(stdout, "PAYLOAD") {
+		t.Fatalf("stdout = %q, want JSON output without table headers", stdout)
+	}
+	if !strings.Contains(stdout, "\"tasks\"") || !strings.Contains(stdout, "\"status\": \"running\"") {
+		t.Fatalf("stdout = %q, want JSON task payload", stdout)
+	}
+	<-done
+}
+
+func TestCmdDaemonStatusOutputJSONFlag(t *testing.T) {
+	socketPath := testSocketPath(t, "stoutjson")
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		var req daemon.IPCRequest
+		dec := json.NewDecoder(conn)
+		if err := dec.Decode(&req); err != nil {
+			return
+		}
+		resp := daemon.IPCResponse{
+			OK: true,
+			Data: map[string]any{
+				"tasks": []map[string]any{{
+					"id":         2,
+					"status":     "queued",
+					"payload":    "task two",
+					"session_id": "s2",
+					"progress":   "",
+					"summary":    "",
+				}},
+			},
+		}
+		enc := json.NewEncoder(conn)
+		_ = enc.Encode(resp)
+	}()
+
+	cfgPath := writeDaemonTestConfig(t, onboarding.En, socketPath)
+	withArgs(t, []string{"elnath", "--config", cfgPath})
+	resetLoadLocaleCache()
+
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdDaemonStatus(context.Background(), []string{"--output", "json"}); err != nil {
+			t.Fatalf("cmdDaemonStatus: %v", err)
+		}
+	})
+	if !strings.Contains(stdout, "\"tasks\"") || !strings.Contains(stdout, "\"status\": \"queued\"") {
+		t.Fatalf("stdout = %q, want JSON task payload", stdout)
+	}
+	<-done
+}
+
 func TestCmdEvalScaffoldRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 
