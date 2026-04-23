@@ -204,6 +204,48 @@ func filterByIDs(probes []probe, csv string) []probe {
 	return out
 }
 
+// withProbeWorkDir runs fn inside a freshly created temp directory so
+// that a single probe cannot pollute the caller's working tree. Each
+// invocation gets its own directory — callers must never share between
+// probes. The directory is removed when fn returns; set
+// ELNATH_KEEP_PROBE_DIR=1 to keep it for post-mortem inspection.
+func withProbeWorkDir(probeID string, fn func(dir string) error) error {
+	dir, err := os.MkdirTemp("", "elnath-probe-"+sanitizeProbeID(probeID)+"-")
+	if err != nil {
+		return fmt.Errorf("probe workdir: %w", err)
+	}
+	keep := os.Getenv("ELNATH_KEEP_PROBE_DIR") == "1"
+	defer func() {
+		if keep {
+			fmt.Fprintf(os.Stderr, "[probe] ELNATH_KEEP_PROBE_DIR=1 — keeping %s\n", dir)
+			return
+		}
+		_ = os.RemoveAll(dir)
+	}()
+	return fn(dir)
+}
+
+func sanitizeProbeID(id string) string {
+	if id == "" {
+		return "probe"
+	}
+	var b strings.Builder
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '.' || r == '-' || r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('_')
+		}
+	}
+	if b.Len() == 0 {
+		return "probe"
+	}
+	return b.String()
+}
+
 // runCCProbe executes `claude -p --output-format stream-json --verbose
 // --no-session-persistence "$prompt"` and extracts the final
 // `{"type":"result",...}` line which carries num_turns, duration, usage,
@@ -212,19 +254,26 @@ func filterByIDs(probes []probe, csv string) []probe {
 // `result` field for head-to-head rendering.
 func runCCProbe(p probe, captureReply bool) metrics {
 	start := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "claude", "-p", "--output-format", "stream-json",
-		"--verbose", "--no-session-persistence", p.Prompt)
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	stdout, err := cmd.Output()
-	m := metrics{Duration: time.Since(start)}
-	if err != nil {
-		m.Error = fmt.Sprintf("cc run failed: %v; stderr=%s", err, stderr.String())
-		return m
+	var m metrics
+	if werr := withProbeWorkDir(p.ID, func(dir string) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "claude", "-p", "--output-format", "stream-json",
+			"--verbose", "--no-session-persistence", p.Prompt)
+		cmd.Dir = dir
+		var stderr strings.Builder
+		cmd.Stderr = &stderr
+		stdout, err := cmd.Output()
+		m = metrics{Duration: time.Since(start)}
+		if err != nil {
+			m.Error = fmt.Sprintf("cc run failed: %v; stderr=%s", err, stderr.String())
+			return nil
+		}
+		parseCCStreamJSON(&m, stdout, captureReply)
+		return nil
+	}); werr != nil {
+		m = metrics{Duration: time.Since(start), Error: fmt.Sprintf("probe workdir: %v", werr)}
 	}
-	parseCCStreamJSON(&m, stdout, captureReply)
 	return m
 }
 
@@ -318,27 +367,34 @@ func parseCCStreamJSON(m *metrics, body []byte, captureReply bool) {
 // assistant reply text by stripping log noise.
 func runElnathProbe(p probe, binary string, captureReply bool) metrics {
 	start := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, binary, "run", "--non-interactive")
-	cmd.Stdin = strings.NewReader(p.Prompt + "\n")
-	// ELNATH_LOG_LEVEL=error keeps the assistant reply readable for
-	// head-to-head capture without losing the metric-bearing
-	// `[tokens: ...]` summary line (which prints unconditionally).
-	if captureReply {
-		cmd.Env = append(os.Environ(), "ELNATH_LOG_LEVEL=error")
-	}
-	var combined strings.Builder
-	cmd.Stdout = &combined
-	cmd.Stderr = &combined
-	err := cmd.Run()
-	m := metrics{Duration: time.Since(start)}
-	if err != nil {
-		m.Error = fmt.Sprintf("elnath run failed: %v", err)
-	}
-	parseElnathOutput(&m, combined.String())
-	if captureReply {
-		m.ReplyText = extractElnathReply(combined.String())
+	var m metrics
+	if werr := withProbeWorkDir(p.ID, func(dir string) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, binary, "run", "--non-interactive")
+		cmd.Dir = dir
+		cmd.Stdin = strings.NewReader(p.Prompt + "\n")
+		// ELNATH_LOG_LEVEL=error keeps the assistant reply readable for
+		// head-to-head capture without losing the metric-bearing
+		// `[tokens: ...]` summary line (which prints unconditionally).
+		if captureReply {
+			cmd.Env = append(os.Environ(), "ELNATH_LOG_LEVEL=error")
+		}
+		var combined strings.Builder
+		cmd.Stdout = &combined
+		cmd.Stderr = &combined
+		err := cmd.Run()
+		m = metrics{Duration: time.Since(start)}
+		if err != nil {
+			m.Error = fmt.Sprintf("elnath run failed: %v", err)
+		}
+		parseElnathOutput(&m, combined.String())
+		if captureReply {
+			m.ReplyText = extractElnathReply(combined.String())
+		}
+		return nil
+	}); werr != nil {
+		m = metrics{Duration: time.Since(start), Error: fmt.Sprintf("probe workdir: %v", werr)}
 	}
 	return m
 }
