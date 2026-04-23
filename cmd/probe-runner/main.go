@@ -572,7 +572,7 @@ func writeHead2Head(path string, results []result) error {
 		fmt.Fprintln(w, replyBlock(r.Elnath.ReplyText, r.Elnath.Error))
 		fmt.Fprintln(w, "")
 	}
-	fmt.Fprintln(w, "---\n## Partner judgment template\n")
+	fmt.Fprintln(w, "---\n## Partner judgment template")
 	fmt.Fprintln(w, "Per probe, fill one of:")
 	fmt.Fprintln(w, "- **OK** — Elnath quality acceptable")
 	fmt.Fprintln(w, "- **VETO: <reason>** — what's missing or wrong")
