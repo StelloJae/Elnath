@@ -472,9 +472,12 @@ func parseWorkflowPrefix(input string) (workflow, cleaned string) {
 // VerificationHint only — ExistingCode is preserved as semantic truth so that
 // "Add --json flag to existing CLI" remains ExistingCode=true while still
 // routing to single via the raised team threshold.
+// Phase 8.2 Fix 5: all phrase lookups run against orchestrator.NormalizeForPhraseMatch
+// output so markdown-wrapped identifiers (backticked paths, names) still
+// participate in the match.
 func buildRoutingContext(input string) *orchestrator.RoutingContext {
 	wf, cleaned := parseWorkflowPrefix(input)
-	lower := strings.ToLower(cleaned)
+	normalized := orchestrator.NormalizeForPhraseMatch(cleaned)
 
 	existingCodeCues := []string{
 		"existing", "current", "repo", "repository", "module", "handler", "middleware",
@@ -515,13 +518,13 @@ func buildRoutingContext(input string) *orchestrator.RoutingContext {
 		ExplicitWorkflow: wf,
 	}
 	for _, cue := range existingCodeCues {
-		if strings.Contains(lower, cue) {
+		if strings.Contains(normalized, cue) {
 			ctx.ExistingCode = true
 			break
 		}
 	}
 	for _, phrase := range verificationPhrases {
-		if strings.Contains(lower, phrase) {
+		if strings.Contains(normalized, phrase) {
 			ctx.VerificationHint = true
 			break
 		}
@@ -531,7 +534,7 @@ func buildRoutingContext(input string) *orchestrator.RoutingContext {
 	// legitimate existing-code small tasks stay ExistingCode=true and ride
 	// the raised team threshold (EstimatedFiles >= 4) to single.
 	for _, phrase := range newWorkPhrases {
-		if strings.Contains(lower, phrase) {
+		if strings.Contains(normalized, phrase) {
 			ctx.VerificationHint = false
 			break
 		}

@@ -547,8 +547,11 @@ func canAcceptUnverifiedInline(prompt, evidence string) bool {
 // phrases ("write a unit test", "author ci.yml", etc.) grant it. Default
 // is false — unverified_inline requires positive signal, not absence of a
 // block phrase. Phase 8.1a Fix 2 GPT G5 guard rail.
+// Phase 8.2 Fix 5: phrase matching runs against NormalizeForPhraseMatch so
+// backticked paths ("Author `.github/workflows/ci.yml`") still register as
+// inline-friendly — the guard must stay in sync with the router classifier.
 func isInlineEligibleTask(prompt string) bool {
-	lower := strings.ToLower(prompt)
+	normalized := NormalizeForPhraseMatch(prompt)
 	fileModRequired := []string{
 		"modify cmd/", "modify internal/", "modify src/", "modify pkg/",
 		"update cmd/", "update internal/", "update src/", "update pkg/",
@@ -558,7 +561,7 @@ func isInlineEligibleTask(prompt string) bool {
 		"apply a patch to", "patch cmd/", "patch internal/",
 	}
 	for _, phrase := range fileModRequired {
-		if strings.Contains(lower, phrase) {
+		if strings.Contains(normalized, phrase) {
 			return false
 		}
 	}
@@ -573,7 +576,7 @@ func isInlineEligibleTask(prompt string) bool {
 		"provide a snippet", "show me how",
 	}
 	for _, phrase := range inlineFriendly {
-		if strings.Contains(lower, phrase) {
+		if strings.Contains(normalized, phrase) {
 			return true
 		}
 	}
