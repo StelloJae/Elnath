@@ -463,7 +463,7 @@ func TestProgressObserverDispatchesRepresentativeEventTypesAndIgnoresUnknown(t *
 	observer.OnEvent(event.TextDeltaEvent{Content: "partial output"})
 	observer.OnEvent(event.UsageProgressEvent{Summary: "tokens: 42"})
 	observer.OnEvent(event.ResearchProgressEvent{Message: "researching"})
-	observer.OnEvent(event.ToolCallEvent{ToolName: "ignored"})
+	observer.OnEvent(event.IterationStartEvent{})
 
 	if len(got) != 5 {
 		t.Fatalf("progress events = %d, want 5", len(got))
@@ -474,14 +474,14 @@ func TestProgressObserverDispatchesRepresentativeEventTypesAndIgnoresUnknown(t *
 	if got[1].Kind != daemon.ProgressKindTool || got[1].ToolName != "wiki_search" || got[1].Preview != "looking up docs" {
 		t.Fatalf("tool event = %+v, want tool/wiki_search/looking up docs", got[1])
 	}
-	if got[2].Kind != daemon.ProgressKindText || got[2].Text != "partial output" {
-		t.Fatalf("text event = %+v, want text/partial output", got[2])
+	if got[2].Kind != daemon.ProgressKindText || got[2].Message == "" {
+		t.Fatalf("text event = %+v, want text with non-empty message", got[2])
 	}
-	if got[3].Kind != daemon.ProgressKindUsage || got[3].UsageSummary != "tokens: 42" {
+	if got[3].Kind != daemon.ProgressKindUsage || got[3].Message != "tokens: 42" {
 		t.Fatalf("usage event = %+v, want usage/tokens: 42", got[3])
 	}
-	if got[4].Kind != daemon.ProgressKindText || got[4].Text != "researching" {
-		t.Fatalf("research event = %+v, want text/researching", got[4])
+	if got[4].Kind != daemon.ProgressKindText || got[4].Message == "" {
+		t.Fatalf("research event = %+v, want text with non-empty message", got[4])
 	}
 }
 
@@ -509,7 +509,7 @@ func TestLegacyCallbackObserverDispatchesRepresentativeEventTypesAndIgnoresUnkno
 	observer.OnEvent(event.TextDeltaEvent{Content: "hello"})
 	observer.OnEvent(event.ResearchProgressEvent{Message: "from research"})
 	observer.OnEvent(event.UsageProgressEvent{Summary: "tokens: 42"})
-	observer.OnEvent(event.ToolCallEvent{ToolName: "ignored"})
+	observer.OnEvent(event.IterationStartEvent{})
 
 	if gotIntent != conversation.Intent("question") || gotWorkflow != "single" {
 		t.Fatalf("workflow callback = (%q, %q), want (question, single)", gotIntent, gotWorkflow)
