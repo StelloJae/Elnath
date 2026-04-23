@@ -187,6 +187,20 @@ func isComplexEnoughForResearch(message string) bool {
 	if trimmed == "" {
 		return false
 	}
+	lower := strings.ToLower(trimmed)
+	// Phase 8.2 Fix 6: Q&A diagnostic short-circuit. Single-step
+	// troubleshooting phrases demote out of research even when the
+	// message is long or carries a URL — research workflow's multi-round
+	// hypothesis machinery is the wrong tool for direct diagnostic
+	// questions and previously fell into empty-response parse fatals
+	// (P01, v36 triage 2026-04-23: 374 chars + URL → research →
+	// hypothesis round 2 parse error). Length is not evidence of
+	// multi-round investigation.
+	for _, phrase := range qaPhraseBlocklist {
+		if strings.Contains(lower, phrase) {
+			return false
+		}
+	}
 	if len(trimmed) >= researchMinMessageLen {
 		return true
 	}
@@ -196,7 +210,6 @@ func isComplexEnoughForResearch(message string) bool {
 	if strings.Contains(trimmed, "http://") || strings.Contains(trimmed, "https://") {
 		return true
 	}
-	lower := strings.ToLower(trimmed)
 	for _, kw := range researchComplexityKeywords {
 		if strings.Contains(lower, kw) {
 			return true
@@ -213,6 +226,23 @@ const (
 	// researchMinWordCount mirrors Hermes's 28-word gate.
 	researchMinWordCount = 28
 )
+
+// qaPhraseBlocklist is the single-step diagnostic short-circuit. A
+// message containing any of these phrases demotes out of the research
+// workflow regardless of length/URL/keyword footprint, because the
+// research workflow (3 hypotheses × up to 20 rounds) is the wrong shape
+// for direct troubleshooting questions. Rooted in P01 (v36 triage,
+// 2026-04-23): "Walk me through what's different..." routed to research
+// and hit an empty-response parse fatal in round 2. Keep this list
+// tight to avoid demoting legitimate investigation prompts.
+var qaPhraseBlocklist = []string{
+	"walk me through",
+	"what's different",
+	"what is different",
+	"how to fix",
+	"how do i fix",
+	"how can i fix",
+}
 
 // researchComplexityKeywords is the investigation-intent block list. When
 // the user explicitly asks for analysis, comparison, audit, or debugging,

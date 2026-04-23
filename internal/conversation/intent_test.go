@@ -474,6 +474,85 @@ func TestLLMClassifierDemotesProjectWithoutImperative(t *testing.T) {
 	}
 }
 
+// TestIsComplexEnoughForResearchQAPhraseBlocklist guards Phase 8.2 Fix 6:
+// single-step diagnostic questions carrying phrases like "walk me through"
+// or "how to fix" must demote out of the research workflow even when
+// length/URL/keyword thresholds would otherwise promote them. P01
+// (v36 triage, 2026-04-23): 374 chars + URL → research → hypothesis
+// round 2 empty-response parse fatal. Length alone is not evidence of
+// multi-round investigation.
+func TestIsComplexEnoughForResearchQAPhraseBlocklist(t *testing.T) {
+	cases := []struct {
+		name    string
+		message string
+		want    bool
+	}{
+		{
+			name:    "p01_verbatim_374_chars_with_url_walk_me_through",
+			message: "I have an API endpoint that works when I call it from my browser but returns 403 when I hit it with `curl -X POST https://api.example.com/v1/items -d '{\"name\":\"x\"}'`. The browser request carries the same session cookie my curl has via `-b cookies.txt`. Walk me through what's different and how to fix the curl invocation. I'll paste the verbose `curl -v` output on request.",
+			want:    false,
+		},
+		{"short_walk_me_through", "Walk me through what's different here.", false},
+		{"how_to_fix_with_long_stack", "My service returns 500 on /login with this stack trace: panic at auth.go:42 null dereference when the upstream session token is nil after the CSRF rotation we shipped last week. How to fix this properly?", false},
+		{"how_do_i_fix_case_insensitive", "HOW DO I FIX this null pointer that keeps crashing the admin panel in production every time the cron task misses a retry?", false},
+		{"what_is_different_variant", "What is different between my curl and the browser when both carry the same cookie via -b cookies.txt?", false},
+		{"research_keyword_keeps_true", "Compare and analyze the tradeoffs between PostgreSQL and MySQL for our workload.", true},
+		{"long_message_without_qa_phrase_keeps_true", strings.Repeat("pipeline throughput optimization candidate ", 8), true},
+		{"empty_stays_false", "", false},
+		{"whitespace_only_stays_false", "   \t\n ", false},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isComplexEnoughForResearch(tc.message); got != tc.want {
+				t.Errorf("isComplexEnoughForResearch(%q) = %v, want %v", tc.message, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestLLMClassifierDemotesQADiagnosticToQuestion guards Phase 8.2 Fix 6
+// end-to-end: even when the LLM classifier labels a single-step
+// diagnostic Q&A as research, the post-classifier depth gate demotes it
+// to question so the research workflow never fires. Mirrors P01 failure
+// mode in the v36 triage report.
+func TestLLMClassifierDemotesQADiagnosticToQuestion(t *testing.T) {
+	cases := []struct {
+		name    string
+		message string
+		want    Intent
+	}{
+		{
+			name:    "walk_me_through_demoted_to_question",
+			message: "I have an API endpoint that works when I call it from my browser but returns 403 when I hit it with curl. Walk me through what's different and how to fix the curl invocation.",
+			want:    IntentQuestion,
+		},
+		{
+			name:    "how_to_fix_demoted_to_question",
+			message: "My service returns 500 on /login with this stack trace: panic at auth.go:42 null dereference when session is nil. How to fix this properly?",
+			want:    IntentQuestion,
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			classifier := NewLLMClassifier()
+			provider := &mockProvider{
+				chatFn: func(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+					return &llm.ChatResponse{Content: `{"intent":"research","confidence":0.9}`}, nil
+				},
+			}
+			got, err := classifier.Classify(context.Background(), provider, tc.message, nil)
+			if err != nil {
+				t.Fatalf("Classify: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("intent for %q = %q, want %q", tc.message, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestHasProjectImperative(t *testing.T) {
 	cases := []struct {
 		name    string
