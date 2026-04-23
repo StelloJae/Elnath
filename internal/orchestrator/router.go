@@ -24,6 +24,19 @@ type Router struct {
 	workflows map[string]Workflow
 }
 
+type routeHandler func(*RoutingContext) string
+
+var routeHandlers = map[conversation.Intent]routeHandler{
+	conversation.IntentComplexTask: routeComplexTask,
+	conversation.IntentProject:     routeProject,
+	conversation.IntentResearch:    routeResearch,
+	conversation.IntentWikiQuery:   routeSingle,
+	conversation.IntentQuestion:    routeSingle,
+	conversation.IntentSimpleTask:  routeSingle,
+	conversation.IntentUnclear:     routeSingle,
+	conversation.IntentChat:        routeSingle,
+}
+
 // NewRouter creates a Router with the provided workflow map.
 // Expected keys: "single", "team", "autopilot", "ralph".
 // Missing keys cause the router to fall back to "single" gracefully.
@@ -64,40 +77,38 @@ func (r *Router) routeName(intent conversation.Intent, ctx *RoutingContext) stri
 	if ctx != nil && ctx.BenchmarkMode {
 		return "single"
 	}
-	switch intent {
-	case conversation.IntentComplexTask:
-		if ctx != nil && ctx.ExistingCode && ctx.VerificationHint {
-			return "ralph"
-		}
-		if ctx != nil && ctx.ExistingCode && ctx.EstimatedFiles >= 1 {
-			return "team"
-		}
-		if ctx != nil && ctx.EstimatedFiles < 4 {
-			return "single"
-		}
+	if handler, ok := routeHandlers[intent]; ok {
+		return handler(ctx)
+	}
+	return "single"
+}
+
+func routeComplexTask(ctx *RoutingContext) string {
+	if ctx != nil && ctx.ExistingCode && ctx.VerificationHint {
+		return "ralph"
+	}
+	if ctx != nil && ctx.ExistingCode && ctx.EstimatedFiles >= 1 {
 		return "team"
-
-	case conversation.IntentProject:
-		if ctx != nil && ctx.ExistingCode {
-			return "team"
-		}
-		return "autopilot"
-
-	case conversation.IntentResearch:
-		return "research"
-
-	case conversation.IntentWikiQuery:
-		return "single"
-
-	case conversation.IntentQuestion,
-		conversation.IntentSimpleTask,
-		conversation.IntentUnclear,
-		conversation.IntentChat:
-		return "single"
-
-	default:
+	}
+	if ctx != nil && ctx.EstimatedFiles < 4 {
 		return "single"
 	}
+	return "team"
+}
+
+func routeProject(ctx *RoutingContext) string {
+	if ctx != nil && ctx.ExistingCode {
+		return "team"
+	}
+	return "autopilot"
+}
+
+func routeResearch(*RoutingContext) string {
+	return "research"
+}
+
+func routeSingle(*RoutingContext) string {
+	return "single"
 }
 
 // get returns the named workflow, falling back to "single" if not found.

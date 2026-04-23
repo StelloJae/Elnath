@@ -280,26 +280,28 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRespon
 	pending := map[string]*CompletedToolCall{}
 	var toolCalls []ToolCall
 
-	err := p.Stream(ctx, req, func(ev StreamEvent) {
-		switch ev.Type {
-		case EventTextDelta:
+	handlers := map[EventType]func(StreamEvent){
+		EventTextDelta: func(ev StreamEvent) {
 			if ev.Content != "" {
 				textParts = append(textParts, ev.Content)
 			}
-		case EventToolUseStart:
+		},
+		EventToolUseStart: func(ev StreamEvent) {
 			if ev.ToolCall != nil {
 				pending[ev.ToolCall.ID] = &CompletedToolCall{
 					ID:   ev.ToolCall.ID,
 					Name: ev.ToolCall.Name,
 				}
 			}
-		case EventToolUseDelta:
+		},
+		EventToolUseDelta: func(ev StreamEvent) {
 			if ev.ToolCall != nil {
 				if tc, ok := pending[ev.ToolCall.ID]; ok {
 					tc.Input += ev.ToolCall.Input
 				}
 			}
-		case EventToolUseDone:
+		},
+		EventToolUseDone: func(ev StreamEvent) {
 			if ev.ToolCall != nil {
 				if tc, ok := pending[ev.ToolCall.ID]; ok {
 					toolCalls = append(toolCalls, ToolCall{
@@ -310,10 +312,17 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRespon
 					delete(pending, ev.ToolCall.ID)
 				}
 			}
-		case EventDone:
+		},
+		EventDone: func(ev StreamEvent) {
 			if ev.Usage != nil {
 				usageStats = *ev.Usage
 			}
+		},
+	}
+
+	err := p.Stream(ctx, req, func(ev StreamEvent) {
+		if handler, ok := handlers[ev.Type]; ok {
+			handler(ev)
 		}
 	})
 	if err != nil {

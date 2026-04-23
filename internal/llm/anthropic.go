@@ -681,36 +681,45 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRes
 	// Track in-progress tool calls keyed by ID.
 	pending := map[string]*CompletedToolCall{}
 
-	err := p.Stream(ctx, req, func(ev StreamEvent) {
-		switch ev.Type {
-		case EventTextDelta:
+	handlers := map[EventType]func(StreamEvent){
+		EventTextDelta: func(ev StreamEvent) {
 			if ev.Content != "" {
 				textParts = append(textParts, ev.Content)
 			}
-		case EventToolUseStart:
+		},
+		EventToolUseStart: func(ev StreamEvent) {
 			if ev.ToolCall != nil {
 				pending[ev.ToolCall.ID] = &CompletedToolCall{
 					ID:   ev.ToolCall.ID,
 					Name: ev.ToolCall.Name,
 				}
 			}
-		case EventToolUseDelta:
+		},
+		EventToolUseDelta: func(ev StreamEvent) {
 			if ev.ToolCall != nil {
 				if tc, ok := pending[ev.ToolCall.ID]; ok {
 					tc.Input += ev.ToolCall.Input
 				}
 			}
-		case EventToolUseDone:
+		},
+		EventToolUseDone: func(ev StreamEvent) {
 			if ev.ToolCall != nil {
 				if tc, ok := pending[ev.ToolCall.ID]; ok {
 					toolCalls = append(toolCalls, *tc)
 					delete(pending, ev.ToolCall.ID)
 				}
 			}
-		case EventDone:
+		},
+		EventDone: func(ev StreamEvent) {
 			if ev.Usage != nil {
 				usageStats = *ev.Usage
 			}
+		},
+	}
+
+	err := p.Stream(ctx, req, func(ev StreamEvent) {
+		if handler, ok := handlers[ev.Type]; ok {
+			handler(ev)
 		}
 	})
 	if err != nil {

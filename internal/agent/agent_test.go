@@ -603,6 +603,97 @@ func TestRunRetriesOnEmptyStreamAndEmptyChatFallback(t *testing.T) {
 	}
 }
 
+func TestStreamEventDispatch(t *testing.T) {
+	reg := tools.NewRegistry()
+
+	t.Run("known event types emit expected sink events", func(t *testing.T) {
+		var got []event.Event
+		p := &mockProvider{
+			streamFn: func(ctx context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
+				cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: "hello"})
+				cb(llm.StreamEvent{Type: llm.EventToolUseStart, ToolCall: &llm.ToolUseBlock{ID: "tool-1", Name: "lookup"}})
+				cb(llm.StreamEvent{Type: llm.EventToolUseDelta, ToolCall: &llm.ToolUseBlock{ID: "tool-1", Input: `{"q":"go"}`}})
+				cb(llm.StreamEvent{Type: llm.EventToolUseDone, ToolCall: &llm.ToolUseBlock{ID: "tool-1", Name: "lookup", Input: `{"q":"golang"}`}})
+				cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{InputTokens: 3, OutputTokens: 5}})
+				return nil
+			},
+		}
+
+		a := New(p, reg)
+		msg, usage, err := a.stream(context.Background(), llm.ChatRequest{}, event.OnEventToSink(func(ev event.Event) {
+			got = append(got, ev)
+		}))
+		if err != nil {
+			t.Fatalf("stream: %v", err)
+		}
+
+		if len(got) != 5 {
+			t.Fatalf("len(got) = %d, want 5", len(got))
+		}
+		if ev, ok := got[0].(event.TextDeltaEvent); !ok || ev.Content != "hello" {
+			t.Fatalf("got[0] = %#v, want TextDeltaEvent with content hello", got[0])
+		}
+		if ev, ok := got[1].(event.ToolUseStartEvent); !ok || ev.ID != "tool-1" || ev.Name != "lookup" {
+			t.Fatalf("got[1] = %#v, want ToolUseStartEvent for tool-1/lookup", got[1])
+		}
+		if ev, ok := got[2].(event.ToolUseDeltaEvent); !ok || ev.ID != "tool-1" || ev.Input != `{"q":"go"}` {
+			t.Fatalf("got[2] = %#v, want ToolUseDeltaEvent with partial input", got[2])
+		}
+		if ev, ok := got[3].(event.ToolUseDoneEvent); !ok || ev.ID != "tool-1" || ev.Name != "lookup" || ev.Input != `{"q":"golang"}` {
+			t.Fatalf("got[3] = %#v, want ToolUseDoneEvent with final input", got[3])
+		}
+		if ev, ok := got[4].(event.StreamDoneEvent); !ok || ev.Usage.InputTokens != 3 || ev.Usage.OutputTokens != 5 {
+			t.Fatalf("got[4] = %#v, want StreamDoneEvent with usage", got[4])
+		}
+
+		if msg.Text() != "hello" {
+			t.Fatalf("msg.Text() = %q, want hello", msg.Text())
+		}
+		if len(msg.ToolCalls()) != 1 {
+			t.Fatalf("len(msg.ToolCalls()) = %d, want 1", len(msg.ToolCalls()))
+		}
+		if tc := msg.ToolCalls()[0]; tc.ID != "tool-1" || tc.Name != "lookup" || tc.Input != `{"q":"golang"}` {
+			t.Fatalf("tool call = %#v, want accumulated completed tool call", tc)
+		}
+		if usage.InputTokens != 3 || usage.OutputTokens != 5 {
+			t.Fatalf("usage = %#v, want input=3 output=5", usage)
+		}
+	})
+
+	t.Run("unknown event type is ignored", func(t *testing.T) {
+		var got []event.Event
+		p := &mockProvider{
+			streamFn: func(ctx context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
+				cb(llm.StreamEvent{Type: llm.StreamEventType("unknown")})
+				cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: "ok"})
+				cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{InputTokens: 1, OutputTokens: 1}})
+				return nil
+			},
+		}
+
+		a := New(p, reg)
+		msg, _, err := a.stream(context.Background(), llm.ChatRequest{}, event.OnEventToSink(func(ev event.Event) {
+			got = append(got, ev)
+		}))
+		if err != nil {
+			t.Fatalf("stream: %v", err)
+		}
+
+		if len(got) != 2 {
+			t.Fatalf("len(got) = %d, want 2", len(got))
+		}
+		if _, ok := got[0].(event.TextDeltaEvent); !ok {
+			t.Fatalf("got[0] = %#v, want TextDeltaEvent", got[0])
+		}
+		if _, ok := got[1].(event.StreamDoneEvent); !ok {
+			t.Fatalf("got[1] = %#v, want StreamDoneEvent", got[1])
+		}
+		if msg.Text() != "ok" {
+			t.Fatalf("msg.Text() = %q, want ok", msg.Text())
+		}
+	})
+}
+
 func TestRunAddsNudgeAfterEmptyResponse(t *testing.T) {
 	reg := tools.NewRegistry()
 	streamCalls := 0

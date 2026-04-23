@@ -25,6 +25,57 @@ func newTestRouter() *Router {
 	})
 }
 
+func TestRouteHandlersRepresentativeDispatch(t *testing.T) {
+	r := newTestRouter()
+	tests := []struct {
+		name   string
+		intent conversation.Intent
+		ctx    *RoutingContext
+		want   string
+	}{
+		{
+			name:   "question uses single handler",
+			intent: conversation.IntentQuestion,
+			want:   "single",
+		},
+		{
+			name:   "complex task uses complex handler",
+			intent: conversation.IntentComplexTask,
+			ctx:    &RoutingContext{EstimatedFiles: 4},
+			want:   "team",
+		},
+		{
+			name:   "project uses project handler",
+			intent: conversation.IntentProject,
+			want:   "autopilot",
+		},
+		{
+			name:   "research uses research handler",
+			intent: conversation.IntentResearch,
+			want:   "research",
+		},
+		{
+			name:   "wiki query uses single handler",
+			intent: conversation.IntentWikiQuery,
+			want:   "single",
+		},
+		{
+			name:   "chat uses single handler",
+			intent: conversation.IntentChat,
+			want:   "single",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wf := r.Route(tt.intent, tt.ctx, nil)
+			if wf.Name() != tt.want {
+				t.Fatalf("intent %q got %q, want %q", tt.intent, wf.Name(), tt.want)
+			}
+		})
+	}
+}
+
 func TestRouteQuestion(t *testing.T) {
 	r := newTestRouter()
 	wf := r.Route(conversation.IntentQuestion, nil, nil)
@@ -114,11 +165,24 @@ func TestRouteChat(t *testing.T) {
 	}
 }
 
-func TestRouteUnknown(t *testing.T) {
+func TestRouteUnknownIntentFallsBackToSingle(t *testing.T) {
 	r := newTestRouter()
 	wf := r.Route(conversation.Intent("completely_unknown"), nil, nil)
 	if wf.Name() != "single" {
 		t.Errorf("got %q, want %q", wf.Name(), "single")
+	}
+}
+
+func TestRouteUnmappedKnownIntentFallsBackToSingle(t *testing.T) {
+	r := newTestRouter()
+	delete(routeHandlers, conversation.IntentChat)
+	defer func() {
+		routeHandlers[conversation.IntentChat] = routeSingle
+	}()
+
+	wf := r.Route(conversation.IntentChat, nil, nil)
+	if wf.Name() != "single" {
+		t.Fatalf("got %q, want %q", wf.Name(), "single")
 	}
 }
 
