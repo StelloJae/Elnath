@@ -2,8 +2,10 @@ package llm
 
 import (
 	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseCodexSSE_TextDoneFallback(t *testing.T) {
@@ -89,12 +91,6 @@ func TestBuildCodexRequestUsesCallIDForFunctionHistory(t *testing.T) {
 	}
 }
 
-// TestBuildCodexRequest_ToolUseResultPairStructure inspects the exact
-// payload structure produced when the chat tool loop re-submits an
-// assistant tool_use followed by its tool_result. Dogfood 2026-04-21
-// 15:16 hit a Codex 400 "No tool call found for function call output
-// with call_id ..." — this test pins the serialisation so a regression
-// in call_id propagation or item ordering fails here first.
 func TestBuildCodexRequest_ToolUseResultPairStructure(t *testing.T) {
 	const wantCallID = "call_wH9JVxyuUUHiADnStfgOacFM"
 	body, err := buildCodexRequest(ChatRequest{
@@ -122,12 +118,6 @@ func TestBuildCodexRequest_ToolUseResultPairStructure(t *testing.T) {
 		t.Fatalf("unmarshal payload: %v; raw=%s", err, body)
 	}
 
-	t.Logf("codex input payload:")
-	for i, item := range payload.Input {
-		b, _ := json.Marshal(item)
-		t.Logf("  [%d] %s", i, b)
-	}
-
 	var callIdx, outputIdx = -1, -1
 	for i, item := range payload.Input {
 		typ, _ := item["type"].(string)
@@ -147,6 +137,50 @@ func TestBuildCodexRequest_ToolUseResultPairStructure(t *testing.T) {
 	}
 	if callIdx >= outputIdx {
 		t.Fatalf("function_call (idx=%d) must precede function_call_output (idx=%d)", callIdx, outputIdx)
+	}
+}
+
+func TestNewHTTPClientWithPerHostCap_DefaultsAndCallerContracts(t *testing.T) {
+	client := newHTTPClientWithPerHostCap(42)
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("Transport type = %T, want *http.Transport", client.Transport)
+	}
+	if client.Timeout != defaultTimeout(42) {
+		t.Fatalf("Timeout = %v, want %v", client.Timeout, defaultTimeout(42))
+	}
+	if transport.MaxConnsPerHost != defaultHTTPMaxConnsPerHost {
+		t.Fatalf("MaxConnsPerHost = %d, want %d", transport.MaxConnsPerHost, defaultHTTPMaxConnsPerHost)
+	}
+	if transport.MaxIdleConnsPerHost != defaultHTTPMaxConnsPerHost {
+		t.Fatalf("MaxIdleConnsPerHost = %d, want %d", transport.MaxIdleConnsPerHost, defaultHTTPMaxConnsPerHost)
+	}
+
+	openai := NewOpenAIProvider("test-key", "gpt-5.4")
+	openaiTransport, ok := openai.client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("OpenAI client transport type = %T, want *http.Transport", openai.client.Transport)
+	}
+	if openaiTransport.MaxConnsPerHost != defaultHTTPMaxConnsPerHost {
+		t.Fatalf("OpenAI MaxConnsPerHost = %d, want %d", openaiTransport.MaxConnsPerHost, defaultHTTPMaxConnsPerHost)
+	}
+	if openaiTransport.MaxIdleConnsPerHost != openaiTransport.MaxConnsPerHost {
+		t.Fatalf("OpenAI MaxIdleConnsPerHost = %d, want match MaxConnsPerHost=%d", openaiTransport.MaxIdleConnsPerHost, openaiTransport.MaxConnsPerHost)
+	}
+
+	codex := NewCodexOAuthProvider("gpt-5.4", WithCodexOAuthTimeout(42*time.Second))
+	codexTransport, ok := codex.client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("Codex client transport type = %T, want *http.Transport", codex.client.Transport)
+	}
+	if codex.client.Timeout != defaultTimeout(42) {
+		t.Fatalf("Codex timeout = %v, want %v", codex.client.Timeout, defaultTimeout(42))
+	}
+	if codexTransport.MaxConnsPerHost != defaultHTTPMaxConnsPerHost {
+		t.Fatalf("Codex MaxConnsPerHost = %d, want %d", codexTransport.MaxConnsPerHost, defaultHTTPMaxConnsPerHost)
+	}
+	if codexTransport.MaxIdleConnsPerHost != codexTransport.MaxConnsPerHost {
+		t.Fatalf("Codex MaxIdleConnsPerHost = %d, want match MaxConnsPerHost=%d", codexTransport.MaxIdleConnsPerHost, codexTransport.MaxConnsPerHost)
 	}
 }
 
