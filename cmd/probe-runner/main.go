@@ -50,6 +50,11 @@ type metrics struct {
 	Duration         time.Duration
 	RawResultLine    string
 	Error            string
+	// ReplyText holds the assistant-visible final text — populated only
+	// when --head2head capture is requested. CC fills from the stream
+	// json `result.result` field; Elnath fills by stripping log /
+	// summary noise from stdout.
+	ReplyText string
 }
 
 type result struct {
@@ -62,10 +67,11 @@ type result struct {
 func main() {
 	corpus := flag.String("corpus", ".omc/research/probe-corpus-2026-04-22.md", "probe corpus markdown path")
 	output := flag.String("output", ".omc/research/claude-code-baseline-"+time.Now().Format("2006-01-02")+".md", "baseline report output path")
-	only := flag.String("probe", "", "run only this probe ID (smoke test, e.g. P01)")
+	only := flag.String("probe", "", "run only listed probe IDs (comma-separated, e.g. P02,P03,P09)")
 	sides := flag.String("sides", "cc,elnath", "comma-separated sides: cc, elnath, or both")
 	delaySec := flag.Int("delay", 10, "seconds to wait between probes (rate-limit protection)")
 	elnathBinary := flag.String("elnath", "./elnath", "path to elnath binary")
+	head2head := flag.String("head2head", "", "if set, also write side-by-side transcript markdown to this path")
 	flag.Parse()
 
 	probes, err := parseCorpus(*corpus)
@@ -73,11 +79,12 @@ func main() {
 		fatalf("probe-runner: parse corpus %s: %v", *corpus, err)
 	}
 	if *only != "" {
-		probes = filterByID(probes, *only)
+		probes = filterByIDs(probes, *only)
 		if len(probes) == 0 {
-			fatalf("probe-runner: no probe matched ID %q", *only)
+			fatalf("probe-runner: no probe matched IDs %q", *only)
 		}
 	}
+	captureReply := *head2head != ""
 
 	runCC := strings.Contains(*sides, "cc")
 	runElnath := strings.Contains(*sides, "elnath")
@@ -90,10 +97,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "probe-runner: [%d/%d] running %s (%s/%s)\n", i+1, len(probes), p.ID, p.Category, p.Language)
 		r := result{Probe: p, RunAt: time.Now()}
 		if runCC {
-			r.CC = runCCProbe(p)
+			r.CC = runCCProbe(p, captureReply)
 		}
 		if runElnath {
-			r.Elnath = runElnathProbe(p, *elnathBinary)
+			r.Elnath = runElnathProbe(p, *elnathBinary, captureReply)
 		}
 		results = append(results, r)
 		if i < len(probes)-1 && *delaySec > 0 {
@@ -105,6 +112,12 @@ func main() {
 		fatalf("probe-runner: write report: %v", err)
 	}
 	fmt.Fprintf(os.Stderr, "probe-runner: done — %d results written to %s\n", len(results), *output)
+	if captureReply {
+		if err := writeHead2Head(*head2head, results); err != nil {
+			fatalf("probe-runner: write head2head: %v", err)
+		}
+		fmt.Fprintf(os.Stderr, "probe-runner: head2head transcripts at %s\n", *head2head)
+	}
 }
 
 var tableRowRE = regexp.MustCompile(`^\|\s*(P\d+)\s*\|\s*([a-z/-]+)\s*\|\s*([a-z/.0-9+-]+)\s*\|`)
@@ -173,20 +186,31 @@ func parseCorpus(path string) ([]probe, error) {
 	return out, nil
 }
 
-func filterByID(probes []probe, id string) []probe {
-	for _, p := range probes {
-		if p.ID == id {
-			return []probe{p}
+// filterByIDs accepts a comma-separated list of probe IDs and returns
+// the subset, preserving corpus order. Empty list => no filter.
+func filterByIDs(probes []probe, csv string) []probe {
+	wanted := map[string]bool{}
+	for _, id := range strings.Split(csv, ",") {
+		if id = strings.TrimSpace(id); id != "" {
+			wanted[id] = true
 		}
 	}
-	return nil
+	var out []probe
+	for _, p := range probes {
+		if wanted[p.ID] {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // runCCProbe executes `claude -p --output-format stream-json --verbose
 // --no-session-persistence "$prompt"` and extracts the final
 // `{"type":"result",...}` line which carries num_turns, duration, usage,
-// and permission_denials in one structured payload.
-func runCCProbe(p probe) metrics {
+// and permission_denials in one structured payload. When captureReply
+// is true, also fills metrics.ReplyText from the result event's
+// `result` field for head-to-head rendering.
+func runCCProbe(p probe, captureReply bool) metrics {
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
@@ -200,11 +224,11 @@ func runCCProbe(p probe) metrics {
 		m.Error = fmt.Sprintf("cc run failed: %v; stderr=%s", err, stderr.String())
 		return m
 	}
-	parseCCStreamJSON(&m, stdout)
+	parseCCStreamJSON(&m, stdout, captureReply)
 	return m
 }
 
-func parseCCStreamJSON(m *metrics, body []byte) {
+func parseCCStreamJSON(m *metrics, body []byte, captureReply bool) {
 	scanner := bufio.NewScanner(strings.NewReader(string(body)))
 	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
 	for scanner.Scan() {
@@ -276,6 +300,9 @@ func parseCCStreamJSON(m *metrics, body []byte) {
 					m.Duration = time.Duration(r.Duration) * time.Millisecond
 				}
 				m.RawResultLine = string(line)
+				if captureReply {
+					m.ReplyText = r.Result
+				}
 				if r.IsError {
 					m.Error = fmt.Sprintf("cc result is_error=true terminal=%s result=%s", r.TerminalReason, truncate(r.Result, 200))
 				}
@@ -287,13 +314,20 @@ func parseCCStreamJSON(m *metrics, body []byte) {
 // runElnathProbe pipes the prompt into `elnath run --non-interactive`
 // and parses the structured log stream + token-summary line. Elnath's
 // non-interactive mode exits on stdin EOF, so a single prompt completes
-// the session cleanly.
-func runElnathProbe(p probe, binary string) metrics {
+// the session cleanly. When captureReply is true, also extracts the
+// assistant reply text by stripping log noise.
+func runElnathProbe(p probe, binary string, captureReply bool) metrics {
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, binary, "run", "--non-interactive")
 	cmd.Stdin = strings.NewReader(p.Prompt + "\n")
+	// ELNATH_LOG_LEVEL=error keeps the assistant reply readable for
+	// head-to-head capture without losing the metric-bearing
+	// `[tokens: ...]` summary line (which prints unconditionally).
+	if captureReply {
+		cmd.Env = append(os.Environ(), "ELNATH_LOG_LEVEL=error")
+	}
 	var combined strings.Builder
 	cmd.Stdout = &combined
 	cmd.Stderr = &combined
@@ -303,7 +337,35 @@ func runElnathProbe(p probe, binary string) metrics {
 		m.Error = fmt.Sprintf("elnath run failed: %v", err)
 	}
 	parseElnathOutput(&m, combined.String())
+	if captureReply {
+		m.ReplyText = extractElnathReply(combined.String())
+	}
 	return m
+}
+
+// extractElnathReply strips Elnath's log/banner/marker noise from
+// stdout and returns just the assistant's reply text.
+func extractElnathReply(body string) string {
+	var keep []string
+	for _, l := range strings.Split(body, "\n") {
+		t := strings.TrimSpace(l)
+		switch {
+		case t == "":
+			keep = append(keep, "")
+		case strings.HasPrefix(t, "time="):
+		case strings.HasPrefix(t, "elnath "):
+		case strings.HasPrefix(t, "Type your message"):
+		case strings.HasPrefix(t, "> "):
+		case t == ">":
+		case strings.HasPrefix(t, "[") && strings.HasSuffix(t, "]") && (strings.Contains(t, "→") || strings.HasPrefix(t, "[tokens:")):
+		case strings.Contains(l, "wiki git: committed"):
+		case strings.Contains(l, "session auto-documented"):
+		default:
+			keep = append(keep, l)
+		}
+	}
+	out := strings.TrimSpace(strings.Join(keep, "\n"))
+	return out
 }
 
 var (
@@ -476,6 +538,72 @@ func collectMeanOut(results []result) (cc, el int) {
 		el = elOut / elT
 	}
 	return
+}
+
+// writeHead2Head emits a single markdown file with each probe rendered
+// as its own section: the prompt, the CC reply, the Elnath reply, and
+// a short metric line. Designed for partner read-through judgment of
+// the qualitative gap between the two sides.
+func writeHead2Head(path string, results []result) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	w := bufio.NewWriter(f)
+	defer w.Flush()
+	fmt.Fprintf(w, "# Head-to-head transcripts — %s\n\n", time.Now().UTC().Format(time.RFC3339))
+	fmt.Fprintf(w, "Probes: %d. Read each section to judge whether Elnath's reply matches CC's quality.\n\n", len(results))
+	for _, r := range results {
+		fmt.Fprintf(w, "---\n\n## %s — %s / %s\n\n", r.Probe.ID, r.Probe.Category, r.Probe.Language)
+		fmt.Fprintln(w, "### Prompt")
+		fmt.Fprintln(w, "")
+		fmt.Fprintln(w, indent(r.Probe.Prompt, "> "))
+		fmt.Fprintln(w, "")
+		fmt.Fprintf(w, "### Claude Code (Anthropic Opus 4.7 [1m]) — %d turns / %d tools / %s\n\n",
+			r.CC.Turns, r.CC.ToolUses, r.CC.Duration.Truncate(time.Second))
+		fmt.Fprintln(w, replyBlock(r.CC.ReplyText, r.CC.Error))
+		fmt.Fprintln(w, "")
+		fmt.Fprintf(w, "### Elnath (Codex / current default) — %d turns / %d tools / %s\n\n",
+			r.Elnath.Turns, r.Elnath.ToolUses, r.Elnath.Duration.Truncate(time.Second))
+		fmt.Fprintln(w, replyBlock(r.Elnath.ReplyText, r.Elnath.Error))
+		fmt.Fprintln(w, "")
+	}
+	fmt.Fprintln(w, "---\n## Partner judgment template\n")
+	fmt.Fprintln(w, "Per probe, fill one of:")
+	fmt.Fprintln(w, "- **OK** — Elnath quality acceptable")
+	fmt.Fprintln(w, "- **VETO: <reason>** — what's missing or wrong")
+	fmt.Fprintln(w, "")
+	for _, r := range results {
+		fmt.Fprintf(w, "- %s: \n", r.Probe.ID)
+	}
+	return nil
+}
+
+func indent(text, prefix string) string {
+	var sb strings.Builder
+	for i, l := range strings.Split(text, "\n") {
+		if i > 0 {
+			sb.WriteByte('\n')
+		}
+		sb.WriteString(prefix)
+		sb.WriteString(l)
+	}
+	return sb.String()
+}
+
+func replyBlock(text, errStr string) string {
+	if errStr != "" {
+		return "**(run failed: " + errStr + ")**"
+	}
+	t := strings.TrimSpace(text)
+	if t == "" {
+		return "_(empty reply — model produced no text content)_"
+	}
+	return t
 }
 
 func cacheHitLine(results []result) string {
