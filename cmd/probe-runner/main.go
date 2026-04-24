@@ -71,8 +71,25 @@ func main() {
 	sides := flag.String("sides", "cc,elnath", "comma-separated sides: cc, elnath, or both")
 	delaySec := flag.Int("delay", 10, "seconds to wait between probes (rate-limit protection)")
 	elnathBinary := flag.String("elnath", "./elnath", "path to elnath binary")
+	claudeBinary := flag.String("claude", "claude", "path or name of claude CLI binary")
 	head2head := flag.String("head2head", "", "if set, also write side-by-side transcript markdown to this path")
 	flag.Parse()
+
+	// Fix 8.1: resolve both binaries to absolute/PATH-anchored paths
+	// BEFORE any per-probe cwd isolation kicks in. Relative specs like
+	// the default `-elnath=./elnath` would otherwise fail with
+	// `fork/exec ./elnath: no such file or directory` once cmd.Dir is
+	// swapped to the temp workdir.
+	if resolved, err := resolveExecutablePath(*elnathBinary); err != nil {
+		fatalf("probe-runner: resolve elnath binary %q: %v", *elnathBinary, err)
+	} else {
+		*elnathBinary = resolved
+	}
+	if resolved, err := resolveExecutablePath(*claudeBinary); err != nil {
+		fatalf("probe-runner: resolve claude binary %q: %v", *claudeBinary, err)
+	} else {
+		*claudeBinary = resolved
+	}
 
 	probes, err := parseCorpus(*corpus)
 	if err != nil {
@@ -97,7 +114,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "probe-runner: [%d/%d] running %s (%s/%s)\n", i+1, len(probes), p.ID, p.Category, p.Language)
 		r := result{Probe: p, RunAt: time.Now()}
 		if runCC {
-			r.CC = runCCProbe(p, captureReply)
+			r.CC = runCCProbe(p, *claudeBinary, captureReply)
 		}
 		if runElnath {
 			r.Elnath = runElnathProbe(p, *elnathBinary, captureReply)
@@ -204,6 +221,40 @@ func filterByIDs(probes []probe, csv string) []probe {
 	return out
 }
 
+// resolveExecutablePath turns an --elnath / hard-coded CC binary spec
+// into an absolute path that stays valid even after cmd.Dir is changed
+// to a probe-scoped temp directory. Three shapes are accepted:
+//
+//   - absolute path: returned unchanged.
+//   - bare command ("claude", "elnath"): resolved through $PATH via
+//     exec.LookPath so `-elnath=elnath` does not get mis-anchored under
+//     the caller's cwd.
+//   - relative path with a separator ("./elnath", "../bin/elnath"):
+//     anchored to the current working directory before cwd isolation.
+//
+// Fix 8.1 — required because Fix 8 (per-probe cwd isolation) exposed
+// the default `-elnath=./elnath` value as unresolvable from a tempDir.
+func resolveExecutablePath(spec string) (string, error) {
+	if spec == "" {
+		return "", fmt.Errorf("empty executable path")
+	}
+	if filepath.IsAbs(spec) {
+		return spec, nil
+	}
+	if filepath.Base(spec) == spec {
+		resolved, err := exec.LookPath(spec)
+		if err != nil {
+			return "", fmt.Errorf("look up %q in PATH: %w", spec, err)
+		}
+		return resolved, nil
+	}
+	abs, err := filepath.Abs(spec)
+	if err != nil {
+		return "", fmt.Errorf("make %q absolute: %w", spec, err)
+	}
+	return abs, nil
+}
+
 // withProbeWorkDir runs fn inside a freshly created temp directory so
 // that a single probe cannot pollute the caller's working tree. Each
 // invocation gets its own directory — callers must never share between
@@ -252,13 +303,13 @@ func sanitizeProbeID(id string) string {
 // and permission_denials in one structured payload. When captureReply
 // is true, also fills metrics.ReplyText from the result event's
 // `result` field for head-to-head rendering.
-func runCCProbe(p probe, captureReply bool) metrics {
+func runCCProbe(p probe, binary string, captureReply bool) metrics {
 	start := time.Now()
 	var m metrics
 	if werr := withProbeWorkDir(p.ID, func(dir string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
-		cmd := exec.CommandContext(ctx, "claude", "-p", "--output-format", "stream-json",
+		cmd := exec.CommandContext(ctx, binary, "-p", "--output-format", "stream-json",
 			"--verbose", "--no-session-persistence", p.Prompt)
 		cmd.Dir = dir
 		var stderr strings.Builder
