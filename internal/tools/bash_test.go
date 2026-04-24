@@ -5,8 +5,12 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func makeBashParams(t *testing.T, command string, extraFields map[string]any) json.RawMessage {
@@ -566,6 +570,165 @@ func TestBash_EnvPinsShellAndTerm(t *testing.T) {
 	if !strings.Contains(res.Output, "dumb|/bin/bash") {
 		t.Errorf("TERM|SHELL = %q, want contains 'dumb|/bin/bash'", res.Output)
 	}
+}
+
+// TestBash_ProcessGroup_ChildKilledOnTimeout verifies that a
+// background child spawned by the bash command does not become an
+// orphan when the tool times out. The sleep child must be reaped as
+// part of the session's process group. P0-4 process group cleanup.
+func TestBash_ProcessGroup_ChildKilledOnTimeout(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process group cleanup deferred on Windows (TODO: Job Objects)")
+	}
+	root := t.TempDir()
+	guard := NewPathGuard(root, nil)
+	tool := NewBashTool(guard)
+
+	ctx := WithSessionID(context.Background(), "pgrp-child")
+	sessionDir, err := guard.EnsureSessionWorkDir("pgrp-child")
+	if err != nil {
+		t.Fatalf("ensure session: %v", err)
+	}
+	realSession, err := filepath.EvalSymlinks(sessionDir)
+	if err != nil {
+		t.Fatalf("resolve session: %v", err)
+	}
+	pidFile := filepath.Join(realSession, "child.pid")
+
+	script := `sleep 60 & echo $! > child.pid; wait`
+	res, err := tool.Execute(ctx, makeBashParams(t, script, map[string]any{"timeout_ms": 300}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected timeout error; got: %s", res.Output)
+	}
+	if !strings.Contains(res.Output, "timed out") {
+		t.Errorf("expected 'timed out' in output; got: %s", res.Output)
+	}
+
+	pidBytes, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatalf("read pid file: %v", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(pidBytes)))
+	if err != nil {
+		t.Fatalf("parse pid: %v", err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := syscall.Kill(pid, 0); err != nil {
+			return // ESRCH — child reaped
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	_ = syscall.Kill(pid, syscall.SIGKILL)
+	t.Fatalf("child pid %d still alive after timeout; process group cleanup failed", pid)
+}
+
+// TestBash_ProcessGroup_NormalCommandUnaffected ensures that adding
+// process group handling does not change the happy-path exit
+// semantics.
+func TestBash_ProcessGroup_NormalCommandUnaffected(t *testing.T) {
+	tool := NewBashTool(NewPathGuard(t.TempDir(), nil))
+	res, err := tool.Execute(context.Background(), makeBashParams(t, "echo ok", nil))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.Output)
+	}
+	if !strings.Contains(res.Output, "STDOUT:\nok") {
+		t.Errorf("expected STDOUT:\\nok in output; got: %s", res.Output)
+	}
+}
+
+// TestBash_ProcessGroup_NonZeroExitStillRecoverable confirms that
+// P0-4 does not regress Lane 2.2: non-zero exits remain recoverable
+// tool_result(IsError=true), not fatal workflow errors.
+func TestBash_ProcessGroup_NonZeroExitStillRecoverable(t *testing.T) {
+	tool := NewBashTool(NewPathGuard(t.TempDir(), nil))
+	res, err := tool.Execute(context.Background(), makeBashParams(t, "exit 42", nil))
+	if err != nil {
+		t.Fatalf("Execute err must stay nil on non-zero exit: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("exit 42 should surface as IsError=true; got success: %s", res.Output)
+	}
+}
+
+// TestBash_ProcessGroup_TimeoutMetadata documents the timeout
+// message shape: the agent should see both the duration and that
+// the child process tree was cleaned up.
+func TestBash_ProcessGroup_TimeoutMetadata(t *testing.T) {
+	tool := NewBashTool(NewPathGuard(t.TempDir(), nil))
+	res, err := tool.Execute(context.Background(), makeBashParams(t, "sleep 10", map[string]any{"timeout_ms": 200}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected timeout error; got: %s", res.Output)
+	}
+	if !strings.Contains(res.Output, "timed out") {
+		t.Errorf("output %q should mention 'timed out'", res.Output)
+	}
+	if !strings.Contains(res.Output, "process group terminated") {
+		t.Errorf("output %q should mention 'process group terminated'", res.Output)
+	}
+}
+
+// TestBash_ProcessGroup_SigkillEscalation verifies that a command
+// which ignores SIGTERM is still killed by the follow-up SIGKILL
+// after the grace period. The parent shell traps TERM/INT and loops
+// forever; only SIGKILL will take it down.
+func TestBash_ProcessGroup_SigkillEscalation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("SIGKILL escalation not modeled on Windows")
+	}
+	root := t.TempDir()
+	guard := NewPathGuard(root, nil)
+	tool := NewBashTool(guard)
+
+	ctx := WithSessionID(context.Background(), "pgrp-escal")
+	sessionDir, err := guard.EnsureSessionWorkDir("pgrp-escal")
+	if err != nil {
+		t.Fatalf("ensure session: %v", err)
+	}
+	realSession, err := filepath.EvalSymlinks(sessionDir)
+	if err != nil {
+		t.Fatalf("resolve session: %v", err)
+	}
+	pidFile := filepath.Join(realSession, "parent.pid")
+
+	script := `trap "" TERM INT; echo $$ > parent.pid; while :; do sleep 1; done`
+	res, err := tool.Execute(ctx, makeBashParams(t, script, map[string]any{"timeout_ms": 200}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected timeout error; got: %s", res.Output)
+	}
+
+	pidBytes, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatalf("read pid file: %v", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(pidBytes)))
+	if err != nil {
+		t.Fatalf("parse pid: %v", err)
+	}
+
+	// bashKillGrace (2s) + slack for reap.
+	deadline := time.Now().Add(6 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := syscall.Kill(pid, 0); err != nil {
+			return // ESRCH — parent killed via SIGKILL escalation
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	_ = syscall.Kill(pid, syscall.SIGKILL)
+	t.Fatalf("parent pid %d survived SIGTERM+grace+SIGKILL path", pid)
 }
 
 func TestAnalyzeCommand(t *testing.T) {

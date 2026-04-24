@@ -17,6 +17,9 @@ import (
 const (
 	bashDefaultTimeout = 120 * time.Second
 	bashMaxTimeout     = 600 * time.Second
+	// bashKillGrace is the time the bash tool waits after SIGTERM
+	// before escalating to SIGKILL on the command's process group.
+	bashKillGrace = 2 * time.Second
 )
 
 // BashTool executes shell commands with a timeout and AST-based safety analysis.
@@ -127,29 +130,55 @@ func (t *BashTool) Execute(ctx context.Context, params json.RawMessage) (*Result
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(execCtx, "bash", "-c", p.Command)
+	cmd := exec.Command("bash", "-c", p.Command)
 	cmd.Dir = workDir
 	cmd.Env = cleanBashEnv(os.Environ(), sessionDir, workDir)
+	configureProcessCleanup(cmd)
 
 	stdout := newCappedOutput(bashOutputCapPerStream)
 	stderr := newCappedOutput(bashOutputCapPerStream)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 
-	err = cmd.Run()
+	if startErr := cmd.Start(); startErr != nil {
+		return &Result{
+			Output:  fmt.Sprintf("bash start failed: %v", startErr),
+			IsError: true,
+		}, nil
+	}
 
-	if execCtx.Err() == context.DeadlineExceeded {
-		return ErrorResult(fmt.Sprintf("command timed out after %s", timeout)), nil
+	// Buffered so the Wait goroutine exits cleanly even when the
+	// select below returns early on ctx.Done — the value is simply
+	// dropped if no one consumes it.
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	canceled := false
+	var runErr error
+	select {
+	case runErr = <-done:
+	case <-execCtx.Done():
+		canceled = true
+		terminateProcessTree(cmd, bashKillGrace)
+		runErr = <-done
+	}
+
+	if canceled {
+		msg := fmt.Sprintf("command timed out after %s; process group terminated", timeout)
+		if execCtx.Err() == context.Canceled {
+			msg = "command canceled; process group terminated"
+		}
+		return ErrorResult(msg), nil
 	}
 
 	// Surface exec-level failures that produced no stream output
 	// (e.g. "bash not found") so the agent has something actionable.
-	if err != nil && stdout.RawBytes() == 0 && stderr.RawBytes() == 0 {
-		stderr.Write([]byte(err.Error()))
+	if runErr != nil && stdout.RawBytes() == 0 && stderr.RawBytes() == 0 {
+		stderr.Write([]byte(runErr.Error()))
 	}
 
 	body := formatBashOutput(stdout, stderr)
-	if err != nil {
+	if runErr != nil {
 		return &Result{Output: body, IsError: true}, nil
 	}
 	return SuccessResult(body), nil
