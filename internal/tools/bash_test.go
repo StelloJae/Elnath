@@ -731,6 +731,49 @@ func TestBash_ProcessGroup_SigkillEscalation(t *testing.T) {
 	t.Fatalf("parent pid %d survived SIGTERM+grace+SIGKILL path", pid)
 }
 
+// TestBash_Preflight_RejectsMalformedShell confirms that a command
+// whose shell syntax cannot be parsed is blocked at preflight rather
+// than handed to bash. Before P0-5 the AST analyzer returned
+// allow-through on parser errors, which meant dangerous patterns
+// hidden inside unparseable constructs could still run. P0-5 flips
+// the policy to fail-closed.
+func TestBash_Preflight_RejectsMalformedShell(t *testing.T) {
+	root := t.TempDir()
+	guard := NewPathGuard(root, nil)
+	tool := NewBashTool(guard)
+
+	ctx := WithSessionID(context.Background(), "preflight-sess")
+	sessionDir, err := guard.EnsureSessionWorkDir("preflight-sess")
+	if err != nil {
+		t.Fatalf("ensure session: %v", err)
+	}
+	realSession, err := filepath.EvalSymlinks(sessionDir)
+	if err != nil {
+		t.Fatalf("resolve session: %v", err)
+	}
+	sideEffect := filepath.Join(realSession, "should_not_exist.txt")
+
+	// The unparseable prefix must short-circuit: if any byte of the
+	// command reached bash, the touch would create the witness file.
+	script := `((( ; touch should_not_exist.txt`
+	res, err := tool.Execute(ctx, makeBashParams(t, script, nil))
+	if err != nil {
+		t.Fatalf("Execute err must stay nil; preflight rejection is a recoverable tool_result: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("malformed command must surface as IsError=true; got: %s", res.Output)
+	}
+	if !strings.Contains(res.Output, "command blocked") {
+		t.Errorf("output %q should mention 'command blocked'", res.Output)
+	}
+	if !strings.Contains(res.Output, "shell syntax") {
+		t.Errorf("output %q should mention parse failure reason", res.Output)
+	}
+	if _, statErr := os.Stat(sideEffect); statErr == nil {
+		t.Errorf("side-effect file %q was created; bash executed a rejected command", sideEffect)
+	}
+}
+
 func TestAnalyzeCommand(t *testing.T) {
 	cases := []struct {
 		command   string
@@ -763,7 +806,11 @@ func TestAnalyzeCommand(t *testing.T) {
 		{command: "git push --force origin feature", dangerous: false},
 		{command: "git push origin main", dangerous: false},
 		{command: "git push -f origin master", dangerous: true},
-		{command: "(((", dangerous: false}, // unparseable — bash will report the error
+		// P0-5 fail-closed: unparseable commands are blocked at
+		// preflight because the AST analyzer cannot vet them for
+		// dangerous patterns. The reason string embeds the parser
+		// error, so we only assert it is non-empty in the table.
+		{command: "(((", dangerous: true, reason: "shell syntax"},
 	}
 
 	for _, tc := range cases {

@@ -189,8 +189,12 @@ func (t *BashTool) Execute(ctx context.Context, params json.RawMessage) (*Result
 func AnalyzeCommandSafety(command string) (dangerous bool, reason string) {
 	f, err := syntax.NewParser().Parse(strings.NewReader(command), "cmd")
 	if err != nil {
-		// Unparseable commands are allowed — bash will report the syntax error.
-		return false, ""
+		// Fail-closed preflight: the AST analyzer cannot vet a
+		// command it could not parse, so dangerous patterns hidden
+		// inside unparseable constructs must not slip through. The
+		// caller turns this into a recoverable tool_result so the
+		// agent can fix the syntax on the next turn.
+		return true, fmt.Sprintf("shell syntax could not be parsed: %v", err)
 	}
 
 	syntax.Walk(f, func(node syntax.Node) bool {
