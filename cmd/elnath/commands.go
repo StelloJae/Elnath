@@ -177,7 +177,7 @@ func buildProvider(cfg *config.Config) (llm.Provider, string, error) {
 		}
 		m := cfg.OpenAI.Model
 		if m == "" {
-			m = "gpt-4o"
+			m = resolveFallbackModel(cfg)
 		}
 		reg.Register("openai", llm.NewOpenAIProvider(cfg.OpenAI.APIKey, m, opts...))
 		if model == "" {
@@ -225,6 +225,22 @@ func buildProvider(cfg *config.Config) (llm.Provider, string, error) {
 	return p, resolvedModel, nil
 }
 
+// defaultFallbackModel is the hardcoded fallback when neither the
+// provider's Model field nor cfg.FallbackModel is set. Primary model
+// per partner directive (2026-04-24) is gpt-5.5.
+const defaultFallbackModel = "gpt-5.5"
+
+// resolveFallbackModel returns the effective fallback model. Priority:
+// cfg.FallbackModel → defaultFallbackModel. ELNATH_FALLBACK_MODEL is
+// handled upstream by config.applyEnvOverrides, which populates
+// cfg.FallbackModel before this call.
+func resolveFallbackModel(cfg *config.Config) string {
+	if cfg != nil && cfg.FallbackModel != "" {
+		return cfg.FallbackModel
+	}
+	return defaultFallbackModel
+}
+
 func loadCodexAuth() (token, model, accountID string) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -258,7 +274,7 @@ func loadCodexAuth() (token, model, accountID string) {
 		}
 	}
 	if model == "" {
-		model = "gpt-4o"
+		model = defaultFallbackModel
 	}
 	return auth.Tokens.AccessToken, model, accountID
 }

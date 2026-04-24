@@ -15,6 +15,8 @@ func DefaultConfig() *Config {
 		Locale:   "en",
 		LogLevel: "info",
 
+		FallbackModel: "gpt-5.5",
+
 		Anthropic: ProviderConfig{
 			Model:   "claude-sonnet-4-6",
 			Timeout: 120,

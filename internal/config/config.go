@@ -23,6 +23,12 @@ type Config struct {
 	MaxContextTokens  int     `yaml:"max_context_tokens"`
 	CompressThreshold float64 `yaml:"compress_threshold"`
 
+	// FallbackModel is the model used when a provider's Model field is
+	// empty or a downstream path needs a sane default (see
+	// cmd/elnath/commands.go resolveFallbackModel). Defaults to gpt-5.5;
+	// overridden by ELNATH_FALLBACK_MODEL env var or yaml fallback_model.
+	FallbackModel string `yaml:"fallback_model"`
+
 	Permission     PermissionConfig     `yaml:"permission"`
 	Principal      PrincipalConfig      `yaml:"principal"`
 	Daemon         DaemonConfig         `yaml:"daemon"`
@@ -204,6 +210,9 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("ELNATH_ANTHROPIC_API_KEY"); v != "" {
 		cfg.Anthropic.APIKey = v
+	}
+	if v := os.Getenv("ELNATH_FALLBACK_MODEL"); v != "" {
+		cfg.FallbackModel = v
 	}
 	if v := os.Getenv("ELNATH_OPENAI_API_KEY"); v != "" {
 		cfg.OpenAI.APIKey = v

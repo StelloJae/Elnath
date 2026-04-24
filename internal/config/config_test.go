@@ -48,6 +48,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.LLMExtraction.Enabled {
 		t.Error("LLMExtraction.Enabled should default to false")
 	}
+	if cfg.FallbackModel != "gpt-5.5" {
+		t.Errorf("expected FallbackModel default %q, got %q", "gpt-5.5", cfg.FallbackModel)
+	}
 }
 
 // --- DefaultConfigPath ---
@@ -351,6 +354,13 @@ func TestApplyEnvOverrides(t *testing.T) {
 				return strconv.Itoa(c.Telegram.PollTimeoutSeconds)
 			},
 			want: "45",
+		},
+		{
+			name:   "ELNATH_FALLBACK_MODEL",
+			envKey: "ELNATH_FALLBACK_MODEL",
+			envVal: "gpt-custom",
+			check:  func(c *Config) string { return c.FallbackModel },
+			want:   "gpt-custom",
 		},
 	}
 
