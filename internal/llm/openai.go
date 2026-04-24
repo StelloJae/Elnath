@@ -347,12 +347,12 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRespon
 
 var openAIModels = []ModelInfo{
 	{
-		ID:              "gpt-5.4",
-		Name:            "GPT-5.4",
+		ID:              "gpt-5.5",
+		Name:            "GPT-5.5",
 		MaxTokens:       128_000,
-		ContextWindow:   1_050_000,
-		InputPricePerM:  2.5,
-		OutputPricePerM: 15.0,
+		ContextWindow:   400_000,
+		InputPricePerM:  5.0,
+		OutputPricePerM: 30.0,
 	},
 	{
 		ID:              "gpt-5.4-mini",

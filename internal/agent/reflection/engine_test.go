@@ -50,7 +50,7 @@ func TestLLMEngine_ValidResponse(t *testing.T) {
 	provider := &fakeProvider{
 		content: `{"suggested_strategy":"retry_smaller_scope","reasoning":"too many files touched","task_summary":"fix failing test"}`,
 	}
-	eng := NewLLMEngine(provider, "gpt-5.4")
+	eng := NewLLMEngine(provider, "gpt-5.5")
 
 	rep, err := eng.Reflect(context.Background(), newTestInput())
 	if err != nil {
@@ -75,7 +75,7 @@ func TestLLMEngine_ValidResponse(t *testing.T) {
 
 func TestLLMEngine_SchemaInvalid_FallsBackToUnknown(t *testing.T) {
 	provider := &fakeProvider{content: `not valid json at all`}
-	eng := NewLLMEngine(provider, "gpt-5.4")
+	eng := NewLLMEngine(provider, "gpt-5.5")
 
 	rep, err := eng.Reflect(context.Background(), newTestInput())
 	if err != nil {
@@ -90,7 +90,7 @@ func TestLLMEngine_EnumOutOfRange_FallsBackToUnknown(t *testing.T) {
 	provider := &fakeProvider{
 		content: `{"suggested_strategy":"teleport_to_fix","reasoning":"","task_summary":""}`,
 	}
-	eng := NewLLMEngine(provider, "gpt-5.4")
+	eng := NewLLMEngine(provider, "gpt-5.5")
 
 	rep, err := eng.Reflect(context.Background(), newTestInput())
 	if err != nil {
@@ -106,7 +106,7 @@ func TestLLMEngine_FencedJSON_Parsed(t *testing.T) {
 	provider := &fakeProvider{
 		content: "sure thing!\n```json\n{\"suggested_strategy\":\"compress_context\",\"reasoning\":\"context overflow\",\"task_summary\":\"long task\"}\n```",
 	}
-	eng := NewLLMEngine(provider, "gpt-5.4")
+	eng := NewLLMEngine(provider, "gpt-5.5")
 
 	rep, err := eng.Reflect(context.Background(), newTestInput())
 	if err != nil {
@@ -119,7 +119,7 @@ func TestLLMEngine_FencedJSON_Parsed(t *testing.T) {
 
 func TestLLMEngine_ProviderError_Propagates(t *testing.T) {
 	provider := &fakeProvider{err: errors.New("boom")}
-	eng := NewLLMEngine(provider, "gpt-5.4")
+	eng := NewLLMEngine(provider, "gpt-5.5")
 
 	_, err := eng.Reflect(context.Background(), newTestInput())
 	if err == nil {
@@ -134,7 +134,7 @@ func TestLLMEngine_Timeout_EnforcedPerCall(t *testing.T) {
 			return nil, ctx.Err()
 		},
 	}
-	eng := NewLLMEngine(provider, "gpt-5.4", WithEngineTimeout(10*time.Millisecond))
+	eng := NewLLMEngine(provider, "gpt-5.5", WithEngineTimeout(10*time.Millisecond))
 
 	start := time.Now()
 	_, err := eng.Reflect(context.Background(), newTestInput())
@@ -155,7 +155,7 @@ func TestLLMEngine_ParentContext_Independent(t *testing.T) {
 			return nil, ctx.Err()
 		},
 	}
-	eng := NewLLMEngine(provider, "gpt-5.4", WithEngineTimeout(5*time.Second))
+	eng := NewLLMEngine(provider, "gpt-5.5", WithEngineTimeout(5*time.Second))
 
 	parent, cancel := context.WithCancel(context.Background())
 	cancel()

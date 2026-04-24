@@ -144,7 +144,7 @@ func estimateCost(provider, model string, stats UsageStats) float64 {
 		"gpt-5.1":      {1.25, 10.00},
 		"gpt-5.2":      {1.75, 14.00},
 		"gpt-5.2-pro":  {21.00, 168.00},
-		"gpt-5.4":      {2.50, 15.00},
+		"gpt-5.5":      {5.00, 30.00},
 		"gpt-5.4-mini": {0.75, 4.50},
 	}
 

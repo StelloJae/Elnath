@@ -485,16 +485,16 @@ func TestLoadCodexAuthAndModel(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(codexDir, "auth.json"), authRaw, 0o644); err != nil {
 		t.Fatalf("write auth: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(codexDir, "config.toml"), []byte("model = \"gpt-5.4\"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(codexDir, "config.toml"), []byte("model = \"gpt-5.5\"\n"), 0o644); err != nil {
 		t.Fatalf("write config.toml: %v", err)
 	}
 
 	token, model, accountID := loadCodexAuth()
-	if token != "tok_123" || model != "gpt-5.4" || accountID != "acct_456" {
+	if token != "tok_123" || model != "gpt-5.5" || accountID != "acct_456" {
 		t.Fatalf("loadCodexAuth = (%q,%q,%q)", token, model, accountID)
 	}
-	if got := loadCodexModel(); got != "gpt-5.4" {
-		t.Fatalf("loadCodexModel = %q, want gpt-5.4", got)
+	if got := loadCodexModel(); got != "gpt-5.5" {
+		t.Fatalf("loadCodexModel = %q, want gpt-5.5", got)
 	}
 }
 

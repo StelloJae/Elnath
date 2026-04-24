@@ -70,7 +70,7 @@ func TestParseCodexSSE_OutputItemAddedFunctionCall(t *testing.T) {
 
 func TestBuildCodexRequestUsesCallIDForFunctionHistory(t *testing.T) {
 	body, err := buildCodexRequest(ChatRequest{
-		Model: "gpt-5.4",
+		Model: "gpt-5.5",
 		Messages: []Message{
 			NewUserMessage("hi"),
 			{Role: RoleAssistant, Content: []ContentBlock{
@@ -78,7 +78,7 @@ func TestBuildCodexRequestUsesCallIDForFunctionHistory(t *testing.T) {
 			}},
 			NewToolResultMessage("call_1", "file.go", false),
 		},
-	}, "gpt-5.4")
+	}, "gpt-5.5")
 	if err != nil {
 		t.Fatalf("buildCodexRequest: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestBuildCodexRequestUsesCallIDForFunctionHistory(t *testing.T) {
 func TestBuildCodexRequest_ToolUseResultPairStructure(t *testing.T) {
 	const wantCallID = "call_wH9JVxyuUUHiADnStfgOacFM"
 	body, err := buildCodexRequest(ChatRequest{
-		Model: "gpt-5.4",
+		Model: "gpt-5.5",
 		Messages: []Message{
 			NewUserMessage("오늘 미국 주식 인기종목 3개 알아봐줘"),
 			{Role: RoleAssistant, Content: []ContentBlock{
@@ -106,7 +106,7 @@ func TestBuildCodexRequest_ToolUseResultPairStructure(t *testing.T) {
 			}},
 			NewToolResultMessage(wantCallID, "AAPL, MSFT, NVDA rankings", false),
 		},
-	}, "gpt-5.4")
+	}, "gpt-5.5")
 	if err != nil {
 		t.Fatalf("buildCodexRequest: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestNewHTTPClientWithPerHostCap_DefaultsAndCallerContracts(t *testing.T) {
 		t.Fatalf("MaxIdleConnsPerHost = %d, want %d", transport.MaxIdleConnsPerHost, defaultHTTPMaxConnsPerHost)
 	}
 
-	openai := NewOpenAIProvider("test-key", "gpt-5.4")
+	openai := NewOpenAIProvider("test-key", "gpt-5.5")
 	openaiTransport, ok := openai.client.Transport.(*http.Transport)
 	if !ok {
 		t.Fatalf("OpenAI client transport type = %T, want *http.Transport", openai.client.Transport)
@@ -168,7 +168,7 @@ func TestNewHTTPClientWithPerHostCap_DefaultsAndCallerContracts(t *testing.T) {
 		t.Fatalf("OpenAI MaxIdleConnsPerHost = %d, want match MaxConnsPerHost=%d", openaiTransport.MaxIdleConnsPerHost, openaiTransport.MaxConnsPerHost)
 	}
 
-	codex := NewCodexOAuthProvider("gpt-5.4", WithCodexOAuthTimeout(42*time.Second))
+	codex := NewCodexOAuthProvider("gpt-5.5", WithCodexOAuthTimeout(42*time.Second))
 	codexTransport, ok := codex.client.Transport.(*http.Transport)
 	if !ok {
 		t.Fatalf("Codex client transport type = %T, want *http.Transport", codex.client.Transport)

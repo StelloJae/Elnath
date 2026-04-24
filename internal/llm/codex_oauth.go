@@ -79,7 +79,7 @@ func (p *CodexOAuthProvider) Name() string { return "codex" }
 
 func (p *CodexOAuthProvider) Models() []ModelInfo {
 	return []ModelInfo{
-		{ID: "gpt-5.4", Name: "GPT-5.4", MaxTokens: 128_000, ContextWindow: 1_050_000, InputPricePerM: 2.5, OutputPricePerM: 15.0},
+		{ID: "gpt-5.5", Name: "GPT-5.5", MaxTokens: 128_000, ContextWindow: 400_000, InputPricePerM: 5.0, OutputPricePerM: 30.0},
 		{ID: "gpt-5.4-mini", Name: "GPT-5.4 Mini", MaxTokens: 128_000, ContextWindow: 400_000, InputPricePerM: 0.75, OutputPricePerM: 4.5},
 		{ID: "gpt-5.3-codex", Name: "GPT-5.3 Codex", MaxTokens: 128_000, ContextWindow: 1_050_000},
 		{ID: "gpt-5.3-codex-spark", Name: "GPT-5.3 Codex Spark", MaxTokens: 128_000, ContextWindow: 400_000},

@@ -340,7 +340,7 @@ func TestResponsesBuildRequest_WebSearchEmitsNativeSchema(t *testing.T) {
 	p := newResponsesProvider("http://localhost")
 
 	req := ChatRequest{
-		Model:    "gpt-5.4",
+		Model:    "gpt-5.5",
 		Messages: []Message{NewUserMessage("search something")},
 		Tools: []ToolDef{
 			{Name: "bash", Description: "run shell", InputSchema: json.RawMessage(`{"type":"object"}`)},

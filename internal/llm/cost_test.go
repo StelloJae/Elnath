@@ -149,7 +149,7 @@ func TestEstimateCostGPT5Models(t *testing.T) {
 		{model: "gpt-5.1", wantUSD: 1.25 + 10.00},
 		{model: "gpt-5.2", wantUSD: 1.75 + 14.00},
 		{model: "gpt-5.2-pro", wantUSD: 21.00 + 168.00},
-		{model: "gpt-5.4", wantUSD: 2.50 + 15.00},
+		{model: "gpt-5.5", wantUSD: 5.00 + 30.00},
 		{model: "gpt-5.4-mini", wantUSD: 0.75 + 4.50},
 	}
 	for _, tt := range tests {
