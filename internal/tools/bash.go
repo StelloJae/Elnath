@@ -100,7 +100,7 @@ func (t *BashTool) Execute(ctx context.Context, params json.RawMessage) (*Result
 	}
 	workDir := sessionDir
 	if p.WorkingDir != "" {
-		resolved, err := t.guard.ResolveIn(sessionDir, p.WorkingDir)
+		resolved, err := t.guard.ResolveWorkingDir(sessionDir, p.WorkingDir)
 		if err != nil {
 			return ErrorResult(fmt.Sprintf("invalid working_dir: %v", err)), nil
 		}

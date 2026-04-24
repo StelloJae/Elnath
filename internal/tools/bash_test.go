@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -90,19 +91,25 @@ func TestBashOutputTruncatesCombinedStreams(t *testing.T) {
 	}
 }
 
-func TestBashWorkingDir(t *testing.T) {
-	dir := t.TempDir()
-	tool := NewBashTool(NewPathGuard(t.TempDir(), nil)) // tool's own default workDir is irrelevant here
+// TestBashWorkingDir_AllowsSessionSubdir confirms that a relative working_dir
+// pointing inside the per-session workspace is accepted after P0-1 tightening.
+func TestBashWorkingDir_AllowsSessionSubdir(t *testing.T) {
+	root := t.TempDir()
+	guard := NewPathGuard(root, nil)
+	tool := NewBashTool(guard)
 
-	// Resolve the real path because t.TempDir() may return a symlink on macOS.
-	realDir, err := os.Lstat(dir)
-	_ = realDir
+	ctx := WithSessionID(context.Background(), "wdir-inside")
+	sessionDir, err := guard.EnsureSessionWorkDir("wdir-inside")
 	if err != nil {
-		t.Fatalf("stat temp dir: %v", err)
+		t.Fatalf("ensure session: %v", err)
+	}
+	sub := filepath.Join(sessionDir, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatalf("mkdir sub: %v", err)
 	}
 
-	res, err := tool.Execute(context.Background(), makeBashParams(t, "pwd", map[string]any{
-		"working_dir": dir,
+	res, err := tool.Execute(ctx, makeBashParams(t, "pwd", map[string]any{
+		"working_dir": "sub",
 	}))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -110,17 +117,152 @@ func TestBashWorkingDir(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("unexpected error result: %s", res.Output)
 	}
-
-	// pwd may resolve symlinks differently on macOS (/private/var vs /var);
-	// compare the base name to keep the test portable.
+	// pwd resolves symlinks (macOS /tmp → /private/tmp); assert suffix.
 	gotTrimmed := strings.TrimSpace(res.Output)
-	if !strings.HasSuffix(gotTrimmed, strings.TrimRight(dir, "/")) &&
-		!strings.Contains(gotTrimmed, strings.TrimLeft(dir, "/")) {
-		// Fallback: just check the last path component matches.
-		wantBase := dir[strings.LastIndex(dir, "/")+1:]
-		if !strings.HasSuffix(gotTrimmed, wantBase) {
-			t.Errorf("pwd output %q does not match working_dir %q", gotTrimmed, dir)
-		}
+	if !strings.HasSuffix(gotTrimmed, string(filepath.Separator)+"sub") {
+		t.Errorf("pwd output %q should end with /sub", gotTrimmed)
+	}
+}
+
+// TestBashWorkingDir_RejectsExternalAbsolute replaces the permissive pre-P0-1
+// TestBashWorkingDir: a working_dir that resolves outside the session root
+// must be rejected as a boundary escape.
+func TestBashWorkingDir_RejectsExternalAbsolute(t *testing.T) {
+	outside := t.TempDir()
+	tool := NewBashTool(NewPathGuard(t.TempDir(), nil))
+
+	res, err := tool.Execute(context.Background(), makeBashParams(t, "pwd", map[string]any{
+		"working_dir": outside,
+	}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected error for external working_dir, got output: %s", res.Output)
+	}
+	if !strings.Contains(res.Output, "invalid working_dir") {
+		t.Errorf("output %q should mention 'invalid working_dir'", res.Output)
+	}
+}
+
+func TestBashWorkingDir_RejectsRootPath(t *testing.T) {
+	tool := NewBashTool(NewPathGuard(t.TempDir(), nil))
+
+	res, err := tool.Execute(context.Background(), makeBashParams(t, "pwd", map[string]any{
+		"working_dir": "/",
+	}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected error for working_dir=/, got output: %s", res.Output)
+	}
+}
+
+func TestBashWorkingDir_RejectsParentEscape(t *testing.T) {
+	tool := NewBashTool(NewPathGuard(t.TempDir(), nil))
+
+	res, err := tool.Execute(context.Background(), makeBashParams(t, "pwd", map[string]any{
+		"working_dir": "../../../../",
+	}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected error for ../../../../ escape, got output: %s", res.Output)
+	}
+}
+
+// TestBashWorkingDir_RejectsPrefixTrick guards against the classic
+// HasPrefix boundary bug: a sibling directory whose name shares a prefix
+// with the session root must not pass.
+func TestBashWorkingDir_RejectsPrefixTrick(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "root")
+	sibling := filepath.Join(parent, "root2")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("mkdir root: %v", err)
+	}
+	if err := os.MkdirAll(sibling, 0o755); err != nil {
+		t.Fatalf("mkdir sibling: %v", err)
+	}
+	tool := NewBashTool(NewPathGuard(root, nil))
+
+	res, err := tool.Execute(context.Background(), makeBashParams(t, "pwd", map[string]any{
+		"working_dir": sibling,
+	}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected error for prefix-trick sibling, got output: %s", res.Output)
+	}
+}
+
+// TestBashWorkingDir_RejectsSymlinkEscape verifies that a symlink inside the
+// session workspace that resolves to an outside directory is rejected.
+func TestBashWorkingDir_RejectsSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	guard := NewPathGuard(root, nil)
+	tool := NewBashTool(guard)
+
+	ctx := WithSessionID(context.Background(), "wdir-symlink")
+	sessionDir, err := guard.EnsureSessionWorkDir("wdir-symlink")
+	if err != nil {
+		t.Fatalf("ensure session: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(sessionDir, "escape")); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+
+	res, err := tool.Execute(ctx, makeBashParams(t, "pwd", map[string]any{
+		"working_dir": "escape",
+	}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected error for symlink escape, got output: %s", res.Output)
+	}
+	if !strings.Contains(res.Output, "invalid working_dir") {
+		t.Errorf("output %q should mention 'invalid working_dir'", res.Output)
+	}
+}
+
+func TestBashWorkingDir_RejectsNonexistent(t *testing.T) {
+	tool := NewBashTool(NewPathGuard(t.TempDir(), nil))
+
+	res, err := tool.Execute(context.Background(), makeBashParams(t, "pwd", map[string]any{
+		"working_dir": "does-not-exist",
+	}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected error for nonexistent working_dir, got output: %s", res.Output)
+	}
+}
+
+func TestBashWorkingDir_RejectsFile(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "file.txt")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	tool := NewBashTool(NewPathGuard(root, nil))
+
+	res, err := tool.Execute(context.Background(), makeBashParams(t, "pwd", map[string]any{
+		"working_dir": "file.txt",
+	}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected error for file working_dir, got output: %s", res.Output)
+	}
+	if !strings.Contains(res.Output, "not a directory") {
+		t.Errorf("output %q should mention 'not a directory'", res.Output)
 	}
 }
 

@@ -123,6 +123,65 @@ func (g *PathGuard) ResolveIn(cwd, rawPath string) (string, error) {
 	return filepath.Clean(p), nil
 }
 
+// pathWithin reports whether candidate is located at or under root.
+// Both paths MUST be cleaned, absolute, and canonicalized via EvalSymlinks
+// before being passed here — this helper does only the containment check
+// using filepath.Rel semantics, so prefix-leak bugs such as "/tmp/root2"
+// matching "/tmp/root" do not slip through.
+func pathWithin(root, candidate string) bool {
+	rel, err := filepath.Rel(root, candidate)
+	if err != nil {
+		return false
+	}
+	if rel == "." {
+		return true
+	}
+	if rel == ".." {
+		return false
+	}
+	return !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// ResolveWorkingDir resolves rawPath against sessionDir and verifies the
+// result lies within the session workspace after symlink resolution. The
+// target must already exist and be a directory. Used by tools (bash) that
+// accept a caller-supplied working directory as a security boundary rather
+// than a lock hint; read-only tools may still use ResolveIn.
+func (g *PathGuard) ResolveWorkingDir(sessionDir, rawPath string) (string, error) {
+	if rawPath == "" {
+		return "", fmt.Errorf("empty path")
+	}
+
+	p := expandHome(g.homeDir, rawPath)
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(sessionDir, p)
+	}
+	cleaned := filepath.Clean(p)
+
+	rootReal, err := filepath.EvalSymlinks(sessionDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve session root: %w", err)
+	}
+	candidateReal, err := filepath.EvalSymlinks(cleaned)
+	if err != nil {
+		return "", fmt.Errorf("working directory does not exist or is not resolvable: %w", err)
+	}
+
+	info, err := os.Stat(candidateReal)
+	if err != nil {
+		return "", fmt.Errorf("stat working directory: %w", err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("working_dir is not a directory")
+	}
+
+	if !pathWithin(rootReal, candidateReal) {
+		return "", fmt.Errorf("working_dir escapes session root")
+	}
+
+	return candidateReal, nil
+}
+
 // CheckWrite returns an error if absPath falls under a protected directory.
 func (g *PathGuard) CheckWrite(absPath string) error {
 	cleaned := filepath.Clean(absPath)

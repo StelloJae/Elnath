@@ -327,6 +327,212 @@ func TestExpandHome(t *testing.T) {
 	}
 }
 
+func TestPathWithin(t *testing.T) {
+	tests := []struct {
+		name      string
+		root      string
+		candidate string
+		want      bool
+	}{
+		{"self", "/work", "/work", true},
+		{"child", "/work", "/work/sub", true},
+		{"deep child", "/work", "/work/a/b/c", true},
+		{"parent escape", "/work", "/outside", false},
+		{"one up", "/work/sub", "/work", false},
+		{"root up", "/work", "/", false},
+		{"prefix trick flat", "/work", "/work2", false},
+		{"prefix trick deep", "/work", "/work2/file", false},
+		{"sibling", "/a/b", "/a/c", false},
+		{"parent literal", "/work", "..", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := filepath.FromSlash(tt.root)
+			candidate := filepath.FromSlash(tt.candidate)
+			got := pathWithin(root, candidate)
+			if got != tt.want {
+				t.Errorf("pathWithin(%q, %q) = %v, want %v", root, candidate, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPathGuard_ResolveWorkingDir_AllowsSessionRoot(t *testing.T) {
+	root := t.TempDir()
+	g := NewPathGuard(root, nil)
+
+	got, err := g.ResolveWorkingDir(root, ".")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestPathGuard_ResolveWorkingDir_AllowsSubdir(t *testing.T) {
+	root := t.TempDir()
+	sub := filepath.Join(root, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatalf("mkdir sub: %v", err)
+	}
+	g := NewPathGuard(root, nil)
+
+	got, err := g.ResolveWorkingDir(root, "sub")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want, err := filepath.EvalSymlinks(sub)
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestPathGuard_ResolveWorkingDir_RejectsAbsoluteOutside(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	g := NewPathGuard(root, nil)
+
+	_, err := g.ResolveWorkingDir(root, outside)
+	if err == nil {
+		t.Fatal("expected error for absolute path outside session root")
+	}
+	if !strings.Contains(err.Error(), "escapes session root") {
+		t.Errorf("error %q should say 'escapes session root'", err)
+	}
+}
+
+func TestPathGuard_ResolveWorkingDir_RejectsParentEscape(t *testing.T) {
+	root := t.TempDir()
+	g := NewPathGuard(root, nil)
+
+	_, err := g.ResolveWorkingDir(root, "..")
+	if err == nil {
+		t.Fatal("expected error for .. path")
+	}
+}
+
+func TestPathGuard_ResolveWorkingDir_RejectsDeepParentEscape(t *testing.T) {
+	root := t.TempDir()
+	sub := filepath.Join(root, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatalf("mkdir sub: %v", err)
+	}
+	g := NewPathGuard(root, nil)
+
+	_, err := g.ResolveWorkingDir(root, "sub/../..")
+	if err == nil {
+		t.Fatal("expected error for sub/../.. escape")
+	}
+}
+
+func TestPathGuard_ResolveWorkingDir_RejectsPrefixTrick(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "root")
+	sibling := filepath.Join(parent, "root2")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("mkdir root: %v", err)
+	}
+	if err := os.MkdirAll(sibling, 0o755); err != nil {
+		t.Fatalf("mkdir sibling: %v", err)
+	}
+	g := NewPathGuard(root, nil)
+
+	_, err := g.ResolveWorkingDir(root, sibling)
+	if err == nil {
+		t.Fatalf("expected error for %q (prefix trick of %q)", sibling, root)
+	}
+	if !strings.Contains(err.Error(), "escapes session root") {
+		t.Errorf("error %q should say 'escapes session root'", err)
+	}
+}
+
+func TestPathGuard_ResolveWorkingDir_RejectsSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	link := filepath.Join(root, "escape")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	g := NewPathGuard(root, nil)
+
+	_, err := g.ResolveWorkingDir(root, "escape")
+	if err == nil {
+		t.Fatal("expected error for symlink resolving outside session root")
+	}
+	if !strings.Contains(err.Error(), "escapes session root") {
+		t.Errorf("error %q should say 'escapes session root'", err)
+	}
+}
+
+func TestPathGuard_ResolveWorkingDir_AllowsSymlinkInside(t *testing.T) {
+	root := t.TempDir()
+	real := filepath.Join(root, "real")
+	if err := os.MkdirAll(real, 0o755); err != nil {
+		t.Fatalf("mkdir real: %v", err)
+	}
+	if err := os.Symlink(real, filepath.Join(root, "link")); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	g := NewPathGuard(root, nil)
+
+	got, err := g.ResolveWorkingDir(root, "link")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestPathGuard_ResolveWorkingDir_RejectsNonexistent(t *testing.T) {
+	root := t.TempDir()
+	g := NewPathGuard(root, nil)
+
+	_, err := g.ResolveWorkingDir(root, "does-not-exist")
+	if err == nil {
+		t.Fatal("expected error for nonexistent path")
+	}
+}
+
+func TestPathGuard_ResolveWorkingDir_RejectsFile(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "file.txt")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	g := NewPathGuard(root, nil)
+
+	_, err := g.ResolveWorkingDir(root, "file.txt")
+	if err == nil {
+		t.Fatal("expected error for non-directory path")
+	}
+	if !strings.Contains(err.Error(), "not a directory") {
+		t.Errorf("error %q should mention 'not a directory'", err)
+	}
+}
+
+func TestPathGuard_ResolveWorkingDir_RejectsEmpty(t *testing.T) {
+	root := t.TempDir()
+	g := NewPathGuard(root, nil)
+
+	_, err := g.ResolveWorkingDir(root, "")
+	if err == nil {
+		t.Fatal("expected error for empty path")
+	}
+}
+
 func TestPathGuardCheckScope(t *testing.T) {
 	workDir := t.TempDir()
 	protected := filepath.Join(workDir, "protected")
