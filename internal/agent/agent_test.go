@@ -607,26 +607,25 @@ func TestStreamEventDispatch(t *testing.T) {
 	reg := tools.NewRegistry()
 
 	t.Run("known event types emit expected sink events", func(t *testing.T) {
-		var got []event.Event
+		sink := &event.RecorderSink{}
 		p := &mockProvider{
 			streamFn: func(ctx context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
 				cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: "hello"})
-				cb(llm.StreamEvent{Type: llm.EventToolUseStart, ToolCall: &llm.ToolUseBlock{ID: "tool-1", Name: "lookup"}})
-				cb(llm.StreamEvent{Type: llm.EventToolUseDelta, ToolCall: &llm.ToolUseBlock{ID: "tool-1", Input: `{"q":"go"}`}})
-				cb(llm.StreamEvent{Type: llm.EventToolUseDone, ToolCall: &llm.ToolUseBlock{ID: "tool-1", Name: "lookup", Input: `{"q":"golang"}`}})
+				cb(llm.StreamEvent{Type: llm.EventToolUseStart, ToolCall: &llm.ToolUseEvent{ID: "tool-1", Name: "lookup"}})
+				cb(llm.StreamEvent{Type: llm.EventToolUseDelta, ToolCall: &llm.ToolUseEvent{ID: "tool-1", Input: `{"q":"go"}`}})
+				cb(llm.StreamEvent{Type: llm.EventToolUseDone, ToolCall: &llm.ToolUseEvent{ID: "tool-1", Name: "lookup", Input: `{"q":"golang"}`}})
 				cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{InputTokens: 3, OutputTokens: 5}})
 				return nil
 			},
 		}
 
 		a := New(p, reg)
-		msg, usage, err := a.stream(context.Background(), llm.ChatRequest{}, event.OnEventToSink(func(ev event.Event) {
-			got = append(got, ev)
-		}))
+		msg, usage, err := a.stream(context.Background(), llm.ChatRequest{}, sink)
 		if err != nil {
 			t.Fatalf("stream: %v", err)
 		}
 
+		got := sink.Events
 		if len(got) != 5 {
 			t.Fatalf("len(got) = %d, want 5", len(got))
 		}
@@ -649,10 +648,11 @@ func TestStreamEventDispatch(t *testing.T) {
 		if msg.Text() != "hello" {
 			t.Fatalf("msg.Text() = %q, want hello", msg.Text())
 		}
-		if len(msg.ToolCalls()) != 1 {
-			t.Fatalf("len(msg.ToolCalls()) = %d, want 1", len(msg.ToolCalls()))
+		calls := llm.ExtractToolUseBlocks(msg)
+		if len(calls) != 1 {
+			t.Fatalf("len(calls) = %d, want 1", len(calls))
 		}
-		if tc := msg.ToolCalls()[0]; tc.ID != "tool-1" || tc.Name != "lookup" || tc.Input != `{"q":"golang"}` {
+		if tc := calls[0]; tc.ID != "tool-1" || tc.Name != "lookup" || string(tc.Input) != `{"q":"golang"}` {
 			t.Fatalf("tool call = %#v, want accumulated completed tool call", tc)
 		}
 		if usage.InputTokens != 3 || usage.OutputTokens != 5 {
@@ -661,7 +661,7 @@ func TestStreamEventDispatch(t *testing.T) {
 	})
 
 	t.Run("unknown event type is ignored", func(t *testing.T) {
-		var got []event.Event
+		sink := &event.RecorderSink{}
 		p := &mockProvider{
 			streamFn: func(ctx context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
 				cb(llm.StreamEvent{Type: llm.StreamEventType("unknown")})
@@ -672,13 +672,12 @@ func TestStreamEventDispatch(t *testing.T) {
 		}
 
 		a := New(p, reg)
-		msg, _, err := a.stream(context.Background(), llm.ChatRequest{}, event.OnEventToSink(func(ev event.Event) {
-			got = append(got, ev)
-		}))
+		msg, _, err := a.stream(context.Background(), llm.ChatRequest{}, sink)
 		if err != nil {
 			t.Fatalf("stream: %v", err)
 		}
 
+		got := sink.Events
 		if len(got) != 2 {
 			t.Fatalf("len(got) = %d, want 2", len(got))
 		}

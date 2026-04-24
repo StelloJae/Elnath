@@ -1917,8 +1917,8 @@ func TestLoadCodexAuthNoConfigToml(t *testing.T) {
 	if token != "tok_abc" {
 		t.Fatalf("token = %q, want tok_abc", token)
 	}
-	if model != "gpt-4o" {
-		t.Fatalf("model = %q, want gpt-4o (default)", model)
+	if model != defaultFallbackModel {
+		t.Fatalf("model = %q, want %q (default)", model, defaultFallbackModel)
 	}
 }
 
