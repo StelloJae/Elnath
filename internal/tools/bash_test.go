@@ -731,6 +731,66 @@ func TestBash_ProcessGroup_SigkillEscalation(t *testing.T) {
 	t.Fatalf("parent pid %d survived SIGTERM+grace+SIGKILL path", pid)
 }
 
+// TestBash_ProcessGroup_BackgroundChildKilledAfterNormalExit guards
+// against GPT review finding P0-4-B: a child backgrounded by the user
+// command survives the parent bash's normal exit unless the tool
+// cleans up the leftover process group. The child inherits the same
+// pgid via Setpgid=true, so terminating the group after Wait returns
+// reaps it. Without this cleanup the orphaned sleep would be
+// reparented to init and leak until host teardown.
+func TestBash_ProcessGroup_BackgroundChildKilledAfterNormalExit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("background child cleanup deferred on Windows (TODO: Job Objects)")
+	}
+	root := t.TempDir()
+	guard := NewPathGuard(root, nil)
+	tool := NewBashTool(guard)
+
+	ctx := WithSessionID(context.Background(), "pgrp-bgchild")
+	sessionDir, err := guard.EnsureSessionWorkDir("pgrp-bgchild")
+	if err != nil {
+		t.Fatalf("ensure session: %v", err)
+	}
+	realSession, err := filepath.EvalSymlinks(sessionDir)
+	if err != nil {
+		t.Fatalf("resolve session: %v", err)
+	}
+	pidFile := filepath.Join(realSession, "child.pid")
+
+	// Parent bash exits 0 without waiting; sleep should be reaped by
+	// the post-Wait process group cleanup.
+	script := `sleep 30 >/dev/null 2>&1 & echo $! > child.pid; echo done`
+	res, err := tool.Execute(ctx, makeBashParams(t, script, nil))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("expected success; got error: %s", res.Output)
+	}
+	if !strings.Contains(res.Output, "done") {
+		t.Errorf("expected output to contain 'done'; got: %s", res.Output)
+	}
+
+	pidBytes, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatalf("read pid file: %v", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(pidBytes)))
+	if err != nil {
+		t.Fatalf("parse pid: %v", err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := syscall.Kill(pid, 0); err != nil {
+			return // ESRCH — background child reaped via group cleanup
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	_ = syscall.Kill(pid, syscall.SIGKILL)
+	t.Fatalf("background child pid %d still alive after normal bash exit; post-Wait group cleanup failed", pid)
+}
+
 // TestBash_Preflight_RejectsMalformedShell confirms that a command
 // whose shell syntax cannot be parsed is blocked at preflight rather
 // than handed to bash. Before P0-5 the AST analyzer returned

@@ -16,14 +16,34 @@ func configureProcessCleanup(cmd *exec.Cmd) {
 	_ = cmd
 }
 
-// terminateProcessTree sends a direct kill to the bash child.
-// Grandchildren are not reached — see the configureProcessCleanup
-// TODO. The grace parameter is unused today; the future Job Object
-// implementation will honor it.
-func terminateProcessTree(cmd *exec.Cmd, grace time.Duration) {
+// terminateProcessGroup performs a best-effort direct kill of the
+// bash child. Grandchildren are not reached — see the TODO on
+// configureProcessCleanup.
+func terminateProcessGroup(cmd *exec.Cmd) error {
 	if cmd == nil || cmd.Process == nil {
-		return
+		return nil
 	}
-	_ = cmd.Process.Kill()
+	return cmd.Process.Kill()
+}
+
+// killProcessGroup is identical to terminateProcessGroup on Windows
+// today; the future Job Object implementation will distinguish them.
+func killProcessGroup(cmd *exec.Cmd) error {
+	return terminateProcessGroup(cmd)
+}
+
+// processGroupAlive conservatively reports the group as gone once the
+// direct child has exited. Without Job Objects we cannot reliably
+// enumerate orphaned grandchildren, so callers should not rely on
+// this path for true tree cleanup.
+func processGroupAlive(cmd *exec.Cmd) bool {
+	return false
+}
+
+// reapOrphanedProcessGroup is effectively a no-op on Windows because
+// processGroupAlive always returns false. The grace parameter is
+// retained so the caller's signature remains cross-platform.
+func reapOrphanedProcessGroup(cmd *exec.Cmd, grace time.Duration) {
+	_ = cmd
 	_ = grace
 }

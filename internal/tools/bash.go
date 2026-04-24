@@ -157,10 +157,29 @@ func (t *BashTool) Execute(ctx context.Context, params json.RawMessage) (*Result
 	var runErr error
 	select {
 	case runErr = <-done:
+		// Normal exit. The parent bash is reaped, but a detached
+		// background child (`foo &` without `wait`) may still hold
+		// the process group. Clean up if anything survived.
+		reapOrphanedProcessGroup(cmd, bashKillGrace)
 	case <-execCtx.Done():
 		canceled = true
-		terminateProcessTree(cmd, bashKillGrace)
-		runErr = <-done
+		_ = terminateProcessGroup(cmd)
+
+		// Wait for cooperative exit up to bashKillGrace before
+		// escalating to SIGKILL. Unlike the previous detached
+		// goroutine this never fires SIGKILL after the group has
+		// already exited, so a recycled PGID cannot receive stray
+		// signals.
+		timer := time.NewTimer(bashKillGrace)
+		select {
+		case runErr = <-done:
+			if !timer.Stop() {
+				<-timer.C
+			}
+		case <-timer.C:
+			_ = killProcessGroup(cmd)
+			runErr = <-done
+		}
 	}
 
 	if canceled {
