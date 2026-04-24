@@ -49,7 +49,10 @@ func (t *BashTool) IsConcurrencySafe(json.RawMessage) bool { return false }
 
 func (t *BashTool) Reversible() bool { return false }
 
-func (t *BashTool) ShouldCancelSiblingsOnError() bool { return true }
+// ShouldCancelSiblingsOnError returns false so non-zero bash exits
+// surface to the LLM as tool_result(IsError=true), letting the agent
+// recover on the next turn instead of aborting the workflow.
+func (t *BashTool) ShouldCancelSiblingsOnError() bool { return false }
 
 func (t *BashTool) Scope(params json.RawMessage) ToolScope {
 	var p bashParams

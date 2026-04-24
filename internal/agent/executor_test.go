@@ -310,7 +310,7 @@ func TestCancel_BashFailureCancelsSiblings(t *testing.T) {
 	}
 }
 
-func TestCancel_RealBashFailureCancelsSiblings(t *testing.T) {
+func TestCancel_BashFailureDoesNotCancelSiblings(t *testing.T) {
 	workDir := t.TempDir()
 	bashTool := tools.NewBashTool(tools.NewPathGuard(workDir, nil))
 	read := &fakeTool{name: "slow_read", safe: true, reversible: true, scope: tools.ToolScope{ReadPaths: []string{filepath.Join(t.TempDir(), "outside")}}, sleep: 500 * time.Millisecond}
@@ -320,23 +320,30 @@ func TestCancel_RealBashFailureCancelsSiblings(t *testing.T) {
 	reg.Register(read)
 
 	start := time.Now()
-	_, err := newTestAgent(reg).executeTools(context.Background(), nil, []llm.ToolUseBlock{
+	messages, err := newTestAgent(reg).executeTools(context.Background(), nil, []llm.ToolUseBlock{
 		{ID: "bash", Name: bashTool.Name(), Input: json.RawMessage(`{"command":"false","timeout_ms":1000}`)},
 		{ID: "read", Name: read.Name(), Input: json.RawMessage(`{}`)},
 	}, nil)
 	elapsed := time.Since(start)
-	if err == nil {
-		t.Fatal("expected fatal error, got nil")
+	if err != nil {
+		t.Fatalf("executeTools returned err = %v, want nil (bash failure should reach LLM as tool_result, not abort)", err)
 	}
-	if !errors.Is(err, core.ErrToolExecution) {
-		t.Fatalf("error = %v, want wrapping core.ErrToolExecution", err)
+	blocks := toolResultBlocks(t, messages)
+	if len(blocks) != 2 {
+		t.Fatalf("len(blocks) = %d, want 2", len(blocks))
 	}
-	if elapsed >= 200*time.Millisecond {
-		t.Fatalf("wallclock = %s, want real bash failure to cancel sibling", elapsed)
+	if !blocks[0].IsError {
+		t.Fatalf("bash block IsError = false, want true (exit 1)")
+	}
+	if blocks[1].IsError {
+		t.Fatalf("read block unexpectedly IsError = true")
+	}
+	if elapsed < 400*time.Millisecond {
+		t.Fatalf("wallclock = %s, want slow sibling to keep running past bash failure", elapsed)
 	}
 	readStart, readFinish := read.interval()
-	if readFinish.Sub(readStart) >= 500*time.Millisecond {
-		t.Fatalf("slow read ran full duration: %s", readFinish.Sub(readStart))
+	if readFinish.Sub(readStart) < 400*time.Millisecond {
+		t.Fatalf("slow read was canceled early: %s", readFinish.Sub(readStart))
 	}
 }
 

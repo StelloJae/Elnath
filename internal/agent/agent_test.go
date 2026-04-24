@@ -1240,3 +1240,61 @@ func TestAgent_CompressionCircuitBreaker(t *testing.T) {
 		t.Fatal("compressFunc was never invoked; proactive path appears dead")
 	}
 }
+
+// TestAgentRecoversFromBashToolError guards against the P07 root cause
+// (v39 lane 2.2): a bash command that exits non-zero must surface to the
+// LLM as a tool_result(IsError=true) so the agent can self-correct on
+// the next turn. Before the fix, BashTool.ShouldCancelSiblingsOnError
+// returned true and the executor converted any bash IsError into a
+// fatal workflow error, blocking single-step recovery (see
+// /tmp/p07-direct.stderr "tool execution failed: bash: ... python:
+// command not found").
+func TestAgentRecoversFromBashToolError(t *testing.T) {
+	guard := tools.NewPathGuard(t.TempDir(), nil)
+	reg := tools.NewRegistry()
+	reg.Register(tools.NewBashTool(guard))
+
+	streamCalls := 0
+	p := &mockProvider{
+		streamFn: func(ctx context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
+			streamCalls++
+			switch streamCalls {
+			case 1:
+				cb(llm.StreamEvent{Type: llm.EventToolUseStart, ToolCall: &llm.ToolUseEvent{ID: "b1", Name: "bash"}})
+				cb(llm.StreamEvent{Type: llm.EventToolUseDone, ToolCall: &llm.ToolUseEvent{ID: "b1", Name: "bash", Input: `{"command":"exit 42"}`}})
+				cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{InputTokens: 10, OutputTokens: 5}})
+			default:
+				cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: "command failed; reporting unverified"})
+				cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{InputTokens: 20, OutputTokens: 12}})
+			}
+			return nil
+		},
+	}
+
+	a := New(p, reg)
+	result, err := a.Run(context.Background(), []llm.Message{llm.NewUserMessage("run exit 42")}, nil)
+	if err != nil {
+		t.Fatalf("Run returned err = %v; agent must recover from bash failure, not abort the workflow", err)
+	}
+	if streamCalls < 2 {
+		t.Fatalf("streamCalls = %d, want >= 2 (LLM must get a recovery turn after bash error)", streamCalls)
+	}
+	if result == nil {
+		t.Fatal("result is nil; agent must complete even when bash reports IsError")
+	}
+	last := result.Messages[len(result.Messages)-1]
+	if !strings.Contains(last.Text(), "reporting unverified") {
+		t.Fatalf("final assistant text = %q, want recovery sentence", last.Text())
+	}
+	sawErrorToolResult := false
+	for _, m := range result.Messages {
+		for _, b := range m.Content {
+			if tr, ok := b.(llm.ToolResultBlock); ok && tr.IsError {
+				sawErrorToolResult = true
+			}
+		}
+	}
+	if !sawErrorToolResult {
+		t.Fatal("expected tool_result(IsError=true) in messages so the LLM sees the failure detail")
+	}
+}
