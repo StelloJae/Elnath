@@ -305,6 +305,155 @@ func TestBashAccessors(t *testing.T) {
 	}
 }
 
+// TestBash_EnvDoesNotLeakSecret verifies that provider API keys on the
+// host environment are not inherited by bash invocations. P0-2 clean
+// env baseline.
+func TestBash_EnvDoesNotLeakSecret(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "sk-leak")
+	tool := NewBashTool(NewPathGuard(t.TempDir(), nil))
+	res, err := tool.Execute(context.Background(), makeBashParams(t, `printf %s "$OPENAI_API_KEY"`, nil))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.Output)
+	}
+	if strings.Contains(res.Output, "sk-leak") {
+		t.Errorf("OPENAI_API_KEY leaked into bash; output=%q", res.Output)
+	}
+}
+
+// TestBash_EnvBlocksSshAuthSock: SSH_AUTH_SOCK exposure would let a
+// shell command authenticate to other hosts as the real user.
+func TestBash_EnvBlocksSshAuthSock(t *testing.T) {
+	t.Setenv("SSH_AUTH_SOCK", "/tmp/elnath-test-agent.sock")
+	tool := NewBashTool(NewPathGuard(t.TempDir(), nil))
+	res, err := tool.Execute(context.Background(), makeBashParams(t, `printf %s "$SSH_AUTH_SOCK"`, nil))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if strings.Contains(res.Output, "elnath-test-agent.sock") {
+		t.Errorf("SSH_AUTH_SOCK leaked: %q", res.Output)
+	}
+}
+
+// TestBash_EnvBlocksBashEnvInjection verifies that a host-set BASH_ENV
+// does not cause bash to source attacker-controlled files before the
+// user command runs.
+func TestBash_EnvBlocksBashEnvInjection(t *testing.T) {
+	injectorDir := t.TempDir()
+	injector := filepath.Join(injectorDir, "injector.sh")
+	if err := os.WriteFile(injector, []byte("echo ELNATH_INJECTED_MARKER\n"), 0o644); err != nil {
+		t.Fatalf("write injector: %v", err)
+	}
+	t.Setenv("BASH_ENV", injector)
+
+	tool := NewBashTool(NewPathGuard(t.TempDir(), nil))
+	res, err := tool.Execute(context.Background(), makeBashParams(t, "echo ok", nil))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if strings.Contains(res.Output, "ELNATH_INJECTED_MARKER") {
+		t.Errorf("BASH_ENV injection fired; output=%q", res.Output)
+	}
+	if !strings.Contains(res.Output, "ok") {
+		t.Errorf("expected 'ok' in output, got %q", res.Output)
+	}
+}
+
+// TestBash_EnvBlocksAwsSecret enforces the AWS_ prefix policy.
+func TestBash_EnvBlocksAwsSecret(t *testing.T) {
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "aws-leak")
+	tool := NewBashTool(NewPathGuard(t.TempDir(), nil))
+	res, err := tool.Execute(context.Background(), makeBashParams(t, `printf %s "$AWS_SECRET_ACCESS_KEY"`, nil))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if strings.Contains(res.Output, "aws-leak") {
+		t.Errorf("AWS_SECRET_ACCESS_KEY leaked: %q", res.Output)
+	}
+}
+
+// TestBash_EnvSetsHomeToSession pins HOME inside the per-session
+// workspace so shell commands cannot read or write through the real
+// user's home directory.
+func TestBash_EnvSetsHomeToSession(t *testing.T) {
+	root := t.TempDir()
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
+	t.Setenv("HOME", "/not/the/session")
+
+	guard := NewPathGuard(root, nil)
+	tool := NewBashTool(guard)
+	ctx := WithSessionID(context.Background(), "home-sess")
+
+	res, err := tool.Execute(ctx, makeBashParams(t, `printf %s "$HOME"`, nil))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.Output)
+	}
+	wantSuffix := filepath.Join("sessions", "home-sess")
+	if !strings.Contains(res.Output, wantSuffix) {
+		t.Errorf("HOME = %q, expected to contain %q", res.Output, wantSuffix)
+	}
+	if !strings.Contains(res.Output, realRoot) {
+		t.Errorf("HOME = %q, expected to be under %q", res.Output, realRoot)
+	}
+	if strings.Contains(res.Output, "/not/the/session") {
+		t.Errorf("HOME leaked host value: %q", res.Output)
+	}
+}
+
+// TestBash_EnvTmpDirInsideSession ensures TMPDIR is rewritten to the
+// session workspace's .tmp subdirectory.
+func TestBash_EnvTmpDirInsideSession(t *testing.T) {
+	root := t.TempDir()
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
+	guard := NewPathGuard(root, nil)
+	tool := NewBashTool(guard)
+	ctx := WithSessionID(context.Background(), "tmp-sess")
+
+	res, err := tool.Execute(ctx, makeBashParams(t, `printf %s "$TMPDIR"`, nil))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.Output)
+	}
+	wantSuffix := filepath.Join("sessions", "tmp-sess", ".tmp")
+	if !strings.Contains(res.Output, wantSuffix) {
+		t.Errorf("TMPDIR = %q, expected to contain %q", res.Output, wantSuffix)
+	}
+	if !strings.Contains(res.Output, realRoot) {
+		t.Errorf("TMPDIR = %q, expected to be under %q", res.Output, realRoot)
+	}
+}
+
+// TestBash_EnvPinsShellAndTerm ensures bash sees a deterministic
+// non-interactive TERM and a known SHELL regardless of the host.
+func TestBash_EnvPinsShellAndTerm(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("SHELL", "/opt/homebrew/bin/fish")
+	tool := NewBashTool(NewPathGuard(t.TempDir(), nil))
+	res, err := tool.Execute(context.Background(), makeBashParams(t, `printf "%s|%s" "$TERM" "$SHELL"`, nil))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.Output)
+	}
+	if !strings.Contains(res.Output, "dumb|/bin/bash") {
+		t.Errorf("TERM|SHELL = %q, want contains 'dumb|/bin/bash'", res.Output)
+	}
+}
+
 func TestAnalyzeCommand(t *testing.T) {
 	cases := []struct {
 		command   string

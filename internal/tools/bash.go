@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -98,6 +99,15 @@ func (t *BashTool) Execute(ctx context.Context, params json.RawMessage) (*Result
 	if sessErr != nil {
 		return ErrorResult(fmt.Sprintf("session workspace: %v", sessErr)), nil
 	}
+	// Canonicalize the session root so HOME / TMPDIR / PWD agree with
+	// the paths bash itself observes after macOS /tmp → /private/tmp
+	// symlink resolution.
+	sessionReal, err := filepath.EvalSymlinks(sessionDir)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("resolve session root: %v", err)), nil
+	}
+	sessionDir = sessionReal
+
 	workDir := sessionDir
 	if p.WorkingDir != "" {
 		resolved, err := t.guard.ResolveWorkingDir(sessionDir, p.WorkingDir)
@@ -107,17 +117,26 @@ func (t *BashTool) Execute(ctx context.Context, params json.RawMessage) (*Result
 		workDir = resolved
 	}
 
+	// TMPDIR is pinned inside the session workspace; create the
+	// directory eagerly so shell tools that rely on $TMPDIR existing
+	// (mktemp, go test cache, etc.) do not fail on first use.
+	tmpDir := filepath.Join(sessionDir, ".tmp")
+	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+		return ErrorResult(fmt.Sprintf("prepare session tmp: %v", err)), nil
+	}
+
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(execCtx, "bash", "-c", p.Command)
 	cmd.Dir = workDir
+	cmd.Env = cleanBashEnv(os.Environ(), sessionDir, workDir)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	err := cmd.Run()
+	err = cmd.Run()
 	combined := stdout.String()
 	if stderr.Len() > 0 {
 		if combined != "" {
