@@ -55,39 +55,153 @@ func TestBashTimeout(t *testing.T) {
 	}
 }
 
-func TestBashOutputTruncatesStdout(t *testing.T) {
+// TestBash_OutputSmallWithoutTruncation verifies that commands whose
+// output fits under the per-stream cap are returned verbatim with no
+// truncation marker. P0-3 bounded output.
+func TestBash_OutputSmallWithoutTruncation(t *testing.T) {
 	tool := NewBashTool(NewPathGuard(t.TempDir(), nil))
-
-	res, err := tool.Execute(context.Background(), makeBashParams(t, "head -c 70000 /dev/zero | tr '\\000' 'a'", nil))
+	res, err := tool.Execute(context.Background(), makeBashParams(t, "echo hello", nil))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 	if res.IsError {
-		t.Fatalf("unexpected error result: %s", res.Output)
+		t.Fatalf("unexpected error: %s", res.Output)
 	}
-	if len(res.Output) > toolMaxOutputBytes {
-		t.Fatalf("output len = %d, want <= %d", len(res.Output), toolMaxOutputBytes)
+	if strings.Contains(res.Output, "output truncated") {
+		t.Errorf("small output should not carry truncation marker: %q", res.Output)
 	}
-	if !strings.Contains(res.Output, "output truncated") {
-		t.Fatalf("expected truncation marker, got %q", res.Output[len(res.Output)-80:])
+	if !strings.Contains(res.Output, "STDOUT:\nhello") {
+		t.Errorf("STDOUT section missing hello: %q", res.Output)
+	}
+	if !strings.Contains(res.Output, "[stdout: 6 bytes]") {
+		t.Errorf("metadata header missing/wrong: %q", res.Output)
 	}
 }
 
-func TestBashOutputTruncatesCombinedStreams(t *testing.T) {
+// TestBash_OutputStdoutExceedsCap ensures stdout larger than the
+// per-stream cap is truncated and flagged.
+func TestBash_OutputStdoutExceedsCap(t *testing.T) {
 	tool := NewBashTool(NewPathGuard(t.TempDir(), nil))
-
-	res, err := tool.Execute(context.Background(), makeBashParams(t, "head -c 70000 /dev/zero | tr '\\000' 'b' 1>&2", nil))
+	// 400_000 bytes of 'a' exceeds the 256 KiB per-stream cap.
+	cmd := "head -c 400000 /dev/zero | tr '\\000' 'a'"
+	res, err := tool.Execute(context.Background(), makeBashParams(t, cmd, nil))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 	if res.IsError {
-		t.Fatalf("unexpected error result: %s", res.Output)
+		t.Fatalf("unexpected error: %s", res.Output)
 	}
-	if len(res.Output) > toolMaxOutputBytes {
-		t.Fatalf("output len = %d, want <= %d", len(res.Output), toolMaxOutputBytes)
+	if !strings.Contains(res.Output, "[stdout: 400000 bytes, truncated") {
+		t.Errorf("stdout metadata header missing/wrong: %q", res.Output[:200])
 	}
 	if !strings.Contains(res.Output, "output truncated") {
-		t.Fatalf("expected truncation marker, got %q", res.Output[len(res.Output)-80:])
+		t.Errorf("stream-level truncation marker missing")
+	}
+	// Output size is bounded near 2 * cap + small header budget.
+	if len(res.Output) > 2*bashOutputCapPerStream+4096 {
+		t.Errorf("output len = %d, want near per-stream cap", len(res.Output))
+	}
+}
+
+// TestBash_OutputStderrExceedsCap ensures stderr is capped
+// independently and does not affect stdout reporting.
+func TestBash_OutputStderrExceedsCap(t *testing.T) {
+	tool := NewBashTool(NewPathGuard(t.TempDir(), nil))
+	cmd := "head -c 400000 /dev/zero | tr '\\000' 'b' 1>&2"
+	res, err := tool.Execute(context.Background(), makeBashParams(t, cmd, nil))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.Output)
+	}
+	if !strings.Contains(res.Output, "[stdout: 0 bytes]") {
+		t.Errorf("stdout should be empty; header=%q", res.Output[:200])
+	}
+	if !strings.Contains(res.Output, "[stderr: 400000 bytes, truncated") {
+		t.Errorf("stderr metadata header missing/wrong")
+	}
+}
+
+// TestBash_OutputBothStreamsCappedIndependently emits large output on
+// both streams and verifies each is truncated separately.
+func TestBash_OutputBothStreamsCappedIndependently(t *testing.T) {
+	tool := NewBashTool(NewPathGuard(t.TempDir(), nil))
+	cmd := "head -c 400000 /dev/zero | tr '\\000' 'a'; head -c 400000 /dev/zero | tr '\\000' 'b' 1>&2"
+	res, err := tool.Execute(context.Background(), makeBashParams(t, cmd, nil))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.Output)
+	}
+	if !strings.Contains(res.Output, "[stdout: 400000 bytes, truncated") {
+		t.Errorf("stdout not truncated: %q", res.Output[:200])
+	}
+	if !strings.Contains(res.Output, "[stderr: 400000 bytes, truncated") {
+		t.Errorf("stderr not truncated: %q", res.Output[:200])
+	}
+}
+
+// TestBash_OutputPreservesHeadAndTail emits recognizable markers at
+// the start and end of a large output and checks both survive the
+// cap; the middle must be dropped behind a truncation marker.
+func TestBash_OutputPreservesHeadAndTail(t *testing.T) {
+	tool := NewBashTool(NewPathGuard(t.TempDir(), nil))
+	// 400_000 bytes of 'x' between HEAD and TAIL.
+	cmd := "printf HEADMARKER; head -c 400000 /dev/zero | tr '\\000' 'x'; printf TAILMARKER"
+	res, err := tool.Execute(context.Background(), makeBashParams(t, cmd, nil))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.Output)
+	}
+	if !strings.Contains(res.Output, "HEADMARKER") {
+		t.Errorf("head preserved HEADMARKER missing")
+	}
+	if !strings.Contains(res.Output, "TAILMARKER") {
+		t.Errorf("tail preserved TAILMARKER missing")
+	}
+	if !strings.Contains(res.Output, "output truncated") {
+		t.Errorf("truncation marker missing")
+	}
+}
+
+// TestBash_OutputCommandNotKilledOnCapExceed guarantees that a
+// command producing more bytes than the cap still finishes with
+// exit 0, matching real shell semantics. P0-3 scope is drop/
+// truncate, not flow-control or kill.
+func TestBash_OutputCommandNotKilledOnCapExceed(t *testing.T) {
+	tool := NewBashTool(NewPathGuard(t.TempDir(), nil))
+	cmd := "head -c 400000 /dev/zero | tr '\\000' 'a'; echo AFTER-TRUNCATE; exit 0"
+	res, err := tool.Execute(context.Background(), makeBashParams(t, cmd, nil))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("command should exit 0 even after cap exceed: %s", res.Output)
+	}
+	if !strings.Contains(res.Output, "AFTER-TRUNCATE") {
+		t.Errorf("post-truncation output lost; bash was killed prematurely: %q", res.Output[len(res.Output)-200:])
+	}
+}
+
+// TestBash_OutputNonZeroExitAfterTruncation preserves Lane 2.2
+// invariant: a non-zero exit after large output is still a
+// recoverable tool_result(IsError=true), not a fatal workflow abort.
+func TestBash_OutputNonZeroExitAfterTruncation(t *testing.T) {
+	tool := NewBashTool(NewPathGuard(t.TempDir(), nil))
+	cmd := "head -c 400000 /dev/zero | tr '\\000' 'a'; exit 42"
+	res, err := tool.Execute(context.Background(), makeBashParams(t, cmd, nil))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("exit 42 should surface as IsError=true")
+	}
+	if !strings.Contains(res.Output, "[stdout: 400000 bytes, truncated") {
+		t.Errorf("stdout metadata missing on error path: %q", res.Output[:200])
 	}
 }
 

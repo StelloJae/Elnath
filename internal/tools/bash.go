@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -132,32 +131,28 @@ func (t *BashTool) Execute(ctx context.Context, params json.RawMessage) (*Result
 	cmd.Dir = workDir
 	cmd.Env = cleanBashEnv(os.Environ(), sessionDir, workDir)
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdout := newCappedOutput(bashOutputCapPerStream)
+	stderr := newCappedOutput(bashOutputCapPerStream)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 
 	err = cmd.Run()
-	combined := stdout.String()
-	if stderr.Len() > 0 {
-		if combined != "" {
-			combined += "\n"
-		}
-		combined += stderr.String()
-	}
-	combined = truncateOutput(combined, toolMaxOutputBytes)
 
 	if execCtx.Err() == context.DeadlineExceeded {
 		return ErrorResult(fmt.Sprintf("command timed out after %s", timeout)), nil
 	}
-	if err != nil {
-		msg := combined
-		if msg == "" {
-			msg = err.Error()
-		}
-		return &Result{Output: msg, IsError: true}, nil
+
+	// Surface exec-level failures that produced no stream output
+	// (e.g. "bash not found") so the agent has something actionable.
+	if err != nil && stdout.RawBytes() == 0 && stderr.RawBytes() == 0 {
+		stderr.Write([]byte(err.Error()))
 	}
 
-	return SuccessResult(combined), nil
+	body := formatBashOutput(stdout, stderr)
+	if err != nil {
+		return &Result{Output: body, IsError: true}, nil
+	}
+	return SuccessResult(body), nil
 }
 
 // analyzeCommand parses the shell command AST and checks for dangerous patterns.
