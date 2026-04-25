@@ -303,15 +303,11 @@ func TestNewBashRunnerForConfig_SeatbeltOnCurrentPlatform(t *testing.T) {
 	}
 }
 
-func TestNewBashRunnerForConfig_BwrapUnsupported(t *testing.T) {
-	_, err := NewBashRunnerForConfig(SandboxConfig{Mode: "bwrap"})
-	if err == nil {
-		t.Fatalf("expected unsupported error for bwrap mode")
-	}
-	if !strings.Contains(err.Error(), "not yet implemented") {
-		t.Errorf("expected 'not yet implemented' in error, got: %v", err)
-	}
-}
+// TestNewBashRunnerForConfig_BwrapUnsupported has been superseded by
+// TestNewBashRunnerForConfig_BwrapOnCurrentPlatform in
+// bash_runner_bwrap_test.go: bwrap is now wired in the factory and
+// the diagnostic message depends on platform availability rather than
+// a hardcoded "not yet implemented" string.
 
 func TestNewBashRunnerForConfig_UnknownMode(t *testing.T) {
 	_, err := NewBashRunnerForConfig(SandboxConfig{Mode: "ferret"})

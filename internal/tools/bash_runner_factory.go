@@ -61,7 +61,20 @@ func NewBashRunnerForConfig(cfg SandboxConfig) (BashRunner, error) {
 		}
 		return r, nil
 	case "bwrap":
-		return nil, fmt.Errorf("sandbox mode %q not yet implemented (B3b-3 Linux bwrap lane pending)", cfg.Mode)
+		// B3b-3 ships default-deny network only; userspace IP/domain
+		// allowlist on Linux requires the B3b-4 network proxy lane.
+		// A non-empty allowlist with bwrap mode is rejected at the
+		// factory so a config that expected allowlist semantics
+		// cannot silently degrade to "no network".
+		if len(cfg.NetworkAllowlist) > 0 {
+			return nil, fmt.Errorf("sandbox mode %q does not yet support a network allowlist; bwrap is default-deny only in B3b-3 (allowlist support is the B3b-4 network proxy lane)", cfg.Mode)
+		}
+		r := NewBwrapRunner()
+		p := r.Probe(context.Background())
+		if !p.Available {
+			return nil, fmt.Errorf("sandbox mode %q unavailable: %s", cfg.Mode, p.Message)
+		}
+		return r, nil
 	default:
 		return nil, fmt.Errorf("unknown sandbox mode %q", cfg.Mode)
 	}

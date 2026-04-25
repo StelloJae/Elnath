@@ -1,0 +1,50 @@
+name: Linux Sandbox Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# B3b-3 ship gate. Runs the full Go test suite on Linux with bwrap
+# installed so the //go:build linux runtime tests in
+# internal/tools/bash_runner_bwrap_linux_test.go actually exercise
+# user-namespace isolation, network deny, and host filesystem
+# read-only binds. Per the v41 partner verdict the BwrapRunner is not
+# considered shipped until this workflow is green.
+
+jobs:
+  bwrap-tests:
+    name: Bubblewrap substrate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          check-latest: true
+
+      - name: Install bubblewrap and netcat
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap netcat-openbsd
+
+      - name: Verify bwrap user-namespace probe
+        # Mirrors BwrapRunner.runProbe; failing here means the runner
+        # would refuse to ship on this host and the integration tests
+        # below would all skip — surface the failure early so it does
+        # not silently hide a regression.
+        run: bwrap --unshare-user --unshare-net --ro-bind / / /bin/true
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Run all package tests with race detector
+        run: go test -race -count=1 ./...
+
+      - name: Run linux-tagged sandbox tests
+        run: go test -race -count=1 -run 'Bwrap' ./internal/tools/...
