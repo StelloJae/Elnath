@@ -33,6 +33,24 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bubblewrap netcat-openbsd
 
+      - name: Permit unprivileged user namespaces
+        # Ubuntu 24.04 (and later 22.04 kernels) ships AppArmor
+        # restrictions that block unprivileged user namespaces by
+        # default. Without this disabled bwrap fails its loopback
+        # setup with "Failed RTM_NEWADDR: Operation not permitted"
+        # the moment --unshare-net is used. Production deployments
+        # need either this sysctl flipped, an AppArmor profile that
+        # allows /usr/bin/bwrap to use userns, or a kernel without
+        # the restriction; the BwrapRunner probe reports the
+        # underlying kernel error so operators can pick a fix.
+        run: |
+          if [ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          fi
+          if [ -f /proc/sys/kernel/unprivileged_userns_clone ]; then
+            echo 1 | sudo tee /proc/sys/kernel/unprivileged_userns_clone
+          fi
+
       - name: Verify bwrap user-namespace probe
         # Mirrors BwrapRunner.runProbe; failing here means the runner
         # would refuse to ship on this host and the integration tests
