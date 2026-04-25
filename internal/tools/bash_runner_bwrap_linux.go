@@ -143,16 +143,22 @@ func (r *BwrapRunner) Run(ctx context.Context, req BashRunRequest) (BashRunResul
 }
 
 // bwrapHostReadBinds names the only host paths exposed read-only inside
-// the sandbox. /bin, /usr, /sbin, /lib, /lib64, /lib32, /libx32 cover
-// the shell, libc, dynamic linker, and the standard coreutils. /etc is
-// included so libc / pam / nss can resolve uid → name, hostname, time
-// zone, and CA bundles without leaking per-user state — host HOME,
-// /root, /Users, /var (caches, mail, spool, etc.), /opt, /srv, and
-// /mnt are deliberately NOT bound, closing the arbitrary host read
-// surface that --ro-bind / / would have left wide open. --ro-bind-try
-// silently skips entries that do not exist on a given host (e.g.
-// /lib32 on x86_64-only systems) so the runner stays portable.
+// the sandbox. The shell, libc, dynamic linker, and standard coreutils
+// live under /bin, /sbin, /usr, /lib, /lib64, /lib32, /libx32 — those
+// directories are bound whole. /etc is NOT bound whole because that
+// would expose /etc/ssh, /etc/sudoers, /etc/shadow, package configs,
+// and any distro-specific secret-bearing files; instead, only the
+// individual /etc entries libc / nss / the dynamic linker need to
+// resolve uid → name, hostname, time zone, and ldconfig are bound by
+// path. Anything else in /etc — and host HOME, /root, /Users, /var,
+// /opt, /srv, /mnt — stays invisible inside the sandbox.
+//
+// --ro-bind-try silently skips entries that do not exist on a given
+// host (e.g. /lib32 on x86_64-only systems, /etc/ld.so.conf.d on a
+// distro without it) so the runner stays portable across distros
+// without per-distro forks.
 var bwrapHostReadBinds = []string{
+	// Runtime trees: the shell, libc, dynamic linker, coreutils.
 	"/bin",
 	"/sbin",
 	"/usr",
@@ -160,7 +166,20 @@ var bwrapHostReadBinds = []string{
 	"/lib64",
 	"/lib32",
 	"/libx32",
-	"/etc",
+	// /etc subset: ONLY the entries libc / nss / ldconfig / locale
+	// need. Bare /etc is intentionally not bound — see comment
+	// above. Each path passes through --ro-bind-try so distros that
+	// place a file elsewhere (or omit it entirely) do not break the
+	// runner.
+	"/etc/passwd",
+	"/etc/group",
+	"/etc/hosts",
+	"/etc/nsswitch.conf",
+	"/etc/resolv.conf",
+	"/etc/ld.so.cache",
+	"/etc/ld.so.conf",
+	"/etc/ld.so.conf.d",
+	"/etc/localtime",
 }
 
 // buildBwrapArgs composes the bwrap argument list. The order is:
