@@ -14,11 +14,21 @@ import (
 // substituting DirectRunner — silent fallback would defeat the purpose
 // of asking for a sandbox.
 type SeatbeltRunner struct {
-	killGrace time.Duration
+	killGrace        time.Duration
+	networkAllowlist []string
 }
 
 func NewSeatbeltRunner() *SeatbeltRunner {
-	return &SeatbeltRunner{killGrace: bashKillGrace}
+	r, _ := NewSeatbeltRunnerWithAllowlist(nil)
+	return r
+}
+
+func NewSeatbeltRunnerWithAllowlist(allowlist []string) (*SeatbeltRunner, error) {
+	cleaned, err := validateNetworkAllowlist(allowlist)
+	if err != nil {
+		return nil, err
+	}
+	return &SeatbeltRunner{killGrace: bashKillGrace, networkAllowlist: cleaned}, nil
 }
 
 func (r *SeatbeltRunner) Name() string { return "seatbelt" }
@@ -31,8 +41,8 @@ func (r *SeatbeltRunner) Probe(_ context.Context) BashRunnerProbe {
 		Name:               r.Name(),
 		Platform:           runtime.GOOS,
 		Message:            "macos_seatbelt requires darwin",
-		ExecutionMode:      "macos_seatbelt_fs",
-		PolicyName:         "seatbelt-fs",
+		ExecutionMode:      "macos_seatbelt",
+		PolicyName:         "seatbelt",
 		FilesystemEnforced: false,
 		NetworkEnforced:    false,
 		SandboxEnforced:    false,

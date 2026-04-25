@@ -3,14 +3,23 @@ package tools
 import (
 	"context"
 	"fmt"
+	"net"
+	"strconv"
 )
 
 // SandboxConfig captures the user-facing sandbox/runner mode for BashTool.
-// Phase 1 supports only "direct" (the DirectRunner host-process backend).
-// "seatbelt" and "bwrap" are reserved for B3b-2 / B3b-3 substrate lanes
-// and currently return a clear unsupported error rather than silently
-// degrading to DirectRunner — silent fallback would let "sandbox=on"
-// requests run unsandboxed without notice.
+// Phase 1 supports "direct" (DirectRunner host-process backend) and
+// "seatbelt" (macOS Seatbelt substrate). "bwrap" is reserved for the
+// B3b-3 Linux lane and currently returns a clear unsupported error
+// rather than silently degrading to DirectRunner — silent fallback
+// would let "sandbox=on" requests run unsandboxed without notice.
+//
+// NetworkAllowlist is the B3b-2.5 default-deny + explicit IP:port
+// allowlist. Each entry must be "<ipv4|ipv6>:<port>"; domain matching
+// is deferred to B3b-4 with a real network proxy. An empty allowlist
+// blocks all outbound network when the substrate runner enforces
+// network policy. Domain entries are rejected at construction so the
+// caller cannot ship config that silently does nothing.
 //
 // LLM/tool-param input MUST NOT populate this struct. Per the v41 partner
 // verdict, only user-side configuration (config file, CLI flag, or
@@ -19,6 +28,12 @@ import (
 type SandboxConfig struct {
 	// Mode selects the runner backend. Empty string is treated as "direct".
 	Mode string
+
+	// NetworkAllowlist holds explicit "host:port" entries the substrate
+	// permits for outbound TCP/UDP. Each entry must use an IP address;
+	// domain names are rejected. Only the substrate runners read this
+	// field — DirectRunner ignores it (no policy to enforce).
+	NetworkAllowlist []string
 }
 
 // NewBashRunnerForConfig returns a BashRunner for the given config or an
@@ -36,7 +51,10 @@ func NewBashRunnerForConfig(cfg SandboxConfig) (BashRunner, error) {
 	case "", "direct":
 		return NewDirectRunner(), nil
 	case "seatbelt":
-		r := NewSeatbeltRunner()
+		r, err := NewSeatbeltRunnerWithAllowlist(cfg.NetworkAllowlist)
+		if err != nil {
+			return nil, fmt.Errorf("sandbox mode %q: %w", cfg.Mode, err)
+		}
 		p := r.Probe(context.Background())
 		if !p.Available {
 			return nil, fmt.Errorf("sandbox mode %q unavailable: %s", cfg.Mode, p.Message)
@@ -47,4 +65,46 @@ func NewBashRunnerForConfig(cfg SandboxConfig) (BashRunner, error) {
 	default:
 		return nil, fmt.Errorf("unknown sandbox mode %q", cfg.Mode)
 	}
+}
+
+// validateNetworkAllowlist checks each entry is "<IP>:<port>" with a
+// valid loopback IP and a non-zero port < 65536. Domain names AND
+// non-loopback IPs are rejected with an explicit B3b-4 deferral
+// message so config that expected broader allowlist semantics cannot
+// silently degrade to "no network".
+//
+// Phase 1 supports only loopback (127.0.0.1, ::1) because Seatbelt's
+// SBPL `(remote ip ...)` filter accepts only "*" or "localhost" as the
+// host portion — arbitrary IPv4/IPv6 host filtering requires a
+// userspace network proxy (the B3b-4 lane). The validator surfaces
+// this constraint at construction so a caller asking for
+// "10.0.0.5:5000" gets a clear error instead of a silently-broken
+// profile.
+//
+// Returns a defensive copy so callers cannot mutate the live policy
+// after the runner captures it.
+func validateNetworkAllowlist(allowlist []string) ([]string, error) {
+	if len(allowlist) == 0 {
+		return nil, nil
+	}
+	cleaned := make([]string, 0, len(allowlist))
+	for _, entry := range allowlist {
+		host, portStr, err := net.SplitHostPort(entry)
+		if err != nil {
+			return nil, fmt.Errorf("network allowlist entry %q must be IP:port: %w", entry, err)
+		}
+		ip := net.ParseIP(host)
+		if ip == nil {
+			return nil, fmt.Errorf("network allowlist entry %q must use an IP address; domain matching is deferred to B3b-4", entry)
+		}
+		if !ip.IsLoopback() {
+			return nil, fmt.Errorf("network allowlist entry %q must target loopback (127.0.0.1 or ::1); non-loopback allowlists require the network proxy substrate (B3b-4)", entry)
+		}
+		port, err := strconv.ParseUint(portStr, 10, 16)
+		if err != nil || port == 0 {
+			return nil, fmt.Errorf("network allowlist entry %q has invalid port", entry)
+		}
+		cleaned = append(cleaned, entry)
+	}
+	return cleaned, nil
 }

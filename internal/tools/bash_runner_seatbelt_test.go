@@ -36,20 +36,11 @@ func TestSeatbeltRunner_ProbeShape(t *testing.T) {
 	if p.Platform != runtime.GOOS {
 		t.Errorf("probe.Platform = %q, want %q", p.Platform, runtime.GOOS)
 	}
-	if p.PolicyName != "seatbelt-fs" {
-		t.Errorf("probe.PolicyName = %q, want %q", p.PolicyName, "seatbelt-fs")
+	if p.PolicyName != "seatbelt" {
+		t.Errorf("probe.PolicyName = %q, want %q", p.PolicyName, "seatbelt")
 	}
-	if p.ExecutionMode != "macos_seatbelt_fs" {
-		t.Errorf("probe.ExecutionMode = %q, want %q", p.ExecutionMode, "macos_seatbelt_fs")
-	}
-
-	// Label discipline: B3b-2 is filesystem-only. SandboxEnforced and
-	// NetworkEnforced MUST stay false until B3b-2.5 wires network policy.
-	if p.SandboxEnforced {
-		t.Error("SandboxEnforced must be false in B3b-2 (filesystem-only prototype)")
-	}
-	if p.NetworkEnforced {
-		t.Error("NetworkEnforced must be false in B3b-2 (network policy is B3b-2.5)")
+	if p.ExecutionMode != "macos_seatbelt" {
+		t.Errorf("probe.ExecutionMode = %q, want %q", p.ExecutionMode, "macos_seatbelt")
 	}
 
 	if runtime.GOOS == "darwin" {
@@ -59,6 +50,12 @@ func TestSeatbeltRunner_ProbeShape(t *testing.T) {
 		if !p.FilesystemEnforced {
 			t.Error("FilesystemEnforced must be true on darwin (Seatbelt FS profile)")
 		}
+		if !p.NetworkEnforced {
+			t.Error("NetworkEnforced must be true after B3b-2.5 (default-deny + IP:port allowlist)")
+		}
+		if !p.SandboxEnforced {
+			t.Error("SandboxEnforced must be true after B3b-2.5 (FS+Net both enforced)")
+		}
 		if p.Message == "" {
 			t.Error("Probe message should describe the runner")
 		}
@@ -67,8 +64,8 @@ func TestSeatbeltRunner_ProbeShape(t *testing.T) {
 			t.Errorf("expected Available=false on %s, got %+v", runtime.GOOS, p)
 		}
 		// Off-darwin the substrate cannot enforce anything.
-		if p.FilesystemEnforced {
-			t.Error("FilesystemEnforced must be false off darwin")
+		if p.FilesystemEnforced || p.NetworkEnforced || p.SandboxEnforced {
+			t.Error("non-darwin stub must report all enforcement flags false")
 		}
 		if !strings.Contains(p.Message, "darwin") {
 			t.Errorf("probe message should name darwin requirement, got %q", p.Message)
@@ -98,14 +95,49 @@ func TestSeatbeltRunner_OffDarwinRunReturnsUnsupported(t *testing.T) {
 	}
 }
 
-func TestSeatbeltRunner_NeverClaimsSandboxEnforcedOnPartialEnforcement(t *testing.T) {
-	// This is the label-discipline regression test: B3b-2 ships
-	// filesystem isolation only. SandboxEnforced is reserved for the
-	// configuration where filesystem AND network are both enforced.
-	// Until B3b-2.5 ships, the probe must NEVER report SandboxEnforced=true.
+func TestSeatbeltRunner_LabelDisciplineFollowsEnforcement(t *testing.T) {
+	// SandboxEnforced is reserved for the configuration where BOTH
+	// filesystem AND network policies are actually enforced. This
+	// regression test locks the invariant: the probe's
+	// SandboxEnforced flag must equal FilesystemEnforced &&
+	// NetworkEnforced — partial enforcement (e.g., a future profile
+	// that opens network) must immediately flip the SandboxEnforced
+	// label back to false rather than drift silently.
 	r := NewSeatbeltRunner()
 	p := r.Probe(context.Background())
-	if p.SandboxEnforced {
-		t.Fatal("SeatbeltRunner B3b-2 must not report SandboxEnforced=true (network not yet enforced)")
+	want := p.FilesystemEnforced && p.NetworkEnforced
+	if p.SandboxEnforced != want {
+		t.Fatalf("SandboxEnforced=%v but FilesystemEnforced=%v && NetworkEnforced=%v (want %v)",
+			p.SandboxEnforced, p.FilesystemEnforced, p.NetworkEnforced, want)
+	}
+}
+
+func TestNewSeatbeltRunnerWithAllowlist_ValidatesEntries(t *testing.T) {
+	cases := []struct {
+		name      string
+		allowlist []string
+		wantErr   bool
+	}{
+		{"empty", nil, false},
+		{"valid ipv4", []string{"127.0.0.1:8080"}, false},
+		{"valid ipv6", []string{"[::1]:8080"}, false},
+		{"multiple valid loopback", []string{"127.0.0.1:80", "[::1]:443"}, false},
+		{"non-loopback rejected", []string{"10.0.0.1:443"}, true},
+		{"domain rejected", []string{"github.com:443"}, true},
+		{"missing port", []string{"127.0.0.1"}, true},
+		{"port zero rejected", []string{"127.0.0.1:0"}, true},
+		{"port out of range", []string{"127.0.0.1:99999"}, true},
+		{"empty entry", []string{""}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NewSeatbeltRunnerWithAllowlist(tc.allowlist)
+			if tc.wantErr && err == nil {
+				t.Errorf("expected error for %v", tc.allowlist)
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("unexpected error for %v: %v", tc.allowlist, err)
+			}
+		})
 	}
 }

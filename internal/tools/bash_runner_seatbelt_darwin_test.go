@@ -5,9 +5,11 @@ package tools
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -158,9 +160,9 @@ func TestSeatbeltRunner_PreservesB1MetadataShape(t *testing.T) {
 	}
 }
 
-func TestDefaultSeatbeltProfile_AllowsSessionWritesAndDeniesDefault(t *testing.T) {
+func TestSeatbeltProfile_DefaultDenyContent(t *testing.T) {
 	req := BashRunRequest{SessionDir: "/private/tmp/elnath-test-session"}
-	p := defaultSeatbeltProfile(req)
+	p := seatbeltProfile(req, nil)
 
 	required := []string{
 		"(version 1)",
@@ -168,14 +170,193 @@ func TestDefaultSeatbeltProfile_AllowsSessionWritesAndDeniesDefault(t *testing.T
 		`(allow file-write* (subpath "/private/tmp/elnath-test-session"))`,
 		"(allow file-read*)",
 		"(allow process-exec)",
-		// B3b-2 = filesystem-only prototype; network unrestricted on
-		// purpose. Network deny lands in B3b-2.5.
-		"(allow network*)",
 	}
 	for _, want := range required {
 		if !strings.Contains(p, want) {
-			t.Errorf("default profile missing %q:\n%s", want, p)
+			t.Errorf("profile missing %q:\n%s", want, p)
 		}
+	}
+	// B3b-2.5 baseline: no (allow network*) — default-deny network.
+	if strings.Contains(p, "(allow network*)") {
+		t.Errorf("profile must NOT contain (allow network*) under default-deny:\n%s", p)
+	}
+	// No allowlist entries → no (allow network-outbound ...) lines.
+	if strings.Contains(p, "(allow network-outbound") {
+		t.Errorf("empty allowlist should produce zero network-outbound lines:\n%s", p)
+	}
+}
+
+func TestSeatbeltProfile_AllowlistEmitsLocalhostEntries(t *testing.T) {
+	// Seatbelt SBPL only accepts "*" or "localhost" as the host part of
+	// (remote ip "host:port") — non-localhost IPs are rejected by the
+	// SBPL parser. Phase 1 of B3b-2.5 therefore restricts the allowlist
+	// to loopback IPs and emits the SBPL-acceptable "localhost:port"
+	// form regardless of which loopback variant the caller specified.
+	req := BashRunRequest{SessionDir: "/private/tmp/x"}
+	allowlist := []string{"127.0.0.1:5555", "[::1]:8080"}
+	p := seatbeltProfile(req, allowlist)
+
+	for _, port := range []string{"5555", "8080"} {
+		want := fmt.Sprintf(`(allow network-outbound (remote ip "localhost:%s"))`, port)
+		if !strings.Contains(p, want) {
+			t.Errorf("profile missing localhost rule for port %s:\n%s", port, p)
+		}
+	}
+	// The raw "127.0.0.1" or "::1" host strings must NOT appear in
+	// the profile because Seatbelt rejects them; the translation to
+	// "localhost" is what makes the allowlist actually enforce.
+	if strings.Contains(p, "127.0.0.1:") {
+		t.Errorf("profile must translate 127.0.0.1 to localhost:\n%s", p)
+	}
+	if !strings.Contains(p, "(deny default)") {
+		t.Errorf("profile must keep (deny default) baseline:\n%s", p)
+	}
+}
+
+// startTestTCPServer starts a goroutine listener on 127.0.0.1:0 and
+// returns the bound port plus a flag that flips to true once any
+// client connects. Cleanup closes the listener at test end.
+func startTestTCPServer(t *testing.T) (port int, accepted *atomic.Bool) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen: %v", err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+
+	addr := listener.Addr().(*net.TCPAddr)
+	accepted = &atomic.Bool{}
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			accepted.Store(true)
+			_ = conn.Close()
+		}
+	}()
+	return addr.Port, accepted
+}
+
+func TestSeatbeltNetwork_DefaultDenyBlocksLocalTCP(t *testing.T) {
+	port, accepted := startTestTCPServer(t)
+	sessionDir, _ := seatbeltSessionDirs(t)
+
+	runner, err := NewSeatbeltRunnerWithAllowlist(nil)
+	if err != nil {
+		t.Fatalf("NewSeatbeltRunnerWithAllowlist(nil): %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res, runErr := runner.Run(ctx, BashRunRequest{
+		Command:    fmt.Sprintf("nc -z -w 2 127.0.0.1 %d", port),
+		WorkDir:    sessionDir,
+		SessionDir: sessionDir,
+		DisplayCWD: ".",
+	})
+	if runErr != nil {
+		t.Fatalf("Run: %v", runErr)
+	}
+
+	if !res.IsError {
+		t.Errorf("expected nc connection to fail under default-deny network; output: %s", res.Output)
+	}
+	// Give the kernel a beat to settle in case a SYN raced the deny.
+	time.Sleep(150 * time.Millisecond)
+	if accepted.Load() {
+		t.Errorf("server accepted connection — Seatbelt did NOT block default-deny outbound TCP")
+	}
+}
+
+func TestSeatbeltNetwork_AllowlistAllowsExactIPPort(t *testing.T) {
+	port, accepted := startTestTCPServer(t)
+	sessionDir, _ := seatbeltSessionDirs(t)
+
+	allowlist := []string{fmt.Sprintf("127.0.0.1:%d", port)}
+	runner, err := NewSeatbeltRunnerWithAllowlist(allowlist)
+	if err != nil {
+		t.Fatalf("NewSeatbeltRunnerWithAllowlist: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res, runErr := runner.Run(ctx, BashRunRequest{
+		Command:    fmt.Sprintf("nc -z -w 2 127.0.0.1 %d", port),
+		WorkDir:    sessionDir,
+		SessionDir: sessionDir,
+		DisplayCWD: ".",
+	})
+	if runErr != nil {
+		t.Fatalf("Run: %v", runErr)
+	}
+	if res.IsError {
+		t.Fatalf("expected allowlisted endpoint to be reachable; output: %s", res.Output)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if accepted.Load() {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Errorf("server did NOT accept connection — Seatbelt allowlist did not permit 127.0.0.1:%d", port)
+}
+
+func TestSeatbeltNetwork_AllowlistDeniesDifferentPort(t *testing.T) {
+	allowedPort, _ := startTestTCPServer(t)
+	deniedPort, deniedAccepted := startTestTCPServer(t)
+	sessionDir, _ := seatbeltSessionDirs(t)
+
+	allowlist := []string{fmt.Sprintf("127.0.0.1:%d", allowedPort)}
+	runner, err := NewSeatbeltRunnerWithAllowlist(allowlist)
+	if err != nil {
+		t.Fatalf("NewSeatbeltRunnerWithAllowlist: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res, runErr := runner.Run(ctx, BashRunRequest{
+		Command:    fmt.Sprintf("nc -z -w 2 127.0.0.1 %d", deniedPort),
+		WorkDir:    sessionDir,
+		SessionDir: sessionDir,
+		DisplayCWD: ".",
+	})
+	if runErr != nil {
+		t.Fatalf("Run: %v", runErr)
+	}
+	if !res.IsError {
+		t.Errorf("expected nc to fail to non-allowlisted port; output: %s", res.Output)
+	}
+	time.Sleep(150 * time.Millisecond)
+	if deniedAccepted.Load() {
+		t.Errorf("server on non-allowlisted port accepted connection — allowlist scoping failed")
+	}
+}
+
+func TestSeatbeltNetwork_DomainAllowlistRejected(t *testing.T) {
+	_, err := NewSeatbeltRunnerWithAllowlist([]string{"github.com:443"})
+	if err == nil {
+		t.Fatalf("expected error for domain allowlist entry")
+	}
+	if !strings.Contains(err.Error(), "IP address") && !strings.Contains(err.Error(), "B3b-4") {
+		t.Errorf("expected IP-only / B3b-4 deferral message, got: %v", err)
+	}
+}
+
+func TestSeatbeltNetwork_FactoryRejectsInvalidAllowlist(t *testing.T) {
+	// A malformed allowlist must not yield a runner — silent fallback to
+	// DirectRunner or a no-policy SeatbeltRunner is the failure mode the
+	// v41 verdict explicitly closed.
+	_, err := NewBashRunnerForConfig(SandboxConfig{
+		Mode:             "seatbelt",
+		NetworkAllowlist: []string{"not-an-ip-or-port"},
+	})
+	if err == nil {
+		t.Fatalf("expected validation error from factory")
 	}
 }
 
