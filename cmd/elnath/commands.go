@@ -50,6 +50,11 @@ func commandRegistry() map[string]commandRunner {
 		"profile":     cmdProfile,
 		"explain":     cmdExplain,
 		"debug":       cmdDebug,
+		// Hidden internal exec mode for the v41 / B3b-4-S0 Linux
+		// netns bridge spike. Not user-facing; the integration test
+		// at internal/tools/netproxy_bridge_spike_linux_test.go is
+		// the only caller. Omitted from `elnath help` on purpose.
+		"netproxy-bridge-spike": cmdNetproxyBridgeSpike,
 	}
 }
 
