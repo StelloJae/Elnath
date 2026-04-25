@@ -1,11 +1,9 @@
 package tools
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"strings"
 	"time"
 )
@@ -13,9 +11,29 @@ import (
 const gitTimeout = 30 * time.Second
 
 // GitTool dispatches git subcommands (status, diff, commit, log, branch).
-type GitTool struct{ guard *PathGuard }
+// Execution is routed through a composed BashTool so git inherits the same
+// B3a/B1/B3b-0.5 guardrails as bash: clean env (HOME pinned to the session
+// workspace, host HOME / .gitconfig invisible), session-scoped cwd,
+// bounded output, process group cleanup, structured BASH RESULT metadata,
+// and per-invocation telemetry. Argv is shell-quoted before being handed
+// to the runner so user-controlled paths cannot inject shell metacharacters.
+type GitTool struct {
+	guard    *PathGuard
+	bashTool *BashTool
+}
 
-func NewGitTool(guard *PathGuard) *GitTool { return &GitTool{guard: guard} }
+// NewGitTool constructs a GitTool whose underlying BashTool uses the
+// default DirectRunner backend.
+func NewGitTool(guard *PathGuard) *GitTool {
+	return &GitTool{guard: guard, bashTool: NewBashTool(guard)}
+}
+
+// NewGitToolWithRunner constructs a GitTool whose underlying BashTool
+// uses the supplied BashRunner. Used by tests to inject fakes and by
+// future substrate composition.
+func NewGitToolWithRunner(guard *PathGuard, runner BashRunner) *GitTool {
+	return &GitTool{guard: guard, bashTool: NewBashToolWithRunner(guard, runner)}
+}
 
 func (t *GitTool) Name() string        { return "git" }
 func (t *GitTool) Description() string { return "Run git commands in the repository." }
@@ -96,44 +114,45 @@ func (t *GitTool) Execute(ctx context.Context, params json.RawMessage) (*Result,
 	}
 }
 
-// run executes a git command with the given arguments.
+// run hands the git invocation to the composed BashTool. Args are
+// shell-quoted so user-supplied paths cannot inject metacharacters; the
+// command is interpreted by the same runner as bash, so git inherits
+// HOME pinning, env cleaning, output bounding, and telemetry.
 func (t *GitTool) run(ctx context.Context, args ...string) (*Result, error) {
-	sessionDir, err := t.guard.EnsureSessionWorkDir(SessionIDFrom(ctx))
+	cmdStr := "git " + shellQuoteArgs(args)
+
+	payload, err := json.Marshal(map[string]any{
+		"command":    cmdStr,
+		"timeout_ms": int(gitTimeout / time.Millisecond),
+	})
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("session workspace: %v", err)), nil
+		return ErrorResult(fmt.Sprintf("git: marshal payload: %v", err)), nil
 	}
+	return t.bashTool.Execute(ctx, payload)
+}
 
-	execCtx, cancel := context.WithTimeout(ctx, gitTimeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(execCtx, "git", args...)
-	cmd.Dir = sessionDir
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err = cmd.Run()
-	output := stdout.String()
-	if stderr.Len() > 0 {
-		if output != "" {
-			output += "\n"
-		}
-		output += stderr.String()
+// shellQuoteArg wraps s in POSIX single quotes, escaping any embedded
+// single quote via the standard '\'' sequence. Single-quoted strings in
+// POSIX shells disable every form of expansion (variables, command
+// substitution, glob, history) so this quoting is safe for any byte
+// sequence except embedded NUL.
+func shellQuoteArg(s string) string {
+	if s == "" {
+		return "''"
 	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
 
-	if execCtx.Err() == context.DeadlineExceeded {
-		return ErrorResult("git command timed out"), nil
+// shellQuoteArgs joins args with spaces after individually quoting each
+// element. The output is suitable to follow a literal command name in a
+// bash -c invocation, e.g. "git " + shellQuoteArgs(args).
+func shellQuoteArgs(args []string) string {
+	if len(args) == 0 {
+		return ""
 	}
-	if err != nil {
-		msg := output
-		if msg == "" {
-			msg = err.Error()
-		}
-		return ErrorResult(msg), nil
+	parts := make([]string, len(args))
+	for i, a := range args {
+		parts[i] = shellQuoteArg(a)
 	}
-	if output == "" {
-		output = "(no output)"
-	}
-	return &Result{Output: output}, nil
+	return strings.Join(parts, " ")
 }
