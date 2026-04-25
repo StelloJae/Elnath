@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -50,6 +51,66 @@ var bashEnvSecretSuffixes = []string{
 // bashFallbackPath is used when the host PATH is empty or unusable.
 const bashFallbackPath = "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
+// bashShellCandidates lists absolute paths searched in priority order
+// for an executable bash binary. Lookup deliberately bypasses
+// exec.LookPath: that consults the caller's PATH, which is exactly the
+// surface this hardening pass closes off — a fake "bash" placed in the
+// session workspace or any user-controlled PATH entry could otherwise
+// intercept command execution.
+var bashShellCandidates = []string{
+	"/bin/bash",
+	"/usr/bin/bash",
+	"/usr/local/bin/bash",
+	"/opt/homebrew/bin/bash",
+}
+
+// resolveBashShell returns the absolute path to the bash executable
+// used for command invocations. It picks the first candidate in
+// bashShellCandidates that resolves to an executable regular file. If
+// no candidate resolves, /bin/bash is returned as a deterministic
+// fallback so any failure surfaces as an exec error (caught by
+// configureProcessCleanup) rather than a silent host-PATH lookup.
+func resolveBashShell() string {
+	for _, candidate := range bashShellCandidates {
+		info, err := os.Stat(candidate)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		if info.Mode()&0o111 == 0 {
+			continue
+		}
+		return candidate
+	}
+	return "/bin/bash"
+}
+
+// sanitizeBashPath returns a colon-separated PATH with unsafe entries
+// removed: empty entries, the implicit "." (current directory), and
+// any non-absolute path. Duplicates are collapsed while preserving the
+// first occurrence's position. Returns "" when no entries survive;
+// callers must apply bashFallbackPath in that case.
+func sanitizeBashPath(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	seen := make(map[string]struct{})
+	keep := make([]string, 0)
+	for _, entry := range strings.Split(raw, ":") {
+		if entry == "" || entry == "." {
+			continue
+		}
+		if !strings.HasPrefix(entry, "/") {
+			continue
+		}
+		if _, dup := seen[entry]; dup {
+			continue
+		}
+		seen[entry] = struct{}{}
+		keep = append(keep, entry)
+	}
+	return strings.Join(keep, ":")
+}
+
 // cleanBashEnv returns the environment passed to bash invocations. It
 // forwards PATH/LANG/LC_ALL from the host so common tools keep
 // resolving, strips injection and credential variables, and pins
@@ -81,6 +142,7 @@ func cleanBashEnv(hostEnv []string, sessionRoot, workingDir string) []string {
 		}
 	}
 
+	pathValue = sanitizeBashPath(pathValue)
 	if pathValue == "" {
 		pathValue = bashFallbackPath
 	}
@@ -100,7 +162,7 @@ func cleanBashEnv(hostEnv []string, sessionRoot, workingDir string) []string {
 		"TMP=" + tmpDir,
 		"TEMP=" + tmpDir,
 		"PWD=" + workingDir,
-		"SHELL=/bin/bash",
+		"SHELL=" + resolveBashShell(),
 		"TERM=dumb",
 		"LANG=" + langValue,
 		"LC_ALL=" + lcValue,

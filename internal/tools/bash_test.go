@@ -898,3 +898,52 @@ func TestAnalyzeCommand(t *testing.T) {
 		})
 	}
 }
+
+// TestBash_ShellPinsToAbsolutePath confirms that command execution
+// cannot be hijacked by planting a fake "bash" inside the session
+// workspace. With absolute-path resolution, $BASH must point at a
+// system binary regardless of any sibling named "bash" in cwd, and
+// the fake script must not run.
+func TestBash_ShellPinsToAbsolutePath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("bash hardening is POSIX-only")
+	}
+
+	guard := NewPathGuard(t.TempDir(), nil)
+	tool := NewBashTool(guard)
+
+	const sessID = "shell-pin-sess"
+	ctx := WithSessionID(context.Background(), sessID)
+	sessionDir, err := guard.EnsureSessionWorkDir(sessID)
+	if err != nil {
+		t.Fatalf("ensure session: %v", err)
+	}
+
+	sentinel := filepath.Join(sessionDir, "fake-bash-fired")
+	fakeBash := filepath.Join(sessionDir, "bash")
+	body := "#!/bin/sh\ntouch " + strconv.Quote(sentinel) + "\nprintf 'fake-bash-output'\n"
+	if writeErr := os.WriteFile(fakeBash, []byte(body), 0o755); writeErr != nil {
+		t.Fatalf("write fake bash: %v", writeErr)
+	}
+
+	res, err := tool.Execute(ctx, makeBashParams(t, "printf '%s' \"$BASH\"", nil))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("expected success, got error: %s", res.Output)
+	}
+
+	if _, statErr := os.Stat(sentinel); statErr == nil {
+		t.Fatalf("fake bash sentinel %q was created — bash binary was not pinned", sentinel)
+	}
+	if strings.Contains(res.Output, "fake-bash-output") {
+		t.Fatalf("fake bash output leaked into result: %q", res.Output)
+	}
+	if !strings.Contains(res.Output, "/bash") {
+		t.Fatalf("$BASH did not appear absolute in output: %q", res.Output)
+	}
+	if strings.Contains(res.Output, sessionDir+"/bash") {
+		t.Fatalf("$BASH resolved to fake inside session dir: %q", res.Output)
+	}
+}

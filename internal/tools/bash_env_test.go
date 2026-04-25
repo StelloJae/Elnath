@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -209,5 +210,86 @@ func TestCleanBashEnv_BaselineKeysExactSet(t *testing.T) {
 	}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("baseline keys = %v, want %v", got, want)
+	}
+}
+
+func TestSanitizeBashPath_DropsEmptyDotAndRelative(t *testing.T) {
+	// ":" between "/usr/bin" and "/bin" produces an empty middle entry,
+	// "." is the implicit-cwd vector, and "relative/bin" is anything
+	// not anchored at /. All three must be dropped.
+	got := sanitizeBashPath("/usr/bin::.:relative/bin:/bin")
+	want := "/usr/bin:/bin"
+	if got != want {
+		t.Errorf("sanitizeBashPath = %q, want %q", got, want)
+	}
+}
+
+func TestSanitizeBashPath_PreservesAbsoluteEntries(t *testing.T) {
+	in := "/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin"
+	if got := sanitizeBashPath(in); got != in {
+		t.Errorf("sanitizeBashPath = %q, want unchanged %q", got, in)
+	}
+}
+
+func TestSanitizeBashPath_DeduplicatesPreservingFirstOccurrence(t *testing.T) {
+	got := sanitizeBashPath("/usr/bin:/bin:/usr/bin:/sbin:/bin")
+	want := "/usr/bin:/bin:/sbin"
+	if got != want {
+		t.Errorf("sanitizeBashPath = %q, want %q", got, want)
+	}
+}
+
+func TestSanitizeBashPath_EmptyInputReturnsEmpty(t *testing.T) {
+	if got := sanitizeBashPath(""); got != "" {
+		t.Errorf("sanitizeBashPath(empty) = %q, want empty", got)
+	}
+}
+
+func TestCleanBashEnv_SanitizesUnsafeHostPathEntries(t *testing.T) {
+	// Host PATH carries an empty entry, ".", a relative path, and a
+	// duplicate; all four must be stripped before bash sees PATH.
+	host := []string{"PATH=/usr/bin::.:relative/bin:/usr/bin:/bin"}
+	env := envSnapshot(t, cleanBashEnv(host, "/sess", "/sess"))
+	if env["PATH"] != "/usr/bin:/bin" {
+		t.Errorf("PATH = %q, want %q", env["PATH"], "/usr/bin:/bin")
+	}
+}
+
+func TestCleanBashEnv_PathFallbackWhenSanitizationEmpties(t *testing.T) {
+	// Host PATH only contains unsafe entries: sanitization yields the
+	// empty string, so cleanBashEnv must apply the fallback PATH
+	// instead of handing bash an empty PATH (which would make every
+	// command resolution fail in a confusing way).
+	host := []string{"PATH=.:relative/bin:"}
+	env := envSnapshot(t, cleanBashEnv(host, "/sess", "/sess"))
+	if env["PATH"] != bashFallbackPath {
+		t.Errorf("PATH = %q, want fallback %q", env["PATH"], bashFallbackPath)
+	}
+}
+
+func TestResolveBashShell_ReturnsAbsoluteExecutable(t *testing.T) {
+	got := resolveBashShell()
+	if !strings.HasPrefix(got, "/") {
+		t.Fatalf("resolveBashShell = %q, want absolute path", got)
+	}
+	info, err := os.Stat(got)
+	if err != nil {
+		// /bin/bash is the deterministic fallback and must exist on
+		// every supported runtime; if not, the host environment is
+		// incompatible with this build.
+		t.Fatalf("resolveBashShell returned %q which does not stat: %v", got, err)
+	}
+	if info.IsDir() || info.Mode()&0o111 == 0 {
+		t.Fatalf("resolveBashShell returned %q which is not an executable file", got)
+	}
+}
+
+func TestCleanBashEnv_ShellEqualsResolvedBinary(t *testing.T) {
+	// SHELL must match the binary actually invoked by exec.Command so
+	// any user script re-execing through "$SHELL" lands on the same,
+	// pinned bash and never reaches a host-PATH lookup.
+	env := envSnapshot(t, cleanBashEnv(nil, "/sess", "/sess"))
+	if env["SHELL"] != resolveBashShell() {
+		t.Errorf("SHELL = %q, want %q", env["SHELL"], resolveBashShell())
 	}
 }

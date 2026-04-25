@@ -130,7 +130,7 @@ func (t *BashTool) Execute(ctx context.Context, params json.RawMessage) (*Result
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.Command("bash", "-c", p.Command)
+	cmd := exec.Command(resolveBashShell(), "-c", p.Command)
 	cmd.Dir = workDir
 	cmd.Env = cleanBashEnv(os.Environ(), sessionDir, workDir)
 	configureProcessCleanup(cmd)
