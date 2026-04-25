@@ -54,8 +54,11 @@ func TestBashTimeout(t *testing.T) {
 	if !res.IsError {
 		t.Fatalf("expected timeout error result, got success: %s", res.Output)
 	}
-	if !strings.Contains(res.Output, "timed out") {
-		t.Errorf("output %q does not mention timeout", res.Output)
+	if !strings.Contains(res.Output, "status: timeout") {
+		t.Errorf("output %q does not carry status: timeout", res.Output)
+	}
+	if !strings.Contains(res.Output, "timed_out: true") {
+		t.Errorf("output %q does not carry timed_out: true", res.Output)
 	}
 }
 
@@ -77,8 +80,11 @@ func TestBash_OutputSmallWithoutTruncation(t *testing.T) {
 	if !strings.Contains(res.Output, "STDOUT:\nhello") {
 		t.Errorf("STDOUT section missing hello: %q", res.Output)
 	}
-	if !strings.Contains(res.Output, "[stdout: 6 bytes]") {
-		t.Errorf("metadata header missing/wrong: %q", res.Output)
+	if !strings.Contains(res.Output, "stdout_bytes_raw: 6") {
+		t.Errorf("metadata stdout_bytes_raw missing/wrong: %q", res.Output)
+	}
+	if !strings.Contains(res.Output, "stdout_truncated: false") {
+		t.Errorf("metadata stdout_truncated missing/wrong: %q", res.Output)
 	}
 }
 
@@ -95,8 +101,11 @@ func TestBash_OutputStdoutExceedsCap(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
 	}
-	if !strings.Contains(res.Output, "[stdout: 400000 bytes, truncated") {
-		t.Errorf("stdout metadata header missing/wrong: %q", res.Output[:200])
+	if !strings.Contains(res.Output, "stdout_bytes_raw: 400000") {
+		t.Errorf("stdout_bytes_raw missing/wrong: %q", res.Output[:200])
+	}
+	if !strings.Contains(res.Output, "stdout_truncated: true") {
+		t.Errorf("stdout_truncated flag missing/wrong: %q", res.Output[:200])
 	}
 	if !strings.Contains(res.Output, "output truncated") {
 		t.Errorf("stream-level truncation marker missing")
@@ -119,11 +128,14 @@ func TestBash_OutputStderrExceedsCap(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
 	}
-	if !strings.Contains(res.Output, "[stdout: 0 bytes]") {
-		t.Errorf("stdout should be empty; header=%q", res.Output[:200])
+	if !strings.Contains(res.Output, "stdout_bytes_raw: 0") {
+		t.Errorf("stdout should be empty; output=%q", res.Output[:200])
 	}
-	if !strings.Contains(res.Output, "[stderr: 400000 bytes, truncated") {
-		t.Errorf("stderr metadata header missing/wrong")
+	if !strings.Contains(res.Output, "stderr_bytes_raw: 400000") {
+		t.Errorf("stderr_bytes_raw missing/wrong: %q", res.Output[:200])
+	}
+	if !strings.Contains(res.Output, "stderr_truncated: true") {
+		t.Errorf("stderr_truncated flag missing/wrong: %q", res.Output[:200])
 	}
 }
 
@@ -139,10 +151,12 @@ func TestBash_OutputBothStreamsCappedIndependently(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.Output)
 	}
-	if !strings.Contains(res.Output, "[stdout: 400000 bytes, truncated") {
+	if !strings.Contains(res.Output, "stdout_bytes_raw: 400000") ||
+		!strings.Contains(res.Output, "stdout_truncated: true") {
 		t.Errorf("stdout not truncated: %q", res.Output[:200])
 	}
-	if !strings.Contains(res.Output, "[stderr: 400000 bytes, truncated") {
+	if !strings.Contains(res.Output, "stderr_bytes_raw: 400000") ||
+		!strings.Contains(res.Output, "stderr_truncated: true") {
 		t.Errorf("stderr not truncated: %q", res.Output[:200])
 	}
 }
@@ -204,8 +218,12 @@ func TestBash_OutputNonZeroExitAfterTruncation(t *testing.T) {
 	if !res.IsError {
 		t.Fatalf("exit 42 should surface as IsError=true")
 	}
-	if !strings.Contains(res.Output, "[stdout: 400000 bytes, truncated") {
+	if !strings.Contains(res.Output, "stdout_bytes_raw: 400000") ||
+		!strings.Contains(res.Output, "stdout_truncated: true") {
 		t.Errorf("stdout metadata missing on error path: %q", res.Output[:200])
+	}
+	if !strings.Contains(res.Output, "exit_code: 42") {
+		t.Errorf("exit_code metadata missing on error path: %q", res.Output[:200])
 	}
 }
 
@@ -235,10 +253,14 @@ func TestBashWorkingDir_AllowsSessionSubdir(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("unexpected error result: %s", res.Output)
 	}
-	// pwd resolves symlinks (macOS /tmp → /private/tmp); assert suffix.
-	gotTrimmed := strings.TrimSpace(res.Output)
-	if !strings.HasSuffix(gotTrimmed, string(filepath.Separator)+"sub") {
-		t.Errorf("pwd output %q should end with /sub", gotTrimmed)
+	// pwd resolves symlinks (macOS /tmp → /private/tmp); the absolute
+	// path appears inside the STDOUT section of the metadata-formatted
+	// body, so we just confirm the captured cwd ends in /sub.
+	if !strings.Contains(res.Output, string(filepath.Separator)+"sub\n") {
+		t.Errorf("STDOUT did not capture a path ending with /sub: %q", res.Output)
+	}
+	if !strings.Contains(res.Output, "cwd: sub") {
+		t.Errorf("metadata cwd should be session-relative 'sub'; got: %q", res.Output)
 	}
 }
 
@@ -603,8 +625,11 @@ func TestBash_ProcessGroup_ChildKilledOnTimeout(t *testing.T) {
 	if !res.IsError {
 		t.Fatalf("expected timeout error; got: %s", res.Output)
 	}
-	if !strings.Contains(res.Output, "timed out") {
-		t.Errorf("expected 'timed out' in output; got: %s", res.Output)
+	if !strings.Contains(res.Output, "status: timeout") {
+		t.Errorf("expected 'status: timeout' in output; got: %s", res.Output)
+	}
+	if !strings.Contains(res.Output, "timed_out: true") {
+		t.Errorf("expected 'timed_out: true' in output; got: %s", res.Output)
 	}
 
 	pidBytes, err := os.ReadFile(pidFile)
@@ -670,11 +695,11 @@ func TestBash_ProcessGroup_TimeoutMetadata(t *testing.T) {
 	if !res.IsError {
 		t.Fatalf("expected timeout error; got: %s", res.Output)
 	}
-	if !strings.Contains(res.Output, "timed out") {
-		t.Errorf("output %q should mention 'timed out'", res.Output)
+	if !strings.Contains(res.Output, "status: timeout") {
+		t.Errorf("output %q should carry status: timeout", res.Output)
 	}
-	if !strings.Contains(res.Output, "process group terminated") {
-		t.Errorf("output %q should mention 'process group terminated'", res.Output)
+	if !strings.Contains(res.Output, "timed_out: true") {
+		t.Errorf("output %q should carry timed_out: true", res.Output)
 	}
 }
 
@@ -945,5 +970,154 @@ func TestBash_ShellPinsToAbsolutePath(t *testing.T) {
 	}
 	if strings.Contains(res.Output, sessionDir+"/bash") {
 		t.Fatalf("$BASH resolved to fake inside session dir: %q", res.Output)
+	}
+}
+
+// TestBash_Metadata_SuccessShape pins the metadata header emitted on
+// the success path: status / exit_code / classification all reflect a
+// clean run, duration_ms is present, and the cwd is reported as a
+// session-relative path rather than an absolute host directory.
+func TestBash_Metadata_SuccessShape(t *testing.T) {
+	tool := NewBashTool(NewPathGuard(t.TempDir(), nil))
+	res, err := tool.Execute(context.Background(), makeBashParams(t, "echo ok", nil))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("expected success, got error: %s", res.Output)
+	}
+	for _, want := range []string{
+		"BASH RESULT\n",
+		"status: success",
+		"exit_code: 0",
+		"timed_out: false",
+		"canceled: false",
+		"classification: success",
+		"cwd: .",
+	} {
+		if !strings.Contains(res.Output, want) {
+			t.Errorf("missing metadata line %q; body=%q", want, res.Output)
+		}
+	}
+	if !strings.Contains(res.Output, "duration_ms: ") {
+		t.Errorf("duration_ms not reported; body=%q", res.Output)
+	}
+	if strings.Contains(res.Output, t.TempDir()) {
+		t.Errorf("absolute host path leaked into LLM-facing body: %q", res.Output)
+	}
+}
+
+// TestBash_Metadata_NonZeroExitClassified confirms a generic non-zero
+// exit becomes status=error, exit_code=N, classification=unknown_nonzero
+// while staying recoverable (IsError=true, Execute err nil).
+func TestBash_Metadata_NonZeroExitClassified(t *testing.T) {
+	tool := NewBashTool(NewPathGuard(t.TempDir(), nil))
+	res, err := tool.Execute(context.Background(), makeBashParams(t, "exit 42", nil))
+	if err != nil {
+		t.Fatalf("Execute err must stay nil for non-zero exits: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("exit 42 should surface as IsError=true")
+	}
+	for _, want := range []string{
+		"status: error",
+		"exit_code: 42",
+		"classification: unknown_nonzero",
+	} {
+		if !strings.Contains(res.Output, want) {
+			t.Errorf("missing %q; body=%q", want, res.Output)
+		}
+	}
+}
+
+// TestBash_Metadata_CommandNotFoundClassified covers the 127 exit
+// code path: bash exits 127 when the requested program is missing,
+// which the classifier maps to "command_not_found" so the agent can
+// react with an install/path fix rather than a generic retry.
+func TestBash_Metadata_CommandNotFoundClassified(t *testing.T) {
+	tool := NewBashTool(NewPathGuard(t.TempDir(), nil))
+	res, err := tool.Execute(context.Background(),
+		makeBashParams(t, "elnath-not-a-real-binary-xyz", nil))
+	if err != nil {
+		t.Fatalf("Execute err must stay nil: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("missing binary should surface as IsError=true; got: %s", res.Output)
+	}
+	for _, want := range []string{
+		"status: error",
+		"exit_code: 127",
+		"classification: command_not_found",
+	} {
+		if !strings.Contains(res.Output, want) {
+			t.Errorf("missing %q; body=%q", want, res.Output)
+		}
+	}
+}
+
+// TestBash_Metadata_TimeoutShape pairs the captured-output guarantee
+// with the metadata: a timed-out command must report status=timeout,
+// timed_out=true, and canceled=false. duration_ms is bounded by the
+// timeout (plus the kill-grace window) so the agent can tell whether
+// the kill was clean.
+func TestBash_Metadata_TimeoutShape(t *testing.T) {
+	tool := NewBashTool(NewPathGuard(t.TempDir(), nil))
+	res, err := tool.Execute(context.Background(), makeBashParams(t, "sleep 10", map[string]any{
+		"timeout_ms": 200,
+	}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected timeout error result, got success: %s", res.Output)
+	}
+	for _, want := range []string{
+		"status: timeout",
+		"timed_out: true",
+		"canceled: false",
+		"classification: timeout",
+	} {
+		if !strings.Contains(res.Output, want) {
+			t.Errorf("missing %q; body=%q", want, res.Output)
+		}
+	}
+	if strings.Contains(res.Output, "exit_code: 0") {
+		t.Errorf("timeout must not report a clean exit code; body=%q", res.Output)
+	}
+}
+
+// TestBash_Metadata_CWDStaysSessionRelative pins the no-host-path-leak
+// invariant for the cwd field: the metadata must report the
+// working directory relative to the session root, never the absolute
+// host path that would expose /Users/... or /tmp/... details.
+func TestBash_Metadata_CWDStaysSessionRelative(t *testing.T) {
+	root := t.TempDir()
+	guard := NewPathGuard(root, nil)
+	tool := NewBashTool(guard)
+
+	const sessID = "cwd-rel-sess"
+	ctx := WithSessionID(context.Background(), sessID)
+	sessionDir, err := guard.EnsureSessionWorkDir(sessID)
+	if err != nil {
+		t.Fatalf("ensure session: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(sessionDir, "nested"), 0o755); err != nil {
+		t.Fatalf("mkdir nested: %v", err)
+	}
+
+	res, err := tool.Execute(ctx, makeBashParams(t, "echo ok", map[string]any{
+		"working_dir": "nested",
+	}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("expected success, got error: %s", res.Output)
+	}
+	if !strings.Contains(res.Output, "cwd: nested") {
+		t.Errorf("cwd not session-relative; body=%q", res.Output)
+	}
+	if strings.Contains(res.Output, "cwd: "+sessionDir) {
+		t.Errorf("absolute session path leaked into cwd; body=%q", res.Output)
 	}
 }

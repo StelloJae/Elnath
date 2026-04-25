@@ -3,8 +3,10 @@ package tools
 import (
 	"fmt"
 	"io"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // bashOutputCapPerStream sets the default per-stream capture limit
@@ -74,9 +76,6 @@ func (w *cappedOutput) Write(p []byte) (int, error) {
 		return n, nil
 	}
 
-	// Single chunk that already overshoots the tail capacity: keep
-	// only the last tailCap bytes, repacked so tailStart=0 keeps the
-	// rendering path contiguous.
 	if len(p) >= w.tailCap {
 		copy(w.tail, p[len(p)-w.tailCap:])
 		w.tailStart = 0
@@ -84,9 +83,6 @@ func (w *cappedOutput) Write(p []byte) (int, error) {
 		return n, nil
 	}
 
-	// Smaller chunk: walk into the ring in at most two contiguous
-	// copies (one before the wrap, one after) so each Write costs
-	// O(len(p)) regardless of how full the buffer already is.
 	for len(p) > 0 {
 		writeIdx := (w.tailStart + w.tailLen) % w.tailCap
 		chunk := w.tailCap - writeIdx
@@ -127,9 +123,6 @@ func (w *cappedOutput) Dropped() int64 {
 // Truncated reports whether any bytes were dropped.
 func (w *cappedOutput) Truncated() bool { return w.Dropped() > 0 }
 
-// tailBytes materialises the ring's logical contents in arrival order.
-// Allocation here is fine; the hot path is Write, which stays
-// allocation-free once the buffer is sized.
 func (w *cappedOutput) tailBytes() []byte {
 	if w.tailLen == 0 {
 		return nil
@@ -163,16 +156,107 @@ func (w *cappedOutput) Render() string {
 // Ensure interface conformance at compile time.
 var _ io.Writer = (*cappedOutput)(nil)
 
-// formatBashOutput builds the LLM-facing body for a bash invocation.
-// It prepends a metadata header with the raw/kept byte counts for
-// each stream and appends STDOUT/STDERR sections only when those
-// streams produced output. B1 BashResult metadata will replace this
-// shape with a structured payload; this is the minimum surface
-// needed for P0-3.
-func formatBashOutput(stdout, stderr *cappedOutput) string {
+// bashResultMeta is the structured summary B1 emits alongside captured
+// stdout/stderr. Fields are LLM-facing and intentionally avoid host
+// details: cwd is session-relative, classification is a coarse hint
+// (NOT a security policy), and bytes are reported in raw / shown /
+// truncated form so the agent can reason about whether it saw the
+// full stream.
+type bashResultMeta struct {
+	Status           string
+	ExitCode         *int
+	Duration         time.Duration
+	CWD              string
+	TimedOut         bool
+	Canceled         bool
+	StdoutRawBytes   int64
+	StdoutShownBytes int64
+	StdoutTruncated  bool
+	StderrRawBytes   int64
+	StderrShownBytes int64
+	StderrTruncated  bool
+	Classification   string
+}
+
+// classifyExitCode maps a process exit code to one of the coarse
+// labels exposed by bashResultMeta.Classification. The mapping is a
+// rule-based hint for the agent; it is NOT consulted by the runtime
+// for any policy decision.
+func classifyExitCode(exitCode int) string {
+	switch exitCode {
+	case 127:
+		return "command_not_found"
+	case 126:
+		return "permission_denied"
+	default:
+		return "unknown_nonzero"
+	}
+}
+
+// displayCWD reports the working directory relative to the session
+// root so LLM-facing output never leaks the absolute host path.
+// When workDir equals the session root the result is ".". Anything
+// that resolves outside the session (which should not happen given
+// PathGuard validation) collapses to "." rather than leaking "..".
+func displayCWD(sessionRoot, workDir string) string {
+	if workDir == sessionRoot {
+		return "."
+	}
+	rel, err := filepath.Rel(sessionRoot, workDir)
+	if err != nil {
+		return "."
+	}
+	if rel == "." {
+		return "."
+	}
+	if rel == ".." || strings.HasPrefix(rel, "../") || strings.HasPrefix(rel, "..\\") {
+		return "."
+	}
+	return rel
+}
+
+// formatBashResult emits the LLM-facing body for a bash invocation:
+// a metadata header followed by STDOUT/STDERR sections. Sections are
+// only emitted when the corresponding stream produced bytes, so empty
+// streams stay quiet.
+func formatBashResult(meta bashResultMeta, stdout, stderr *cappedOutput) string {
 	var sb strings.Builder
-	writeStreamHeader(&sb, "stdout", stdout)
-	writeStreamHeader(&sb, "stderr", stderr)
+	sb.WriteString("BASH RESULT\n")
+	sb.WriteString("status: ")
+	sb.WriteString(meta.Status)
+	sb.WriteByte('\n')
+	sb.WriteString("exit_code: ")
+	if meta.ExitCode != nil {
+		sb.WriteString(strconv.Itoa(*meta.ExitCode))
+	} else {
+		sb.WriteString("null")
+	}
+	sb.WriteByte('\n')
+	sb.WriteString("duration_ms: ")
+	sb.WriteString(strconv.FormatInt(meta.Duration.Milliseconds(), 10))
+	sb.WriteByte('\n')
+	sb.WriteString("cwd: ")
+	sb.WriteString(meta.CWD)
+	sb.WriteByte('\n')
+	sb.WriteString("timed_out: ")
+	sb.WriteString(strconv.FormatBool(meta.TimedOut))
+	sb.WriteByte('\n')
+	sb.WriteString("canceled: ")
+	sb.WriteString(strconv.FormatBool(meta.Canceled))
+	sb.WriteByte('\n')
+	writeBytesLine(&sb, "stdout_bytes_raw", meta.StdoutRawBytes)
+	writeBytesLine(&sb, "stdout_bytes_shown", meta.StdoutShownBytes)
+	sb.WriteString("stdout_truncated: ")
+	sb.WriteString(strconv.FormatBool(meta.StdoutTruncated))
+	sb.WriteByte('\n')
+	writeBytesLine(&sb, "stderr_bytes_raw", meta.StderrRawBytes)
+	writeBytesLine(&sb, "stderr_bytes_shown", meta.StderrShownBytes)
+	sb.WriteString("stderr_truncated: ")
+	sb.WriteString(strconv.FormatBool(meta.StderrTruncated))
+	sb.WriteByte('\n')
+	sb.WriteString("classification: ")
+	sb.WriteString(meta.Classification)
+	sb.WriteByte('\n')
 
 	stdoutText := stdout.Render()
 	stderrText := stderr.Render()
@@ -180,29 +264,22 @@ func formatBashOutput(stdout, stderr *cappedOutput) string {
 		sb.WriteString("\nSTDOUT:\n")
 		sb.WriteString(stdoutText)
 		if !strings.HasSuffix(stdoutText, "\n") {
-			sb.WriteString("\n")
+			sb.WriteByte('\n')
 		}
 	}
 	if stderr.RawBytes() > 0 {
 		sb.WriteString("\nSTDERR:\n")
 		sb.WriteString(stderrText)
 		if !strings.HasSuffix(stderrText, "\n") {
-			sb.WriteString("\n")
+			sb.WriteByte('\n')
 		}
 	}
 	return sb.String()
 }
 
-func writeStreamHeader(sb *strings.Builder, name string, w *cappedOutput) {
-	sb.WriteString("[")
-	sb.WriteString(name)
+func writeBytesLine(sb *strings.Builder, key string, n int64) {
+	sb.WriteString(key)
 	sb.WriteString(": ")
-	sb.WriteString(strconv.FormatInt(w.RawBytes(), 10))
-	sb.WriteString(" bytes")
-	if w.Truncated() {
-		sb.WriteString(", truncated (")
-		sb.WriteString(strconv.Itoa(w.Kept()))
-		sb.WriteString(" shown)")
-	}
-	sb.WriteString("]\n")
+	sb.WriteString(strconv.FormatInt(n, 10))
+	sb.WriteByte('\n')
 }

@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -140,11 +141,24 @@ func (t *BashTool) Execute(ctx context.Context, params json.RawMessage) (*Result
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 
+	displayCwd := displayCWD(sessionDir, workDir)
+	start := time.Now()
+
 	if startErr := cmd.Start(); startErr != nil {
-		return &Result{
-			Output:  fmt.Sprintf("bash start failed: %v", startErr),
-			IsError: true,
-		}, nil
+		stderr.Write([]byte(fmt.Sprintf("bash start failed: %v", startErr)))
+		meta := bashResultMeta{
+			Status:           "error",
+			Duration:         time.Since(start),
+			CWD:              displayCwd,
+			StdoutRawBytes:   stdout.RawBytes(),
+			StdoutShownBytes: int64(stdout.Kept()),
+			StdoutTruncated:  stdout.Truncated(),
+			StderrRawBytes:   stderr.RawBytes(),
+			StderrShownBytes: int64(stderr.Kept()),
+			StderrTruncated:  stderr.Truncated(),
+			Classification:   "unknown_nonzero",
+		}
+		return &Result{Output: formatBashResult(meta, stdout, stderr), IsError: true}, nil
 	}
 
 	// Buffered so the Wait goroutine exits cleanly even when the
@@ -153,8 +167,11 @@ func (t *BashTool) Execute(ctx context.Context, params json.RawMessage) (*Result
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 
-	canceled := false
-	var runErr error
+	var (
+		timedOut    bool
+		canceledRun bool
+		runErr      error
+	)
 	select {
 	case runErr = <-done:
 		// Normal exit. The parent bash is reaped, but a detached
@@ -162,7 +179,11 @@ func (t *BashTool) Execute(ctx context.Context, params json.RawMessage) (*Result
 		// the process group. Clean up if anything survived.
 		reapOrphanedProcessGroup(cmd, bashKillGrace)
 	case <-execCtx.Done():
-		canceled = true
+		if errors.Is(execCtx.Err(), context.DeadlineExceeded) {
+			timedOut = true
+		} else {
+			canceledRun = true
+		}
 		_ = terminateProcessGroup(cmd)
 
 		// Wait for cooperative exit up to bashKillGrace before
@@ -182,22 +203,66 @@ func (t *BashTool) Execute(ctx context.Context, params json.RawMessage) (*Result
 		}
 	}
 
-	if canceled {
-		msg := fmt.Sprintf("command timed out after %s; process group terminated", timeout)
-		if execCtx.Err() == context.Canceled {
-			msg = "command canceled; process group terminated"
-		}
-		return ErrorResult(msg), nil
-	}
+	duration := time.Since(start)
 
-	// Surface exec-level failures that produced no stream output
-	// (e.g. "bash not found") so the agent has something actionable.
-	if runErr != nil && stdout.RawBytes() == 0 && stderr.RawBytes() == 0 {
+	// Surface exec-level failures from a normal exit path that
+	// produced no stream output (e.g. "bash not found") so the agent
+	// has something actionable. Timeout / cancel paths already
+	// indicate the cause through the metadata header, so we leave
+	// their stderr untouched to preserve any partial output.
+	if runErr != nil && !timedOut && !canceledRun &&
+		stdout.RawBytes() == 0 && stderr.RawBytes() == 0 {
 		stderr.Write([]byte(runErr.Error()))
 	}
 
-	body := formatBashOutput(stdout, stderr)
-	if runErr != nil {
+	var (
+		status         string
+		classification string
+		exitCode       *int
+		isError        bool
+	)
+	switch {
+	case timedOut:
+		status, classification, isError = "timeout", "timeout", true
+	case canceledRun:
+		status, classification, isError = "canceled", "canceled", true
+	case runErr != nil:
+		status, isError = "error", true
+		var exitErr *exec.ExitError
+		if errors.As(runErr, &exitErr) {
+			ec := exitErr.ExitCode()
+			exitCode = &ec
+			classification = classifyExitCode(ec)
+		} else {
+			classification = "unknown_nonzero"
+		}
+	default:
+		status, classification = "success", "success"
+		ec := 0
+		if cmd.ProcessState != nil {
+			ec = cmd.ProcessState.ExitCode()
+		}
+		exitCode = &ec
+	}
+
+	meta := bashResultMeta{
+		Status:           status,
+		ExitCode:         exitCode,
+		Duration:         duration,
+		CWD:              displayCwd,
+		TimedOut:         timedOut,
+		Canceled:         canceledRun,
+		StdoutRawBytes:   stdout.RawBytes(),
+		StdoutShownBytes: int64(stdout.Kept()),
+		StdoutTruncated:  stdout.Truncated(),
+		StderrRawBytes:   stderr.RawBytes(),
+		StderrShownBytes: int64(stderr.Kept()),
+		StderrTruncated:  stderr.Truncated(),
+		Classification:   classification,
+	}
+
+	body := formatBashResult(meta, stdout, stderr)
+	if isError {
 		return &Result{Output: body, IsError: true}, nil
 	}
 	return SuccessResult(body), nil

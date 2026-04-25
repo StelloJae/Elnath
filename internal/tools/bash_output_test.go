@@ -128,16 +128,41 @@ func TestCappedOutput_MinimumLimit(t *testing.T) {
 	}
 }
 
-func TestFormatBashOutput_EmptyStreams(t *testing.T) {
+func successMeta(stdout, stderr *cappedOutput) bashResultMeta {
+	ec := 0
+	return bashResultMeta{
+		Status:           "success",
+		ExitCode:         &ec,
+		CWD:              ".",
+		StdoutRawBytes:   stdout.RawBytes(),
+		StdoutShownBytes: int64(stdout.Kept()),
+		StdoutTruncated:  stdout.Truncated(),
+		StderrRawBytes:   stderr.RawBytes(),
+		StderrShownBytes: int64(stderr.Kept()),
+		StderrTruncated:  stderr.Truncated(),
+		Classification:   "success",
+	}
+}
+
+func TestFormatBashResult_EmptyStreams(t *testing.T) {
 	stdout := newCappedOutput(1024)
 	stderr := newCappedOutput(1024)
-	body := formatBashOutput(stdout, stderr)
+	body := formatBashResult(successMeta(stdout, stderr), stdout, stderr)
 
-	if !strings.Contains(body, "[stdout: 0 bytes]") {
-		t.Errorf("missing zero-byte stdout header; body=%q", body)
+	if !strings.HasPrefix(body, "BASH RESULT\n") {
+		t.Errorf("body must start with metadata header; body=%q", body)
 	}
-	if !strings.Contains(body, "[stderr: 0 bytes]") {
-		t.Errorf("missing zero-byte stderr header; body=%q", body)
+	for _, want := range []string{
+		"status: success",
+		"stdout_bytes_raw: 0",
+		"stdout_truncated: false",
+		"stderr_bytes_raw: 0",
+		"stderr_truncated: false",
+		"classification: success",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing metadata line %q; body=%q", want, body)
+		}
 	}
 	if strings.Contains(body, "STDOUT:") {
 		t.Errorf("empty stdout must not emit a STDOUT section; body=%q", body)
@@ -147,14 +172,17 @@ func TestFormatBashOutput_EmptyStreams(t *testing.T) {
 	}
 }
 
-func TestFormatBashOutput_StdoutOnly(t *testing.T) {
+func TestFormatBashResult_StdoutOnly(t *testing.T) {
 	stdout := newCappedOutput(1024)
 	stdout.Write([]byte("hello"))
 	stderr := newCappedOutput(1024)
-	body := formatBashOutput(stdout, stderr)
+	body := formatBashResult(successMeta(stdout, stderr), stdout, stderr)
 
-	if !strings.Contains(body, "[stdout: 5 bytes]") {
-		t.Errorf("stdout header missing; body=%q", body)
+	if !strings.Contains(body, "stdout_bytes_raw: 5") {
+		t.Errorf("stdout raw count missing; body=%q", body)
+	}
+	if !strings.Contains(body, "stdout_bytes_shown: 5") {
+		t.Errorf("stdout shown count missing; body=%q", body)
 	}
 	if !strings.Contains(body, "STDOUT:\nhello") {
 		t.Errorf("stdout section missing; body=%q", body)
@@ -164,32 +192,42 @@ func TestFormatBashOutput_StdoutOnly(t *testing.T) {
 	}
 }
 
-func TestFormatBashOutput_TruncationAnnotated(t *testing.T) {
+func TestFormatBashResult_TruncationAnnotated(t *testing.T) {
 	stdout := newCappedOutput(20) // head=10, tail=10
 	stdout.Write([]byte(strings.Repeat("x", 1000)))
 	stderr := newCappedOutput(1024)
-	body := formatBashOutput(stdout, stderr)
+	body := formatBashResult(successMeta(stdout, stderr), stdout, stderr)
 
-	if !strings.Contains(body, "[stdout: 1000 bytes, truncated (20 shown)]") {
-		t.Errorf("truncation header missing/wrong; body=%q", body)
-	}
-	if !strings.Contains(body, "output truncated") {
-		t.Errorf("stream-level truncation marker missing; body=%q", body)
+	for _, want := range []string{
+		"stdout_bytes_raw: 1000",
+		"stdout_bytes_shown: 20",
+		"stdout_truncated: true",
+		"output truncated",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %q; body=%q", want, body)
+		}
 	}
 }
 
-func TestFormatBashOutput_BothStreamsTruncatedIndependently(t *testing.T) {
+func TestFormatBashResult_BothStreamsTruncatedIndependently(t *testing.T) {
 	stdout := newCappedOutput(20)
 	stdout.Write([]byte(strings.Repeat("a", 500)))
 	stderr := newCappedOutput(20)
 	stderr.Write([]byte(strings.Repeat("b", 700)))
 
-	body := formatBashOutput(stdout, stderr)
-	if !strings.Contains(body, "[stdout: 500 bytes, truncated (20 shown)]") {
-		t.Errorf("stdout header wrong; body=%q", body)
-	}
-	if !strings.Contains(body, "[stderr: 700 bytes, truncated (20 shown)]") {
-		t.Errorf("stderr header wrong; body=%q", body)
+	body := formatBashResult(successMeta(stdout, stderr), stdout, stderr)
+	for _, want := range []string{
+		"stdout_bytes_raw: 500",
+		"stdout_bytes_shown: 20",
+		"stdout_truncated: true",
+		"stderr_bytes_raw: 700",
+		"stderr_bytes_shown: 20",
+		"stderr_truncated: true",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %q; body=%q", want, body)
+		}
 	}
 }
 
