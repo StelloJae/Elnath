@@ -238,6 +238,65 @@ func TestBwrapRunner_BlocksHostHomeRead(t *testing.T) {
 	}
 }
 
+func TestBwrapRunner_AllowlistedEtcReadable(t *testing.T) {
+	r := skipIfBwrapUnavailable(t)
+	sessionDir, _ := bwrapSessionDirs(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	res, err := r.Run(ctx, BashRunRequest{
+		Command:    "cat /etc/passwd",
+		WorkDir:    sessionDir,
+		SessionDir: sessionDir,
+		DisplayCWD: ".",
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("/etc/passwd should be readable inside sandbox (allowlisted); output: %s", res.Output)
+	}
+	if !strings.Contains(res.Output, "root:") {
+		t.Errorf("expected /etc/passwd content (root: line) in output: %s", res.Output)
+	}
+}
+
+func TestBwrapRunner_NonAllowlistedEtcSubdirBlocked(t *testing.T) {
+	r := skipIfBwrapUnavailable(t)
+	sessionDir, _ := bwrapSessionDirs(t)
+
+	// Find an /etc subdirectory that is NOT in bwrapHostReadBinds and
+	// IS present on the host. We cannot rely on a fixed candidate
+	// because distros vary; iterate through likely candidates and
+	// skip if none are available.
+	candidates := []string{"/etc/ssh", "/etc/cron.d", "/etc/apt", "/etc/init.d", "/etc/systemd"}
+	var probe string
+	for _, c := range candidates {
+		if info, err := os.Stat(c); err == nil && info.IsDir() {
+			probe = c
+			break
+		}
+	}
+	if probe == "" {
+		t.Skip("no /etc subdirectory candidate present on host; cannot probe selective bind")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	res, err := r.Run(ctx, BashRunRequest{
+		Command:    fmt.Sprintf("ls %q", probe),
+		WorkDir:    sessionDir,
+		SessionDir: sessionDir,
+		DisplayCWD: ".",
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !res.IsError {
+		t.Errorf("expected %s to be invisible inside sandbox under selective /etc bind; output: %s", probe, res.Output)
+	}
+}
+
 func TestBwrapRunner_HostHomeGitconfigNotLoaded(t *testing.T) {
 	r := skipIfBwrapUnavailable(t)
 
