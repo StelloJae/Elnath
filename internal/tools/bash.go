@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -25,19 +26,27 @@ const (
 // analysis, delegating actual command execution to a BashRunner backend.
 // The default backend is DirectRunner; substrate runners (Seatbelt, bwrap)
 // will plug in via NewBashToolWithRunner once their lanes ship.
+//
+// The runner's Probe is captured at construction and reused for every
+// per-invocation telemetry record. Probe is static per runner instance,
+// so caching avoids re-probing on each Execute and keeps the slog field
+// shape stable across a session.
 type BashTool struct {
 	guard          *PathGuard
 	defaultTimeout time.Duration
 	runner         BashRunner
+	probe          BashRunnerProbe
 }
 
 // NewBashTool creates a BashTool with the DirectRunner backend (host-process
 // command runner with B3a guardrails — no sandbox).
 func NewBashTool(guard *PathGuard) *BashTool {
+	runner := NewDirectRunner()
 	return &BashTool{
 		guard:          guard,
 		defaultTimeout: bashDefaultTimeout,
-		runner:         NewDirectRunner(),
+		runner:         runner,
+		probe:          runner.Probe(context.Background()),
 	}
 }
 
@@ -49,6 +58,7 @@ func NewBashToolWithRunner(guard *PathGuard, runner BashRunner) *BashTool {
 		guard:          guard,
 		defaultTimeout: bashDefaultTimeout,
 		runner:         runner,
+		probe:          runner.Probe(context.Background()),
 	}
 }
 
@@ -157,6 +167,7 @@ func (t *BashTool) Execute(ctx context.Context, params json.RawMessage) (*Result
 	}
 
 	runResult, runErr := t.runner.Run(execCtx, req)
+	emitBashTelemetry(execCtx, t.probe, req, runResult, runErr)
 	if runErr != nil {
 		return ErrorResult(fmt.Sprintf("bash runner error: %v", runErr)), nil
 	}
@@ -164,6 +175,39 @@ func (t *BashTool) Execute(ctx context.Context, params json.RawMessage) (*Result
 		return &Result{Output: runResult.Output, IsError: true}, nil
 	}
 	return SuccessResult(runResult.Output), nil
+}
+
+// emitBashTelemetry writes a structured slog record summarising the just-
+// completed bash invocation. The full command text is intentionally NOT
+// logged — bash commands frequently embed tokens, secrets, or curl
+// headers, and the per-command body is already captured in the agent's
+// session log via the formatted Result.
+func emitBashTelemetry(ctx context.Context, probe BashRunnerProbe, req BashRunRequest, res BashRunResult, runErr error) {
+	var exitCode any
+	if res.ExitCode != nil {
+		exitCode = *res.ExitCode
+	}
+	runErrMsg := ""
+	if runErr != nil {
+		runErrMsg = runErr.Error()
+	}
+	slog.InfoContext(ctx, "bash command completed",
+		"runner_name", probe.Name,
+		"execution_mode", probe.ExecutionMode,
+		"sandbox_enforced", probe.SandboxEnforced,
+		"policy_name", probe.PolicyName,
+		"cwd_display", req.DisplayCWD,
+		"command_len", len(req.Command),
+		"duration_ms", res.Duration.Milliseconds(),
+		"exit_code", exitCode,
+		"timed_out", res.TimedOut,
+		"canceled", res.Canceled,
+		"classification", res.Classification,
+		"stdout_truncated", res.StdoutTruncated,
+		"stderr_truncated", res.StderrTruncated,
+		"violation_count", len(res.Violations),
+		"runner_error", runErrMsg,
+	)
 }
 
 // analyzeCommand parses the shell command AST and checks for dangerous patterns.

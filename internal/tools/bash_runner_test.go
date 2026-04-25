@@ -1,13 +1,28 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
 )
+
+// captureSlogOutput swaps slog.Default with a buffered TextHandler for the
+// duration of the test. Returns the buffer and a restore func.
+func captureSlogOutput(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
+	prev := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &buf
+}
 
 // fakeBashRunner records each invocation and returns canned results so
 // tests can verify BashTool.Execute delegates correctly.
@@ -172,5 +187,177 @@ func TestBashRunResult_HasViolationsField(t *testing.T) {
 	res.Violations = append(res.Violations, SandboxViolation{Kind: "test"})
 	if len(res.Violations) != 1 || res.Violations[0].Kind != "test" {
 		t.Errorf("Violations field not assignable as expected")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// B3b-0.5 telemetry + sandbox-mode wiring tests
+// ---------------------------------------------------------------------------
+
+func TestBashTool_EmitsTelemetryForDirectRunner(t *testing.T) {
+	buf := captureSlogOutput(t)
+
+	root := t.TempDir()
+	bt := NewBashTool(NewPathGuard(root, nil))
+
+	ctx := WithSessionID(context.Background(), "sess-A")
+	if _, err := bt.Execute(ctx, json.RawMessage(`{"command":"echo hi"}`)); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	out := buf.String()
+	required := []string{
+		"runner_name=direct",
+		"execution_mode=direct_host_guarded",
+		"sandbox_enforced=false",
+		"policy_name=direct",
+		"duration_ms=",
+		"classification=",
+		"violation_count=0",
+		"timed_out=false",
+		"canceled=false",
+	}
+	for _, want := range required {
+		if !strings.Contains(out, want) {
+			t.Errorf("telemetry missing %q in output:\n%s", want, out)
+		}
+	}
+}
+
+func TestBashTool_TelemetryDoesNotIncludeFullCommand(t *testing.T) {
+	buf := captureSlogOutput(t)
+
+	root := t.TempDir()
+	bt := NewBashTool(NewPathGuard(root, nil))
+
+	const secretMarker = "TOKEN_VALUE_LEAKED_xyz123abc"
+	cmd := fmt.Sprintf("echo %s", secretMarker)
+	ctx := WithSessionID(context.Background(), "sess-A")
+	payload, _ := json.Marshal(map[string]any{"command": cmd})
+	if _, err := bt.Execute(ctx, payload); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	out := buf.String()
+	if strings.Contains(out, secretMarker) {
+		t.Errorf("telemetry must not log full command body (secret leak risk):\n%s", out)
+	}
+	if !strings.Contains(out, "command_len=") {
+		t.Errorf("expected command_len field in telemetry; got:\n%s", out)
+	}
+}
+
+func TestBashTool_EmitsTelemetryEvenWhenRunnerFails(t *testing.T) {
+	buf := captureSlogOutput(t)
+
+	fake := &fakeBashRunner{runErr: errors.New("substrate gone")}
+	bt := NewBashToolWithRunner(NewPathGuard(t.TempDir(), nil), fake)
+
+	ctx := WithSessionID(context.Background(), "sess-A")
+	if _, err := bt.Execute(ctx, json.RawMessage(`{"command":"echo hi"}`)); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "runner_error=") {
+		t.Errorf("telemetry missing runner_error field on runner failure:\n%s", out)
+	}
+	if !strings.Contains(out, "substrate gone") {
+		t.Errorf("telemetry missing runner error message:\n%s", out)
+	}
+}
+
+func TestNewBashRunnerForConfig_DirectMode(t *testing.T) {
+	for _, mode := range []string{"", "direct"} {
+		runner, err := NewBashRunnerForConfig(SandboxConfig{Mode: mode})
+		if err != nil {
+			t.Errorf("mode %q: expected success, got %v", mode, err)
+			continue
+		}
+		if runner.Name() != "direct" {
+			t.Errorf("mode %q: expected DirectRunner, got %q", mode, runner.Name())
+		}
+	}
+}
+
+func TestNewBashRunnerForConfig_SeatbeltUnsupported(t *testing.T) {
+	runner, err := NewBashRunnerForConfig(SandboxConfig{Mode: "seatbelt"})
+	if err == nil {
+		t.Fatalf("expected unsupported error for seatbelt mode")
+	}
+	if runner != nil {
+		t.Errorf("expected nil runner on unsupported mode, got %v", runner)
+	}
+	if !strings.Contains(err.Error(), "not yet implemented") {
+		t.Errorf("expected 'not yet implemented' in error, got: %v", err)
+	}
+}
+
+func TestNewBashRunnerForConfig_BwrapUnsupported(t *testing.T) {
+	_, err := NewBashRunnerForConfig(SandboxConfig{Mode: "bwrap"})
+	if err == nil {
+		t.Fatalf("expected unsupported error for bwrap mode")
+	}
+	if !strings.Contains(err.Error(), "not yet implemented") {
+		t.Errorf("expected 'not yet implemented' in error, got: %v", err)
+	}
+}
+
+func TestNewBashRunnerForConfig_UnknownMode(t *testing.T) {
+	_, err := NewBashRunnerForConfig(SandboxConfig{Mode: "ferret"})
+	if err == nil {
+		t.Fatalf("expected error for unknown mode")
+	}
+	if !strings.Contains(err.Error(), "unknown") {
+		t.Errorf("expected 'unknown' in error, got: %v", err)
+	}
+}
+
+func TestBashSchema_DoesNotExposeSandboxBypass(t *testing.T) {
+	bt := NewBashTool(NewPathGuard(t.TempDir(), nil))
+	schema := strings.ToLower(string(bt.Schema()))
+	forbidden := []string{
+		"dangerously_disable_sandbox",
+		"disable_sandbox",
+		"sandbox_mode",
+		"allow_unsandboxed",
+		"bypass_sandbox",
+	}
+	for _, f := range forbidden {
+		if strings.Contains(schema, f) {
+			t.Errorf("bash schema must not expose %q (LLM bypass forbidden)", f)
+		}
+	}
+}
+
+func TestBashTool_ToolParamsCannotBypassSandbox(t *testing.T) {
+	fake := &fakeBashRunner{
+		runResult: BashRunResult{Output: "fake-ok", IsError: false, Classification: "success"},
+	}
+	bt := NewBashToolWithRunner(NewPathGuard(t.TempDir(), nil), fake)
+
+	ctx := WithSessionID(context.Background(), "sess-A")
+	// Embed plausible bypass fields. The schema does not know them, so the
+	// underlying bashParams Unmarshal silently ignores the extras and the
+	// configured runner remains the only execution path.
+	payload := json.RawMessage(`{
+		"command":"echo hi",
+		"dangerously_disable_sandbox":true,
+		"sandbox_mode":"none",
+		"allow_unsandboxed":true,
+		"runner":"escape"
+	}`)
+	res, err := bt.Execute(ctx, payload)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.Output)
+	}
+	fake.mu.Lock()
+	calls := len(fake.runCalls)
+	fake.mu.Unlock()
+	if calls != 1 {
+		t.Errorf("runner should still be called exactly once via fixed BashTool field; got %d", calls)
 	}
 }

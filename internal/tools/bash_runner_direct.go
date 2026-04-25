@@ -33,10 +33,13 @@ func (r *DirectRunner) Name() string { return "direct" }
 // callers cannot misread the runner as a security boundary.
 func (r *DirectRunner) Probe(_ context.Context) BashRunnerProbe {
 	return BashRunnerProbe{
-		Available: true,
-		Name:      r.Name(),
-		Platform:  runtime.GOOS,
-		Message:   "host-process command runner with B3a guardrails (no sandbox)",
+		Available:       true,
+		Name:            r.Name(),
+		Platform:        runtime.GOOS,
+		Message:         "host-process command runner with B3a guardrails (no sandbox)",
+		ExecutionMode:   "direct_host_guarded",
+		SandboxEnforced: false,
+		PolicyName:      "direct",
 	}
 }
 
