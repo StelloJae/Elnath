@@ -28,10 +28,10 @@ jobs:
           go-version: '1.25'
           check-latest: true
 
-      - name: Install bubblewrap and netcat
+      - name: Install bubblewrap, netcat, curl
         run: |
           sudo apt-get update
-          sudo apt-get install -y bubblewrap netcat-openbsd
+          sudo apt-get install -y bubblewrap netcat-openbsd curl
 
       - name: Permit unprivileged user namespaces
         # Ubuntu 24.04 (and later 22.04 kernels) ships AppArmor
@@ -66,3 +66,16 @@ jobs:
 
       - name: Run linux-tagged sandbox tests
         run: go test -race -count=1 -run 'Bwrap' ./internal/tools/...
+
+      - name: Run B3b-4-S0 netns bridge spike (integration)
+        # v41 / B3b-4-S0 spike. Proves the bwrap + self-exec + UDS
+        # bridge design is buildable end-to-end. The test file is
+        # tagged `linux && integration` so this is the only job that
+        # exercises it; unit-test runs without `-tags=integration`
+        # silently skip the file. The test builds the elnath binary
+        # in a TempDir, exec's it as the bwrap-spawned wrapper
+        # (bridge mode), and asserts a full HTTP round-trip plus a
+        # negative direct-egress probe and an orphan-process check.
+        # NOT a B3b-4 production proxy — it's the buildability
+        # evidence that gates B3b-4-3 lane entry.
+        run: go test -tags=integration -race -count=1 -run 'NetnsBridgeSpike' ./internal/tools/...
