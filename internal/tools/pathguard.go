@@ -142,6 +142,67 @@ func pathWithin(root, candidate string) bool {
 	return !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
+// ResolveSessionScoped resolves rawPath against sessionDir for file tools
+// (read_file, write_file, edit_file) and verifies the resolved target lies
+// within the session workspace after symlink resolution.
+//
+// Unlike ResolveWorkingDir, this helper accepts targets that do not yet
+// exist on disk (write_file creating a new file). For non-existent targets
+// the deepest existing ancestor is symlink-resolved instead — this catches
+// symlinks planted inside the session that point outside.
+//
+// Tilde paths (~ or ~/foo) are rejected so file tools cannot reach into
+// the host home directory under any session.
+func (g *PathGuard) ResolveSessionScoped(sessionDir, rawPath string) (string, error) {
+	if rawPath == "" {
+		return "", fmt.Errorf("empty path")
+	}
+	if rawPath == "~" || strings.HasPrefix(rawPath, "~/") {
+		return "", fmt.Errorf("tilde paths not allowed in session scope")
+	}
+
+	p := rawPath
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(sessionDir, p)
+	}
+	cleaned := filepath.Clean(p)
+
+	sessionReal, err := filepath.EvalSymlinks(sessionDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve session root: %w", err)
+	}
+
+	canonical, err := evalSymlinksAllowingMissing(cleaned)
+	if err != nil {
+		return "", fmt.Errorf("resolve target: %w", err)
+	}
+
+	if !pathWithin(sessionReal, canonical) {
+		return "", fmt.Errorf("path escapes session workspace")
+	}
+	return cleaned, nil
+}
+
+// evalSymlinksAllowingMissing resolves symlinks in path. If path itself does
+// not exist, it walks up to the deepest existing ancestor, EvalSymlinks that
+// ancestor, and re-appends the non-existent tail. The non-existent tail
+// cannot contain symlinks because it does not exist on disk, so the result
+// faithfully represents where path will be created on a write.
+func evalSymlinksAllowingMissing(path string) (string, error) {
+	if real, err := filepath.EvalSymlinks(path); err == nil {
+		return real, nil
+	}
+	parent := filepath.Dir(path)
+	if parent == path {
+		return "", fmt.Errorf("no existing ancestor for %q", path)
+	}
+	parentReal, err := evalSymlinksAllowingMissing(parent)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(parentReal, filepath.Base(path)), nil
+}
+
 // ResolveWorkingDir resolves rawPath against sessionDir and verifies the
 // result lies within the session workspace after symlink resolution. The
 // target must already exist and be a directory. Used by tools (bash) that

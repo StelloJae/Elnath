@@ -66,12 +66,12 @@ type readParams struct {
 	Limit    int    `json:"limit"`
 }
 
-func (t *ReadTool) Execute(_ context.Context, params json.RawMessage) (*Result, error) {
+func (t *ReadTool) Execute(ctx context.Context, params json.RawMessage) (*Result, error) {
 	var p readParams
 	if err := json.Unmarshal(params, &p); err != nil {
 		return ErrorResult(fmt.Sprintf("invalid params: %v", err)), nil
 	}
-	abs, err := t.guard.Resolve(p.FilePath)
+	abs, err := resolveFileTarget(t.guard, ctx, p.FilePath)
 	if err != nil {
 		return ErrorResult(err.Error()), nil
 	}
@@ -164,7 +164,7 @@ type writeParams struct {
 	Content  string `json:"content"`
 }
 
-func (t *WriteTool) Execute(_ context.Context, params json.RawMessage) (*Result, error) {
+func (t *WriteTool) Execute(ctx context.Context, params json.RawMessage) (*Result, error) {
 	var p writeParams
 	if err := json.Unmarshal(params, &p); err != nil {
 		return ErrorResult(fmt.Sprintf("invalid params: %v", err)), nil
@@ -172,7 +172,7 @@ func (t *WriteTool) Execute(_ context.Context, params json.RawMessage) (*Result,
 	if err := t.guard.CheckScope(t.Scope(params)); err != nil {
 		return ErrorResult(err.Error()), nil
 	}
-	abs, err := t.guard.Resolve(p.FilePath)
+	abs, err := resolveFileTarget(t.guard, ctx, p.FilePath)
 	if err != nil {
 		return ErrorResult(err.Error()), nil
 	}
@@ -258,7 +258,7 @@ type editParams struct {
 	ReplaceAll bool   `json:"replace_all"`
 }
 
-func (t *EditTool) Execute(_ context.Context, params json.RawMessage) (*Result, error) {
+func (t *EditTool) Execute(ctx context.Context, params json.RawMessage) (*Result, error) {
 	var p editParams
 	if err := json.Unmarshal(params, &p); err != nil {
 		return ErrorResult(fmt.Sprintf("invalid params: %v", err)), nil
@@ -266,7 +266,7 @@ func (t *EditTool) Execute(_ context.Context, params json.RawMessage) (*Result, 
 	if err := t.guard.CheckScope(t.Scope(params)); err != nil {
 		return ErrorResult(err.Error()), nil
 	}
-	abs, err := t.guard.Resolve(p.FilePath)
+	abs, err := resolveFileTarget(t.guard, ctx, p.FilePath)
 	if err != nil {
 		return ErrorResult(err.Error()), nil
 	}
@@ -484,6 +484,24 @@ type grepParams struct {
 	Pattern string `json:"pattern"`
 	Path    string `json:"path"`
 	Include string `json:"include"`
+}
+
+// resolveFileTarget routes file_path resolution through ResolveSessionScoped
+// when ctx carries a session id, falling back to the legacy PathGuard.Resolve
+// only when no session is bound (legacy test compatibility — production agent
+// paths always set a session id). When a session id is present and the
+// session-scoped resolver fails, the failure surfaces as a tool error rather
+// than degrading to legacy behavior, per the B3b-1 fail-closed contract.
+func resolveFileTarget(guard *PathGuard, ctx context.Context, rawPath string) (string, error) {
+	sessionID := SessionIDFrom(ctx)
+	if sessionID == "" {
+		return guard.Resolve(rawPath)
+	}
+	sessionDir, err := guard.EnsureSessionWorkDir(sessionID)
+	if err != nil {
+		return "", err
+	}
+	return guard.ResolveSessionScoped(sessionDir, rawPath)
 }
 
 func resolvedReadScope(guard *PathGuard, rawPath string) ToolScope {
