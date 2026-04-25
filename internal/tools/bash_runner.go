@@ -29,18 +29,24 @@ type BashRunner interface {
 // the substrate cannot run here; callers MUST surface a clear diagnostic
 // rather than silently falling back to a different runner.
 //
-// ExecutionMode / SandboxEnforced / PolicyName populate the structured
-// slog telemetry fields emitted on every Run. They are static per runner
-// instance so telemetry can name the active backend without reaching into
-// runner-specific state on each invocation.
+// ExecutionMode / SandboxEnforced / FilesystemEnforced / NetworkEnforced /
+// PolicyName populate the structured slog telemetry fields emitted on
+// every Run. They are static per runner instance so telemetry can name
+// the active backend without reaching into runner-specific state on each
+// invocation. SandboxEnforced is reserved for the case where BOTH
+// filesystem and network isolation are enforced — partial substrates
+// (e.g., Seatbelt B3b-2 filesystem-only prototype) report
+// FilesystemEnforced=true with SandboxEnforced still false.
 type BashRunnerProbe struct {
-	Available       bool
-	Name            string
-	Platform        string
-	Message         string
-	ExecutionMode   string // "direct_host_guarded" | "macos_seatbelt" | "linux_bwrap"
-	SandboxEnforced bool
-	PolicyName      string // "direct" | "seatbelt" | "bwrap"
+	Available          bool
+	Name               string
+	Platform           string
+	Message            string
+	ExecutionMode      string // "direct_host_guarded" | "macos_seatbelt_fs" | "macos_seatbelt" | "linux_bwrap"
+	SandboxEnforced    bool   // true only when BOTH filesystem and network are enforced
+	FilesystemEnforced bool
+	NetworkEnforced    bool
+	PolicyName         string // "direct" | "seatbelt-fs" | "seatbelt" | "bwrap"
 }
 
 // BashRunRequest is the input to BashRunner.Run. Paths are absolute, real

@@ -33,13 +33,15 @@ func (r *DirectRunner) Name() string { return "direct" }
 // callers cannot misread the runner as a security boundary.
 func (r *DirectRunner) Probe(_ context.Context) BashRunnerProbe {
 	return BashRunnerProbe{
-		Available:       true,
-		Name:            r.Name(),
-		Platform:        runtime.GOOS,
-		Message:         "host-process command runner with B3a guardrails (no sandbox)",
-		ExecutionMode:   "direct_host_guarded",
-		SandboxEnforced: false,
-		PolicyName:      "direct",
+		Available:          true,
+		Name:               r.Name(),
+		Platform:           runtime.GOOS,
+		Message:            "host-process command runner with B3a guardrails (no sandbox)",
+		ExecutionMode:      "direct_host_guarded",
+		SandboxEnforced:    false,
+		FilesystemEnforced: false,
+		NetworkEnforced:    false,
+		PolicyName:         "direct",
 	}
 }
 
@@ -50,13 +52,25 @@ func (r *DirectRunner) Close(_ context.Context) error { return nil }
 
 // Run executes req.Command and returns a fully-rendered BashRunResult.
 // The implementation is the legacy BashTool.Execute body, extracted so the
-// substrate insertion point is isolated to a single Runner.
+// substrate insertion point is isolated to a single Runner. The shared
+// pipeline (capping, process group, classification, formatting) lives in
+// runBashCmd so substrate runners can build a custom *exec.Cmd and reuse
+// the same lifecycle without duplicating ~80 lines of cleanup logic.
 func (r *DirectRunner) Run(ctx context.Context, req BashRunRequest) (BashRunResult, error) {
 	cmd := exec.Command(resolveBashShell(), "-c", req.Command)
 	cmd.Dir = req.WorkDir
 	cmd.Env = cleanBashEnv(os.Environ(), req.SessionDir, req.WorkDir)
 	configureProcessCleanup(cmd)
+	return runBashCmd(ctx, cmd, req, r.killGrace), nil
+}
 
+// runBashCmd is the shared lifecycle for any BashRunner that delegates
+// execution to an *exec.Cmd. It captures stdout/stderr with caps, starts
+// the command, waits with timeout/cancel handling and process-group
+// cleanup, classifies the exit, and returns a fully rendered
+// BashRunResult. Both DirectRunner and SeatbeltRunner call this after
+// constructing the platform-specific cmd.
+func runBashCmd(ctx context.Context, cmd *exec.Cmd, req BashRunRequest, killGrace time.Duration) BashRunResult {
 	stdout := newCappedOutput(bashOutputCapPerStream)
 	stderr := newCappedOutput(bashOutputCapPerStream)
 	cmd.Stdout = stdout
@@ -66,8 +80,8 @@ func (r *DirectRunner) Run(ctx context.Context, req BashRunRequest) (BashRunResu
 
 	if startErr := cmd.Start(); startErr != nil {
 		stderr.Write([]byte(fmt.Sprintf("bash start failed: %v", startErr)))
-		return r.buildResult(req, time.Since(start), stdout, stderr,
-			"error", "unknown_nonzero", nil, false, false), nil
+		return buildBashResult(req, time.Since(start), stdout, stderr,
+			"error", "unknown_nonzero", nil, false, false)
 	}
 
 	// Buffered so the Wait goroutine exits cleanly even when the
@@ -86,7 +100,7 @@ func (r *DirectRunner) Run(ctx context.Context, req BashRunRequest) (BashRunResu
 		// Normal exit. The parent bash is reaped, but a detached
 		// background child (`foo &` without `wait`) may still hold
 		// the process group. Clean up if anything survived.
-		reapOrphanedProcessGroup(cmd, r.killGrace)
+		reapOrphanedProcessGroup(cmd, killGrace)
 	case <-ctx.Done():
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			timedOut = true
@@ -99,7 +113,7 @@ func (r *DirectRunner) Run(ctx context.Context, req BashRunRequest) (BashRunResu
 		// to SIGKILL. Unlike a detached cleanup goroutine this never
 		// fires SIGKILL after the group has already exited, so a
 		// recycled PGID cannot receive stray signals.
-		timer := time.NewTimer(r.killGrace)
+		timer := time.NewTimer(killGrace)
 		select {
 		case runErr = <-done:
 			if !timer.Stop() {
@@ -151,11 +165,15 @@ func (r *DirectRunner) Run(ctx context.Context, req BashRunRequest) (BashRunResu
 		exitCode = &ec
 	}
 
-	return r.buildResult(req, duration, stdout, stderr,
-		status, classification, exitCode, timedOut, canceledRun), nil
+	return buildBashResult(req, duration, stdout, stderr,
+		status, classification, exitCode, timedOut, canceledRun)
 }
 
-func (r *DirectRunner) buildResult(
+// buildBashResult assembles the final BashRunResult from the captured
+// pieces. Used by all BashRunner backends so the formatted Output and
+// the structured fields stay perfectly in sync — the LLM body and the
+// telemetry log are derived from the same meta block.
+func buildBashResult(
 	req BashRunRequest,
 	duration time.Duration,
 	stdout, stderr *cappedOutput,

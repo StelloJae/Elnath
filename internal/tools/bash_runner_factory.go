@@ -1,6 +1,9 @@
 package tools
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+)
 
 // SandboxConfig captures the user-facing sandbox/runner mode for BashTool.
 // Phase 1 supports only "direct" (the DirectRunner host-process backend).
@@ -22,12 +25,23 @@ type SandboxConfig struct {
 // error describing why the requested mode is unavailable. Callers MUST
 // surface the error to the user instead of substituting DirectRunner —
 // silent fallback would defeat the purpose of asking for a sandbox.
+//
+// For substrate modes (seatbelt, bwrap) the factory probes the runner at
+// construction and refuses to return one whose Probe reports
+// Available=false. The probe message becomes part of the returned error
+// so the user sees the concrete reason (wrong platform, missing binary,
+// etc.) rather than a generic "unsupported".
 func NewBashRunnerForConfig(cfg SandboxConfig) (BashRunner, error) {
 	switch cfg.Mode {
 	case "", "direct":
 		return NewDirectRunner(), nil
 	case "seatbelt":
-		return nil, fmt.Errorf("sandbox mode %q not yet implemented (B3b-2 macOS Seatbelt lane pending)", cfg.Mode)
+		r := NewSeatbeltRunner()
+		p := r.Probe(context.Background())
+		if !p.Available {
+			return nil, fmt.Errorf("sandbox mode %q unavailable: %s", cfg.Mode, p.Message)
+		}
+		return r, nil
 	case "bwrap":
 		return nil, fmt.Errorf("sandbox mode %q not yet implemented (B3b-3 Linux bwrap lane pending)", cfg.Mode)
 	default:

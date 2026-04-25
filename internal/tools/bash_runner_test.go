@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -280,16 +281,25 @@ func TestNewBashRunnerForConfig_DirectMode(t *testing.T) {
 	}
 }
 
-func TestNewBashRunnerForConfig_SeatbeltUnsupported(t *testing.T) {
+func TestNewBashRunnerForConfig_SeatbeltOnCurrentPlatform(t *testing.T) {
 	runner, err := NewBashRunnerForConfig(SandboxConfig{Mode: "seatbelt"})
+	if runtime.GOOS == "darwin" {
+		if err != nil {
+			t.Fatalf("expected seatbelt mode to succeed on darwin: %v", err)
+		}
+		if runner == nil || runner.Name() != "seatbelt" {
+			t.Fatalf("expected SeatbeltRunner, got %v", runner)
+		}
+		return
+	}
 	if err == nil {
-		t.Fatalf("expected unsupported error for seatbelt mode")
+		t.Fatalf("expected unsupported error on %s", runtime.GOOS)
 	}
 	if runner != nil {
-		t.Errorf("expected nil runner on unsupported mode, got %v", runner)
+		t.Errorf("expected nil runner on unsupported platform, got %v", runner)
 	}
-	if !strings.Contains(err.Error(), "not yet implemented") {
-		t.Errorf("expected 'not yet implemented' in error, got: %v", err)
+	if !strings.Contains(err.Error(), "darwin") && !strings.Contains(err.Error(), "unavailable") {
+		t.Errorf("expected platform-specific error, got: %v", err)
 	}
 }
 
