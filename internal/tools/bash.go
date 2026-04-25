@@ -573,10 +573,21 @@ func hasSystemPath(args []string) bool {
 	return false
 }
 
+// isSystemPath reports whether v names one of the protected system roots
+// (or a path beneath one). Match is anchored on path boundaries so that
+// "/usr" and "/usr/bin" match while "/usr2", "/etcd", or "/lib2" do NOT.
+// strings.HasPrefix(v, "/usr") alone leaks across siblings because /usr2
+// shares the textual prefix without sharing the directory.
 func isSystemPath(v string) bool {
+	if v == "" {
+		return false
+	}
 	systemPrefixes := []string{"/etc", "/usr", "/bin", "/sbin", "/lib", "/boot", "/sys", "/proc"}
 	for _, prefix := range systemPrefixes {
-		if strings.HasPrefix(v, prefix) {
+		if v == prefix {
+			return true
+		}
+		if strings.HasPrefix(v, prefix+"/") {
 			return true
 		}
 	}

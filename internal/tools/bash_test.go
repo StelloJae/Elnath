@@ -866,6 +866,17 @@ func TestAnalyzeCommand(t *testing.T) {
 		{command: "git push --force origin feature", dangerous: false},
 		{command: "git push origin main", dangerous: false},
 		{command: "git push -f origin master", dangerous: true},
+		// System-path matcher must respect path boundaries: /usr is a
+		// system root, but /usr2 or /etcd are arbitrary user-owned dirs
+		// that happen to share a textual prefix. Pre-fix the matcher
+		// flagged them as dangerous via strings.HasPrefix("/usr"/"/etc")
+		// alone, which both over-blocked legitimate paths and signaled
+		// security where there was none.
+		{command: "touch /usr", dangerous: true},
+		{command: "touch /usr2/file", dangerous: false},
+		{command: "touch /etcd/data", dangerous: false},
+		{command: "mkdir -p /lib2/safe", dangerous: false},
+		{command: "cp ./file /usr2-fake/path", dangerous: false},
 		// P0-5 fail-closed: unparseable commands are blocked at
 		// preflight because the AST analyzer cannot vet them for
 		// dangerous patterns. The reason string embeds the parser
