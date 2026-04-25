@@ -104,7 +104,7 @@ func (r *BwrapRunner) runProbe() BashRunnerProbe {
 	)
 	if err := cmd.Run(); err != nil {
 		base.Available = false
-		base.Message = fmt.Sprintf("bwrap user-namespace probe failed: %v (kernel.unprivileged_userns_clone or similar restriction?)", err)
+		base.Message = fmt.Sprintf("bwrap user-namespace probe failed: %v (check kernel.apparmor_restrict_unprivileged_userns, kernel.unprivileged_userns_clone, or install an AppArmor profile that allows /usr/bin/bwrap to use userns)", err)
 		return base
 	}
 
