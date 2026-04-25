@@ -192,3 +192,96 @@ func TestFormatBashOutput_BothStreamsTruncatedIndependently(t *testing.T) {
 		t.Errorf("stderr header wrong; body=%q", body)
 	}
 }
+
+// TestCappedOutput_TinyWritesDoNotGrowTailCapacity asserts the ring
+// buffer stays at its initial capacity even when the writer is fed
+// many tiny chunks after the tail has filled. Pre-fix the tail used
+// reslice+append, which forced repeated realloc once the underlying
+// array's free space ran out — the regression this commit closes.
+func TestCappedOutput_TinyWritesDoNotGrowTailCapacity(t *testing.T) {
+	w := newCappedOutput(64)
+	startCap := cap(w.tail)
+	if startCap == 0 {
+		t.Fatalf("tail must be pre-allocated, got cap 0")
+	}
+
+	for i := 0; i < 10000; i++ {
+		n, err := w.Write([]byte{byte(i)})
+		if err != nil {
+			t.Fatalf("Write[%d]: %v", i, err)
+		}
+		if n != 1 {
+			t.Fatalf("Write[%d] returned n=%d, want 1", i, n)
+		}
+	}
+
+	if cap(w.tail) != startCap {
+		t.Errorf("tail cap grew from %d to %d under tiny writes", startCap, cap(w.tail))
+	}
+	if w.Kept() > 64 {
+		t.Errorf("Kept = %d, must not exceed limit 64", w.Kept())
+	}
+	if !w.Truncated() {
+		t.Errorf("expected truncated after 10000 writes")
+	}
+}
+
+// TestCappedOutput_TailOrderPreservedAcrossWrap forces the ring to
+// wrap (tailStart > 0) and asserts the rendered tail still reflects
+// arrival order. A naive ring would render tail[0:tailLen] which
+// would scramble the bytes once tailStart != 0.
+func TestCappedOutput_TailOrderPreservedAcrossWrap(t *testing.T) {
+	w := newCappedOutput(20) // head=10, tail=10
+	w.Write([]byte("HEADHEADHE"))
+	// Fill tail exactly: tailStart=0, tailLen=10.
+	w.Write([]byte("0123456789"))
+	// Wrap: each subsequent byte advances tailStart, dropping the
+	// oldest tail byte. After feeding "ABCDE" the logical tail
+	// content must be "56789ABCDE" (in that order).
+	w.Write([]byte("ABCDE"))
+
+	rendered := w.Render()
+	if !strings.HasPrefix(rendered, "HEADHEADHE") {
+		t.Errorf("render %q lost head", rendered)
+	}
+	if !strings.HasSuffix(rendered, "56789ABCDE") {
+		t.Errorf("render %q does not end with logical tail '56789ABCDE'", rendered)
+	}
+	if !strings.Contains(rendered, "output truncated") {
+		t.Errorf("render %q missing truncation marker", rendered)
+	}
+}
+
+// TestCappedOutput_RingPacksOversizedSingleWrite confirms that a
+// single Write larger than the tail capacity collapses to the last
+// tailCap bytes with tailStart=0, so subsequent renders are
+// contiguous and predictable.
+func TestCappedOutput_RingPacksOversizedSingleWrite(t *testing.T) {
+	w := newCappedOutput(20) // head=10, tail=10
+	w.Write([]byte("HEADHEADHE"))
+	// Single chunk much larger than tailCap; the ring should keep
+	// only the last 10 bytes ("STUVWXYZAB") packed at tailStart=0.
+	w.Write([]byte("0123456789KLMNOPQRSTUVWXYZAB"))
+
+	if w.tailStart != 0 {
+		t.Errorf("tailStart = %d, want 0 after oversized single write", w.tailStart)
+	}
+	if w.tailLen != 10 {
+		t.Errorf("tailLen = %d, want 10", w.tailLen)
+	}
+	if !strings.HasSuffix(w.Render(), "STUVWXYZAB") {
+		t.Errorf("render does not end with last 10 bytes: %q", w.Render())
+	}
+}
+
+// TestCappedOutput_RawBytesReturnsInt64 pins the public type of
+// RawBytes(): callers (including future B1 metadata) must be able to
+// rely on int64 rather than the platform-dependent int.
+func TestCappedOutput_RawBytesReturnsInt64(t *testing.T) {
+	w := newCappedOutput(16)
+	w.Write([]byte("hello"))
+	var got int64 = w.RawBytes()
+	if got != 5 {
+		t.Errorf("RawBytes = %d, want 5", got)
+	}
+}

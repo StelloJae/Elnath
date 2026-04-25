@@ -16,12 +16,25 @@ const bashOutputCapPerStream = 256 * 1024
 // and the last tailCap bytes of everything written, dropping the
 // middle once the total exceeds the limit. Writes never fail: the
 // policy is drop/truncate, never flow-control the command.
+//
+// The tail is held in a fixed-size ring buffer (tail, tailStart,
+// tailLen) so tiny writes after the buffer fills do not trigger any
+// allocation or capacity-grow path. Earlier revisions used
+// `tail = tail[overflow:]` followed by `append`; once the underlying
+// array's free capacity ran out, every additional 1-byte write forced
+// a reallocation, giving an O(N * tailCap) worst case for tiny-write
+// streams. The ring keeps Write at amortized O(len(p)).
 type cappedOutput struct {
 	headCap int
 	tailCap int
-	head    []byte
-	tail    []byte
-	raw     int
+
+	head []byte
+
+	tail      []byte
+	tailStart int
+	tailLen   int
+
+	raw int64
 }
 
 // newCappedOutput returns a writer that retains at most `limit` bytes
@@ -36,16 +49,16 @@ func newCappedOutput(limit int) *cappedOutput {
 		headCap: headCap,
 		tailCap: tailCap,
 		head:    make([]byte, 0, headCap),
-		tail:    make([]byte, 0, tailCap),
+		tail:    make([]byte, tailCap),
 	}
 }
 
 // Write always returns len(p), nil. Bytes beyond the head quota are
-// funneled through a tail ring; bytes beyond head+tail are counted
-// but dropped so Render() can report the omission.
+// funneled into the tail ring; bytes beyond head+tail are counted in
+// raw but dropped so Render() can report the omission.
 func (w *cappedOutput) Write(p []byte) (int, error) {
 	n := len(p)
-	w.raw += n
+	w.raw += int64(n)
 
 	if len(w.head) < w.headCap {
 		room := w.headCap - len(w.head)
@@ -57,45 +70,94 @@ func (w *cappedOutput) Write(p []byte) (int, error) {
 		p = p[room:]
 	}
 
-	if len(p) >= w.tailCap {
-		w.tail = append(w.tail[:0], p[len(p)-w.tailCap:]...)
+	if w.tailCap == 0 || len(p) == 0 {
 		return n, nil
 	}
-	if len(w.tail)+len(p) > w.tailCap {
-		overflow := len(w.tail) + len(p) - w.tailCap
-		w.tail = w.tail[overflow:]
+
+	// Single chunk that already overshoots the tail capacity: keep
+	// only the last tailCap bytes, repacked so tailStart=0 keeps the
+	// rendering path contiguous.
+	if len(p) >= w.tailCap {
+		copy(w.tail, p[len(p)-w.tailCap:])
+		w.tailStart = 0
+		w.tailLen = w.tailCap
+		return n, nil
 	}
-	w.tail = append(w.tail, p...)
+
+	// Smaller chunk: walk into the ring in at most two contiguous
+	// copies (one before the wrap, one after) so each Write costs
+	// O(len(p)) regardless of how full the buffer already is.
+	for len(p) > 0 {
+		writeIdx := (w.tailStart + w.tailLen) % w.tailCap
+		chunk := w.tailCap - writeIdx
+		if chunk > len(p) {
+			chunk = len(p)
+		}
+		copy(w.tail[writeIdx:writeIdx+chunk], p[:chunk])
+		p = p[chunk:]
+
+		if w.tailLen+chunk <= w.tailCap {
+			w.tailLen += chunk
+			continue
+		}
+		overflow := w.tailLen + chunk - w.tailCap
+		w.tailStart = (w.tailStart + overflow) % w.tailCap
+		w.tailLen = w.tailCap
+	}
 	return n, nil
 }
 
 // RawBytes returns the total number of bytes seen by the writer,
-// including those discarded by truncation.
-func (w *cappedOutput) RawBytes() int { return w.raw }
+// including those discarded by truncation. The counter is int64 so
+// streams above ~2 GiB do not silently wrap on 32-bit GOARCH builds.
+func (w *cappedOutput) RawBytes() int64 { return w.raw }
 
 // Kept reports how many bytes are retained in head+tail combined.
-func (w *cappedOutput) Kept() int { return len(w.head) + len(w.tail) }
+func (w *cappedOutput) Kept() int { return len(w.head) + w.tailLen }
 
 // Dropped reports how many bytes were discarded between head and tail.
-func (w *cappedOutput) Dropped() int {
-	if w.raw <= w.Kept() {
+func (w *cappedOutput) Dropped() int64 {
+	kept := int64(w.Kept())
+	if w.raw <= kept {
 		return 0
 	}
-	return w.raw - w.Kept()
+	return w.raw - kept
 }
 
 // Truncated reports whether any bytes were dropped.
 func (w *cappedOutput) Truncated() bool { return w.Dropped() > 0 }
+
+// tailBytes materialises the ring's logical contents in arrival order.
+// Allocation here is fine; the hot path is Write, which stays
+// allocation-free once the buffer is sized.
+func (w *cappedOutput) tailBytes() []byte {
+	if w.tailLen == 0 {
+		return nil
+	}
+	if w.tailStart == 0 {
+		return w.tail[:w.tailLen]
+	}
+	out := make([]byte, w.tailLen)
+	first := w.tailCap - w.tailStart
+	if first > w.tailLen {
+		first = w.tailLen
+	}
+	copy(out, w.tail[w.tailStart:w.tailStart+first])
+	if w.tailLen > first {
+		copy(out[first:], w.tail[:w.tailLen-first])
+	}
+	return out
+}
 
 // Render returns head + elision marker + tail. The marker is inserted
 // only when bytes were dropped. Bytes are returned as-is (no UTF-8
 // fixup) so binary output survives the round trip.
 func (w *cappedOutput) Render() string {
 	if !w.Truncated() {
-		return string(w.head) + string(w.tail)
+		return string(w.head) + string(w.tailBytes())
 	}
 	marker := fmt.Sprintf("\n... [output truncated: omitted %d bytes] ...\n", w.Dropped())
-	return string(w.head) + marker + string(w.tail)
+	return string(w.head) + marker + string(w.tailBytes())
 }
 
 // Ensure interface conformance at compile time.
@@ -135,7 +197,7 @@ func writeStreamHeader(sb *strings.Builder, name string, w *cappedOutput) {
 	sb.WriteString("[")
 	sb.WriteString(name)
 	sb.WriteString(": ")
-	sb.WriteString(strconv.Itoa(w.RawBytes()))
+	sb.WriteString(strconv.FormatInt(w.RawBytes(), 10))
 	sb.WriteString(" bytes")
 	if w.Truncated() {
 		sb.WriteString(", truncated (")
