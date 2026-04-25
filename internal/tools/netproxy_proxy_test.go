@@ -543,6 +543,200 @@ func TestSOCKS5_BindCommandRejected(t *testing.T) {
 }
 
 // ---------------------------------------------------------------
+// M2 — SOCKS5 ATYP=0x04 (IPv6) binary-path regression tests
+// ---------------------------------------------------------------
+// The text-based scoped-IPv6 reject guard at evaluate-time only fires
+// for hostnames containing '%'. SOCKS5 ATYP=0x04 supplies 16 raw
+// bytes; the resulting net.IP(buf).String() never carries '%', so the
+// only defense for non-public addresses arriving via this path is the
+// IP classifier in isSpecialRangeIP. These tests pin that defense
+// against silent regression. Production code is unchanged — the
+// existing classifier already catches both link-local and v4-mapped
+// loopback, since net.IP(16-byte buf).String() for ::ffff:127.0.0.1
+// renders as "127.0.0.1" which falls into the v4 loopback branch.
+
+// socks5SendConnectIPv6 sends a SOCKS5 CONNECT (cmd=1) request with
+// ATYP=0x04 and the supplied 16 raw bytes as DST.ADDR.
+func socks5SendConnectIPv6(t *testing.T, conn net.Conn, ipv6 [16]byte, port int) {
+	t.Helper()
+	buf := make([]byte, 0, 4+16+2)
+	buf = append(buf, 0x05, 0x01, 0x00, 0x04)
+	buf = append(buf, ipv6[:]...)
+	portBytes := make([]byte, 2)
+	binary.BigEndian.PutUint16(portBytes, uint16(port))
+	buf = append(buf, portBytes...)
+	if _, err := conn.Write(buf); err != nil {
+		t.Fatalf("write atyp=4 connect: %v", err)
+	}
+}
+
+func TestSOCKS5_ATYP4_LinkLocalIPv6BlockedByDefault(t *testing.T) {
+	// Sentinel listener: if the proxy ever dials upstream for a
+	// link-local target, we'll see a connection attempt here. fail-fast.
+	sentinel, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("sentinel listen: %v", err)
+	}
+	defer sentinel.Close()
+	gotDial := make(chan struct{}, 1)
+	go func() {
+		if c, err := sentinel.Accept(); err == nil {
+			c.Close()
+			select {
+			case gotDial <- struct{}{}:
+			default:
+			}
+		}
+	}()
+
+	// Empty allowlist + empty denylist — link-local must be denied
+	// purely by the special-range classifier.
+	allow, _ := ParseAllowlist([]string{})
+	sink := &captureSink{}
+	proxyAddr, stop := startSocks5Proxy(t, allow, Denylist{}, nil, sink)
+	defer stop()
+
+	conn, err := net.Dial("tcp", proxyAddr.String())
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer conn.Close()
+	socks5Greet(t, conn)
+	// fe80::1 raw bytes.
+	var fe80 [16]byte
+	fe80[0] = 0xfe
+	fe80[1] = 0x80
+	fe80[15] = 0x01
+	socks5SendConnectIPv6(t, conn, fe80, 80)
+
+	code := socks5ReadReplyCode(t, conn)
+	if code == 0x00 {
+		t.Fatalf("link-local fe80::1 must NOT receive 0x00 succeeded")
+	}
+	// Per RFC 1928 §6, 0x02 = "connection not allowed by ruleset" is
+	// the deny-by-policy code emitted by the proxy.
+	if code != 0x02 {
+		t.Errorf("expected reply 0x02 (not allowed); got 0x%02x", code)
+	}
+
+	time.Sleep(20 * time.Millisecond)
+	decisions := sink.snapshotDecisions()
+	if len(decisions) != 1 {
+		t.Fatalf("expected 1 decision; got %d (%+v)", len(decisions), decisions)
+	}
+	d := decisions[0]
+	if d.Allow {
+		t.Errorf("expected deny; got %+v", d)
+	}
+	if d.Source != SourceNetworkProxy {
+		t.Errorf("expected SourceNetworkProxy; got %q", d.Source)
+	}
+	if d.Protocol != ProtocolSOCKS5TCP {
+		t.Errorf("expected ProtocolSOCKS5TCP; got %q", d.Protocol)
+	}
+	// Either ReasonNotInAllowlist (no allowlist match path) or
+	// ReasonLocalBindingDisabled (special-range classifier path) is
+	// acceptable — both are deny-by-design for fe80::1 with an empty
+	// allowlist. Pin to either to avoid over-specifying the production
+	// branch order.
+	if d.Reason != ReasonLocalBindingDisabled && d.Reason != ReasonNotInAllowlist {
+		t.Errorf("expected ReasonLocalBindingDisabled or ReasonNotInAllowlist; got %q", d.Reason)
+	}
+	if d.Host != "fe80::1" {
+		t.Errorf("expected Host=fe80::1; got %q", d.Host)
+	}
+	if d.Port != 80 {
+		t.Errorf("expected Port=80; got %d", d.Port)
+	}
+
+	// Confirm no upstream dial happened.
+	select {
+	case <-gotDial:
+		t.Fatalf("proxy dialed sentinel for a link-local target — production bug")
+	default:
+	}
+}
+
+func TestSOCKS5_ATYP4_IPv4MappedLoopbackBlockedByDefault(t *testing.T) {
+	sentinel, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("sentinel listen: %v", err)
+	}
+	defer sentinel.Close()
+	gotDial := make(chan struct{}, 1)
+	go func() {
+		if c, err := sentinel.Accept(); err == nil {
+			c.Close()
+			select {
+			case gotDial <- struct{}{}:
+			default:
+			}
+		}
+	}()
+
+	allow, _ := ParseAllowlist([]string{})
+	sink := &captureSink{}
+	proxyAddr, stop := startSocks5Proxy(t, allow, Denylist{}, nil, sink)
+	defer stop()
+
+	conn, err := net.Dial("tcp", proxyAddr.String())
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer conn.Close()
+	socks5Greet(t, conn)
+	// ::ffff:127.0.0.1 raw bytes (v4-mapped IPv6).
+	var mapped [16]byte
+	mapped[10] = 0xff
+	mapped[11] = 0xff
+	mapped[12] = 127
+	mapped[15] = 0x01
+	socks5SendConnectIPv6(t, conn, mapped, 22)
+
+	code := socks5ReadReplyCode(t, conn)
+	if code == 0x00 {
+		t.Fatalf("v4-mapped loopback ::ffff:127.0.0.1 must NOT receive 0x00 succeeded")
+	}
+	if code != 0x02 {
+		t.Errorf("expected reply 0x02 (not allowed); got 0x%02x", code)
+	}
+
+	time.Sleep(20 * time.Millisecond)
+	decisions := sink.snapshotDecisions()
+	if len(decisions) != 1 {
+		t.Fatalf("expected 1 decision; got %d (%+v)", len(decisions), decisions)
+	}
+	d := decisions[0]
+	if d.Allow {
+		t.Errorf("expected deny; got %+v", d)
+	}
+	if d.Source != SourceNetworkProxy {
+		t.Errorf("expected SourceNetworkProxy; got %q", d.Source)
+	}
+	if d.Protocol != ProtocolSOCKS5TCP {
+		t.Errorf("expected ProtocolSOCKS5TCP; got %q", d.Protocol)
+	}
+	if d.Reason != ReasonLocalBindingDisabled && d.Reason != ReasonNotInAllowlist {
+		t.Errorf("expected ReasonLocalBindingDisabled or ReasonNotInAllowlist; got %q", d.Reason)
+	}
+	// net.IP(16-byte ::ffff:127.0.0.1).String() renders as "127.0.0.1"
+	// (verified: stdlib collapses v4-mapped form to dotted v4). Pin to
+	// what production actually emits.
+	if d.Host != "127.0.0.1" {
+		t.Errorf("expected Host=127.0.0.1 (rendered v4-mapped form); got %q", d.Host)
+	}
+	if d.Port != 22 {
+		t.Errorf("expected Port=22; got %d", d.Port)
+	}
+
+	select {
+	case <-gotDial:
+		t.Fatalf("proxy dialed sentinel for v4-mapped loopback — production bug")
+	default:
+	}
+}
+
+// ---------------------------------------------------------------
 // Sink behaviour
 // ---------------------------------------------------------------
 

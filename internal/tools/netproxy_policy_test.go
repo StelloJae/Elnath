@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"errors"
+	"net"
 	"strings"
 	"testing"
 )
@@ -332,6 +333,172 @@ func TestAllowlist_IPv4UnspecifiedBlockedDefault(t *testing.T) {
 	d := emptyAl.Evaluate(context.Background(), "0.0.0.0", 80, ProtocolHTTPSConnect, nil)
 	if d.Allow {
 		t.Errorf("expected 0.0.0.0 unspecified to be blocked; got %+v", d)
+	}
+}
+
+// ---------------------------------------------------------------
+// M1 — IPv4 special-range parity with Codex policy.rs:52-70
+// ---------------------------------------------------------------
+// The classifier MUST reject every range Codex's is_non_public_ipv4
+// classifies as non-public so that allowlisted hostnames cannot be
+// silently bypassed by resolving to a CGNAT / TEST-NET / RFC6890
+// address. CGNAT is the realistic SSRF vector — net.IP.IsPrivate
+// does NOT classify 100.64.0.0/10 as private.
+
+func TestIsSpecialRangeIP_IPv4ExtendedRanges(t *testing.T) {
+	cases := []struct {
+		name string
+		ip   string
+	}{
+		{"this network 0.0.0.0/8 mid", "0.1.2.3"},
+		{"this network 0.0.0.0/8 high", "0.255.255.254"},
+		{"CGNAT 100.64.0.0/10 low", "100.64.0.1"},
+		{"CGNAT 100.64.0.0/10 mid", "100.96.42.42"},
+		{"CGNAT 100.64.0.0/10 high", "100.127.255.254"},
+		{"IETF 192.0.0.0/24", "192.0.0.1"},
+		{"TEST-NET-1 192.0.2.0/24", "192.0.2.1"},
+		{"benchmarking 198.18.0.0/15 low", "198.18.0.1"},
+		{"benchmarking 198.18.0.0/15 high", "198.19.255.254"},
+		{"TEST-NET-2 198.51.100.0/24", "198.51.100.1"},
+		{"TEST-NET-3 203.0.113.0/24", "203.0.113.1"},
+		{"reserved class E 240.0.0.0/4 low", "240.0.0.1"},
+		{"reserved class E 240.0.0.0/4 high", "254.255.255.254"},
+		{"broadcast 255.255.255.255", "255.255.255.255"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ip := net.ParseIP(tc.ip)
+			if ip == nil {
+				t.Fatalf("ParseIP(%q) returned nil", tc.ip)
+			}
+			if !isSpecialRangeIP(ip) {
+				t.Errorf("isSpecialRangeIP(%s) = false; want true (%s)", tc.ip, tc.name)
+			}
+		})
+	}
+}
+
+func TestIsSpecialRangeIP_IPv4PublicAddressesNotSpecial(t *testing.T) {
+	// Sanity: nearby public addresses must remain non-special so the
+	// classifier doesn't widen too far. These are the boundary
+	// addresses just outside each new CIDR.
+	cases := []struct {
+		name string
+		ip   string
+	}{
+		{"just outside CGNAT low", "100.63.255.254"},
+		{"just outside CGNAT high", "100.128.0.1"},
+		{"just outside TEST-NET-1", "192.0.3.1"},
+		{"just outside benchmarking low", "198.17.255.254"},
+		{"just outside benchmarking high", "198.20.0.1"},
+		{"just outside TEST-NET-2", "198.51.99.1"},
+		{"just outside TEST-NET-3", "203.0.114.1"},
+		{"public Google DNS", "8.8.8.8"},
+		{"public Cloudflare DNS", "1.1.1.1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ip := net.ParseIP(tc.ip)
+			if ip == nil {
+				t.Fatalf("ParseIP(%q) returned nil", tc.ip)
+			}
+			if isSpecialRangeIP(ip) {
+				t.Errorf("isSpecialRangeIP(%s) = true; want false (%s)", tc.ip, tc.name)
+			}
+		})
+	}
+}
+
+func TestIsSpecialRangeIP_IPv4MappedExtendedRanges(t *testing.T) {
+	// ::ffff:x.x.x.x form must classify by the embedded v4 — this
+	// closes the v4-mapped IPv6 SSRF bypass that would otherwise let a
+	// CGNAT address slip past the v4 classifier.
+	cases := []struct {
+		name string
+		ip   string
+	}{
+		{"v4-mapped CGNAT", "::ffff:100.64.1.1"},
+		{"v4-mapped TEST-NET-1", "::ffff:192.0.2.1"},
+		{"v4-mapped TEST-NET-2", "::ffff:198.51.100.1"},
+		{"v4-mapped TEST-NET-3", "::ffff:203.0.113.1"},
+		{"v4-mapped reserved class E", "::ffff:240.0.0.1"},
+		{"v4-mapped this network", "::ffff:0.1.2.3"},
+		{"v4-mapped benchmarking", "::ffff:198.18.0.1"},
+		{"v4-mapped IETF", "::ffff:192.0.0.1"},
+		{"v4-mapped broadcast", "::ffff:255.255.255.255"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ip := net.ParseIP(tc.ip)
+			if ip == nil {
+				t.Fatalf("ParseIP(%q) returned nil", tc.ip)
+			}
+			if !isSpecialRangeIP(ip) {
+				t.Errorf("isSpecialRangeIP(%s) = false; want true (%s)", tc.ip, tc.name)
+			}
+		})
+	}
+}
+
+func TestAllowlist_IPv4CGNATBlockedByDefault(t *testing.T) {
+	// Realistic SSRF surface: an attacker-controlled DNS record
+	// resolves an allowlisted hostname to a CGNAT address. The
+	// resolver-side IP check must classify CGNAT as non-public so the
+	// connection is denied.
+	emptyAl, _ := ParseAllowlist([]string{})
+	d := emptyAl.Evaluate(context.Background(), "100.64.1.1", 443, ProtocolHTTPSConnect, nil)
+	if d.Allow {
+		t.Errorf("CGNAT 100.64.1.1 should be denied by default; got %+v", d)
+	}
+	if d.Reason != ReasonLocalBindingDisabled {
+		t.Errorf("expected ReasonLocalBindingDisabled for CGNAT default-deny; got %q", d.Reason)
+	}
+}
+
+func TestAllowlist_IPv4TestNetBlockedByDefault(t *testing.T) {
+	emptyAl, _ := ParseAllowlist([]string{})
+	cases := []string{
+		"192.0.2.1",   // TEST-NET-1
+		"198.51.100.1", // TEST-NET-2
+		"203.0.113.1", // TEST-NET-3
+	}
+	for _, ip := range cases {
+		t.Run(ip, func(t *testing.T) {
+			d := emptyAl.Evaluate(context.Background(), ip, 443, ProtocolHTTPSConnect, nil)
+			if d.Allow {
+				t.Errorf("TEST-NET %s should be denied by default; got %+v", ip, d)
+			}
+			if d.Reason != ReasonLocalBindingDisabled {
+				t.Errorf("expected ReasonLocalBindingDisabled for %s; got %q", ip, d.Reason)
+			}
+		})
+	}
+}
+
+func TestAllowlist_IPv4BroadcastBlockedByDefault(t *testing.T) {
+	emptyAl, _ := ParseAllowlist([]string{})
+	d := emptyAl.Evaluate(context.Background(), "255.255.255.255", 80, ProtocolHTTPSConnect, nil)
+	if d.Allow {
+		t.Errorf("broadcast 255.255.255.255 should be denied by default; got %+v", d)
+	}
+	if d.Reason != ReasonLocalBindingDisabled {
+		t.Errorf("expected ReasonLocalBindingDisabled for broadcast; got %q", d.Reason)
+	}
+}
+
+func TestAllowlist_HostnameResolvesToCGNATBlocked(t *testing.T) {
+	// Hostname is allowlisted; resolver returns a CGNAT IP. The
+	// resolved-IP check must catch this — without M1 the classifier
+	// would let it through because net.IP.IsPrivate does NOT cover
+	// 100.64.0.0/10.
+	al, _ := ParseAllowlist([]string{"shady.example.com:443"})
+	r := &stubResolver{hosts: map[string][]string{"shady.example.com": {"100.64.1.1"}}}
+	d := al.Evaluate(context.Background(), "shady.example.com", 443, ProtocolHTTPSConnect, r)
+	if d.Allow {
+		t.Errorf("hostname resolving to CGNAT should be denied; got %+v", d)
+	}
+	if d.Reason != ReasonLocalBindingDisabled {
+		t.Errorf("expected ReasonLocalBindingDisabled; got %q", d.Reason)
 	}
 }
 

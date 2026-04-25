@@ -403,16 +403,52 @@ func (r policyRule) matchesHost(host string) bool {
 	return false
 }
 
+// extendedIPv4SpecialCIDRs lists the IPv4 ranges Codex's
+// is_non_public_ipv4 (`network-proxy/src/policy.rs:52-70`) classifies
+// as non-public but Go's net.IP method-based classifiers do NOT cover.
+// Parsed once at package init so per-evaluation cost stays at a
+// handful of u32 mask compares.
+//
+// CGNAT (100.64.0.0/10) is the realistic SSRF vector — net.IP.IsPrivate
+// only covers RFC1918, so without this table an attacker-controlled
+// DNS record could resolve to a CGNAT address and slip past the
+// classifier.
+var extendedIPv4SpecialCIDRs = mustParseCIDRs([]string{
+	"0.0.0.0/8",        // "this network" (RFC 1122)
+	"100.64.0.0/10",    // CGNAT (RFC 6598)
+	"192.0.0.0/24",     // IETF Protocol Assignments (RFC 6890)
+	"192.0.2.0/24",     // TEST-NET-1 (RFC 5737)
+	"198.18.0.0/15",    // benchmarking (RFC 2544)
+	"198.51.100.0/24",  // TEST-NET-2 (RFC 5737)
+	"203.0.113.0/24",   // TEST-NET-3 (RFC 5737)
+	"240.0.0.0/4",      // reserved class E (RFC 6890)
+	"255.255.255.255/32", // limited broadcast
+})
+
+func mustParseCIDRs(cidrs []string) []*net.IPNet {
+	out := make([]*net.IPNet, 0, len(cidrs))
+	for _, c := range cidrs {
+		_, n, err := net.ParseCIDR(c)
+		if err != nil {
+			panic(fmt.Sprintf("netproxy: invalid CIDR %q in extendedIPv4SpecialCIDRs: %v", c, err))
+		}
+		out = append(out, n)
+	}
+	return out
+}
+
 // isSpecialRangeIP reports whether ip falls in a range we treat as
 // "non-public" — loopback, private (RFC1918), ULA, link-local,
-// multicast, v4-mapped IPv6 to a non-public v4, or unspecified.
+// multicast, v4-mapped IPv6 to a non-public v4, unspecified, plus the
+// extended Codex parity ranges (CGNAT, TEST-NET-1/2/3, IETF protocol
+// assignments, benchmarking, reserved class E, broadcast,
+// "this network").
 //
-// Mirrors Codex `network-proxy/src/policy.rs:45-98` but is more
-// conservative on Go's stdlib: net.IP.IsPrivate covers RFC1918 v4 +
-// fc00::/7, but we also need link-local (169.254.0.0/16, fe80::/10),
-// multicast (224.0.0.0/4, ff00::/8), v4-mapped IPv6, and unspecified
-// (0.0.0.0, ::). Per critic M8 — do NOT lean on net.IP.IsPrivate
-// alone for v6.
+// Mirrors Codex `network-proxy/src/policy.rs:45-98`. Layered on top
+// of Go stdlib classifiers because net.IP.IsPrivate covers RFC1918 +
+// fc00::/7 only — CGNAT (100.64.0.0/10) and the TEST-NET / RFC6890
+// blocks are NOT classified by stdlib, so we apply explicit CIDR
+// membership for each.
 func isSpecialRangeIP(ip net.IP) bool {
 	if ip == nil {
 		return true
@@ -435,13 +471,21 @@ func isSpecialRangeIP(ip net.IP) bool {
 	if ip.IsPrivate() {
 		return true
 	}
-	// IsPrivate covers RFC1918 + fc00::/7. v4-mapped IPv6 (::ffff:x.x.x.x)
-	// must be classified by its embedded v4.
+	// v4-mapped IPv6 (::ffff:x.x.x.x) must be classified by its
+	// embedded v4 — both for the existing stdlib categories AND for
+	// the extended CIDR list below. Recurse so a single source of
+	// truth handles the mapping.
+	if v4 := ip.To4(); v4 != nil && len(ip) == net.IPv6len {
+		// We already checked the stdlib categories above on the
+		// 16-byte form; recurse on the 4-byte form so the extended
+		// CIDR table sees a clean IPv4 value.
+		return isSpecialRangeIP(v4)
+	}
 	if v4 := ip.To4(); v4 != nil {
-		// Already handled by IsPrivate / IsLoopback above for the
-		// straightforward v4 form, but ::ffff:x form drops here.
-		if v4.IsLoopback() || v4.IsPrivate() || v4.IsLinkLocalUnicast() {
-			return true
+		for _, n := range extendedIPv4SpecialCIDRs {
+			if n.Contains(v4) {
+				return true
+			}
 		}
 	}
 	return false
