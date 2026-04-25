@@ -174,6 +174,70 @@ func TestBwrapRunner_DefaultDenyNetwork(t *testing.T) {
 	}
 }
 
+func TestBwrapRunner_BlocksOutsideRead(t *testing.T) {
+	r := skipIfBwrapUnavailable(t)
+	sessionDir, outsideDir := bwrapSessionDirs(t)
+
+	secretPath := filepath.Join(outsideDir, "secret.txt")
+	const secret = "TOP_SECRET_OUTSIDE_READ_PROBE_42"
+	if err := os.WriteFile(secretPath, []byte(secret), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	res, err := r.Run(ctx, BashRunRequest{
+		Command:    fmt.Sprintf("cat %q", secretPath),
+		WorkDir:    sessionDir,
+		SessionDir: sessionDir,
+		DisplayCWD: ".",
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !res.IsError {
+		t.Errorf("expected cat of outside-session absolute path to fail; output: %s", res.Output)
+	}
+	if strings.Contains(res.Output, secret) {
+		t.Fatalf("outside-session content leaked into sandbox output — bwrap did not block host read")
+	}
+}
+
+func TestBwrapRunner_BlocksHostHomeRead(t *testing.T) {
+	r := skipIfBwrapUnavailable(t)
+	sessionDir, _ := bwrapSessionDirs(t)
+
+	fakeHome := t.TempDir()
+	secretPath := filepath.Join(fakeHome, ".id-fake-rsa")
+	const secret = "FAKE_HOST_HOME_PRIVATE_KEY_PROBE_99"
+	if err := os.WriteFile(secretPath, []byte(secret), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	t.Setenv("HOME", fakeHome)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	res, err := r.Run(ctx, BashRunRequest{
+		// Try the absolute path AND a host-HOME-relative form. Both
+		// must fail: the absolute path is outside the bound runtime
+		// dirs, and $HOME is pinned to the session workspace by
+		// cleanBashEnv so ~ never reaches the host home.
+		Command:    fmt.Sprintf("cat %q || cat \"$HOME/.id-fake-rsa\"", secretPath),
+		WorkDir:    sessionDir,
+		SessionDir: sessionDir,
+		DisplayCWD: ".",
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !res.IsError {
+		t.Errorf("expected host home read attempt to fail; output: %s", res.Output)
+	}
+	if strings.Contains(res.Output, secret) {
+		t.Fatalf("host home secret leaked into sandbox output — bwrap did not block host read")
+	}
+}
+
 func TestBwrapRunner_HostHomeGitconfigNotLoaded(t *testing.T) {
 	r := skipIfBwrapUnavailable(t)
 

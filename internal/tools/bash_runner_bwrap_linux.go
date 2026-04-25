@@ -142,38 +142,68 @@ func (r *BwrapRunner) Run(ctx context.Context, req BashRunRequest) (BashRunResul
 	return res, nil
 }
 
+// bwrapHostReadBinds names the only host paths exposed read-only inside
+// the sandbox. /bin, /usr, /sbin, /lib, /lib64, /lib32, /libx32 cover
+// the shell, libc, dynamic linker, and the standard coreutils. /etc is
+// included so libc / pam / nss can resolve uid → name, hostname, time
+// zone, and CA bundles without leaking per-user state — host HOME,
+// /root, /Users, /var (caches, mail, spool, etc.), /opt, /srv, and
+// /mnt are deliberately NOT bound, closing the arbitrary host read
+// surface that --ro-bind / / would have left wide open. --ro-bind-try
+// silently skips entries that do not exist on a given host (e.g.
+// /lib32 on x86_64-only systems) so the runner stays portable.
+var bwrapHostReadBinds = []string{
+	"/bin",
+	"/sbin",
+	"/usr",
+	"/lib",
+	"/lib64",
+	"/lib32",
+	"/libx32",
+	"/etc",
+}
+
 // buildBwrapArgs composes the bwrap argument list. The order is:
 //
-//   - namespace unshares (user / pid / uts / net) — userspace
-//     escape vectors closed before any binds happen
-//   - --ro-bind / /  — host root mounted read-only so the agent can
-//     read system binaries and config but cannot write outside the
-//     workspace
-//   - --bind sessionDir sessionDir — explicit read-write bind of the
-//     session workspace at the same path the host sees, so any path
-//     PathGuard validates also resolves correctly inside the sandbox
-//   - --proc /proc, --dev /dev, --tmpfs /tmp — synthetic filesystems
+//   - namespace unshares (user / pid / uts / net) and --die-with-parent
+//     — userspace escape vectors closed and lifecycle pinned before
+//     any mounts happen
+//   - synthetic filesystems (--proc /proc, --dev /dev, --tmpfs /tmp)
 //     so /proc/self, /dev/null, and /tmp work inside the namespace
-//   - --die-with-parent — bwrap exits if Elnath crashes, preventing
-//     orphaned sandbox processes and namespaces
+//     without inheriting host /tmp contents
+//   - read-only host binds for the runtime paths in bwrapHostReadBinds
+//     — host HOME, /root, /Users, /var, /opt, /srv, /mnt are NOT
+//     bound, so cat ~/.ssh/id_rsa or any /home/<user>/* path inside
+//     the sandbox returns "No such file or directory" rather than
+//     leaking host content
+//   - --bind sessionDir sessionDir — read-write bind of the session
+//     workspace at the same host path so any path PathGuard already
+//     validated resolves identically inside the sandbox; bwrap creates
+//     intermediate parent directories as empty mount points so
+//     surrounding host paths remain invisible
 //   - --chdir workDir — start bash with the validated working dir
 //   - --, bash, -c, command — separator and the actual invocation
 func buildBwrapArgs(req BashRunRequest, bashPath string) []string {
-	return []string{
+	args := []string{
 		"--unshare-user",
 		"--unshare-pid",
 		"--unshare-uts",
 		"--unshare-net",
-		"--ro-bind", "/", "/",
-		"--bind", req.SessionDir, req.SessionDir,
+		"--die-with-parent",
 		"--proc", "/proc",
 		"--dev", "/dev",
 		"--tmpfs", "/tmp",
-		"--die-with-parent",
+	}
+	for _, p := range bwrapHostReadBinds {
+		args = append(args, "--ro-bind-try", p, p)
+	}
+	args = append(args,
+		"--bind", req.SessionDir, req.SessionDir,
 		"--chdir", req.WorkDir,
 		"--",
 		bashPath, "-c", req.Command,
-	}
+	)
+	return args
 }
 
 // detectBwrapViolations is a best-effort heuristic for surfacing
