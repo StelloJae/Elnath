@@ -55,6 +55,14 @@ func commandRegistry() map[string]commandRunner {
 		// at internal/tools/netproxy_bridge_spike_linux_test.go is
 		// the only caller. Omitted from `elnath help` on purpose.
 		"netproxy-bridge-spike": cmdNetproxyBridgeSpike,
+		// Hidden internal exec mode for the v41 / B3b-4-2 macOS
+		// Seatbelt + future B3b-4-3 Linux bwrap substrate runners.
+		// SeatbeltRunner self-execs the elnath binary as
+		// `elnath netproxy --http-listen ... --socks-listen ...
+		// --allow ... --deny ...` so the proxy listeners run in
+		// their own process (per partner pin C4 forked-child
+		// self-exec model). Omitted from `elnath help` on purpose.
+		"netproxy": cmdNetproxy,
 	}
 }
 

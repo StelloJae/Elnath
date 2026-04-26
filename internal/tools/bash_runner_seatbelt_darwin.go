@@ -3,13 +3,19 @@
 package tools
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -18,6 +24,26 @@ import (
 // abstraction lets us swap to a successor (Apple Endpoint Security or
 // Containerization.framework) without caller changes.
 const seatbeltBinary = "/usr/bin/sandbox-exec"
+
+// netproxyChildReadyTimeout caps how long the runner waits for the
+// proxy child to publish its bound-port preamble. The proxy binds on
+// 127.0.0.1:0 (ephemeral) so readiness only blocks on go startup +
+// listener bind, both <100ms typically. 5s gives generous slack for
+// loaded CI machines without hanging the runner indefinitely.
+const netproxyChildReadyTimeout = 5 * time.Second
+
+// netproxyChildShutdownGrace caps how long Close waits for the proxy
+// child to exit after SIGTERM before escalating to SIGKILL. The proxy
+// only needs to close listeners and reap copy goroutines, so 2s is
+// generous.
+const netproxyChildShutdownGrace = 2 * time.Second
+
+// netproxyBinaryOverrideEnv lets darwin tests substitute a freshly
+// compiled `elnath` binary for the runner's self-exec path. Production
+// reads os.Executable() unconditionally; the override exists because
+// `go test` compiles the test harness as `tools.test` and there is no
+// way to ask Go for the elnath binary path at test time.
+const netproxyBinaryOverrideEnv = "ELNATH_NETPROXY_BINARY_OVERRIDE"
 
 // SeatbeltRunner is the macOS-specific BashRunner backend that wraps
 // each command in sandbox-exec with an SBPL profile. After B3b-2.5 the
@@ -31,13 +57,51 @@ const seatbeltBinary = "/usr/bin/sandbox-exec"
 //
 // SandboxEnforced becomes true when the runner is constructed on darwin
 // because both axes (filesystem + network) are now actively enforced.
-// Domain-based allowlists are intentionally rejected at construction —
-// domain proxying is a B3b-4 substrate, not a B3b-2.5 surface.
+//
+// As of B3b-4-2 the runner ALSO owns an optional netproxy child
+// process. When the configured allowlist contains any domain entry or
+// any non-loopback IP entry (i.e. EvaluateWithDenylist needs the proxy
+// to enforce policy), the runner self-execs the elnath binary as
+// `elnath netproxy ...` at construction time, captures the bound HTTP
+// CONNECT and SOCKS5 ports, and:
+//
+//   - emits an SBPL `(allow network-outbound (remote ip "localhost:N"))`
+//     entry for each proxy port (per partner pin C3 — never `localhost:*`)
+//   - injects HTTP_PROXY / HTTPS_PROXY / ALL_PROXY into the bash env
+//     so user commands route through the proxy
+//   - shuts down the child cleanly on Close (SIGTERM, then SIGKILL
+//     after netproxyChildShutdownGrace)
+//
+// If the proxy child crashes mid-session the next Run returns
+// IsError=true with Classification="network_proxy_failed" rather than
+// silently falling back to DirectRunner — sandbox unavailable MUST be
+// observable.
+//
+// Loopback-only and empty allowlists do NOT spawn the proxy child;
+// the SBPL `(remote ip "localhost:port")` rule handles loopback ports
+// directly.
 type SeatbeltRunner struct {
 	killGrace        time.Duration
 	binaryPath       string
 	profileBuilder   func(req BashRunRequest) string
 	networkAllowlist []string
+
+	// Proxy lifecycle (B3b-4-2). Populated only when the allowlist
+	// requires the proxy substrate (any domain or non-loopback IP
+	// entry). nil when the runner is in loopback-only or default-deny
+	// mode.
+	proxyMu        sync.Mutex
+	proxyCmd       *exec.Cmd
+	proxyHTTPPort  int
+	proxySOCKSPort int
+	proxyDoneCh    chan error
+	proxyShutdown  bool
+	// proxyDead is the sticky "child has exited" flag. Set inside
+	// the Wait goroutine when cmd.Wait() returns; consulted by
+	// proxyChildAlive on the Run hot path. Atomic so the Run path
+	// stays lock-free and so the test that kills the child mid-session
+	// can observe the dead state deterministically.
+	proxyDead atomic.Bool
 }
 
 // NewSeatbeltRunner constructs a SeatbeltRunner with default-deny
@@ -50,31 +114,361 @@ func NewSeatbeltRunner() *SeatbeltRunner {
 }
 
 // NewSeatbeltRunnerWithAllowlist constructs a SeatbeltRunner with the
-// given IP:port allowlist. Each entry is validated; domain entries
-// return an error rather than silently being treated as no-policy.
+// given allowlist. Loopback-only and empty allowlists are honored
+// directly via SBPL rules; allowlists containing any domain entry or
+// any non-loopback IP entry trigger the netproxy proxy child spawn at
+// construction time. Spawn failures abort construction with a
+// descriptive error so the factory caller can surface "sandbox
+// unavailable" rather than silently falling back.
 func NewSeatbeltRunnerWithAllowlist(allowlist []string) (*SeatbeltRunner, error) {
-	cleaned, err := validateNetworkAllowlist(allowlist)
+	captured := append([]string(nil), allowlist...)
+
+	// Determine which mode: pure-loopback (no proxy needed) or
+	// proxy-required. The factory layer runs entryRequiresProxy on
+	// each entry too — re-running it here means construction stays
+	// safe even when callers bypass the factory (e.g. direct test
+	// instantiation of the runner).
+	loopbackEntries, proxyEntries, err := splitAllowlistByProxyNeed(captured)
 	if err != nil {
 		return nil, err
 	}
-	captured := append([]string(nil), cleaned...)
-	return &SeatbeltRunner{
-		killGrace:  bashKillGrace,
-		binaryPath: seatbeltBinary,
-		profileBuilder: func(req BashRunRequest) string {
-			return seatbeltProfile(req, captured)
-		},
-		networkAllowlist: captured,
-	}, nil
+
+	r := &SeatbeltRunner{
+		killGrace:        bashKillGrace,
+		binaryPath:       seatbeltBinary,
+		networkAllowlist: append([]string(nil), captured...),
+	}
+
+	// Loopback-only / empty path: validate via the legacy IP-only
+	// validator so existing factory tests that pass IP literals
+	// still receive the strict "must be loopback" error.
+	if len(proxyEntries) == 0 {
+		if _, err := validateNetworkAllowlist(loopbackEntries); err != nil {
+			return nil, err
+		}
+		r.profileBuilder = func(req BashRunRequest) string {
+			return seatbeltProfileWithProxyPorts(req, captured, 0, 0)
+		}
+		return r, nil
+	}
+
+	// Proxy-required path: spawn the child, capture ports, then
+	// install the proxy-aware profile builder so the SBPL profile
+	// pins both proxy listener ports.
+	if err := r.spawnProxyChild(proxyEntries, loopbackEntries); err != nil {
+		return nil, fmt.Errorf("netproxy: spawn child: %w", err)
+	}
+	httpPort := r.proxyHTTPPort
+	socksPort := r.proxySOCKSPort
+	r.profileBuilder = func(req BashRunRequest) string {
+		return seatbeltProfileWithProxyPorts(req, loopbackEntries, httpPort, socksPort)
+	}
+	return r, nil
+}
+
+// splitAllowlistByProxyNeed partitions the allowlist into the loopback
+// entries (handled by SBPL directly) and the proxy-required entries
+// (handled by the netproxy child). entryRequiresProxy is the canonical
+// classifier — a single source of truth shared with the factory.
+func splitAllowlistByProxyNeed(allowlist []string) (loopback, proxy []string, err error) {
+	for _, raw := range allowlist {
+		need, perr := entryRequiresProxy(raw)
+		if perr != nil {
+			return nil, nil, fmt.Errorf("network allowlist entry %q invalid: %w", raw, perr)
+		}
+		if need {
+			proxy = append(proxy, raw)
+		} else {
+			loopback = append(loopback, raw)
+		}
+	}
+	return loopback, proxy, nil
+}
+
+// spawnProxyChild self-execs the elnath binary as `elnath netproxy
+// --http-listen 127.0.0.1:0 --socks-listen 127.0.0.1:0 --allow ...`.
+// It blocks until the child publishes its bound ports via the stdout
+// preamble, then returns. The child runs until Close terminates it.
+//
+// Errors at every stage are surfaced as a wrapped error so the
+// factory caller can return "sandbox unavailable" rather than silently
+// falling back. This is the partner-locked no-silent-fallback
+// invariant.
+func (r *SeatbeltRunner) spawnProxyChild(proxyEntries, loopbackEntries []string) error {
+	binary, err := resolveNetproxyBinary()
+	if err != nil {
+		return fmt.Errorf("resolve executable: %w", err)
+	}
+
+	args := []string{
+		"netproxy",
+		"--http-listen", "127.0.0.1:0",
+		"--socks-listen", "127.0.0.1:0",
+	}
+	for _, e := range proxyEntries {
+		args = append(args, "--allow", e)
+	}
+	// Forward loopback-only allowlist entries to the proxy too so a
+	// future allowlist mixing domain + loopback works through the
+	// proxy when an upstream client picks the proxy. SBPL handles
+	// loopback-direct, but the proxy must accept loopback CONNECTs as
+	// well so the agent does not have to know which path applies.
+	for _, e := range loopbackEntries {
+		args = append(args, "--allow", e)
+	}
+
+	cmd := exec.Command(binary, args...)
+	cmd.Env = []string{
+		// Minimal env: no host PATH leak; the child only needs
+		// PATH for resolving the bash shell, but the netproxy
+		// subcommand invokes nothing through bash.
+		"PATH=/usr/bin:/bin",
+	}
+	cmd.Stderr = os.Stderr
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("stdout pipe: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start: %w", err)
+	}
+
+	httpPort, socksPort, readyErr := waitForProxyChildReady(stdout)
+	if readyErr != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return fmt.Errorf("readiness preamble: %w", readyErr)
+	}
+
+	// Drain remaining stdout in the background so the child does not
+	// block on a full pipe. Discarding is fine because no further
+	// production telemetry uses stdout.
+	go func() {
+		_, _ = io.Copy(io.Discard, stdout)
+	}()
+
+	doneCh := make(chan error, 1)
+	go func() {
+		err := cmd.Wait()
+		// Sticky flag so any subsequent Run() observes the dead
+		// state immediately without racing on the channel.
+		r.proxyDead.Store(true)
+		doneCh <- err
+	}()
+
+	r.proxyMu.Lock()
+	r.proxyCmd = cmd
+	r.proxyHTTPPort = httpPort
+	r.proxySOCKSPort = socksPort
+	r.proxyDoneCh = doneCh
+	r.proxyMu.Unlock()
+	return nil
+}
+
+// resolveNetproxyBinary returns the path the runner should self-exec.
+// In production it returns os.Executable() (the elnath binary itself).
+// Darwin tests can override via the ELNATH_NETPROXY_BINARY_OVERRIDE
+// env var pointing at a freshly compiled binary.
+//
+// CRITICAL: must use os.Executable(), NOT /proc/self/exe — the latter
+// does not exist on macOS. Linux substrate wiring (B3b-4-3) re-evaluates
+// whether /proc/self/exe is preferable on that platform; this file is
+// macOS-only.
+func resolveNetproxyBinary() (string, error) {
+	if override := os.Getenv(netproxyBinaryOverrideEnv); override != "" {
+		return override, nil
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	return exe, nil
+}
+
+// waitForProxyChildReady reads the bound-port preamble printed by
+// RunProxyChildMain via cfg.ReadyWriter. The preamble format is:
+//
+//	httpListen=127.0.0.1:NNNN
+//	socksListen=127.0.0.1:NNNN
+//	ready
+//
+// Returns the parsed port numbers when both lines are present and
+// `ready` is observed within netproxyChildReadyTimeout.
+func waitForProxyChildReady(stdout io.Reader) (httpPort, socksPort int, err error) {
+	type result struct {
+		httpPort, socksPort int
+		err                 error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		var (
+			http, socks int
+			ready       bool
+		)
+		scanner := bufio.NewScanner(stdout)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			switch {
+			case strings.HasPrefix(line, "httpListen="):
+				http = parseLoopbackPortFromAddr(strings.TrimPrefix(line, "httpListen="))
+			case strings.HasPrefix(line, "socksListen="):
+				socks = parseLoopbackPortFromAddr(strings.TrimPrefix(line, "socksListen="))
+			case line == "ready":
+				ready = true
+				ch <- result{httpPort: http, socksPort: socks}
+				return
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			ch <- result{err: err}
+			return
+		}
+		if !ready {
+			ch <- result{err: errors.New("child closed stdout before ready")}
+		}
+	}()
+	select {
+	case res := <-ch:
+		if res.err != nil {
+			return 0, 0, res.err
+		}
+		if res.httpPort == 0 || res.socksPort == 0 {
+			return 0, 0, fmt.Errorf("incomplete preamble: http=%d socks=%d",
+				res.httpPort, res.socksPort)
+		}
+		return res.httpPort, res.socksPort, nil
+	case <-time.After(netproxyChildReadyTimeout):
+		return 0, 0, fmt.Errorf("timeout waiting for ready preamble (%s)", netproxyChildReadyTimeout)
+	}
+}
+
+// parseLoopbackPortFromAddr extracts the port from a `127.0.0.1:NNNN`
+// or `[::1]:NNNN` style address string. Returns 0 on parse failure so
+// the caller's incomplete-preamble guard fires.
+func parseLoopbackPortFromAddr(addr string) int {
+	_, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return 0
+	}
+	var p int
+	for _, c := range portStr {
+		if c < '0' || c > '9' {
+			return 0
+		}
+		p = p*10 + int(c-'0')
+	}
+	return p
+}
+
+// proxyChild returns the active proxy child cmd or nil when no proxy
+// child was spawned. Test-only accessor.
+func (r *SeatbeltRunner) proxyChild() *exec.Cmd {
+	r.proxyMu.Lock()
+	defer r.proxyMu.Unlock()
+	return r.proxyCmd
+}
+
+// httpProxyPort returns the bound HTTP CONNECT proxy port, or 0 when
+// no proxy child was spawned.
+func (r *SeatbeltRunner) httpProxyPort() int {
+	r.proxyMu.Lock()
+	defer r.proxyMu.Unlock()
+	return r.proxyHTTPPort
+}
+
+// socksProxyPort returns the bound SOCKS5 proxy port, or 0 when no
+// proxy child was spawned.
+func (r *SeatbeltRunner) socksProxyPort() int {
+	r.proxyMu.Lock()
+	defer r.proxyMu.Unlock()
+	return r.proxySOCKSPort
+}
+
+// bashEnvForRun returns the bash environment for a Run invocation,
+// extending cleanBashEnv with HTTP_PROXY / HTTPS_PROXY / ALL_PROXY
+// when the proxy child is active. No injection when proxy ports are
+// zero (loopback-only / empty allowlist) — DirectRunner-equivalent
+// behavior is preserved.
+func (r *SeatbeltRunner) bashEnvForRun(hostEnv []string, sessionRoot, workingDir string) []string {
+	env := cleanBashEnv(hostEnv, sessionRoot, workingDir)
+	httpPort := r.httpProxyPort()
+	socksPort := r.socksProxyPort()
+	if httpPort == 0 && socksPort == 0 {
+		return env
+	}
+	if httpPort != 0 {
+		httpURL := fmt.Sprintf("http://127.0.0.1:%d", httpPort)
+		env = append(env, "HTTP_PROXY="+httpURL)
+		env = append(env, "HTTPS_PROXY="+httpURL)
+		env = append(env, "http_proxy="+httpURL)
+		env = append(env, "https_proxy="+httpURL)
+	}
+	if socksPort != 0 {
+		socksURL := fmt.Sprintf("socks5h://127.0.0.1:%d", socksPort)
+		env = append(env, "ALL_PROXY="+socksURL)
+		env = append(env, "all_proxy="+socksURL)
+	}
+	return env
+}
+
+// proxyChildAlive reports whether the supervised proxy child is still
+// running. Returns true when no proxy child was ever spawned (the
+// "no proxy needed" path is always considered ready). Implementation
+// uses an atomic sticky flag flipped by the Wait goroutine so the
+// hot path stays lock-free.
+func (r *SeatbeltRunner) proxyChildAlive() bool {
+	r.proxyMu.Lock()
+	cmd := r.proxyCmd
+	r.proxyMu.Unlock()
+	if cmd == nil {
+		return true
+	}
+	return !r.proxyDead.Load()
 }
 
 // Name returns the stable runner identifier used in telemetry slog fields.
 func (r *SeatbeltRunner) Name() string { return "seatbelt" }
 
-// Close is a no-op: per-invocation profile temp files are cleaned up
-// inside Run, and the runner has no long-lived helper process to tear
-// down at session teardown.
-func (r *SeatbeltRunner) Close(_ context.Context) error { return nil }
+// Close gracefully shuts down the proxy child (SIGTERM → wait →
+// SIGKILL after netproxyChildShutdownGrace) when one was spawned. No-op
+// when in loopback-only or default-deny mode. Safe to call multiple
+// times.
+//
+// The Wait goroutine spawned by spawnProxyChild is the sole reaper;
+// Close synchronizes on its done channel so the second caller never
+// double-reaps. When the child has already exited (e.g. the test
+// killed it) the doneCh receive is the only thing we wait for; sending
+// SIGTERM to an already-reaped PID is harmless.
+func (r *SeatbeltRunner) Close(_ context.Context) error {
+	r.proxyMu.Lock()
+	cmd := r.proxyCmd
+	doneCh := r.proxyDoneCh
+	already := r.proxyShutdown
+	r.proxyShutdown = true
+	r.proxyMu.Unlock()
+	if cmd == nil || cmd.Process == nil || already {
+		return nil
+	}
+	// If the child is already dead the doneCh has been pushed; skip
+	// signal delivery.
+	if r.proxyDead.Load() {
+		<-doneCh
+		return nil
+	}
+	_ = cmd.Process.Signal(syscall.SIGTERM)
+	timer := time.NewTimer(netproxyChildShutdownGrace)
+	defer timer.Stop()
+	select {
+	case <-doneCh:
+		return nil
+	case <-timer.C:
+		_ = cmd.Process.Signal(syscall.SIGKILL)
+		<-doneCh
+		return nil
+	}
+}
 
 // Probe reports whether sandbox-exec is available and what surface this
 // substrate enforces. After B3b-2.5 SeatbeltRunner enforces both
@@ -109,8 +503,11 @@ func (r *SeatbeltRunner) Probe(_ context.Context) BashRunnerProbe {
 	p.Available = true
 	if len(r.networkAllowlist) == 0 {
 		p.Message = "macos sandbox-exec available; default-deny network (no allowlist entries) and session-confined writes"
-	} else {
+	} else if r.httpProxyPort() == 0 {
 		p.Message = fmt.Sprintf("macos sandbox-exec available; default-deny network with %d allowlist entries; session-confined writes", len(r.networkAllowlist))
+	} else {
+		p.Message = fmt.Sprintf("macos sandbox-exec available; netproxy on 127.0.0.1:%d (HTTP) + 127.0.0.1:%d (SOCKS5); %d allowlist entries; session-confined writes",
+			r.httpProxyPort(), r.socksProxyPort(), len(r.networkAllowlist))
 	}
 	return p
 }
@@ -120,6 +517,13 @@ func (r *SeatbeltRunner) Probe(_ context.Context) BashRunnerProbe {
 // returns, so per-invocation cleanup stays inside the runner per the
 // B3b-0 contract.
 func (r *SeatbeltRunner) Run(ctx context.Context, req BashRunRequest) (BashRunResult, error) {
+	// If a proxy child was spawned and has since died, refuse to run
+	// rather than silently falling back to direct egress (which would
+	// route around the SBPL allowlist that pins only the proxy port).
+	if !r.proxyChildAlive() {
+		return seatbeltProxyDownError(req), nil
+	}
+
 	profileStr := r.profileBuilder(req)
 
 	profileFile, err := os.CreateTemp("", "elnath-seatbelt-*.sb")
@@ -139,7 +543,7 @@ func (r *SeatbeltRunner) Run(ctx context.Context, req BashRunRequest) (BashRunRe
 
 	cmd := exec.Command(r.binaryPath, "-f", profilePath, resolveBashShell(), "-c", req.Command)
 	cmd.Dir = req.WorkDir
-	cmd.Env = cleanBashEnv(os.Environ(), req.SessionDir, req.WorkDir)
+	cmd.Env = r.bashEnvForRun(os.Environ(), req.SessionDir, req.WorkDir)
 	configureProcessCleanup(cmd)
 
 	res := runBashCmd(ctx, cmd, req, r.killGrace)
@@ -148,18 +552,47 @@ func (r *SeatbeltRunner) Run(ctx context.Context, req BashRunRequest) (BashRunRe
 	return res, nil
 }
 
-// seatbeltProfile composes the SBPL profile string for a single Run.
-// The filesystem section confines writes to req.SessionDir while
-// keeping reads broadly available; the network section starts from
-// (deny default) and emits one (allow network-outbound (remote ip
-// "host:port")) entry per allowlist member. An empty allowlist means
-// no outbound network is permitted at all.
+// seatbeltProfile (legacy entry) emits the SBPL profile for a Run
+// without any proxy ports. Kept for callers that constructed
+// SeatbeltRunner before B3b-4-2 and have no proxy concept; they still
+// see the loopback-only translated rule shape.
+//
+// New code should prefer seatbeltProfileWithProxyPorts which honors
+// per-port pinning for the netproxy child listeners.
+func seatbeltProfile(req BashRunRequest, networkAllowlist []string) string {
+	return seatbeltProfileWithProxyPorts(req, networkAllowlist, 0, 0)
+}
+
+// seatbeltProfileWithProxyPorts emits the SBPL profile with optional
+// proxy port pinning (B3b-4-2). When httpProxyPort > 0 the SBPL emits
+// `(allow network-outbound (remote ip "localhost:<httpProxyPort>"))`;
+// likewise for socksProxyPort. User-provided loopback entries
+// (127.0.0.1:port, [::1]:port) are translated to the SBPL-acceptable
+// `localhost:port` form.
+//
+// Per partner pin C3 the profile NEVER emits `localhost:*` or any
+// other broad wildcard. A user that wants a local service on port
+// 5432 must list `127.0.0.1:5432` explicitly; the profile then emits
+// only `localhost:5432`.
+//
+// Limitation (B3b-4-2): SBPL grammar permits `(remote ip "host:port")`
+// per entry but cannot encode "this localhost:port is the proxy" vs
+// "this localhost:port is a user-authorized local service". An
+// explicit per-port loopback allowlist entry therefore intentionally
+// permits direct sandbox egress to that exact port, even when a
+// netproxy child is also bound on a different loopback port.
+// Direct-egress enforcement is observed only against ports the user
+// did NOT allowlist; the integration test suite uses a separate
+// non-allowlisted loopback server to assert default-deny works for
+// those (see TestSeatbeltProxyIntegration_DirectEgressToNonAllowlistedPortBlocked).
+// The broad `localhost:*` footgun (Critic C3) is what stays
+// forbidden — explicit user opt-in to a known port does not.
 //
 // SBPL string literals use bare quotes; req.SessionDir and the
-// allowlist entries are constructed from canonical paths and
-// validated IP:port forms respectively, so neither can carry a
-// terminating " that would break the profile.
-func seatbeltProfile(req BashRunRequest, networkAllowlist []string) string {
+// allowlist entries are constructed from canonical paths and validated
+// IP:port forms respectively, so neither can carry a terminating " that
+// would break the profile.
+func seatbeltProfileWithProxyPorts(req BashRunRequest, networkAllowlist []string, httpProxyPort, socksProxyPort int) string {
 	var b strings.Builder
 	b.WriteString("(version 1)\n")
 	b.WriteString("(deny default)\n")
@@ -175,13 +608,14 @@ func seatbeltProfile(req BashRunRequest, networkAllowlist []string) string {
 	b.WriteString("(allow sysctl-read)\n")
 	b.WriteString("(allow ipc-posix-shm)\n")
 	b.WriteString("(allow ipc-posix-sem)\n")
-	// Network: default-deny + explicit loopback:port allowlist
-	// (B3b-2.5). (deny default) above already blocks network*; we
-	// emit allow rules for the whitelisted ports. Seatbelt's
-	// `(remote ip ...)` filter accepts only "*" or "localhost" as
-	// the host portion — the validator has already restricted entries
-	// to loopback IPs, so we translate each "127.0.0.1:port" or
-	// "[::1]:port" into the SBPL-acceptable "localhost:port" form.
+	// Network: default-deny + explicit port allowlist (per partner
+	// pin C3 — never `localhost:*`).
+	if httpProxyPort > 0 {
+		fmt.Fprintf(&b, "(allow network-outbound (remote ip \"localhost:%d\"))\n", httpProxyPort)
+	}
+	if socksProxyPort > 0 {
+		fmt.Fprintf(&b, "(allow network-outbound (remote ip \"localhost:%d\"))\n", socksProxyPort)
+	}
 	for _, entry := range networkAllowlist {
 		_, portStr, err := net.SplitHostPort(entry)
 		if err != nil {
@@ -226,6 +660,23 @@ func seatbeltSetupError(req BashRunRequest, err error) BashRunResult {
 		Output:         fmt.Sprintf("seatbelt setup failed: %v", err),
 		IsError:        true,
 		Classification: "sandbox_setup_failed",
+		CWD:            req.DisplayCWD,
+	}
+}
+
+// seatbeltProxyDownError signals that the supervised proxy child has
+// died mid-session. The runner refuses to execute the command rather
+// than silently fall back to direct egress (which would bypass the
+// allowlist). Classification is the partner-locked
+// "network_proxy_failed" string so callers can distinguish it from
+// generic sandbox setup failures.
+func seatbeltProxyDownError(req BashRunRequest) BashRunResult {
+	return BashRunResult{
+		Output: "seatbelt: netproxy child has exited; refusing to execute command without active proxy. " +
+			"This is the partner-locked no-silent-fallback invariant — the proxy enforces the network allowlist " +
+			"and a missing proxy means the sandbox cannot enforce policy. Restart Elnath to recover.",
+		IsError:        true,
+		Classification: "network_proxy_failed",
 		CWD:            req.DisplayCWD,
 	}
 }

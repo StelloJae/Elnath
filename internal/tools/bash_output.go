@@ -382,30 +382,53 @@ func appendViolationsSection(body string, violations []SandboxViolation) string 
 // host:port + protocol + reason; legacy filesystem-style entries
 // surface kind + message. Source falls back to "sandbox" when
 // missing so output never carries a bare colon.
+//
+// Newlines and carriage returns in Host / Message are replaced with a
+// single space at render time so a crafted violation cannot inject a
+// fake "SANDBOX VIOLATIONS:" header line or otherwise fool a casual
+// log reader (M4). The proxy listener path also sanitizes at the
+// construction boundary as defense in depth, but render-time scrubbing
+// covers all callers including legacy substrate stderr heuristics.
 func renderSandboxViolation(v SandboxViolation) string {
-	source := v.Source
+	source := sanitizeViolationField(v.Source)
 	if source == "" {
 		if v.Kind != "" {
-			source = v.Kind
+			source = sanitizeViolationField(v.Kind)
 		} else {
 			source = "sandbox"
 		}
 	}
-	if v.Host != "" {
-		protocol := v.Protocol
+	host := sanitizeViolationField(v.Host)
+	if host != "" {
+		protocol := sanitizeViolationField(v.Protocol)
 		if protocol == "" {
 			protocol = "unknown"
 		}
-		reason := v.Reason
+		reason := sanitizeViolationField(v.Reason)
 		if reason == "" {
 			reason = "unspecified"
 		}
 		return fmt.Sprintf("- %s: blocked %s:%d (protocol=%s, reason=%s)",
-			source, v.Host, v.Port, protocol, reason)
+			source, host, v.Port, protocol, reason)
 	}
-	msg := v.Message
+	msg := sanitizeViolationField(v.Message)
 	if msg == "" {
 		msg = "no message"
 	}
 	return fmt.Sprintf("- %s: %s", source, msg)
+}
+
+// sanitizeViolationField scrubs newlines and carriage returns from a
+// rendered violation field. Replacement is a single space so the
+// surrounding text remains word-spaced. Defense in depth against a
+// crafted Host or Message smuggling fake violation lines.
+func sanitizeViolationField(s string) string {
+	if s == "" {
+		return s
+	}
+	if !strings.ContainsAny(s, "\r\n") {
+		return s
+	}
+	r := strings.NewReplacer("\r\n", " ", "\r", " ", "\n", " ")
+	return r.Replace(s)
 }

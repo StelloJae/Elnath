@@ -337,15 +337,13 @@ func TestSeatbeltNetwork_AllowlistDeniesDifferentPort(t *testing.T) {
 	}
 }
 
-func TestSeatbeltNetwork_DomainAllowlistRejected(t *testing.T) {
-	_, err := NewSeatbeltRunnerWithAllowlist([]string{"github.com:443"})
-	if err == nil {
-		t.Fatalf("expected error for domain allowlist entry")
-	}
-	if !strings.Contains(err.Error(), "IP address") && !strings.Contains(err.Error(), "B3b-4") {
-		t.Errorf("expected IP-only / B3b-4 deferral message, got: %v", err)
-	}
-}
+// The pre-B3b-4-2 TestSeatbeltNetwork_DomainAllowlistRejected was
+// removed when the factory began spawning a netproxy child for
+// domain entries instead of rejecting them. The new behavior is
+// covered by TestSeatbeltRunner_DomainAllowlistSpawnsProxyChildAndCapturesPorts
+// (unit-level, uses binary-override mechanism) and the integration
+// suite `TestSeatbeltProxyIntegration_AllowedDomainHTTPRequestSucceeds`
+// (sandbox-exec + real proxy round-trip).
 
 func TestSeatbeltNetwork_FactoryRejectsInvalidAllowlist(t *testing.T) {
 	// A malformed allowlist must not yield a runner — silent fallback to
