@@ -140,22 +140,20 @@ func NewBashRunnerForConfig(cfg SandboxConfig) (BashRunner, error) {
 		}
 		return r, nil
 	case "bwrap":
-		// B3b-3 ships default-deny network only. Bwrap has no
-		// substrate-level allowlist (not even loopback), so any
-		// non-empty allowlist or denylist requires the B3b-4-3 proxy
-		// wiring lane that is not yet in this build. Reject loudly so
-		// a config that expected allowlist semantics cannot silently
-		// degrade to "no network".
-		if len(cfg.NetworkAllowlist) > 0 || len(cfg.NetworkDenylist) > 0 {
-			entry := firstNetEntry(cfg.NetworkAllowlist, cfg.NetworkDenylist)
-			return nil, fmt.Errorf(
-				"network allowlist entry %q requires B3b-4 proxy wiring; "+
-					"Seatbelt/Bwrap proxy wiring is not available in this lane yet (B3b-4-2 macOS, B3b-4-3 Linux). "+
-					"Remove the entry to fall back to default-deny on bwrap. %s",
-				entry, networkProxyDisclosure(),
-			)
+		// B3b-4-3 wires the netproxy substrate to BwrapRunner. Loopback
+		// IP entries on bwrap remain rejected because bwrap has no
+		// SBPL-equivalent loopback rule and the netns blocks all egress
+		// — proxy-required entries (domain or non-loopback IP) flow
+		// through the netproxy bridge. A pure loopback-only allowlist
+		// is therefore still a misconfiguration on bwrap; the operator
+		// should remove the entry to fall back to default-deny.
+		if err := rejectIfBwrapLoopbackOnly(cfg.NetworkAllowlist, cfg.NetworkDenylist); err != nil {
+			return nil, err
 		}
-		r := NewBwrapRunner()
+		r, err := NewBwrapRunnerWithAllowlist(cfg.NetworkAllowlist)
+		if err != nil {
+			return nil, fmt.Errorf("sandbox mode %q: %w", cfg.Mode, err)
+		}
 		p := r.Probe(context.Background())
 		if !p.Available {
 			return nil, fmt.Errorf("sandbox mode %q unavailable: %s", cfg.Mode, p.Message)
@@ -241,6 +239,41 @@ func firstNetEntry(allowlist, denylist []string) string {
 		return denylist[0]
 	}
 	return ""
+}
+
+// rejectIfBwrapLoopbackOnly errors when the allowlist or denylist on
+// bwrap contains a loopback IP entry (e.g. 127.0.0.1:8080). Bwrap has
+// no SBPL-equivalent loopback rule and the netns blocks all egress, so
+// a loopback-only entry cannot be honored by either the substrate or
+// the netproxy bridge. The factory rejects rather than silently
+// degrading to default-deny.
+//
+// Proxy-required entries (domain, non-loopback IP) flow through the
+// netproxy substrate and are accepted; an empty config is the
+// default-deny path and is also accepted.
+func rejectIfBwrapLoopbackOnly(allowlist, denylist []string) error {
+	check := func(entries []string, kind string) error {
+		for _, raw := range entries {
+			needsProxy, parseErr := entryRequiresProxy(raw)
+			if parseErr != nil {
+				return fmt.Errorf("network %s entry %q invalid: %w", kind, raw, parseErr)
+			}
+			if needsProxy {
+				continue
+			}
+			return fmt.Errorf(
+				"network %s entry %q is a loopback IP literal which bwrap cannot honor; "+
+					"bwrap has no SBPL-equivalent loopback rule and the netns blocks all egress. "+
+					"Remove the entry to fall back to default-deny on bwrap. %s",
+				kind, raw, networkProxyDisclosure(),
+			)
+		}
+		return nil
+	}
+	if err := check(allowlist, "allowlist"); err != nil {
+		return err
+	}
+	return check(denylist, "denylist")
 }
 
 // validateNetworkAllowlist checks each entry is "<IP>:<port>" with a

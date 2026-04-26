@@ -51,12 +51,17 @@ func TestNetworkProxyDisclosure_EmitsThreePartnerLockedSentences(t *testing.T) {
 // the factory rejection error surfaces the full disclosure so the
 // operator learns the Phase 1 invariants without consulting external
 // docs.
+//
+// After B3b-4-3 the bwrap factory accepts proxy-required entries
+// (domain, non-loopback IP) and only rejects loopback-only entries
+// (no SBPL-equivalent loopback rule on bwrap, netns blocks all
+// egress). We exercise the loopback rejection path because it is
+// portable across all platforms (no darwin gate needed) and still
+// surfaces the disclosure.
 func TestFactoryRejection_IncludesAllThreeDisclosureSentences(t *testing.T) {
-	// Use bwrap because the factory rejection on bwrap is portable
-	// across all platforms (no darwin gate needed).
 	_, err := NewBashRunnerForConfig(SandboxConfig{
 		Mode:             "bwrap",
-		NetworkAllowlist: []string{"github.com:443"},
+		NetworkAllowlist: []string{"127.0.0.1:8080"},
 	})
 	if err == nil {
 		t.Fatal("expected rejection")

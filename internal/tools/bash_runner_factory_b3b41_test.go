@@ -118,28 +118,26 @@ func TestFactory_SeatbeltLoopbackOnlyAllowlistStillAccepted(t *testing.T) {
 	}
 }
 
-// TestFactory_BwrapAnyAllowlistRejectedWithB3b43Wording pins the
-// wording for bwrap. Even loopback entries are rejected because bwrap
-// does not yet accept any allowlist at the substrate level.
-func TestFactory_BwrapAnyAllowlistRejectedWithB3b43Wording(t *testing.T) {
-	cases := [][]string{
-		{"127.0.0.1:8080"},
-		{"github.com:443"},
-		{"10.0.0.5:5432"},
+// TestFactory_BwrapLoopbackOnlyAllowlistRejectedAfterB3b43 pins the
+// post-B3b-4-3 contract for bwrap: loopback IP entries remain
+// rejected because bwrap has no SBPL-equivalent loopback rule and
+// the netns blocks all egress (including loopback to a host
+// listener). Domain / non-loopback IP entries flow through the
+// netproxy substrate and are accepted on linux; the corresponding
+// happy-path coverage lives in the linux-tagged factory tests in
+// bash_runner_bwrap_proxy_linux_test.go (B3b-4-3).
+func TestFactory_BwrapLoopbackOnlyAllowlistRejectedAfterB3b43(t *testing.T) {
+	loopback := []string{"127.0.0.1:8080"}
+	_, err := NewBashRunnerForConfig(SandboxConfig{
+		Mode:             "bwrap",
+		NetworkAllowlist: loopback,
+	})
+	if err == nil {
+		t.Fatalf("bwrap with loopback-only allowlist %v must be rejected", loopback)
 	}
-	for _, allowlist := range cases {
-		_, err := NewBashRunnerForConfig(SandboxConfig{
-			Mode:             "bwrap",
-			NetworkAllowlist: allowlist,
-		})
-		if err == nil {
-			t.Errorf("bwrap with allowlist %v must be rejected", allowlist)
-			continue
-		}
-		for _, want := range []string{"B3b-4", "proxy"} {
-			if !strings.Contains(err.Error(), want) {
-				t.Errorf("bwrap rejection missing %q for %v; got: %v", want, allowlist, err)
-			}
+	for _, want := range []string{"loopback", "127.0.0.1:8080"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("bwrap loopback rejection missing %q; got: %v", want, err)
 		}
 	}
 }

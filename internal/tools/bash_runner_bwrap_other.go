@@ -18,7 +18,16 @@ type BwrapRunner struct {
 }
 
 func NewBwrapRunner() *BwrapRunner {
-	return &BwrapRunner{killGrace: bashKillGrace}
+	r, _ := NewBwrapRunnerWithAllowlist(nil)
+	return r
+}
+
+// NewBwrapRunnerWithAllowlist mirrors the linux constructor signature
+// so cross-platform factory code stays substrate-agnostic. On
+// non-linux the allowlist is ignored and the stub Probe reports
+// Available=false.
+func NewBwrapRunnerWithAllowlist(_ []string) (*BwrapRunner, error) {
+	return &BwrapRunner{killGrace: bashKillGrace}, nil
 }
 
 func (r *BwrapRunner) Name() string { return "bwrap" }

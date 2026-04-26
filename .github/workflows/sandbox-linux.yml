@@ -79,3 +79,25 @@ jobs:
         # NOT a B3b-4 production proxy — it's the buildability
         # evidence that gates B3b-4-3 lane entry.
         run: go test -tags=integration -race -count=1 -run 'NetnsBridgeSpike' ./internal/tools/...
+
+      - name: Run B3b-4-3 Linux bwrap proxy integration
+        # v41 / B3b-4-3 production wiring. Mirrors the macOS
+        # sandbox-darwin.yml SeatbeltProxyIntegration step pattern:
+        # builds the elnath binary, runs the BwrapProxy integration
+        # set behind `linux && integration`, and validates that real
+        # PASS lines were emitted (skip-green prevention).
+        #
+        # Skip-green guard: greps for `^--- PASS: TestBwrapProxy_`
+        # and exits 1 if zero PASSes. A silent skip would let a
+        # regression sneak past the integration job because the file
+        # is tagged `integration` and bwrap availability is probed
+        # at runtime; the explicit count is the only way to prove
+        # the substrate actually exercised the substrate.
+        run: |
+          set -o pipefail
+          LOG=$(mktemp)
+          go test -tags=integration -race -count=1 -v -run 'BwrapProxy' ./internal/tools/... 2>&1 | tee "$LOG"
+          if ! grep -q '^--- PASS: TestBwrapProxy_' "$LOG"; then
+            echo "B3b-4-3: zero TestBwrapProxy_* PASS lines found — silent skip is the failure mode this guard exists to prevent" >&2
+            exit 1
+          fi
