@@ -102,6 +102,29 @@ type SeatbeltRunner struct {
 	// stays lock-free and so the test that kills the child mid-session
 	// can observe the dead state deterministically.
 	proxyDead atomic.Bool
+
+	// proxyDrainShutdown signals the stdout drain goroutine to exit.
+	// The drain goroutine selects on this channel alongside its read
+	// loop so Close() can release it deterministically rather than
+	// relying on the child's pipe close. Mirrors the Linux M-3 fix —
+	// see bash_runner_bwrap_linux.go:121-128 for the canonical doc.
+	proxyDrainShutdown chan struct{}
+	// proxyDrainDone is closed by the drain goroutine on exit so Close
+	// can synchronously wait for the drain to finish. Mirrors Linux at
+	// bash_runner_bwrap_linux.go:126-128.
+	proxyDrainDone chan struct{}
+
+	// proxyDecisionsMu guards proxyDecisions. Held only briefly during
+	// append (drain goroutine) and snapshot+clear (Run completion). The
+	// listener accept-loop path never touches this slice directly so
+	// the lock cannot block the proxy's hot path. Mirrors Linux at
+	// bash_runner_bwrap_linux.go:130-141.
+	proxyDecisionsMu sync.Mutex
+	// proxyDecisions buffers per-connection Decision events the drain
+	// goroutine parses out of the netproxy child's stdout. v42-1a
+	// surfaces these into BashRunResult.Violations on the next Run
+	// completion via collectProxyViolations.
+	proxyDecisions []Decision
 }
 
 // NewSeatbeltRunner constructs a SeatbeltRunner with default-deny
@@ -242,11 +265,45 @@ func (r *SeatbeltRunner) spawnProxyChild(proxyEntries, loopbackEntries []string)
 		return fmt.Errorf("readiness preamble: %w", readyErr)
 	}
 
-	// Drain remaining stdout in the background so the child does not
-	// block on a full pipe. Discarding is fine because no further
-	// production telemetry uses stdout.
+	// v42-1a: drain remaining stdout AND parse `event=<json>` lines
+	// into r.proxyDecisions so the next Run completion can project
+	// them into BashRunResult.Violations as Source=network_proxy.
+	// Mirrors the Linux drain pattern at bash_runner_bwrap_linux.go:530-563.
+	// Lines that don't carry the event prefix (future preamble lines,
+	// debug noise) are silently dropped — readiness has already been
+	// consumed by waitForProxyChildReady before this drain starts.
+	drainShutdown := make(chan struct{})
+	drainDone := make(chan struct{})
 	go func() {
-		_, _ = io.Copy(io.Discard, stdout)
+		defer close(drainDone)
+		scanDone := make(chan struct{})
+		go func() {
+			defer close(scanDone)
+			scanner := bufio.NewScanner(stdout)
+			// Decision JSON lines stay well under 4KiB; keep the cap
+			// explicit so future growth is observable.
+			scanner.Buffer(make([]byte, 0, 4*1024), 64*1024)
+			for scanner.Scan() {
+				line := scanner.Text()
+				d, ok, err := ParseDecisionEventLine(line)
+				if err != nil || !ok {
+					continue
+				}
+				r.proxyDecisionsMu.Lock()
+				r.proxyDecisions = append(r.proxyDecisions, d)
+				r.proxyDecisionsMu.Unlock()
+			}
+		}()
+		select {
+		case <-scanDone:
+		case <-drainShutdown:
+			// Close the read end so the scanner returns; the pipe
+			// close races with the child exit which Close also
+			// triggers via SIGTERM, but either way the scanner
+			// terminates and scanDone closes.
+			_ = stdout.Close()
+			<-scanDone
+		}
 	}()
 
 	doneCh := make(chan error, 1)
@@ -263,6 +320,8 @@ func (r *SeatbeltRunner) spawnProxyChild(proxyEntries, loopbackEntries []string)
 	r.proxyHTTPPort = httpPort
 	r.proxySOCKSPort = socksPort
 	r.proxyDoneCh = doneCh
+	r.proxyDrainShutdown = drainShutdown
+	r.proxyDrainDone = drainDone
 	r.proxyMu.Unlock()
 	return nil
 }
@@ -428,46 +487,88 @@ func (r *SeatbeltRunner) proxyChildAlive() bool {
 	return !r.proxyDead.Load()
 }
 
+// proxyActive reports whether the runner is in proxy-required mode.
+// Used by Run completion to decide whether the proxy lifecycle is
+// expected to be alive. Mirrors the Linux helper at
+// bash_runner_bwrap_linux.go:688-692. Holds proxyMu so concurrent
+// reads cannot race with the spawnProxyChild writer (critic Minor 3).
+func (r *SeatbeltRunner) proxyActive() bool {
+	r.proxyMu.Lock()
+	defer r.proxyMu.Unlock()
+	return r.proxyCmd != nil
+}
+
 // Name returns the stable runner identifier used in telemetry slog fields.
 func (r *SeatbeltRunner) Name() string { return "seatbelt" }
 
 // Close gracefully shuts down the proxy child (SIGTERM → wait →
-// SIGKILL after netproxyChildShutdownGrace) when one was spawned. No-op
-// when in loopback-only or default-deny mode. Safe to call multiple
-// times.
+// SIGKILL after netproxyChildShutdownGrace) when one was spawned,
+// drains the stdout drain goroutine via its shutdown channel (M-3),
+// and is safe to call multiple times.
 //
 // The Wait goroutine spawned by spawnProxyChild is the sole reaper;
 // Close synchronizes on its done channel so the second caller never
 // double-reaps. When the child has already exited (e.g. the test
 // killed it) the doneCh receive is the only thing we wait for; sending
 // SIGTERM to an already-reaped PID is harmless.
+//
+// v42-1a (critic Major 1+2): Close MUST close drainShutdown + await
+// drainDone whenever cmd != nil, regardless of whether the child is
+// already dead or this is a second Close call. Skipping these on the
+// dead-proxy or already-shutdown branches would leak the drain
+// goroutine. Mirrors Linux ordering at bash_runner_bwrap_linux.go:241-307
+// which has no fast-path early-returns.
 func (r *SeatbeltRunner) Close(_ context.Context) error {
 	r.proxyMu.Lock()
 	cmd := r.proxyCmd
 	doneCh := r.proxyDoneCh
 	already := r.proxyShutdown
+	drainShutdown := r.proxyDrainShutdown
+	drainDone := r.proxyDrainDone
 	r.proxyShutdown = true
 	r.proxyMu.Unlock()
-	if cmd == nil || cmd.Process == nil || already {
+	if already {
 		return nil
 	}
-	// If the child is already dead the doneCh has been pushed; skip
-	// signal delivery.
-	if r.proxyDead.Load() {
-		<-doneCh
+
+	if cmd == nil || cmd.Process == nil {
+		// Drain goroutine is only spawned when the child is, so it
+		// cannot exist without cmd. Nothing to release.
 		return nil
 	}
+
+	// Signal the drain goroutine to exit. The drain holds the stdout
+	// pipe open via bufio.Scanner; closing the shutdown channel lets
+	// the goroutine detect the request even if no further bytes
+	// arrive on stdout. Closed BEFORE SIGTERM so the scanner is
+	// released independently of the child reap path.
+	if drainShutdown != nil {
+		close(drainShutdown)
+	}
+
+	// Send SIGTERM and wait for doneCh. If the child has already
+	// exited, the doneCh receive returns immediately because the Wait
+	// goroutine has pushed onto it; the SIGTERM signal to a reaped PID
+	// is harmless.
 	_ = cmd.Process.Signal(syscall.SIGTERM)
 	timer := time.NewTimer(netproxyChildShutdownGrace)
 	defer timer.Stop()
 	select {
 	case <-doneCh:
-		return nil
 	case <-timer.C:
 		_ = cmd.Process.Signal(syscall.SIGKILL)
 		<-doneCh
-		return nil
 	}
+
+	// Wait for the drain goroutine to exit so callers can rely on
+	// "Close returned" implying "no leftover goroutines from this
+	// runner". Bounded by the next pipe-close from the reaped child;
+	// drainShutdown above ensures this never blocks indefinitely.
+	if drainDone != nil {
+		<-drainDone
+	}
+
+	return nil
 }
 
 // Probe reports whether sandbox-exec is available and what surface this
@@ -547,9 +648,90 @@ func (r *SeatbeltRunner) Run(ctx context.Context, req BashRunRequest) (BashRunRe
 	configureProcessCleanup(cmd)
 
 	res := runBashCmd(ctx, cmd, req, r.killGrace)
-	res.Violations = detectSeatbeltViolations(res)
+	// Post-Run check for the race window between the pre-bash
+	// proxyChildAlive() guard at line 523 and the bash invocation
+	// finishing. If the supervised proxy child died DURING the Run,
+	// the bash command's network calls will have failed with bare
+	// connection errors. Override Classification to
+	// "network_proxy_failed" so operators see the substrate cause.
+	// Mirrors the Linux M-1 fix at bash_runner_bwrap_linux.go:777.
+	res = overrideClassificationIfProxyDiedDarwin(res, r.proxyActive() && !r.proxyChildAlive())
+	// v42-1a: pull authoritative network_proxy violations the drain
+	// goroutine accumulated for this Run, then append the existing
+	// substrate-stderr heuristic so the agent sees both surfaces.
+	// network_proxy entries appear first because they are
+	// authoritative; heuristic entries follow as low-confidence signal.
+	// Mirrors Linux at bash_runner_bwrap_linux.go:777-793.
+	netViolations := r.collectProxyViolations()
+	heuristic := detectSeatbeltViolations(res)
+	if len(netViolations) > 0 || len(heuristic) > 0 {
+		combined := make([]SandboxViolation, 0, len(netViolations)+len(heuristic))
+		combined = append(combined, netViolations...)
+		combined = append(combined, heuristic...)
+		res.Violations = combined
+	}
 	res.Output = appendViolationsSection(res.Output, res.Violations)
 	return res, nil
+}
+
+// overrideClassificationIfProxyDiedDarwin returns the supplied result
+// with Classification rewritten to "network_proxy_failed" when
+// proxyDied is true. Mirrors the Linux helper at
+// bash_runner_bwrap_linux.go:1094 — kept as a darwin-local copy so
+// v42-1a does not touch the Linux file. Behavior is identical and
+// idempotent: a false proxyDied returns the input unchanged.
+func overrideClassificationIfProxyDiedDarwin(res BashRunResult, proxyDied bool) BashRunResult {
+	if !proxyDied {
+		return res
+	}
+	res.Classification = "network_proxy_failed"
+	res.IsError = true
+	return res
+}
+
+// collectProxyViolations snapshots the per-Run Decision buffer the
+// drain goroutine fills, projects each deny Decision into a
+// SandboxViolation with Source=network_proxy, and clears the buffer
+// for the next Run. Allow Decisions are intentionally dropped — the
+// SANDBOX VIOLATIONS surface is for blocked actions, not informational
+// allow events. The projection sanitizes Host/Reason/Protocol newlines
+// at the construction boundary (M4 closure) before they reach the
+// renderer.
+//
+// Decision.Port is bounded to uint16 by NewAllow / NewDeny construction
+// (0..65535 enforced); the explicit conversion below cannot overflow.
+//
+// Mirrors the Linux helper at bash_runner_bwrap_linux.go:807-836; the
+// near-copy is intentional per the v42-1a Option A architect call.
+func (r *SeatbeltRunner) collectProxyViolations() []SandboxViolation {
+	r.proxyDecisionsMu.Lock()
+	decisions := r.proxyDecisions
+	r.proxyDecisions = nil
+	r.proxyDecisionsMu.Unlock()
+	if len(decisions) == 0 {
+		return nil
+	}
+	out := make([]SandboxViolation, 0, len(decisions))
+	for _, d := range decisions {
+		if d.Allow {
+			continue
+		}
+		if d.Source != SourceNetworkProxy {
+			// Only network_proxy decisions belong in violations from
+			// this lane. Other Source values are reserved for
+			// substrate-direct paths that emit through detect*
+			// helpers; routing them here would double-count.
+			continue
+		}
+		out = append(out, SandboxViolation{
+			Source:   string(d.Source),
+			Host:     sanitizeViolationField(d.Host),
+			Port:     uint16(d.Port),
+			Protocol: sanitizeViolationField(string(d.Protocol)),
+			Reason:   sanitizeViolationField(string(d.Reason)),
+		})
+	}
+	return out
 }
 
 // seatbeltProfile (legacy entry) emits the SBPL profile for a Run
