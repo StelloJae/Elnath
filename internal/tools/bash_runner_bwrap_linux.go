@@ -263,16 +263,22 @@ func (r *BwrapRunner) Close(_ context.Context) error {
 		close(drainShutdown)
 	}
 
-	// Send SIGTERM and wait for the live doneCh. No proxyDead.Load()
-	// shortcut before the select — the select naturally returns
-	// immediately on doneCh if the child has already exited. M-1 fix.
-	_ = cmd.Process.Signal(syscall.SIGTERM)
+	// Send SIGTERM to the proxy child's process group and wait for
+	// the live doneCh. No proxyDead.Load() shortcut before the
+	// select — the select naturally returns immediately on doneCh
+	// if the child has already exited. M-1 fix.
+	//
+	// Process-group kill (rather than cmd.Process.Signal) is required
+	// to reach grandchildren that the netproxy child may have spawned
+	// — see configureProxyChildProcessGroup for the recursive-test-
+	// binary leak this defends against.
+	_ = killProxyChildTree(cmd, syscall.SIGTERM)
 	timer := time.NewTimer(netproxyBwrapChildShutdownGrace)
 	defer timer.Stop()
 	select {
 	case <-doneCh:
 	case <-timer.C:
-		_ = cmd.Process.Signal(syscall.SIGKILL)
+		_ = killProxyChildTree(cmd, syscall.SIGKILL)
 		<-doneCh
 	}
 
@@ -445,15 +451,33 @@ func (r *BwrapRunner) spawnProxyChild(proxyEntries, loopbackEntries []string) er
 		return fmt.Errorf("stdout pipe: %w", err)
 	}
 
+	// Place the proxy child in its own process group so kill semantics
+	// reach the entire descendant tree. Critical when the resolved
+	// binary turns out to be a Go test binary (no override env): test
+	// binaries silently accept unknown argv and recursively re-run the
+	// suite, holding the parent test process's stderr fd via inherited
+	// descriptors. Without process-group kill, cmd.Process.Kill only
+	// targets the immediate child PID, leaving grandchildren alive long
+	// enough to trigger Go test's WaitDelay 1m hang
+	// (`Test I/O incomplete 1m0s after exiting`). Production runs see
+	// the same hardening: a future netproxy child that spawned its own
+	// helpers would also be reaped via process-group kill.
+	configureProxyChildProcessGroup(cmd)
+
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start: %w", err)
 	}
 
 	httpAddr, socksAddr, readyErr := waitForBwrapProxyChildReady(cmd, stdout)
 	if readyErr != nil {
-		// waitForBwrapProxyChildReady killed the child if the timeout
-		// branch was the cause; reap here so we never leak a zombie
-		// even if the child is already gone.
+		// waitForBwrapProxyChildReady kills the child via process
+		// group on the timeout branch; the non-timeout failure modes
+		// (scanner error, child closed stdout before ready) leave the
+		// child running. Best-effort process-group SIGKILL covers
+		// both paths so a recursive grandchild tree (e.g., Go test
+		// binary recursing under no-override) is fully reaped before
+		// we surface the error.
+		_ = killProxyChildTree(cmd, syscall.SIGKILL)
 		_ = cmd.Wait()
 		return fmt.Errorf("readiness preamble: %w", readyErr)
 	}
@@ -572,9 +596,12 @@ func waitForBwrapProxyChildReady(cmd *exec.Cmd, stdout io.Reader) (httpAddr, soc
 		// M-2: explicit kill rather than relying on caller cleanup.
 		// Best-effort signal then return; the caller still calls Wait
 		// so the goroutine above completes when the pipe closes.
-		if cmd != nil && cmd.Process != nil {
-			_ = cmd.Process.Kill()
-		}
+		// Use process-group kill so a child that managed to spawn
+		// helpers (recursive Go test binary, future production
+		// helpers) is fully reaped — without this, the immediate
+		// child dies but grandchildren keep the inherited stderr fd
+		// alive, triggering Go test's WaitDelay leak.
+		_ = killProxyChildTree(cmd, syscall.SIGKILL)
 		return "", "", fmt.Errorf("timeout waiting for ready preamble (%s)", netproxyBwrapChildReadyTimeout)
 	}
 }
@@ -692,6 +719,17 @@ func (r *BwrapRunner) Run(ctx context.Context, req BashRunRequest) (BashRunResul
 	configureProcessCleanup(cmd)
 
 	res := runBashCmd(ctx, cmd, req, r.killGrace)
+	// M-1: post-Run check for the race window between the pre-bash
+	// proxyChildAlive() guard above and the bash invocation finishing.
+	// If the supervised proxy child died DURING the Run, the bash
+	// command's network calls will have failed with bare connection
+	// errors and the Classification would otherwise reflect curl's
+	// exit code. Override to "network_proxy_failed" so operators see
+	// the substrate cause instead of guessing from the user-facing
+	// network error. Only triggers when the runner is in
+	// proxy-required mode (proxyActive); default-deny runs are
+	// unaffected.
+	res = overrideClassificationIfProxyDied(res, r.proxyActive() && !r.proxyChildAlive())
 	res.Violations = detectBwrapViolations(res)
 	res.Output = appendViolationsSection(res.Output, res.Violations)
 	return res, nil
@@ -897,5 +935,68 @@ func containsAny(haystack string, needles ...string) bool {
 		}
 	}
 	return false
+}
+
+// configureProxyChildProcessGroup places the netproxy child in its own
+// process group so kill-via-process-group reaches the entire descendant
+// tree. Mirrors configureProcessCleanup but kept distinct so future
+// netproxy-specific hardening (e.g. PR_SET_PDEATHSIG, prctl flags) can
+// be added without entangling the bash-invocation pipeline.
+//
+// Why this matters: when the resolved netproxy binary turns out to be
+// a Go test binary (no ELNATH_NETPROXY_BWRAP_BINARY_OVERRIDE set), the
+// test binary silently accepts unknown argv and recursively re-runs
+// the entire test suite. cmd.Process.Kill only targets the immediate
+// child PID; without Setpgid the recursive grandchildren survive,
+// inherit the parent test binary's stderr fd, and trigger Go test's
+// `Test I/O incomplete 1m0s after exiting; exec: WaitDelay expired
+// before I/O complete` runtime hang. Production paths see the same
+// hardening at no cost.
+func configureProxyChildProcessGroup(cmd *exec.Cmd) {
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.Setpgid = true
+}
+
+// killProxyChildTree sends signal to the netproxy child's process
+// group, reaching grandchildren spawned by the child. Falls back to a
+// direct cmd.Process kill when Setpgid was not configured (defensive;
+// configureProxyChildProcessGroup is always invoked before Start).
+// ESRCH is treated as success — the group has already exited.
+func killProxyChildTree(cmd *exec.Cmd, sig syscall.Signal) error {
+	if cmd == nil || cmd.Process == nil {
+		return nil
+	}
+	if cmd.SysProcAttr != nil && cmd.SysProcAttr.Setpgid {
+		err := syscall.Kill(-cmd.Process.Pid, sig)
+		if err == syscall.ESRCH {
+			return nil
+		}
+		return err
+	}
+	return cmd.Process.Signal(sig)
+}
+
+// overrideClassificationIfProxyDied returns the supplied result with
+// Classification rewritten to "network_proxy_failed" when proxyDied
+// is true. Implements reviewer M-1: a proxy crash mid-Run produces a
+// bash-level network failure (curl exit 7, connection refused, etc.)
+// whose Classification would otherwise reflect the bash exit code,
+// hiding the true substrate-side cause from operators. The override
+// preserves Output verbatim so the user-facing error text still
+// names the underlying network failure; only the structured
+// Classification field is rewritten.
+//
+// Behaviour is intentionally idempotent: calling this with proxyDied
+// false returns the input unchanged, so the call site can be a
+// trailing post-Run hook without conditional plumbing.
+func overrideClassificationIfProxyDied(res BashRunResult, proxyDied bool) BashRunResult {
+	if !proxyDied {
+		return res
+	}
+	res.Classification = "network_proxy_failed"
+	res.IsError = true
+	return res
 }
 

@@ -4,6 +4,7 @@ package tools
 
 import (
 	"context"
+	"os/exec"
 	"runtime"
 	"strings"
 	"testing"
@@ -33,6 +34,19 @@ func TestBwrapFactory_DomainAllowlistAcceptedAfterB3b43(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("bwrap factory is linux-only")
 	}
+	// Force the netproxy spawn to fail with a fast, well-defined
+	// error. Without this override, os.Executable() returns the Go
+	// test binary itself; re-execing the test binary as
+	// `tools.test netproxy ...` recursively re-runs every test in
+	// this package, holds the parent test binary's stderr fd via
+	// inherited descriptors, and tickles the
+	// `Test I/O incomplete 1m0s after exiting` runtime hang that
+	// broke CI on 2026-04-26. /bin/false exec's, exits with code 1,
+	// the readiness preamble never arrives, and the constructor
+	// returns a netproxy-side error — which is exactly the failure
+	// mode this test wants to assert wording against.
+	t.Setenv(netproxyBwrapBinaryOverrideEnv, "/bin/false")
+
 	_, err := NewBashRunnerForConfig(SandboxConfig{
 		Mode:             "bwrap",
 		NetworkAllowlist: []string{"github.com:443"},
@@ -66,6 +80,13 @@ func TestBwrapFactory_NonLoopbackIPAllowlistAcceptedAfterB3b43(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("bwrap factory is linux-only")
 	}
+	// See TestBwrapFactory_DomainAllowlistAcceptedAfterB3b43 for why
+	// this override is mandatory: the default os.Executable() in test
+	// context is the test binary itself, which would recursively
+	// re-run all tests when invoked as `netproxy ...` and leak
+	// inherited stderr fds.
+	t.Setenv(netproxyBwrapBinaryOverrideEnv, "/bin/false")
+
 	_, err := NewBashRunnerForConfig(SandboxConfig{
 		Mode:             "bwrap",
 		NetworkAllowlist: []string{"10.0.0.5:5432"},
@@ -217,6 +238,96 @@ func TestBwrapBuildArgsWithBridge_ShapeForProxyRequiredRun(t *testing.T) {
 					args[i+1], req.Command)
 			}
 		}
+	}
+}
+
+// TestBwrapProxy_SpawnProxyChildConfiguresProcessGroup pins the
+// hardening that prevents the v41 / B3b-4-3 CI subprocess pipe leak.
+//
+// Background: when BwrapRunner.spawnProxyChild self-execs the elnath
+// binary OR (in test contexts without an override) the test binary
+// itself, the child must be placed in its own process group via
+// Setpgid=true. Without this, killing the child via cmd.Process.Kill
+// only delivers SIGKILL to the immediate child PID. If the child
+// happens to have spawned grandchildren (e.g., when os.Executable()
+// returns a Go test binary that recursively re-runs all tests),
+// those grandchildren survive, inherit the original test binary's
+// stderr fd, and hold the pipe open after the test process exits.
+// The Go test runtime then prints `Test I/O incomplete 1m0s after
+// exiting; exec: WaitDelay expired before I/O complete` and FAILs.
+//
+// Setpgid=true makes cmd.Process.Kill (and our process-group helpers)
+// reach the entire descendant tree via syscall.Kill(-pid, signal),
+// matching the substrate-runner cleanup discipline applied to the
+// bash invocation itself (configureProcessCleanup at Run time).
+func TestBwrapProxy_SpawnProxyChildConfiguresProcessGroup(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("bwrap runner is linux-only")
+	}
+	// Exercise the helper that places the proxy child in its own
+	// process group. configureProxyChildProcessGroup MUST set
+	// Setpgid=true on the supplied exec.Cmd. If the helper ever
+	// stops setting the bit, the constructor's kill semantics
+	// regress and the recursive-self-exec leak that broke CI on
+	// 2026-04-26 returns.
+	cmd := exec.Command("/bin/true")
+	configureProxyChildProcessGroup(cmd)
+	if cmd.SysProcAttr == nil {
+		t.Fatal("configureProxyChildProcessGroup must set SysProcAttr")
+	}
+	if !cmd.SysProcAttr.Setpgid {
+		t.Errorf("proxy child must run in its own process group (Setpgid=true) so kill reaches grandchildren")
+	}
+}
+
+// TestBwrapProxy_RunOverridesClassificationOnPostBashProxyDeath pins
+// reviewer M-1: when the supervised proxy child dies in the race
+// window between Run's pre-check (proxyChildAlive at line 684) and
+// the bash command's exit, the resulting BashRunResult must surface
+// Classification="network_proxy_failed" so operators can distinguish
+// "command failed because the network proxy died" from "command
+// failed because of a real bash exit code".
+//
+// The test exercises the unit-level helper that performs the post-Run
+// classification override (overrideClassificationIfProxyDied). Race
+// reproduction at the integration level lives in the integration
+// file; this unit test pins the helper's contract so the override
+// path stays correct even when the integration test cannot run
+// (cross-platform CI, no bwrap available).
+func TestBwrapProxy_RunOverridesClassificationOnPostBashProxyDeath(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("bwrap runner is linux-only")
+	}
+	// Construct a minimal BashRunResult representing a "bash exited
+	// nonzero" state — what the user would see if their command's
+	// network calls failed because the proxy died mid-run.
+	exit := 1
+	original := BashRunResult{
+		Output:         "curl: (7) Failed to connect to ...: Connection refused",
+		IsError:        true,
+		ExitCode:       &exit,
+		Classification: "network_failure",
+		CWD:            ".",
+	}
+	overridden := overrideClassificationIfProxyDied(original, true)
+	if overridden.Classification != "network_proxy_failed" {
+		t.Errorf("Classification = %q, want %q (proxy died → operator-visible cause)",
+			overridden.Classification, "network_proxy_failed")
+	}
+	if !overridden.IsError {
+		t.Errorf("IsError must remain true after proxy-death override")
+	}
+	// Original Output must be preserved as authoritative bash output.
+	if overridden.Output != original.Output {
+		t.Errorf("Output mutated by classification override: got %q want %q",
+			overridden.Output, original.Output)
+	}
+
+	// Conversely, when the proxy is alive after Run, classification
+	// must NOT be touched.
+	preserved := overrideClassificationIfProxyDied(original, false)
+	if preserved.Classification != "network_failure" {
+		t.Errorf("proxy-alive path must preserve Classification; got %q", preserved.Classification)
 	}
 }
 

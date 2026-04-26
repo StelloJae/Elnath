@@ -129,14 +129,14 @@ func cmdNetproxyBridge(ctx context.Context, args []string) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			runBridgeAcceptLoopProd(httpListener, *udsHTTP, shutdown)
+			runBridgeAcceptLoopProd(httpListener, *udsHTTP, shutdown, os.Stderr)
 		}()
 	}
 	if socksListener != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			runBridgeAcceptLoopProd(socksListener, *udsSOCKS, shutdown)
+			runBridgeAcceptLoopProd(socksListener, *udsSOCKS, shutdown, os.Stderr)
 		}()
 	}
 
@@ -163,12 +163,16 @@ func cmdNetproxyBridge(ctx context.Context, args []string) error {
 // listener is closed (Accept returns net.ErrClosed) or when shutdown
 // is closed.
 //
-// Errors are intentionally swallowed because the bridge is forwarding
-// at the byte level — there is no policy decision to record here. The
+// Per-connection diagnostic errors are emitted to stderr (M-3): the
 // upstream netproxy listener (HTTP CONNECT / SOCKS5 framing) on the
-// host side records per-connection Decisions through its own EventSink;
-// this bridge is just a transport.
-func runBridgeAcceptLoopProd(listener net.Listener, udsPath string, shutdown <-chan struct{}) {
+// host side records per-connection Decisions through its own EventSink,
+// but transport-layer failures (e.g., the host-side UDS path
+// disappearing because the supervised proxy child died) used to leave
+// zero trace. The parent BwrapRunner forwards bridge stderr through
+// its bash invocation's stderr drain, so a single line per failed
+// dial reaches the operator and disambiguates "user network call
+// failed" from "supervised proxy died".
+func runBridgeAcceptLoopProd(listener net.Listener, udsPath string, shutdown <-chan struct{}, stderr io.Writer) {
 	for {
 		select {
 		case <-shutdown:
@@ -183,7 +187,7 @@ func runBridgeAcceptLoopProd(listener net.Listener, udsPath string, shutdown <-c
 			// strategy for a wedged listener.
 			return
 		}
-		go bridgeConn(tcpConn, udsPath)
+		go bridgeConn(tcpConn, udsPath, stderr)
 	}
 }
 
@@ -192,10 +196,21 @@ func runBridgeAcceptLoopProd(listener net.Listener, udsPath string, shutdown <-c
 // goroutine exits when either copy returns EOF or an error; both
 // connections are closed via defer so a unilateral EOF still releases
 // the other side.
-func bridgeConn(tcpConn net.Conn, udsPath string) {
+//
+// M-3: when net.Dial("unix", udsPath) fails (path missing, kernel
+// refuses, supervised proxy child crashed), bridgeConn emits a single
+// `netproxy-bridge: dial <path>: <err>` line to stderr so the parent
+// BwrapRunner has signal to attribute the resulting bash failure to a
+// substrate-side cause rather than a user-network problem. Pre-fix
+// this function silently returned, leaving zero trace and amplifying
+// the M-1 race-window symptom.
+func bridgeConn(tcpConn net.Conn, udsPath string, stderr io.Writer) {
 	defer tcpConn.Close()
 	uds, err := net.Dial("unix", udsPath)
 	if err != nil {
+		if stderr != nil {
+			fmt.Fprintf(stderr, "netproxy-bridge: dial %s: %v\n", udsPath, err)
+		}
 		return
 	}
 	defer uds.Close()
