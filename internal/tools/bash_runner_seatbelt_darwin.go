@@ -144,6 +144,7 @@ func (r *SeatbeltRunner) Run(ctx context.Context, req BashRunRequest) (BashRunRe
 
 	res := runBashCmd(ctx, cmd, req, r.killGrace)
 	res.Violations = detectSeatbeltViolations(res)
+	res.Output = appendViolationsSection(res.Output, res.Violations)
 	return res, nil
 }
 
@@ -197,6 +198,13 @@ func seatbeltProfile(req BashRunRequest, networkAllowlist []string) string {
 // surface is better than the agent seeing a generic "permission
 // denied" with no classification, but absence of a violation entry
 // does not mean the command was unrestricted.
+//
+// Per B3b-4-1 the entry's Source is stamped
+// "sandbox_substrate_heuristic" so output rendering and structured
+// telemetry can mark the entry as low-confidence inferred-from-stderr
+// rather than authoritative. The legacy Kind/Message fields are kept
+// for backward compatibility with callers that consumed the original
+// shape.
 func detectSeatbeltViolations(res BashRunResult) []SandboxViolation {
 	if res.StderrRawBytes == 0 {
 		return nil
@@ -207,7 +215,8 @@ func detectSeatbeltViolations(res BashRunResult) []SandboxViolation {
 	}
 	violation := SandboxViolation{
 		Kind:    "sandbox_denied",
-		Message: "sandbox-exec denied a filesystem or network operation; see stderr",
+		Source:  string(SourceSandboxSubstrateHeuristic),
+		Message: "low confidence: heuristic inferred sandbox-exec denial of filesystem or network operation; see stderr",
 	}
 	return []SandboxViolation{violation}
 }

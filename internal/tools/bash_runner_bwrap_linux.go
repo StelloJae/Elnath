@@ -139,6 +139,7 @@ func (r *BwrapRunner) Run(ctx context.Context, req BashRunRequest) (BashRunResul
 
 	res := runBashCmd(ctx, cmd, req, r.killGrace)
 	res.Violations = detectBwrapViolations(res)
+	res.Output = appendViolationsSection(res.Output, res.Violations)
 	return res, nil
 }
 
@@ -232,6 +233,11 @@ func buildBwrapArgs(req BashRunRequest, bashPath string) []string {
 // --unshare-net, write denied on --ro-bind paths) and emit a single
 // SandboxViolation entry. Absence of a violation does not prove the
 // command was unrestricted; it just means the heuristic did not match.
+//
+// Per B3b-4-1 the entry's Source is stamped
+// "sandbox_substrate_heuristic" so output rendering and structured
+// telemetry can mark the entry as low-confidence inferred-from-stderr
+// rather than authoritative.
 func detectBwrapViolations(res BashRunResult) []SandboxViolation {
 	if res.StderrRawBytes == 0 && res.StdoutRawBytes == 0 {
 		return nil
@@ -241,7 +247,8 @@ func detectBwrapViolations(res BashRunResult) []SandboxViolation {
 	case containsAny(body, "Network is unreachable", "Operation not permitted", "Read-only file system"):
 		return []SandboxViolation{{
 			Kind:    "sandbox_denied",
-			Message: "bwrap blocked a filesystem or network operation; see stderr",
+			Source:  string(SourceSandboxSubstrateHeuristic),
+			Message: "low confidence: heuristic inferred bwrap denial of filesystem or network operation; see stderr",
 		}}
 	}
 	return nil
