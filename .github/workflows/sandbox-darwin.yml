@@ -1,0 +1,105 @@
+name: macOS Sandbox Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# B3b-4-2.5 ship gate. Runs the full Go test suite on macOS with
+# sandbox-exec available so the //go:build darwin runtime tests in
+# internal/tools/bash_runner_seatbelt_*_darwin_test.go actually
+# exercise SeatbeltRunner proxy lifecycle, SBPL per-port pinning,
+# HTTP_PROXY env injection, and the M4 newline sanitization +
+# N1/N2 hardening paths from B3b-4-2. Per the v41 partner verdict
+# B3b-4-2 macOS proxy wiring is implemented but NOT considered
+# CI-gated until this workflow is green; the focused integration
+# step intentionally fails on silent skip so a regression in
+# integrationRequireDarwinSeatbelt cannot turn a skipped run green.
+#
+# Out of scope for this lane: any production code change, any new
+# proxy behavior, any BwrapRunner / Linux change. The Linux
+# sandbox-linux workflow remains the authority for bwrap.
+
+jobs:
+  seatbelt-tests:
+    name: Seatbelt substrate
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          check-latest: true
+
+      - name: Verify sandbox-exec available
+        # Apple has deprecated sandbox-exec but ships it through
+        # macOS 26. If a future runner image removes it, every
+        # //go:build darwin Seatbelt test would skip and the focused
+        # integration step would all-skip. Surface the failure early
+        # so it does not silently hide a Seatbelt-substrate regression.
+        run: |
+          if ! command -v sandbox-exec >/dev/null 2>&1; then
+            echo "ERROR: sandbox-exec not on PATH — SeatbeltRunner cannot ship from this image"
+            exit 1
+          fi
+          sandbox-exec -p '(version 1)(allow default)' /usr/bin/true
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Cross-build sanity (GOOS=linux)
+        # Catches breakage of the Linux build path from a darwin-only
+        # change. The sandbox-linux workflow is the authority for
+        # actual Linux runtime; this is a lightweight cross-compile
+        # gate so a darwin-only PR cannot silently break Linux.
+        run: |
+          GOOS=linux go vet ./...
+          GOOS=linux go build ./...
+
+      - name: Run all package tests with race detector
+        # Includes the new B3b-4-2 unit tests in
+        # bash_runner_seatbelt_proxy_darwin_test.go (lifecycle / SBPL
+        # pinning / env injection / M4 sanitization) and the
+        # netproxy_proxy_hardening_test.go (N1 header cap / N2
+        # half-close). //go:build linux files are skipped naturally.
+        run: go test -race -count=1 ./...
+
+      - name: Run B3b-4-2 macOS Seatbelt proxy integration tests
+        # The B3b-4-2 closure gate. The integration test file is
+        # tagged `darwin && integration` so this step is the only one
+        # that exercises real sandbox-exec + netproxy child + curl
+        # round-trip. The verification step below greps the log for
+        # at least one PASS line so an all-skip outcome (which would
+        # appear green to GitHub Actions) is treated as a hard
+        # failure — silent skip is the failure mode the partner
+        # verdict explicitly closed.
+        run: |
+          set -o pipefail
+          go test -tags=integration -race -count=1 -v \
+            -run 'SeatbeltProxyIntegration' \
+            ./internal/tools/... | tee seatbelt-integration.log
+
+      - name: Verify Seatbelt integration tests actually ran (no silent skip)
+        # Skip-green is the failure mode this guard exists to prevent.
+        # If integrationRequireDarwinSeatbelt() ever skips because
+        # sandbox-exec is missing or misbehaves, the previous step
+        # could still exit 0 with all SKIPs. Require at least one
+        # PASS line that matches the integration test prefix.
+        run: |
+          if ! grep -qE '^--- PASS: TestSeatbeltProxyIntegration_' seatbelt-integration.log; then
+            echo "FATAL: B3b-4-2.5 closure requires at least one SeatbeltProxyIntegration PASS; all tests skipped or none ran" >&2
+            grep -E '^=== RUN|^--- (PASS|FAIL|SKIP):' seatbelt-integration.log || true
+            exit 1
+          fi
+          PASS_COUNT=$(grep -cE '^--- PASS: TestSeatbeltProxyIntegration_' seatbelt-integration.log)
+          SKIP_COUNT=$(grep -cE '^--- SKIP: TestSeatbeltProxyIntegration_' seatbelt-integration.log || true)
+          FAIL_COUNT=$(grep -cE '^--- FAIL: TestSeatbeltProxyIntegration_' seatbelt-integration.log || true)
+          echo "B3b-4-2.5: SeatbeltProxyIntegration PASS=$PASS_COUNT SKIP=$SKIP_COUNT FAIL=$FAIL_COUNT"
+          if [ "$FAIL_COUNT" != "0" ]; then
+            exit 1
+          fi
