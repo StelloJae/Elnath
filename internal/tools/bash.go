@@ -182,6 +182,20 @@ func (t *BashTool) Execute(ctx context.Context, params json.RawMessage) (*Result
 // logged — bash commands frequently embed tokens, secrets, or curl
 // headers, and the per-command body is already captured in the agent's
 // session log via the formatted Result.
+//
+// The structured violations list surfaces ONLY {source, host, port,
+// protocol, reason} for each entry. Per the B3b-4-1 N6 retention
+// policy, telemetry MUST NOT include URL paths, query strings, HTTP
+// headers, or request bodies — even when present in
+// SandboxViolation.Message or .Path. Decision.Host on SOCKS5 ATYP=0x03
+// (DOMAINNAME) may carry FQDNs containing private destination info;
+// callers requiring stricter redaction MUST gate INFO-level Host
+// emission at a downstream filter.
+//
+// violation_drop_count surfaces the N4 carry-forward: the netproxy
+// ChannelEventSink drops events when the buffer is full. A non-zero
+// value indicates the operator should bump the sink buffer or
+// investigate a violation flood.
 func emitBashTelemetry(ctx context.Context, probe BashRunnerProbe, req BashRunRequest, res BashRunResult, runErr error) {
 	var exitCode any
 	if res.ExitCode != nil {
@@ -206,8 +220,35 @@ func emitBashTelemetry(ctx context.Context, probe BashRunnerProbe, req BashRunRe
 		"stdout_truncated", res.StdoutTruncated,
 		"stderr_truncated", res.StderrTruncated,
 		"violation_count", len(res.Violations),
+		"violation_drop_count", res.ViolationDropCount,
+		"violations", redactViolationsForTelemetry(res.Violations),
 		"runner_error", runErrMsg,
 	)
+}
+
+// redactViolationsForTelemetry projects each SandboxViolation into a
+// minimal map containing only the partner-locked telemetry fields:
+// source, host, port, protocol, reason. Message, Path, and Kind are
+// intentionally dropped because they may carry secrets / URL paths /
+// HTTP headers per the N6 retention policy.
+//
+// Empty input returns nil so the slog field renders as "[]" rather
+// than a placeholder; downstream consumers can branch on length.
+func redactViolationsForTelemetry(violations []SandboxViolation) []map[string]any {
+	if len(violations) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(violations))
+	for _, v := range violations {
+		out = append(out, map[string]any{
+			"source":   v.Source,
+			"host":     v.Host,
+			"port":     v.Port,
+			"protocol": v.Protocol,
+			"reason":   v.Reason,
+		})
+	}
+	return out
 }
 
 // analyzeCommand parses the shell command AST and checks for dangerous patterns.

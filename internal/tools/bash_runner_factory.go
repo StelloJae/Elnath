@@ -5,35 +5,103 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
+	"time"
 )
 
 // SandboxConfig captures the user-facing sandbox/runner mode for BashTool.
 // Phase 1 supports "direct" (DirectRunner host-process backend) and
-// "seatbelt" (macOS Seatbelt substrate). "bwrap" is reserved for the
-// B3b-3 Linux lane and currently returns a clear unsupported error
-// rather than silently degrading to DirectRunner — silent fallback
-// would let "sandbox=on" requests run unsandboxed without notice.
+// "seatbelt" (macOS Seatbelt substrate). "bwrap" is the B3b-3 Linux
+// lane (default-deny network only). "Sandbox" labeling stays reserved
+// for substrates with namespace/chroot-equivalent enforcement; silent
+// fallback to DirectRunner is forbidden because that would let
+// "sandbox=on" requests run unsandboxed without notice.
 //
-// NetworkAllowlist is the B3b-2.5 default-deny + explicit IP:port
-// allowlist. Each entry must be "<ipv4|ipv6>:<port>"; domain matching
-// is deferred to B3b-4 with a real network proxy. An empty allowlist
-// blocks all outbound network when the substrate runner enforces
-// network policy. Domain entries are rejected at construction so the
-// caller cannot ship config that silently does nothing.
+// NetworkAllowlist accepts the broader B3b-4 grammar (loopback IPs,
+// non-loopback IPs, domain entries, scoped wildcards). The factory
+// inspects each entry's shape: a loopback-only allowlist is honored
+// by Seatbelt directly; any non-loopback IP entry or domain entry
+// requires the netproxy proxy substrate, which the substrate-wiring
+// lanes (B3b-4-2 macOS, B3b-4-3 Linux) ship later. Until those lanes
+// land the factory rejects such entries LOUDLY at construction with
+// an error naming the in-progress lane and the restart-required
+// disclosure — never a silent fallback to DirectRunner.
+//
+// NetworkDenylist holds explicit deny entries with the same grammar.
+// Denylist matches always win over allowlist matches (deny-wins, per
+// netproxy_policy.go EvaluateWithDenylist). Like NetworkAllowlist
+// entries, non-loopback denylist entries currently require proxy
+// wiring; until that ships, a non-empty denylist on Seatbelt or
+// Bwrap is rejected at the factory.
+//
+// NetworkProxyConnectTimeout is the operator-tunable upper bound on
+// initial proxy handshake reads. Zero falls back to the default
+// (netproxyDefaultConnectTimeout). The field is accepted at parse
+// time so config can be written ahead of substrate wiring; the value
+// is NOT yet wired into the substrate (B3b-4-2 / B3b-4-3 will thread
+// it through to the netproxy listeners).
 //
 // LLM/tool-param input MUST NOT populate this struct. Per the v41 partner
 // verdict, only user-side configuration (config file, CLI flag, or
 // interactive approval) constructs SandboxConfig. Bash command parameters
 // have no field that influences the runner backend.
+//
+// There is intentionally NO ProxyEnabled flag. Proxy need is INFERRED
+// from the allowlist/denylist shape (presence of any non-loopback IP
+// or any domain entry). Adding a boolean would create a footgun: an
+// operator could enable the proxy without configuring entries, or
+// vice versa. Inference closes the gap.
 type SandboxConfig struct {
 	// Mode selects the runner backend. Empty string is treated as "direct".
 	Mode string
 
-	// NetworkAllowlist holds explicit "host:port" entries the substrate
-	// permits for outbound TCP/UDP. Each entry must use an IP address;
-	// domain names are rejected. Only the substrate runners read this
-	// field — DirectRunner ignores it (no policy to enforce).
+	// NetworkAllowlist holds "host:port" entries permitted for
+	// outbound TCP. Grammar mirrors netproxy_policy.go ParseAllowlist
+	// (loopback IPs, non-loopback IPs, domain entries, *.host
+	// subdomain wildcards, **.host apex+sub wildcards). Only the
+	// substrate runners read this field; DirectRunner ignores it
+	// because the host-process backend has no policy to enforce.
 	NetworkAllowlist []string
+
+	// NetworkDenylist holds "host:port" entries denied even when the
+	// allowlist would permit them. Same grammar as NetworkAllowlist.
+	// Denylist always wins over allowlist (deny-wins).
+	NetworkDenylist []string
+
+	// NetworkProxyConnectTimeout bounds initial proxy handshake reads
+	// inside the netproxy listener. Zero uses the package default
+	// (netproxyDefaultConnectTimeout). Substrate-wiring lanes thread
+	// this value into the proxy listener; B3b-4-1 only validates it.
+	NetworkProxyConnectTimeout time.Duration
+}
+
+// netproxyDefaultConnectTimeout is the fallback for
+// SandboxConfig.NetworkProxyConnectTimeout. Mirrors the existing
+// netproxy_proxy.go connectIOTimeout constant so callers picking up
+// the default see the same value the in-tree proxy listeners use.
+const netproxyDefaultConnectTimeout = 30 * time.Second
+
+// ResolvedNetworkProxyConnectTimeout returns the operator-supplied
+// timeout when set, or the package default otherwise. Used by future
+// substrate-wiring lanes to plumb the value into the netproxy listener.
+func (c SandboxConfig) ResolvedNetworkProxyConnectTimeout() time.Duration {
+	if c.NetworkProxyConnectTimeout > 0 {
+		return c.NetworkProxyConnectTimeout
+	}
+	return netproxyDefaultConnectTimeout
+}
+
+// networkProxyDisclosure returns the partner-locked disclosure
+// sentences appended to factory rejection errors and substrate probe
+// messages so operators always learn three Phase 1 invariants in the
+// same words: restart on config edit, UDP/QUIC blocked, DNS rebinding
+// not fully defended.
+func networkProxyDisclosure() string {
+	return strings.Join([]string{
+		"Network allowlist changes require Elnath restart.",
+		"UDP and QUIC egress are blocked in this sandbox version.",
+		"DNS rebinding is not fully defended; for hostile DNS threat models, enforce egress at a lower layer.",
+	}, " ")
 }
 
 // NewBashRunnerForConfig returns a BashRunner for the given config or an
@@ -46,11 +114,22 @@ type SandboxConfig struct {
 // Available=false. The probe message becomes part of the returned error
 // so the user sees the concrete reason (wrong platform, missing binary,
 // etc.) rather than a generic "unsupported".
+//
+// Allowlist/denylist shape determines whether substrate-wiring lanes
+// must be present. Loopback-only entries on Seatbelt are honored
+// directly by the SBPL `(remote ip "localhost:<port>")` rule; any
+// entry that requires the proxy substrate (non-loopback IP, domain)
+// is rejected here with explicit B3b-4-2 / B3b-4-3 wording until the
+// proxy is wired through. Bwrap rejects every non-empty allowlist
+// because the substrate has no equivalent rule yet.
 func NewBashRunnerForConfig(cfg SandboxConfig) (BashRunner, error) {
 	switch cfg.Mode {
 	case "", "direct":
 		return NewDirectRunner(), nil
 	case "seatbelt":
+		if err := rejectIfRequiresProxy(cfg.NetworkAllowlist, cfg.NetworkDenylist, "seatbelt", "B3b-4-2"); err != nil {
+			return nil, err
+		}
 		r, err := NewSeatbeltRunnerWithAllowlist(cfg.NetworkAllowlist)
 		if err != nil {
 			return nil, fmt.Errorf("sandbox mode %q: %w", cfg.Mode, err)
@@ -61,13 +140,20 @@ func NewBashRunnerForConfig(cfg SandboxConfig) (BashRunner, error) {
 		}
 		return r, nil
 	case "bwrap":
-		// B3b-3 ships default-deny network only; userspace IP/domain
-		// allowlist on Linux requires the B3b-4 network proxy lane.
-		// A non-empty allowlist with bwrap mode is rejected at the
-		// factory so a config that expected allowlist semantics
-		// cannot silently degrade to "no network".
-		if len(cfg.NetworkAllowlist) > 0 {
-			return nil, fmt.Errorf("sandbox mode %q does not yet support a network allowlist; bwrap is default-deny only in B3b-3 (allowlist support is the B3b-4 network proxy lane)", cfg.Mode)
+		// B3b-3 ships default-deny network only. Bwrap has no
+		// substrate-level allowlist (not even loopback), so any
+		// non-empty allowlist or denylist requires the B3b-4-3 proxy
+		// wiring lane that is not yet in this build. Reject loudly so
+		// a config that expected allowlist semantics cannot silently
+		// degrade to "no network".
+		if len(cfg.NetworkAllowlist) > 0 || len(cfg.NetworkDenylist) > 0 {
+			entry := firstNetEntry(cfg.NetworkAllowlist, cfg.NetworkDenylist)
+			return nil, fmt.Errorf(
+				"network allowlist entry %q requires B3b-4 proxy wiring; "+
+					"Seatbelt/Bwrap proxy wiring is not available in this lane yet (B3b-4-2 macOS, B3b-4-3 Linux). "+
+					"Remove the entry to fall back to default-deny on bwrap. %s",
+				entry, networkProxyDisclosure(),
+			)
 		}
 		r := NewBwrapRunner()
 		p := r.Probe(context.Background())
@@ -78,6 +164,83 @@ func NewBashRunnerForConfig(cfg SandboxConfig) (BashRunner, error) {
 	default:
 		return nil, fmt.Errorf("unknown sandbox mode %q", cfg.Mode)
 	}
+}
+
+// rejectIfRequiresProxy returns an explicit B3b-4 deferral error when
+// any allowlist or denylist entry needs the proxy substrate. Loopback
+// IP entries are accepted on Seatbelt because the SBPL filter handles
+// them directly; the same is NOT true for bwrap (handled separately).
+//
+// The error wording is partner-locked: it MUST cite the in-progress
+// lane (B3b-4-2 macOS, B3b-4-3 Linux), MUST forbid silent fallback to
+// DirectRunner, and MUST include the restart-required +
+// UDP/QUIC-blocked + DNS-rebinding disclosure so operators learn the
+// Phase 1 invariants without consulting external docs.
+func rejectIfRequiresProxy(allowlist, denylist []string, _ string, lane string) error {
+	check := func(entries []string, kind string) error {
+		for _, raw := range entries {
+			needsProxy, parseErr := entryRequiresProxy(raw)
+			if parseErr != nil {
+				return fmt.Errorf("network %s entry %q invalid: %w", kind, raw, parseErr)
+			}
+			if !needsProxy {
+				continue
+			}
+			return fmt.Errorf(
+				"network %s entry %q requires B3b-4 proxy wiring; "+
+					"Seatbelt/Bwrap proxy wiring is not available in this lane yet (%s macOS, B3b-4-3 Linux). "+
+					"Loopback-only allowlist entries (e.g. 127.0.0.1:8080, [::1]:8080) are still accepted on Seatbelt; "+
+					"or remove the entry to fall back to default-deny. %s",
+				kind, raw, lane, networkProxyDisclosure(),
+			)
+		}
+		return nil
+	}
+	if err := check(allowlist, "allowlist"); err != nil {
+		return err
+	}
+	if err := check(denylist, "denylist"); err != nil {
+		return err
+	}
+	return nil
+}
+
+// entryRequiresProxy reports whether a single allowlist/denylist
+// entry needs the netproxy substrate to enforce. Loopback IP literal
+// entries do NOT require proxy (Seatbelt handles them at the SBPL
+// layer); domain entries and non-loopback IP entries DO.
+//
+// Parsing is delegated to ParseAllowlist (the netproxy_policy.go
+// grammar) so the factory keeps a single source of truth for the
+// host:port grammar and stays in lock-step with substrate evaluation.
+func entryRequiresProxy(entry string) (bool, error) {
+	parsed, err := ParseAllowlist([]string{entry})
+	if err != nil {
+		return false, err
+	}
+	rules := parsed.Rules()
+	if len(rules) == 0 {
+		return false, nil
+	}
+	r := rules[0]
+	if !r.IsIP {
+		return true, nil
+	}
+	return !r.IP.IsLoopback(), nil
+}
+
+// firstNetEntry returns the first non-empty entry across allowlist
+// and denylist for diagnostic message formatting in the bwrap
+// rejection path. Local helper because the existing firstNonEmpty
+// elsewhere has a different signature.
+func firstNetEntry(allowlist, denylist []string) string {
+	if len(allowlist) > 0 {
+		return allowlist[0]
+	}
+	if len(denylist) > 0 {
+		return denylist[0]
+	}
+	return ""
 }
 
 // validateNetworkAllowlist checks each entry is "<IP>:<port>" with a

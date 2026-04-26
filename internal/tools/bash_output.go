@@ -215,10 +215,21 @@ func displayCWD(sessionRoot, workDir string) string {
 	return rel
 }
 
+// maxViolationsRendered caps how many SandboxViolation entries are
+// rendered into the LLM-facing body. Larger lists collapse to the
+// rendered head plus a "and N more violations (truncated)" summary so
+// a misbehaving substrate can't flood the result envelope.
+const maxViolationsRendered = 50
+
 // formatBashResult emits the LLM-facing body for a bash invocation:
 // a metadata header followed by STDOUT/STDERR sections. Sections are
 // only emitted when the corresponding stream produced bytes, so empty
 // streams stay quiet.
+//
+// Violations rendering lives in formatBashResultWithViolations so the
+// no-violations call sites stay terse. Both helpers produce the same
+// header/STDOUT/STDERR shape; only the trailing SANDBOX VIOLATIONS
+// section differs.
 func formatBashResult(meta bashResultMeta, stdout, stderr *cappedOutput) string {
 	var sb strings.Builder
 	sb.WriteString("BASH RESULT\n")
@@ -282,4 +293,119 @@ func writeBytesLine(sb *strings.Builder, key string, n int64) {
 	sb.WriteString(": ")
 	sb.WriteString(strconv.FormatInt(n, 10))
 	sb.WriteByte('\n')
+}
+
+// formatBashResultWithViolations renders the standard bash result
+// body and appends a "SANDBOX VIOLATIONS:" section when the
+// substrate-detected violations slice is non-empty. The section is
+// emitted INDEPENDENT of meta.Status / IsError: a successful command
+// (exit 0) with non-empty violations still surfaces them so the agent
+// can react to silent partial denials.
+//
+// Each entry renders as one bullet. Network-shaped entries (Source +
+// Host populated) format as "- {source}: blocked {host}:{port}
+// (protocol={protocol}, reason={reason})". Legacy filesystem-style
+// entries (no Host) format as "- {source}: {message}" or, when no
+// Source is set either, "- {kind}: {message}". The cap is
+// maxViolationsRendered (50); overflow renders a single
+// "... and N more violations (truncated)" line so a misbehaving
+// substrate can't blow up the result envelope.
+//
+// Upstream HTTP 403 responses from a real upstream MUST NOT appear
+// in this section. Only sandbox-attributable violations belong here;
+// callers populate BashRunResult.Violations exclusively from
+// substrate-side decisions.
+func formatBashResultWithViolations(meta bashResultMeta, stdout, stderr *cappedOutput, violations []SandboxViolation) string {
+	body := formatBashResult(meta, stdout, stderr)
+	if len(violations) == 0 {
+		return body
+	}
+	var sb strings.Builder
+	sb.WriteString(body)
+	if !strings.HasSuffix(body, "\n") {
+		sb.WriteByte('\n')
+	}
+	sb.WriteString("\nSANDBOX VIOLATIONS:\n")
+	limit := len(violations)
+	truncated := 0
+	if limit > maxViolationsRendered {
+		truncated = limit - maxViolationsRendered
+		limit = maxViolationsRendered
+	}
+	for i := 0; i < limit; i++ {
+		sb.WriteString(renderSandboxViolation(violations[i]))
+		sb.WriteByte('\n')
+	}
+	if truncated > 0 {
+		fmt.Fprintf(&sb, "... and %d more violations (truncated)\n", truncated)
+	}
+	return sb.String()
+}
+
+// appendViolationsSection appends a SANDBOX VIOLATIONS section to an
+// already-rendered BASH RESULT body. Used by substrate runners after
+// detectXViolations populates res.Violations on the result that was
+// finalized by buildBashResult; re-rendering with cappedOutput state
+// would be redundant work because the head/tail buffers are already
+// drained into the existing body string.
+//
+// Returns body unchanged when violations is empty so callers can
+// always invoke unconditionally.
+func appendViolationsSection(body string, violations []SandboxViolation) string {
+	if len(violations) == 0 {
+		return body
+	}
+	var sb strings.Builder
+	sb.WriteString(body)
+	if !strings.HasSuffix(body, "\n") {
+		sb.WriteByte('\n')
+	}
+	sb.WriteString("\nSANDBOX VIOLATIONS:\n")
+	limit := len(violations)
+	truncated := 0
+	if limit > maxViolationsRendered {
+		truncated = limit - maxViolationsRendered
+		limit = maxViolationsRendered
+	}
+	for i := 0; i < limit; i++ {
+		sb.WriteString(renderSandboxViolation(violations[i]))
+		sb.WriteByte('\n')
+	}
+	if truncated > 0 {
+		fmt.Fprintf(&sb, "... and %d more violations (truncated)\n", truncated)
+	}
+	return sb.String()
+}
+
+// renderSandboxViolation formats a single SandboxViolation entry for
+// the SANDBOX VIOLATIONS section. Network-shaped entries surface
+// host:port + protocol + reason; legacy filesystem-style entries
+// surface kind + message. Source falls back to "sandbox" when
+// missing so output never carries a bare colon.
+func renderSandboxViolation(v SandboxViolation) string {
+	source := v.Source
+	if source == "" {
+		if v.Kind != "" {
+			source = v.Kind
+		} else {
+			source = "sandbox"
+		}
+	}
+	if v.Host != "" {
+		protocol := v.Protocol
+		if protocol == "" {
+			protocol = "unknown"
+		}
+		reason := v.Reason
+		if reason == "" {
+			reason = "unspecified"
+		}
+		return fmt.Sprintf("- %s: blocked %s:%d (protocol=%s, reason=%s)",
+			source, v.Host, v.Port, protocol, reason)
+	}
+	msg := v.Message
+	if msg == "" {
+		msg = "no message"
+	}
+	return fmt.Sprintf("- %s: %s", source, msg)
 }

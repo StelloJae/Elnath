@@ -179,6 +179,18 @@ func (r ProxyReason) String() string { return string(r) }
 //
 // JSON encoding uses snake_case keys so logs remain readable when
 // piped into jq / OTEL exporters / cross-tool log aggregators.
+//
+// N6 retention policy (B3b-4-1): Host may carry hostnames the user
+// never typed when the request arrived through the SOCKS5 DOMAINNAME
+// (ATYP=0x03) path or as a CONNECT host header. Downstream telemetry
+// MUST NOT log full URL paths, query strings, or HTTP headers; only
+// {host, port, protocol, reason, source} from this struct are
+// approved for INFO-level structured emission. emitBashTelemetry in
+// bash.go enforces the projection on the executor side. Operators
+// requiring stricter Host redaction (e.g. for FQDNs containing
+// internal route names) MUST gate at a downstream filter rather than
+// inside the listener loop, which keeps the proxy decision-emit path
+// allocation-free.
 type Decision struct {
 	Allow    bool          `json:"allow"`
 	Source   ProxySource   `json:"source"`

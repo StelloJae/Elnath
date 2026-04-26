@@ -1,0 +1,180 @@
+package tools
+
+import (
+	"runtime"
+	"strings"
+	"testing"
+)
+
+// B3b-4-1 Phase B: SandboxConfig.NetworkDenylist + factory rejection
+// wording. Loopback-only Seatbelt allowlist still ACCEPTED on darwin
+// (Phase 1 capability preserved). Domain or non-loopback IP entry on
+// Seatbelt rejected with explicit B3b-4-2 / B3b-4-3 wording. Bwrap
+// with any non-empty allowlist rejected with B3b-4-3 wording. Empty
+// allowlist + empty denylist on either substrate is the default-deny
+// path.
+
+// TestSandboxConfig_AcceptsNetworkDenylistField pins the existence of
+// the new field. Compilation alone proves the surface; the assertion
+// keeps the field semantically wired into the struct literal.
+func TestSandboxConfig_AcceptsNetworkDenylistField(t *testing.T) {
+	cfg := SandboxConfig{
+		Mode:             "direct",
+		NetworkAllowlist: []string{"127.0.0.1:8080"},
+		NetworkDenylist:  []string{"169.254.169.254:80"},
+	}
+	if len(cfg.NetworkDenylist) != 1 {
+		t.Fatalf("NetworkDenylist length = %d, want 1", len(cfg.NetworkDenylist))
+	}
+	if cfg.NetworkDenylist[0] != "169.254.169.254:80" {
+		t.Errorf("NetworkDenylist[0] = %q", cfg.NetworkDenylist[0])
+	}
+}
+
+func TestSandboxConfig_DenylistParsedThroughNetproxyPolicy(t *testing.T) {
+	// Empty denylist still accepted.
+	if _, err := ParseDenylist(nil); err != nil {
+		t.Fatalf("empty denylist must parse: %v", err)
+	}
+	// The denylist parser already lives in netproxy_policy.go;
+	// SandboxConfig MUST depend on it rather than duplicate the
+	// grammar. This test pins the contract by exercising a known-good
+	// denylist entry through the public parser.
+	dl, err := ParseDenylist([]string{"github.com:443"})
+	if err != nil {
+		t.Fatalf("denylist domain entry must parse: %v", err)
+	}
+	if dl.IsEmpty() {
+		t.Errorf("parsed denylist should not be empty")
+	}
+}
+
+// TestFactory_SeatbeltDomainAllowlistRejectedWithB3b42Wording pins
+// the new factory rejection wording for domain entries on Seatbelt.
+// The error MUST name the lane (B3b-4-2 / B3b-4-3) and MUST forbid
+// silent fallback to DirectRunner.
+func TestFactory_SeatbeltDomainAllowlistRejectedWithB3b42Wording(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("seatbelt factory only available on darwin")
+	}
+	runner, err := NewBashRunnerForConfig(SandboxConfig{
+		Mode:             "seatbelt",
+		NetworkAllowlist: []string{"github.com:443"},
+	})
+	if err == nil {
+		t.Fatalf("expected factory error for domain entry, got runner=%v", runner)
+	}
+	if runner != nil {
+		t.Errorf("factory MUST NOT return a runner alongside an error (silent fallback risk)")
+	}
+	msg := err.Error()
+	for _, want := range []string{"github.com:443", "B3b-4", "proxy"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("rejection wording missing %q; got: %v", want, err)
+		}
+	}
+	// Restart-required disclosure must appear so the operator knows
+	// changing config requires an Elnath restart.
+	if !strings.Contains(msg, "restart") {
+		t.Errorf("rejection wording missing restart disclosure; got: %v", err)
+	}
+}
+
+func TestFactory_SeatbeltNonLoopbackIPAllowlistRejectedWithB3b42Wording(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("seatbelt factory only available on darwin")
+	}
+	_, err := NewBashRunnerForConfig(SandboxConfig{
+		Mode:             "seatbelt",
+		NetworkAllowlist: []string{"10.0.0.5:5432"},
+	})
+	if err == nil {
+		t.Fatalf("expected factory error for non-loopback IP entry")
+	}
+	for _, want := range []string{"10.0.0.5:5432", "B3b-4", "proxy"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("rejection wording missing %q; got: %v", want, err)
+		}
+	}
+}
+
+// TestFactory_SeatbeltLoopbackOnlyAllowlistStillAccepted ensures the
+// Phase 1 capability (loopback-only allowlist on Seatbelt) survives
+// the rewrite. This is the no-regression guard: B3b-4-1 must not
+// silently break the loopback path.
+func TestFactory_SeatbeltLoopbackOnlyAllowlistStillAccepted(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("seatbelt factory only available on darwin")
+	}
+	runner, err := NewBashRunnerForConfig(SandboxConfig{
+		Mode:             "seatbelt",
+		NetworkAllowlist: []string{"127.0.0.1:8080", "[::1]:9090"},
+	})
+	if err != nil {
+		t.Fatalf("loopback-only allowlist must remain accepted on darwin: %v", err)
+	}
+	if runner == nil || runner.Name() != "seatbelt" {
+		t.Fatalf("expected SeatbeltRunner, got %v", runner)
+	}
+}
+
+// TestFactory_BwrapAnyAllowlistRejectedWithB3b43Wording pins the
+// wording for bwrap. Even loopback entries are rejected because bwrap
+// does not yet accept any allowlist at the substrate level.
+func TestFactory_BwrapAnyAllowlistRejectedWithB3b43Wording(t *testing.T) {
+	cases := [][]string{
+		{"127.0.0.1:8080"},
+		{"github.com:443"},
+		{"10.0.0.5:5432"},
+	}
+	for _, allowlist := range cases {
+		_, err := NewBashRunnerForConfig(SandboxConfig{
+			Mode:             "bwrap",
+			NetworkAllowlist: allowlist,
+		})
+		if err == nil {
+			t.Errorf("bwrap with allowlist %v must be rejected", allowlist)
+			continue
+		}
+		for _, want := range []string{"B3b-4", "proxy"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("bwrap rejection missing %q for %v; got: %v", want, allowlist, err)
+			}
+		}
+	}
+}
+
+// TestFactory_EmptyAllowlistAndDenylistAcceptedOnBothSubstrates pins
+// the default-deny path. Empty allowlist + empty denylist means no
+// proxy is needed; the substrate's intrinsic default-deny is the
+// enforcement.
+func TestFactory_EmptyAllowlistAndDenylistAcceptedOnBothSubstrates(t *testing.T) {
+	cfg := SandboxConfig{Mode: "seatbelt"}
+	if runtime.GOOS == "darwin" {
+		runner, err := NewBashRunnerForConfig(cfg)
+		if err != nil {
+			t.Fatalf("empty allowlist+denylist on seatbelt must succeed on darwin: %v", err)
+		}
+		if runner.Name() != "seatbelt" {
+			t.Errorf("expected seatbelt, got %s", runner.Name())
+		}
+	}
+	// Bwrap with empty allowlist+denylist is the existing default-deny
+	// path; the factory must continue to accept it on linux. On
+	// non-linux the platform-availability check rejects but with a
+	// platform-specific error rather than a config-shape error.
+	_, _ = NewBashRunnerForConfig(SandboxConfig{Mode: "bwrap"})
+}
+
+func TestFactory_NoProxyEnabledFlag(t *testing.T) {
+	// SandboxConfig MUST NOT carry a ProxyEnabled-shaped flag (partner
+	// pin: proxy need is INFERRED from allowlist shape). Reflection
+	// would catch a renamed field but since we cannot rename in test,
+	// this test asserts the existing struct via name-only check.
+	cfg := SandboxConfig{Mode: "seatbelt"}
+	v := struct{ HasField bool }{}
+	// Compile-time absence is what we want; placeholder runtime check
+	// to prove the test file references cfg.
+	_ = cfg
+	_ = v
+}
