@@ -63,6 +63,16 @@ func commandRegistry() map[string]commandRunner {
 		// their own process (per partner pin C4 forked-child
 		// self-exec model). Omitted from `elnath help` on purpose.
 		"netproxy": cmdNetproxy,
+		// Hidden internal exec mode for the v41 / B3b-4-3 Linux
+		// bwrap proxy wiring. BwrapRunner self-execs the elnath
+		// binary as `elnath netproxy-bridge --uds-http ... --uds-socks
+		// ... --listen-http ... --listen-socks ... --user-cmd ...`
+		// AS the bwrap-spawned wrapper command. The bridge runs
+		// inside the netns, owns the user command lifecycle, and
+		// forwards bytes between netns-internal TCP listeners and
+		// host UDS endpoints served by the netproxy proxy child.
+		// Omitted from `elnath help` on purpose.
+		"netproxy-bridge": cmdNetproxyBridge,
 	}
 }
 

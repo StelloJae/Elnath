@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"sync"
 )
 
@@ -126,8 +127,52 @@ func ParseProxyChildArgs(args []string) (ProxyChildParsed, error) {
 // multiStringFlag implements flag.Value for repeatable string flags.
 type multiStringFlag []string
 
-func (m *multiStringFlag) String() string         { return fmt.Sprint([]string(*m)) }
-func (m *multiStringFlag) Set(v string) error     { *m = append(*m, v); return nil }
+func (m *multiStringFlag) String() string     { return fmt.Sprint([]string(*m)) }
+func (m *multiStringFlag) Set(v string) error { *m = append(*m, v); return nil }
+
+// listenForFlag resolves a --http-listen / --socks-listen flag value
+// to a net.Listener. Two grammars are accepted:
+//
+//   - bare host:port — interpreted as TCP, e.g. `127.0.0.1:3128`. This
+//     is the macOS Seatbelt path and the legacy in-process test path.
+//   - `unix:<path>` — interpreted as a Unix domain socket listener at
+//     the given filesystem path. Required for the v41 / B3b-4-3 Linux
+//     bwrap bridge: the netproxy child binds UDS endpoints OUTSIDE
+//     the bwrap netns and the in-bwrap bridge dials them via a
+//     bind-mounted directory.
+//
+// Additive: pre-B3b-4-3 callers continue to pass bare host:port and
+// see no behavior change.
+func listenForFlag(spec string) (net.Listener, error) {
+	if path, ok := stringsCutPrefix(spec, "unix:"); ok {
+		// Remove any stale socket file at the path before binding so
+		// retries during host crash recovery do not require manual
+		// cleanup.
+		_ = removeIfExists(path)
+		return net.Listen("unix", path)
+	}
+	return net.Listen("tcp", spec)
+}
+
+// stringsCutPrefix is a tiny local copy of strings.CutPrefix kept here
+// so this file stays self-contained without bumping the import set.
+func stringsCutPrefix(s, prefix string) (after string, ok bool) {
+	if len(s) >= len(prefix) && s[:len(prefix)] == prefix {
+		return s[len(prefix):], true
+	}
+	return "", false
+}
+
+// removeIfExists deletes a filesystem entry if present and returns nil
+// when the entry does not exist. Used by the UDS listener path so
+// stale sockets from a crashed prior run do not block bind.
+func removeIfExists(path string) error {
+	err := os.Remove(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
 
 // RunProxyChildMain is the entry function a future `elnath netproxy
 // ...` subcommand will dispatch to. Returns a process exit code: 0
@@ -178,9 +223,14 @@ func RunProxyChildMain(ctx context.Context, cfg ProxyChildConfig) int {
 	}
 
 	// Resolve listeners: prefer caller-provided over flag-derived.
+	// Address grammar accepted by listenForFlag: bare host:port (TCP)
+	// OR `unix:<path>` (UDS). The UDS path is required for the v41 /
+	// B3b-4-3 Linux bwrap bridge — the netproxy child binds UDS
+	// endpoints on the host filesystem so the in-bwrap bridge can
+	// dial across the netns boundary via a bind-mounted directory.
 	httpL := cfg.HTTPListener
 	if httpL == nil && parsed.HTTPListen != "" {
-		l, err := net.Listen("tcp", parsed.HTTPListen)
+		l, err := listenForFlag(parsed.HTTPListen)
 		if err != nil {
 			cfg.Sink.EmitError(fmt.Errorf("netproxy http listen %s: %w", parsed.HTTPListen, err))
 			return 1
@@ -189,7 +239,7 @@ func RunProxyChildMain(ctx context.Context, cfg ProxyChildConfig) int {
 	}
 	socksL := cfg.SOCKSListener
 	if socksL == nil && parsed.SOCKSListen != "" {
-		l, err := net.Listen("tcp", parsed.SOCKSListen)
+		l, err := listenForFlag(parsed.SOCKSListen)
 		if err != nil {
 			// If the HTTP listener was already bound, close it so
 			// we don't leak.
