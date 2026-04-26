@@ -455,3 +455,187 @@ var seatbeltProxyTestSetupMu = &sync.Mutex{}
 func init() {
 	_ = seatbeltProxyTestSetupMu // silence unused if no test uses it
 }
+
+// ---------------------------------------------------------------
+// v42-1a: deny-projection drain lifecycle (parity with Linux M-3)
+// ---------------------------------------------------------------
+
+// TestSeatbeltRunner_DrainGoroutineExitsCleanlyOnClose pins the
+// deterministic-shutdown contract: after Close returns, the stdout
+// drain goroutine spawned by spawnProxyChild MUST have exited. The
+// test waits on the proxyDrainDone channel rather than a NumGoroutine
+// delta to avoid sample-window flakiness.
+//
+// Mirrors the Linux test
+// TestBwrapRunner_DrainGoroutineReleasedDeterministicallyOnClose
+// (bash_runner_bwrap_proxy_linux_test.go) which guards the equivalent
+// drain-channel close path.
+func TestSeatbeltRunner_DrainGoroutineExitsCleanlyOnClose(t *testing.T) {
+	requireSeatbeltProxyTestSupport(t)
+	binPath := buildElnathBinaryForSeatbeltProxy(t)
+	t.Setenv("ELNATH_NETPROXY_BINARY_OVERRIDE", binPath)
+
+	r, err := NewSeatbeltRunnerWithAllowlist([]string{"github.com:443"})
+	if err != nil {
+		t.Fatalf("NewSeatbeltRunnerWithAllowlist: %v", err)
+	}
+
+	r.proxyMu.Lock()
+	drainDone := r.proxyDrainDone
+	r.proxyMu.Unlock()
+	if drainDone == nil {
+		t.Fatalf("proxy-required runner must have spawned a drain goroutine; proxyDrainDone is nil")
+	}
+
+	if err := r.Close(context.Background()); err != nil {
+		t.Errorf("Close: %v", err)
+	}
+
+	select {
+	case <-drainDone:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("drain goroutine did not exit within 3s after Close — channel-based shutdown is not wired")
+	}
+}
+
+// TestSeatbeltRunner_CloseIsIdempotent pins critic Major 1: a second
+// Close call must be a safe no-op AND the first call must have actually
+// shut drain down. This catches the historical fast-path early-return
+// at line 451 (`if cmd == nil || cmd.Process == nil || already`) which
+// previously skipped drain shutdown when proxyShutdown was already true.
+func TestSeatbeltRunner_CloseIsIdempotent(t *testing.T) {
+	requireSeatbeltProxyTestSupport(t)
+	binPath := buildElnathBinaryForSeatbeltProxy(t)
+	t.Setenv("ELNATH_NETPROXY_BINARY_OVERRIDE", binPath)
+
+	r, err := NewSeatbeltRunnerWithAllowlist([]string{"github.com:443"})
+	if err != nil {
+		t.Fatalf("NewSeatbeltRunnerWithAllowlist: %v", err)
+	}
+
+	r.proxyMu.Lock()
+	drainDone := r.proxyDrainDone
+	r.proxyMu.Unlock()
+	if drainDone == nil {
+		t.Fatalf("proxy-required runner must have spawned a drain goroutine; proxyDrainDone is nil")
+	}
+
+	if err := r.Close(context.Background()); err != nil {
+		t.Errorf("first Close: %v", err)
+	}
+	select {
+	case <-drainDone:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("first Close did not release drain goroutine within 3s")
+	}
+
+	if err := r.Close(context.Background()); err != nil {
+		t.Errorf("second Close (must be no-op): %v", err)
+	}
+}
+
+// TestSeatbeltRunner_CloseAfterProxyDeadStillShutsDownDrain pins
+// critic Major 2: Close called after the proxy child has died MUST
+// still close drainShutdown + await drainDone. Linux Close at
+// bash_runner_bwrap_linux.go:241-307 has no dead-proxy fast-path; macOS
+// must match.
+func TestSeatbeltRunner_CloseAfterProxyDeadStillShutsDownDrain(t *testing.T) {
+	requireSeatbeltProxyTestSupport(t)
+	binPath := buildElnathBinaryForSeatbeltProxy(t)
+	t.Setenv("ELNATH_NETPROXY_BINARY_OVERRIDE", binPath)
+
+	r, err := NewSeatbeltRunnerWithAllowlist([]string{"github.com:443"})
+	if err != nil {
+		t.Fatalf("NewSeatbeltRunnerWithAllowlist: %v", err)
+	}
+
+	r.proxyMu.Lock()
+	drainDone := r.proxyDrainDone
+	child := r.proxyCmd
+	r.proxyMu.Unlock()
+	if drainDone == nil || child == nil || child.Process == nil {
+		t.Fatalf("proxy-required runner must have a running child + drain; got drainDone=%v child=%v",
+			drainDone, child)
+	}
+
+	// Forcibly kill the child so the runner observes the dead state
+	// before Close runs. The Wait goroutine flips proxyDead and pushes
+	// to doneCh; we wait for that observation then call Close.
+	if err := child.Process.Kill(); err != nil {
+		t.Fatalf("kill proxy child: %v", err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if !r.proxyChildAlive() {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if r.proxyChildAlive() {
+		t.Fatalf("runner did not observe child crash within timeout")
+	}
+
+	if err := r.Close(context.Background()); err != nil {
+		t.Errorf("Close after child crash: %v", err)
+	}
+
+	select {
+	case <-drainDone:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("drain goroutine leaked: Close after dead-proxy did NOT shut drain down within 3s")
+	}
+}
+
+// TestSeatbeltRunner_ProxyActiveIsRaceFree pins critic Minor 3: the
+// proxyActive() helper added in v42-1a MUST hold proxyMu while reading
+// proxyHTTPPort / proxyCmd. Without the lock, `go test -race` would
+// flag a data race against the writer at spawnProxyChild line 263.
+//
+// Test runs only inside a -race build; otherwise it is a near-no-op.
+// The hammering pattern (concurrent reader + writer) is what the race
+// detector instruments — the test's GREEN signal IS "no race detected".
+func TestSeatbeltRunner_ProxyActiveIsRaceFree(t *testing.T) {
+	requireSeatbeltProxyTestSupport(t)
+	binPath := buildElnathBinaryForSeatbeltProxy(t)
+	t.Setenv("ELNATH_NETPROXY_BINARY_OVERRIDE", binPath)
+
+	r, err := NewSeatbeltRunnerWithAllowlist([]string{"github.com:443"})
+	if err != nil {
+		t.Fatalf("NewSeatbeltRunnerWithAllowlist: %v", err)
+	}
+	defer r.Close(context.Background())
+
+	stop := make(chan struct{})
+	defer close(stop)
+
+	// Reader: hammers proxyActive on the hot path.
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				_ = r.proxyActive()
+			}
+		}
+	}()
+	// Writer: under proxyMu, restamps proxyHTTPPort to a sentinel and
+	// back. This mirrors the Wait-goroutine race window where the field
+	// is mutated while another goroutine reads via proxyActive.
+	go func() {
+		for i := 0; i < 1000; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+				r.proxyMu.Lock()
+				saved := r.proxyHTTPPort
+				r.proxyHTTPPort = 0
+				r.proxyHTTPPort = saved
+				r.proxyMu.Unlock()
+			}
+		}
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+}

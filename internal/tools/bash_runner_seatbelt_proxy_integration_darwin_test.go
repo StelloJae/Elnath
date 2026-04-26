@@ -193,8 +193,11 @@ func TestSeatbeltProxyIntegration_AllowedDomainHTTPRequestSucceeds(t *testing.T)
 //
 // Note on Violations: B3b-4-2 wires only env injection + sandbox
 // profile, NOT a structured channel from the proxy back to the
-// runner — Decisions stay inside the proxy child process. A future
-// B3b-4-3 / B3b-4-4 lane will pipe them into res.Violations.
+// runner — Decisions stay inside the proxy child process. v42-1a
+// adds the deny-projection wiring; the dedicated assertions live in
+// TestSeatbeltProxyIntegration_DeniedDomainPopulatesNetworkProxyViolation
+// below. This test stays scoped to the body-leak and IsError checks
+// so the v42-1a-era test name stays unchanged.
 func TestSeatbeltProxyIntegration_DeniedDomainHTTPRequestFailsWithViolation(t *testing.T) {
 	integrationRequireDarwinSeatbelt(t)
 	binPath := integrationBuildElnathBinary(t)
@@ -230,6 +233,130 @@ func TestSeatbeltProxyIntegration_DeniedDomainHTTPRequestFailsWithViolation(t *t
 	}
 	if strings.Contains(res.Output, "SHOULD-NOT-REACH") {
 		t.Fatalf("denied upstream body leaked into output — proxy did NOT block: %s", res.Output)
+	}
+}
+
+// TestSeatbeltProxyIntegration_DeniedDomainPopulatesNetworkProxyViolation
+// pins the v42-1a deny-projection contract: when the proxy rejects a
+// SOCKS5 CONNECT to a non-allowlisted host, the per-connection Decision
+// event MUST thread back into BashRunResult.Violations as a
+// Source=network_proxy entry naming the denied destination.
+//
+// Mirrors the Linux test
+// TestBwrapProxy_DeniesDomainWithNetworkProxyViolation in
+// bash_runner_bwrap_proxy_integration_linux_test.go:466.
+//
+// Authoritative axis is Source — Reason may be any of the four valid
+// network deny reasons depending on which substrate-level gate fires
+// first (loopback IP literal hits local_binding_disabled before the
+// allowlist check, hostname hits not_in_allowlist or
+// dns_resolution_blocked, denylist hit produces denied_by_rule).
+// Partner pin C3 explicitly bans localhost:* broad-open; loopback
+// default-deny IS substrate-correct here.
+func TestSeatbeltProxyIntegration_DeniedDomainPopulatesNetworkProxyViolation(t *testing.T) {
+	integrationRequireDarwinSeatbelt(t)
+	binPath := integrationBuildElnathBinary(t)
+	t.Setenv(netproxyBinaryOverrideEnv, binPath)
+
+	allowedURL, deniedURL, _ := integrationStartUpstreams(t)
+	allowlist := integrationProxyRequiredAllowlist(integrationAllowlistFromURL(t, allowedURL))
+
+	r, err := NewSeatbeltRunnerWithAllowlist(allowlist)
+	if err != nil {
+		t.Fatalf("NewSeatbeltRunnerWithAllowlist: %v", err)
+	}
+	defer r.Close(context.Background())
+	socksPort := r.socksProxyPort()
+
+	deniedHost, deniedPortStr, err := net.SplitHostPort(strings.TrimPrefix(deniedURL, "http://"))
+	if err != nil {
+		t.Fatalf("split denied url %q: %v", deniedURL, err)
+	}
+	var deniedPort int
+	for _, c := range deniedPortStr {
+		if c < '0' || c > '9' {
+			t.Fatalf("non-numeric denied port %q", deniedPortStr)
+		}
+		deniedPort = deniedPort*10 + int(c-'0')
+	}
+
+	sessionDir, _ := seatbeltSessionDirs(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	res, runErr := r.Run(ctx, BashRunRequest{
+		Command: fmt.Sprintf(
+			"curl --show-error --max-time 10 --socks5-hostname 127.0.0.1:%d %s",
+			socksPort, deniedURL),
+		WorkDir:    sessionDir,
+		SessionDir: sessionDir,
+		DisplayCWD: ".",
+	})
+	if runErr != nil {
+		t.Fatalf("Run: %v", runErr)
+	}
+	if !res.IsError {
+		t.Fatalf("expected denied request to fail; got success: %s", res.Output)
+	}
+	if strings.Contains(res.Output, "SHOULD-NOT-REACH") {
+		t.Fatalf("denied upstream body leaked — proxy did NOT block: %s", res.Output)
+	}
+	if len(res.Violations) == 0 {
+		t.Fatalf("expected non-empty Violations; got empty (deny projection not wired). Output:\n%s", res.Output)
+	}
+	matched := findSeatbeltViolationBySource(res.Violations, string(SourceNetworkProxy))
+	if matched == nil {
+		t.Fatalf("no Source=network_proxy violation found; got %+v", res.Violations)
+	}
+	if !isValidSeatbeltNetworkDenyReason(matched.Reason) {
+		t.Errorf("network_proxy violation has unexpected reason %q (want one of: not_in_allowlist, denied_by_rule, local_binding_disabled, dns_resolution_blocked); full=%+v",
+			matched.Reason, *matched)
+	}
+	if matched.Host != deniedHost {
+		t.Errorf("violation Host = %q, want %q", matched.Host, deniedHost)
+	}
+	if int(matched.Port) != deniedPort {
+		t.Errorf("violation Port = %d, want %d", matched.Port, deniedPort)
+	}
+	if matched.Protocol != string(ProtocolSOCKS5TCP) {
+		t.Errorf("violation Protocol = %q, want %q", matched.Protocol, string(ProtocolSOCKS5TCP))
+	}
+	if !strings.Contains(res.Output, "SANDBOX VIOLATIONS:") {
+		t.Errorf("Output missing SANDBOX VIOLATIONS section; got:\n%s", res.Output)
+	}
+}
+
+// findSeatbeltViolationBySource returns the first violation matching
+// the requested Source, or nil when none match. Source is the
+// authoritative axis (per partner pin C5 + B3b-4-1 enum lock); Reason
+// is one of an enumerated set, all of which are substrate-correct deny
+// outcomes.
+//
+// Suffix differentiates this helper from the bwrap test counterpart
+// findViolationBySource (linux-tagged file) so the two integration
+// suites can co-exist in the same package without symbol collision.
+func findSeatbeltViolationBySource(violations []SandboxViolation, source string) *SandboxViolation {
+	for i := range violations {
+		if violations[i].Source == source {
+			return &violations[i]
+		}
+	}
+	return nil
+}
+
+// isValidSeatbeltNetworkDenyReason reports whether reason is one of
+// the four substrate-correct network deny outcomes a
+// Source=network_proxy violation can carry. Tests MUST NOT lock the
+// assertion to a single Reason because which gate fires first depends
+// on the substrate-level evaluation order.
+func isValidSeatbeltNetworkDenyReason(reason string) bool {
+	switch reason {
+	case string(ReasonNotInAllowlist),
+		string(ReasonDeniedByRule),
+		string(ReasonLocalBindingDisabled),
+		string(ReasonDNSResolutionBlocked):
+		return true
+	default:
+		return false
 	}
 }
 
