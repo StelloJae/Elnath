@@ -126,6 +126,19 @@ type BwrapRunner struct {
 	// proxyDrainDone is closed by the drain goroutine on exit so Close
 	// can synchronously wait for the drain to finish.
 	proxyDrainDone chan struct{}
+
+	// proxyDecisionsMu guards proxyDecisions. Held only briefly during
+	// append (drain goroutine) and snapshot+clear (Run completion); the
+	// listener accept-loop path never touches this slice directly so
+	// the lock cannot block the proxy's hot path.
+	proxyDecisionsMu sync.Mutex
+	// proxyDecisions buffers per-connection Decision events the drain
+	// goroutine parses out of the netproxy child's stdout. B3b-4-3.5
+	// surfaces these into BashRunResult.Violations on the next Run
+	// completion via collectProxyViolations. Bounded by the cumulative
+	// volume of allowlist evaluations during a single Run; in practice
+	// curl invocations emit one Decision per upstream destination.
+	proxyDecisions []Decision
 }
 
 // NewBwrapRunner constructs a BwrapRunner with no network allowlist
@@ -412,6 +425,17 @@ func (r *BwrapRunner) spawnProxyChild(proxyEntries, loopbackEntries []string) er
 	if err != nil {
 		return fmt.Errorf("create uds dir: %w", err)
 	}
+	// B3b-4-3.5 / M-2 close: enforce 0700 explicitly. os.MkdirTemp
+	// honours umask which on most distros yields 0700 by default but
+	// can land at 0755 / 0750 under permissive operator umasks. The
+	// netproxy UDS endpoints inside this dir are the only outbound
+	// network surface for the sandboxed process; restricting the dir
+	// to the owning user prevents a same-host neighbor user from
+	// enumerating or connecting to them.
+	if err := os.Chmod(udsDir, 0o700); err != nil {
+		_ = os.RemoveAll(udsDir)
+		return fmt.Errorf("chmod uds dir: %w", err)
+	}
 	udsHTTP := filepath.Join(udsDir, "http.sock")
 	udsSOCKS := filepath.Join(udsDir, "socks.sock")
 
@@ -492,28 +516,49 @@ func (r *BwrapRunner) spawnProxyChild(proxyEntries, loopbackEntries []string) er
 	// block on a full pipe. Drain selects on proxyDrainShutdown so
 	// Close can release it deterministically rather than relying on
 	// the child's pipe-close (M-3 fix).
+	//
+	// B3b-4-3.5: the netproxy child emits per-connection Decision
+	// events as `event=<json>` lines on the same stdout pipe (post-
+	// readiness preamble). The drain goroutine now parses each line
+	// via tools.ParseDecisionEventLine and appends successful parses
+	// to r.proxyDecisions for the next Run completion to surface as
+	// SandboxViolations. Lines that don't carry the event prefix
+	// (future preamble lines, debug noise) are silently dropped — the
+	// readiness preamble has already been consumed by
+	// waitForBwrapProxyChildReady before this drain starts, so any
+	// non-event line at this stage is informational only.
 	drainShutdown := make(chan struct{})
 	drainDone := make(chan struct{})
 	go func() {
 		defer close(drainDone)
-		// Use io.CopyBuffer + a tiny channel-driven reader so the
-		// goroutine can react to drainShutdown even when the child
-		// is silent. We do this by running the io.Copy in a nested
-		// goroutine and selecting on shutdown vs copy-complete.
-		copyDone := make(chan struct{})
+		scanDone := make(chan struct{})
 		go func() {
-			_, _ = io.Copy(io.Discard, stdout)
-			close(copyDone)
+			defer close(scanDone)
+			scanner := bufio.NewScanner(stdout)
+			// Decision JSON lines are well under 4KiB but operator
+			// debug additions could exceed the default 64KiB cap;
+			// keep the cap explicit so future growth is observable.
+			scanner.Buffer(make([]byte, 0, 4*1024), 64*1024)
+			for scanner.Scan() {
+				line := scanner.Text()
+				d, ok, err := ParseDecisionEventLine(line)
+				if err != nil || !ok {
+					continue
+				}
+				r.proxyDecisionsMu.Lock()
+				r.proxyDecisions = append(r.proxyDecisions, d)
+				r.proxyDecisionsMu.Unlock()
+			}
 		}()
 		select {
-		case <-copyDone:
+		case <-scanDone:
 		case <-drainShutdown:
-			// Close the read end so the inner io.Copy returns; the
-			// pipe close races with the child exit which Close also
-			// triggers via SIGTERM, but either way the inner copy
-			// terminates and copyDone closes.
+			// Close the read end so the scanner returns; the pipe
+			// close races with the child exit which Close also
+			// triggers via SIGTERM, but either way the scanner
+			// terminates and scanDone closes.
 			_ = stdout.Close()
-			<-copyDone
+			<-scanDone
 		}
 	}()
 
@@ -730,9 +775,64 @@ func (r *BwrapRunner) Run(ctx context.Context, req BashRunRequest) (BashRunResul
 	// proxy-required mode (proxyActive); default-deny runs are
 	// unaffected.
 	res = overrideClassificationIfProxyDied(res, r.proxyActive() && !r.proxyChildAlive())
-	res.Violations = detectBwrapViolations(res)
+	// B3b-4-3.5: pull authoritative network_proxy violations the
+	// drain goroutine accumulated for this Run, then append the
+	// existing substrate-stderr heuristic so the agent sees both
+	// surfaces. network_proxy entries appear first because they are
+	// authoritative; heuristic entries follow as low-confidence
+	// signal.
+	netViolations := r.collectProxyViolations()
+	heuristic := detectBwrapViolations(res)
+	if len(netViolations) > 0 || len(heuristic) > 0 {
+		combined := make([]SandboxViolation, 0, len(netViolations)+len(heuristic))
+		combined = append(combined, netViolations...)
+		combined = append(combined, heuristic...)
+		res.Violations = combined
+	}
 	res.Output = appendViolationsSection(res.Output, res.Violations)
 	return res, nil
+}
+
+// collectProxyViolations snapshots the per-Run Decision buffer the
+// drain goroutine fills, projects each deny Decision into a
+// SandboxViolation with Source=network_proxy, and clears the buffer
+// for the next Run. Allow Decisions are intentionally dropped — the
+// SANDBOX VIOLATIONS surface is for blocked actions, not informational
+// allow events. The projection sanitizes Host/Reason/Protocol newlines
+// at the construction boundary (M4 closure) before they reach the
+// renderer.
+//
+// Decision.Port is bounded to uint16 by NewAllow / NewDeny construction
+// (0..65535 enforced); the explicit conversion below cannot overflow.
+func (r *BwrapRunner) collectProxyViolations() []SandboxViolation {
+	r.proxyDecisionsMu.Lock()
+	decisions := r.proxyDecisions
+	r.proxyDecisions = nil
+	r.proxyDecisionsMu.Unlock()
+	if len(decisions) == 0 {
+		return nil
+	}
+	out := make([]SandboxViolation, 0, len(decisions))
+	for _, d := range decisions {
+		if d.Allow {
+			continue
+		}
+		if d.Source != SourceNetworkProxy {
+			// Only network_proxy decisions belong in violations from
+			// this lane. The other Source values are reserved for
+			// substrate-direct paths that emit through detect*
+			// helpers; routing them here would double-count.
+			continue
+		}
+		out = append(out, SandboxViolation{
+			Source:   string(d.Source),
+			Host:     sanitizeViolationField(d.Host),
+			Port:     uint16(d.Port),
+			Protocol: sanitizeViolationField(string(d.Protocol)),
+			Reason:   sanitizeViolationField(string(d.Reason)),
+		})
+	}
+	return out
 }
 
 // buildBwrapArgsForRun composes the bwrap argv for a single Run. When

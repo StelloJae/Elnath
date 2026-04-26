@@ -235,3 +235,60 @@ func TestDecision_JSONOmitsEmptyReasonOnAllow(t *testing.T) {
 		t.Errorf("allow JSON should omit empty reason; got %s", got)
 	}
 }
+
+func TestEncodeAndParseDecisionEventLine(t *testing.T) {
+	d, err := NewDeny(SourceNetworkProxy, ReasonNotInAllowlist, "evil.com", 443, ProtocolHTTPSConnect)
+	if err != nil {
+		t.Fatalf("NewDeny: %v", err)
+	}
+	line, err := EncodeDecisionEventLine(d)
+	if err != nil {
+		t.Fatalf("EncodeDecisionEventLine: %v", err)
+	}
+	if !strings.HasPrefix(line, "event=") {
+		t.Errorf("encoded line missing event= prefix: %q", line)
+	}
+	if !strings.HasSuffix(line, "\n") {
+		t.Errorf("encoded line missing trailing newline: %q", line)
+	}
+
+	parsed, ok, err := ParseDecisionEventLine(line)
+	if err != nil {
+		t.Fatalf("ParseDecisionEventLine: %v", err)
+	}
+	if !ok {
+		t.Fatalf("expected ok=true for event line")
+	}
+	if parsed != d {
+		t.Errorf("round-trip mismatch: got %+v want %+v", parsed, d)
+	}
+}
+
+func TestParseDecisionEventLine_NonEventLineSkipped(t *testing.T) {
+	cases := []string{
+		"httpListen=127.0.0.1:8080",
+		"socksListen=/tmp/uds/socks.sock",
+		"ready",
+		"",
+		"some debug noise",
+	}
+	for _, line := range cases {
+		_, ok, err := ParseDecisionEventLine(line)
+		if ok {
+			t.Errorf("non-event line %q should yield ok=false", line)
+		}
+		if err != nil {
+			t.Errorf("non-event line %q should not error; got %v", line, err)
+		}
+	}
+}
+
+func TestParseDecisionEventLine_MalformedJSONErrors(t *testing.T) {
+	_, ok, err := ParseDecisionEventLine("event={not json")
+	if !ok {
+		t.Errorf("event-prefixed line should yield ok=true even when JSON malformed")
+	}
+	if err == nil {
+		t.Errorf("expected JSON decode error for malformed body")
+	}
+}
