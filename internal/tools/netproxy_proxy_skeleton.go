@@ -42,6 +42,21 @@ import (
 //
 // When a listener is supplied via the config, the corresponding
 // --http-listen / --socks-listen flag is ignored.
+//
+// ReadyWriter (additive, B3b-4-2) is the io.Writer the child process
+// uses to publish its bound port numbers BEFORE entering the accept
+// loop, so a parent that self-execed the binary can discover which
+// ports were bound on `127.0.0.1:0`. Format is one line per listener
+// followed by a trailing `ready` line, all line-terminated:
+//
+//	httpListen=127.0.0.1:NNNN
+//	socksListen=127.0.0.1:NNNN
+//	ready
+//
+// Lines for a listener that was not requested are omitted. The
+// `ready` line is ALWAYS the last line so the parent can read until
+// it arrives. Default nil means no preamble is printed; existing
+// callers (in-process tests) are unaffected.
 type ProxyChildConfig struct {
 	Args          []string
 	HTTPListener  net.Listener
@@ -55,6 +70,12 @@ type ProxyChildConfig struct {
 	// flags. Defaults to io.Discard so embedded tests stay quiet;
 	// future cmd dispatch sets this to os.Stderr.
 	Stderr io.Writer
+	// ReadyWriter (B3b-4-2) receives the bound-port preamble. See
+	// type godoc above for the line format. Nil means no preamble
+	// is printed. The future `elnath netproxy` cmd dispatch wires
+	// this to os.Stdout so a parent process spawning the binary as
+	// a child can read the preamble via cmd.StdoutPipe.
+	ReadyWriter io.Writer
 }
 
 // ProxyChildParsed is the parsed form of ProxyChildConfig.Args.
@@ -184,6 +205,21 @@ func RunProxyChildMain(ctx context.Context, cfg ProxyChildConfig) int {
 	if httpL == nil && socksL == nil {
 		cfg.Sink.EmitError(errors.New("netproxy: at least one of --http-listen or --socks-listen must be set"))
 		return 1
+	}
+
+	// Emit the bound-port preamble BEFORE entering the accept loops
+	// so a parent process self-execing the binary can read which
+	// ephemeral ports were bound on 127.0.0.1:0. Nil ReadyWriter means
+	// no preamble (in-process callers don't need it). The `ready`
+	// trailer is always the last line so the parent can scan to it.
+	if cfg.ReadyWriter != nil {
+		if httpL != nil {
+			fmt.Fprintf(cfg.ReadyWriter, "httpListen=%s\n", httpL.Addr().String())
+		}
+		if socksL != nil {
+			fmt.Fprintf(cfg.ReadyWriter, "socksListen=%s\n", socksL.Addr().String())
+		}
+		fmt.Fprintln(cfg.ReadyWriter, "ready")
 	}
 
 	resolver := cfg.Resolver

@@ -50,6 +50,18 @@ import (
 // be able to wedge a goroutine forever.
 const connectIOTimeout = 30 * time.Second
 
+// httpHeaderMaxBytes caps total bytes consumed across the HTTP
+// CONNECT request line + headers. Slow-loris clients that chain many
+// small headers within connectIOTimeout are blocked by this cap (N1
+// hardening). 8KiB matches typical web server header limits.
+const httpHeaderMaxBytes = 8 * 1024
+
+// httpHeaderMaxLines caps the count of header lines on a CONNECT
+// request. Most browsers send <20; 50 leaves comfortable headroom
+// while preventing pathological clients from racing the byte cap with
+// many tiny lines (N1 hardening).
+const httpHeaderMaxLines = 50
+
 // ServeHTTPConnect runs an HTTP CONNECT-only proxy on listener until
 // the listener is closed or ctx is canceled. Returns nil on graceful
 // shutdown; any non-graceful accept error after the listener is
@@ -142,6 +154,13 @@ func handleHTTPConnect(
 	// Drain remaining headers; a CONNECT may include Host, User-Agent,
 	// Proxy-Authorization, etc. We do not inspect them but must
 	// consume the empty line so the tunnel is at the right boundary.
+	//
+	// N1 hardening: cap total header bytes at httpHeaderMaxBytes and
+	// per-request line count at httpHeaderMaxLines. Slow-loris
+	// clients that chain many small headers within connectIOTimeout
+	// would otherwise wedge a goroutine.
+	totalHeaderBytes := len(requestLine)
+	headerLineCount := 0
 	for {
 		line, err := br.ReadString('\n')
 		if err != nil {
@@ -150,6 +169,16 @@ func handleHTTPConnect(
 		}
 		if line == "\r\n" || line == "\n" {
 			break
+		}
+		totalHeaderBytes += len(line)
+		headerLineCount++
+		if totalHeaderBytes > httpHeaderMaxBytes || headerLineCount > httpHeaderMaxLines {
+			writeHTTPStatus(client, 431, "request header fields too large",
+				"x-proxy-error: blocked-by-header-cap")
+			host, port := splitHostPortBestEffort(target)
+			d, _ := NewDeny(SourceNetworkProxy, ReasonModeGuard, host, port, ProtocolHTTPSConnect)
+			sink.EmitDecision(d)
+			return
 		}
 	}
 	_ = client.SetReadDeadline(time.Time{})
@@ -252,20 +281,44 @@ func writeHTTPStatus(w io.Writer, code int, reason, extraHeaders string) {
 // splice copies bytes both ways between client and upstream. The
 // supplied bufio.Reader holds any bytes already buffered on client
 // after CONNECT — those must be drained into upstream first.
+//
+// N2 hardening: when both sides are *net.TCPConn the function uses
+// CloseWrite half-close after the first goroutine finishes so the
+// second copy sees a natural EOF and finishes its in-flight buffer
+// instead of being interrupted by SetDeadline(time.Now()) which can
+// truncate a large response. Falls back to the deadline-as-cancel
+// pattern for non-TCPConn endpoints (rare; most splice paths use
+// real TCP).
 func splice(client net.Conn, upstream net.Conn, br *bufio.Reader) {
 	if br != nil && br.Buffered() > 0 {
 		buffered, _ := br.Peek(br.Buffered())
 		_, _ = upstream.Write(buffered)
 		_, _ = br.Discard(br.Buffered())
 	}
-	done := make(chan struct{}, 2)
-	go func() { _, _ = io.Copy(upstream, client); done <- struct{}{} }()
-	go func() { _, _ = io.Copy(client, upstream); done <- struct{}{} }()
-	<-done
-	// Closing connections on return signals io.Copy on the other
-	// goroutine to wake up and exit.
-	_ = client.SetDeadline(time.Now())
-	_ = upstream.SetDeadline(time.Now())
+	type direction struct {
+		dst, src net.Conn
+	}
+	clientToUpstream := direction{dst: upstream, src: client}
+	upstreamToClient := direction{dst: client, src: upstream}
+
+	done := make(chan direction, 2)
+	go func() { _, _ = io.Copy(clientToUpstream.dst, clientToUpstream.src); done <- clientToUpstream }()
+	go func() { _, _ = io.Copy(upstreamToClient.dst, upstreamToClient.src); done <- upstreamToClient }()
+
+	first := <-done
+	// Half-close the destination so the still-active goroutine sees
+	// a natural EOF on its source. This avoids the truncation race
+	// where SetDeadline(time.Now()) interrupts an in-flight buffer
+	// flush.
+	if tcp, ok := first.dst.(*net.TCPConn); ok {
+		_ = tcp.CloseWrite()
+	} else {
+		// Non-TCP path: fall back to the deadline-as-cancel
+		// pattern. Acceptable for the rare non-TCP splice (no
+		// production path currently triggers this).
+		_ = first.dst.SetDeadline(time.Now())
+		_ = first.src.SetDeadline(time.Now())
+	}
 	<-done
 }
 
