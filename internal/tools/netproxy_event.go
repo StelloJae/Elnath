@@ -19,9 +19,58 @@
 package tools
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 )
+
+// decisionEventLinePrefix is the line marker the netproxy child uses
+// to publish per-connection Decision events on its stdout. The
+// readiness preamble (`httpListen=`, `socksListen=`, `ready`) shares
+// the same stdout pipe; the prefix prevents collisions and lets the
+// parent's drain goroutine cheaply skip lines that are not events.
+//
+// B3b-4-3.5 wire format. Used by EncodeDecisionEventLine and
+// ParseDecisionEventLine. Never change without coordinating both
+// sides — host-side netproxy writers and BwrapRunner readers must
+// agree on the literal prefix and the JSON projection.
+const decisionEventLinePrefix = "event="
+
+// EncodeDecisionEventLine renders d as a single newline-terminated
+// `event=<json>` line. Returns the line with the trailing newline
+// already attached so callers can write the bytes directly to a
+// stream without an extra Fprintln.
+//
+// The Decision struct's existing json tags drive the projection;
+// adding fields to Decision in a future lane will surface them
+// through this helper without any change here.
+func EncodeDecisionEventLine(d Decision) (string, error) {
+	body, err := json.Marshal(d)
+	if err != nil {
+		return "", fmt.Errorf("netproxy: encode decision: %w", err)
+	}
+	return decisionEventLinePrefix + string(body) + "\n", nil
+}
+
+// ParseDecisionEventLine decodes a single `event=<json>` line into a
+// Decision. Returns ok=false (with no error) for any line that does
+// not carry the event prefix; this lets callers cheaply drain mixed
+// streams (preamble + events + future debug lines) without having to
+// pre-classify each line. A line that DOES carry the prefix but
+// fails to JSON-decode returns an error so callers can surface
+// malformed events instead of silently dropping them.
+func ParseDecisionEventLine(line string) (d Decision, ok bool, err error) {
+	trimmed := strings.TrimRight(line, "\r\n")
+	if !strings.HasPrefix(trimmed, decisionEventLinePrefix) {
+		return Decision{}, false, nil
+	}
+	body := trimmed[len(decisionEventLinePrefix):]
+	if err := json.Unmarshal([]byte(body), &d); err != nil {
+		return Decision{}, true, fmt.Errorf("netproxy: decode decision event: %w", err)
+	}
+	return d, true, nil
+}
 
 // ProxySource identifies which subsystem authored a network policy
 // decision. The value space is fixed at four options per the v41

@@ -456,13 +456,13 @@ func netproxyBridgePort(addr string) int {
 // path: a request to a non-allowlisted upstream MUST fail AND record
 // a network_proxy violation in BashRunResult.Violations.
 //
-// As of B3b-4-3 the bridge is byte-level; the netproxy core inside
-// the host-side proxy child records the deny Decision through its
-// EventSink. Surfacing those Decisions back into BashRunResult is a
-// follow-up channel the bridge does not yet plumb — for B3b-4-3 we
-// require curl to fail (proving the deny actually blocked traffic)
-// and accept that Violations may be empty until the structured
-// channel ships.
+// B3b-4-3.5: tightened from the B3b-4-3 placeholder. The host-side
+// netproxy child now serializes per-connection deny Decisions to its
+// stdout (one `event=<json>` line each), BwrapRunner's stdout drain
+// goroutine parses them back into Decision values, and the runner
+// projects each into a SandboxViolation with Source="network_proxy"
+// before populating BashRunResult.Violations. The previous workaround
+// that accepted an empty Violations slice is gone.
 func TestBwrapProxy_DeniesDomainWithNetworkProxyViolation(t *testing.T) {
 	requireBwrapProxyTestSupport(t)
 	binPath := integrationBuildElnathBinaryForBwrap(t)
@@ -478,6 +478,18 @@ func TestBwrapProxy_DeniesDomainWithNetworkProxyViolation(t *testing.T) {
 		t.Fatalf("NewBwrapRunnerWithAllowlist: %v", err)
 	}
 	defer r.Close(context.Background())
+
+	deniedHost, deniedPortStr, err := net.SplitHostPort(strings.TrimPrefix(deniedURL, "http://"))
+	if err != nil {
+		t.Fatalf("split denied url %q: %v", deniedURL, err)
+	}
+	var deniedPort int
+	for _, c := range deniedPortStr {
+		if c < '0' || c > '9' {
+			t.Fatalf("non-numeric denied port %q", deniedPortStr)
+		}
+		deniedPort = deniedPort*10 + int(c-'0')
+	}
 
 	sessionDir, _ := bwrapSessionDirsIntegration(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -499,17 +511,39 @@ func TestBwrapProxy_DeniesDomainWithNetworkProxyViolation(t *testing.T) {
 	if strings.Contains(res.Output, "SHOULD-NOT-REACH") {
 		t.Fatalf("denied upstream body leaked — proxy did NOT block: %s", res.Output)
 	}
-	// Surfacing network_proxy decisions back to BashRunResult
-	// requires a structured channel between the proxy child and the
-	// runner that B3b-4-3 does not yet ship. When that channel lands
-	// in a follow-up lane this assertion can tighten to require the
-	// Source=network_proxy entry. The substrate-level deny is proven
-	// by the curl failure above.
-	for _, v := range res.Violations {
-		if v.Source == string(SourceNetworkProxy) && v.Reason != string(ReasonNotInAllowlist) &&
-			v.Reason != string(ReasonDeniedByRule) {
-			t.Errorf("unexpected network_proxy violation reason: %+v", v)
+	// B3b-4-3.5: per-connection Decision events from the host-side
+	// netproxy child MUST thread back into BashRunResult.Violations as
+	// a Source=network_proxy entry naming the denied destination.
+	if len(res.Violations) == 0 {
+		t.Fatalf("expected non-empty Violations; got empty (event channel not wired). Output:\n%s", res.Output)
+	}
+	var matched *SandboxViolation
+	for i := range res.Violations {
+		v := &res.Violations[i]
+		if v.Source != string(SourceNetworkProxy) {
+			continue
 		}
+		if v.Reason != string(ReasonNotInAllowlist) && v.Reason != string(ReasonDeniedByRule) {
+			t.Errorf("network_proxy violation has unexpected reason %q (want not_in_allowlist or denied_by_rule); full=%+v", v.Reason, *v)
+			continue
+		}
+		matched = v
+		break
+	}
+	if matched == nil {
+		t.Fatalf("no Source=network_proxy violation found; got %+v", res.Violations)
+	}
+	if matched.Host != deniedHost {
+		t.Errorf("violation Host = %q, want %q", matched.Host, deniedHost)
+	}
+	if int(matched.Port) != deniedPort {
+		t.Errorf("violation Port = %d, want %d", matched.Port, deniedPort)
+	}
+	if matched.Protocol != string(ProtocolSOCKS5TCP) {
+		t.Errorf("violation Protocol = %q, want %q", matched.Protocol, string(ProtocolSOCKS5TCP))
+	}
+	if !strings.Contains(res.Output, "SANDBOX VIOLATIONS:") {
+		t.Errorf("Output missing SANDBOX VIOLATIONS section; got:\n%s", res.Output)
 	}
 }
 
@@ -726,5 +760,82 @@ func TestBwrapProxy_HeuristicFilesystemViolationSourceRemainsHeuristic(t *testin
 			v.Source != string(SourceNetworkProxy) {
 			t.Errorf("heuristic violation must keep Source=sandbox_substrate_heuristic; got %+v", v)
 		}
+	}
+}
+
+// TestBwrapProxy_AllowsDomainWithoutViolation pins the allow path: a
+// request to an allowlisted upstream MUST succeed AND record no entries
+// in BashRunResult.Violations. The wiring added in B3b-4-3.5 only
+// projects deny Decisions into violations; allow Decisions remain
+// informational and never appear in Violations. The output also must
+// not carry a "SANDBOX VIOLATIONS:" section.
+func TestBwrapProxy_AllowsDomainWithoutViolation(t *testing.T) {
+	requireBwrapProxyTestSupport(t)
+	binPath := integrationBuildElnathBinaryForBwrap(t)
+	t.Setenv(netproxyBwrapBinaryOverrideEnv, binPath)
+
+	allowedURL, _, _ := integrationStartBwrapUpstreams(t)
+	allowlist := integrationBwrapProxyRequiredAllowlist(integrationAllowlistFromBwrapURL(t, allowedURL))
+
+	r, err := NewBwrapRunnerWithAllowlist(allowlist)
+	if err != nil {
+		t.Fatalf("NewBwrapRunnerWithAllowlist: %v", err)
+	}
+	defer r.Close(context.Background())
+
+	sessionDir, _ := bwrapSessionDirsIntegration(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	res, runErr := r.Run(ctx, BashRunRequest{
+		Command: fmt.Sprintf(
+			"curl --show-error --max-time 10 --socks5-hostname 127.0.0.1:%d %s",
+			netproxyBridgePort(netproxyBridgeListenSOCKSInternal), allowedURL),
+		WorkDir:    sessionDir,
+		SessionDir: sessionDir,
+		DisplayCWD: ".",
+	})
+	if runErr != nil {
+		t.Fatalf("Run: %v", runErr)
+	}
+	if res.IsError {
+		t.Fatalf("expected success; got error: %s", res.Output)
+	}
+	if len(res.Violations) != 0 {
+		t.Errorf("expected empty Violations on allow path; got %+v", res.Violations)
+	}
+	if strings.Contains(res.Output, "SANDBOX VIOLATIONS:") {
+		t.Errorf("Output must not contain SANDBOX VIOLATIONS on allow path; got:\n%s", res.Output)
+	}
+}
+
+// TestBwrapProxy_UDSDirPermissionsArePrivate pins B3b-4-3 M-2: the
+// per-runner UDS directory holding http.sock + socks.sock MUST be
+// 0700 so neighboring local users cannot enumerate or connect to the
+// netproxy endpoints. The directory is created via os.MkdirTemp which
+// honours umask; an explicit Chmod is required to land at 0700
+// regardless of process umask.
+func TestBwrapProxy_UDSDirPermissionsArePrivate(t *testing.T) {
+	requireBwrapProxyTestSupport(t)
+	binPath := integrationBuildElnathBinaryForBwrap(t)
+	t.Setenv(netproxyBwrapBinaryOverrideEnv, binPath)
+
+	r, err := NewBwrapRunnerWithAllowlist([]string{"sentinel.invalid:443"})
+	if err != nil {
+		t.Fatalf("NewBwrapRunnerWithAllowlist: %v", err)
+	}
+	defer r.Close(context.Background())
+
+	httpUDS, _ := r.proxyUDSPaths()
+	if httpUDS == "" {
+		t.Fatal("expected proxy UDS path on a proxy-required runner")
+	}
+	udsDir := filepath.Dir(httpUDS)
+	info, err := os.Stat(udsDir)
+	if err != nil {
+		t.Fatalf("stat UDS dir %s: %v", udsDir, err)
+	}
+	mode := info.Mode().Perm()
+	if mode != 0o700 {
+		t.Errorf("UDS dir %s mode = %o, want 0700 (no group/world access)", udsDir, mode)
 	}
 }

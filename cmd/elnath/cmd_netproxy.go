@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
+	"sync"
 
 	"github.com/stello/elnath/internal/tools"
 )
@@ -24,16 +26,20 @@ import (
 // surfaces the return code as a Go error so the cmd dispatcher
 // translates it into a non-zero process exit.
 //
-// A discarding sink is installed because the parent does not collect
-// proxy events from this binary's stdout — the events flow back via
-// the proxy's printed bound-port preamble plus the substrate's
-// out-of-band telemetry channel (B3b-4-2 future). Sink errors land in
-// stderr via the standard ChannelEventSink + RunProxyChildMain
-// behavior; the discarding implementation here only suppresses
-// proxy-internal Decisions, not bind-failure errors which RunProxyChildMain
-// surfaces through the return code.
+// As of B3b-4-3.5 per-connection Decisions are projected into stdout
+// as `event=<json>` lines via tools.EncodeDecisionEventLine. The
+// readiness preamble (`httpListen=`, `socksListen=`, `ready`) shares
+// the same stdout — the prefix prevents collision so a parent runner
+// can drain a single pipe and demux preamble lines vs event lines via
+// tools.ParseDecisionEventLine. Errors continue to land on stderr.
+//
+// Decisions are still informational from the netproxy child's own
+// perspective (it has already enforced policy by the time it emits
+// the event) but the parent BwrapRunner uses them to populate
+// BashRunResult.Violations on the deny path so the agent sees a
+// structured deny reason instead of a bare curl exit code.
 func cmdNetproxy(ctx context.Context, args []string) error {
-	sink := &netproxyStderrSink{stderr: os.Stderr}
+	sink := &netproxyStdoutSink{stdout: os.Stdout, stderr: os.Stderr}
 	cfg := tools.ProxyChildConfig{
 		Args:        args,
 		Sink:        sink,
@@ -47,20 +53,40 @@ func cmdNetproxy(ctx context.Context, args []string) error {
 	return nil
 }
 
-// netproxyStderrSink is the EventSink installed by cmdNetproxy. It
-// prints proxy-internal errors to stderr so an operator running the
-// subcommand directly (e.g. for debugging) can see what failed; per
-// connection allow/deny Decisions are dropped because cmdNetproxy is
-// not the production observer. SeatbeltRunner / BwrapRunner that
-// self-exec the binary install their own sinks via the structured
-// telemetry channel established in B3b-4-2 / B3b-4-3.
-type netproxyStderrSink struct {
-	stderr *os.File
+// netproxyStdoutSink is the EventSink installed by cmdNetproxy. Each
+// Decision is serialized as a `event=<json>` line on stdout so the
+// parent BwrapRunner / SeatbeltRunner can ingest it via the existing
+// stdout pipe. Errors land on stderr.
+//
+// The sink serializes Decision writes through stdoutMu so concurrent
+// listener goroutines (HTTP CONNECT and SOCKS5) cannot interleave
+// half-lines on the same pipe. Encoding errors are demoted to stderr
+// rather than propagating because the listener-side path must never
+// block on telemetry (partner-locked invariant for the proxy accept
+// loop).
+type netproxyStdoutSink struct {
+	stdoutMu sync.Mutex
+	stdout   *os.File
+	stderr   *os.File
 }
 
-func (s *netproxyStderrSink) EmitDecision(_ tools.Decision) {}
+func (s *netproxyStdoutSink) EmitDecision(d tools.Decision) {
+	if s.stdout == nil {
+		return
+	}
+	line, err := tools.EncodeDecisionEventLine(d)
+	if err != nil {
+		if s.stderr != nil {
+			fmt.Fprintln(s.stderr, "netproxy: encode decision:", err)
+		}
+		return
+	}
+	s.stdoutMu.Lock()
+	defer s.stdoutMu.Unlock()
+	_, _ = io.WriteString(s.stdout, line)
+}
 
-func (s *netproxyStderrSink) EmitError(err error) {
+func (s *netproxyStdoutSink) EmitError(err error) {
 	if err == nil || s.stderr == nil {
 		return
 	}
