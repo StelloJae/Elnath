@@ -319,6 +319,116 @@ func TestNewBashRunnerForConfig_UnknownMode(t *testing.T) {
 	}
 }
 
+// v42-1b: projectAuditRecords is the platform-agnostic projection that
+// substrate runners use to surface permitted-connection events. The
+// helper enforces the FIFO retention policy and the "disabled but
+// counted" semantics that fall out when maxRetained is 0.
+
+func TestProjectAuditRecords_FIFODropsOverflowAtCap(t *testing.T) {
+	const total = 250
+	const cap = 200
+	decisions := make([]Decision, 0, total)
+	for i := 0; i < total; i++ {
+		decisions = append(decisions, Decision{
+			Allow:    true,
+			Source:   SourceNetworkProxy,
+			Host:     fmt.Sprintf("h%d.example", i),
+			Port:     443,
+			Protocol: ProtocolHTTPSConnect,
+		})
+	}
+	records, dropCount := projectAuditRecords(decisions, cap)
+	if len(records) != cap {
+		t.Errorf("len(records) = %d, want %d", len(records), cap)
+	}
+	if dropCount != total-cap {
+		t.Errorf("dropCount = %d, want %d", dropCount, total-cap)
+	}
+	if records[0].Host != "h0.example" {
+		t.Errorf("FIFO contract broken: records[0].Host = %q, want %q", records[0].Host, "h0.example")
+	}
+	if records[cap-1].Host != fmt.Sprintf("h%d.example", cap-1) {
+		t.Errorf("FIFO contract broken: records[last].Host = %q, want h199.example", records[cap-1].Host)
+	}
+}
+
+func TestProjectAuditRecords_ZeroCapDisabledButCounted(t *testing.T) {
+	decisions := []Decision{
+		{Allow: true, Source: SourceNetworkProxy, Host: "a", Port: 1, Protocol: ProtocolHTTPSConnect},
+		{Allow: true, Source: SourceNetworkProxy, Host: "b", Port: 2, Protocol: ProtocolHTTPSConnect},
+		{Allow: true, Source: SourceNetworkProxy, Host: "c", Port: 3, Protocol: ProtocolHTTPSConnect},
+		{Allow: true, Source: SourceNetworkProxy, Host: "d", Port: 4, Protocol: ProtocolHTTPSConnect},
+		{Allow: true, Source: SourceNetworkProxy, Host: "e", Port: 5, Protocol: ProtocolHTTPSConnect},
+	}
+	records, dropCount := projectAuditRecords(decisions, 0)
+	if len(records) != 0 {
+		t.Errorf("len(records) = %d, want 0 when cap=0", len(records))
+	}
+	if dropCount != 5 {
+		t.Errorf("dropCount = %d, want 5 (disabled-but-counted)", dropCount)
+	}
+}
+
+// TestProjectAuditRecords_OnlyAllowDecisionsAreProjected pins the
+// scope: deny Decisions live in violations, never in audit records.
+// A mixed slice must produce records solely from the allow entries.
+func TestProjectAuditRecords_OnlyAllowDecisionsAreProjected(t *testing.T) {
+	decisions := []Decision{
+		{Allow: true, Source: SourceNetworkProxy, Host: "ok.example", Port: 443, Protocol: ProtocolHTTPSConnect},
+		{Allow: false, Source: SourceNetworkProxy, Reason: ReasonNotInAllowlist, Host: "blocked.example", Port: 443, Protocol: ProtocolHTTPSConnect},
+		{Allow: true, Source: SourceNetworkProxy, Host: "also-ok.example", Port: 443, Protocol: ProtocolHTTPSConnect},
+	}
+	records, dropCount := projectAuditRecords(decisions, 200)
+	if len(records) != 2 {
+		t.Errorf("len(records) = %d, want 2 (deny entry must not appear)", len(records))
+	}
+	if dropCount != 0 {
+		t.Errorf("dropCount = %d, want 0", dropCount)
+	}
+	for _, r := range records {
+		if r.Decision != "allow" {
+			t.Errorf("record carries non-allow decision %q", r.Decision)
+		}
+		if strings.Contains(r.Host, "blocked") {
+			t.Errorf("deny entry leaked into audit records: %+v", r)
+		}
+	}
+}
+
+// TestProjectAuditRecords_FieldsRespectN6RetentionPolicy pins the
+// SandboxAuditRecord shape: only Host/Port/Protocol/Source/Decision
+// must appear. The struct itself enforces this (no Path/Reason/Headers
+// fields), but the test asserts the resulting record carries the
+// expected values from the source Decision.
+func TestProjectAuditRecords_FieldsRespectN6RetentionPolicy(t *testing.T) {
+	decisions := []Decision{
+		{
+			Allow:    true,
+			Source:   SourceNetworkProxy,
+			Host:     "github.com",
+			Port:     443,
+			Protocol: ProtocolHTTPSConnect,
+		},
+	}
+	records, _ := projectAuditRecords(decisions, 200)
+	if len(records) != 1 {
+		t.Fatalf("len(records) = %d, want 1", len(records))
+	}
+	r := records[0]
+	if r.Host != "github.com" || r.Port != 443 {
+		t.Errorf("Host/Port not retained: %+v", r)
+	}
+	if r.Protocol != string(ProtocolHTTPSConnect) {
+		t.Errorf("Protocol = %q, want %q", r.Protocol, string(ProtocolHTTPSConnect))
+	}
+	if r.Source != string(SourceNetworkProxy) {
+		t.Errorf("Source = %q, want %q", r.Source, string(SourceNetworkProxy))
+	}
+	if r.Decision != "allow" {
+		t.Errorf("Decision = %q, want %q", r.Decision, "allow")
+	}
+}
+
 func TestBashSchema_DoesNotExposeSandboxBypass(t *testing.T) {
 	bt := NewBashTool(NewPathGuard(t.TempDir(), nil))
 	schema := strings.ToLower(string(bt.Schema()))

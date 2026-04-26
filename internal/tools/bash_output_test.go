@@ -323,3 +323,39 @@ func TestCappedOutput_RawBytesReturnsInt64(t *testing.T) {
 		t.Errorf("RawBytes = %d, want 5", got)
 	}
 }
+
+// v42-1b: appendAuditSummaryLine surfaces the count of permitted
+// connections in the LLM-facing BASH RESULT body without dumping the
+// host list. The summary section is omitted entirely when there are
+// no records and no drops so quiet Runs stay terse.
+
+func TestAppendAuditSummaryLine_OmitsSectionWhenEmpty(t *testing.T) {
+	const original = "BASH RESULT\nstatus: success\n"
+	out := appendAuditSummaryLine(original, nil, 0)
+	if out != original {
+		t.Errorf("output mutated when records and dropCount both zero; got %q want %q", out, original)
+	}
+	if strings.Contains(out, "PERMITTED") {
+		t.Errorf("PERMITTED substring must not appear when section is omitted; got %q", out)
+	}
+}
+
+func TestAppendAuditSummaryLine_RendersCountWithoutHostList(t *testing.T) {
+	records := []SandboxAuditRecord{
+		{
+			Host:     "api.example.com",
+			Port:     443,
+			Protocol: string(ProtocolHTTPSConnect),
+			Source:   string(SourceNetworkProxy),
+			Decision: "allow",
+		},
+	}
+	out := appendAuditSummaryLine("BASH RESULT\n", records, 0)
+	want := "PERMITTED CONNECTIONS: 1 allowed (0 dropped)"
+	if !strings.Contains(out, want) {
+		t.Errorf("output missing summary line %q; got %q", want, out)
+	}
+	if strings.Contains(out, "api.example.com") {
+		t.Errorf("host list MUST NOT appear in BASH RESULT body; got %q", out)
+	}
+}

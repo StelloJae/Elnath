@@ -586,6 +586,110 @@ func TestSeatbeltRunner_CloseAfterProxyDeadStillShutsDownDrain(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------
+// v42-1b: permitted-connection audit projection (parity with Linux)
+// ---------------------------------------------------------------
+
+// TestSeatbeltRunner_CollectProxyDecisionsProjectsAllowsToAuditRecords
+// pins the v42-1b parity contract on darwin: a mixed Decision buffer
+// must produce both deny-shaped Violations and allow-shaped
+// AuditRecords from a single snapshot, and the buffer must clear so
+// the next call returns empty projections.
+func TestSeatbeltRunner_CollectProxyDecisionsProjectsAllowsToAuditRecords(t *testing.T) {
+	r := newSeatbeltRunnerForAuditTest()
+	seedSeatbeltProxyDecisionsForTest(r, []Decision{
+		{Allow: true, Source: SourceNetworkProxy, Host: "ok.example", Port: 443, Protocol: ProtocolHTTPSConnect},
+		{Allow: false, Source: SourceNetworkProxy, Reason: ReasonNotInAllowlist, Host: "blocked.example", Port: 443, Protocol: ProtocolHTTPSConnect},
+		{Allow: true, Source: SourceNetworkProxy, Host: "also-ok.example", Port: 443, Protocol: ProtocolHTTPSConnect},
+	})
+	violations, audit, drop := collectSeatbeltProxyDecisionsForTest(r)
+	if len(violations) != 1 {
+		t.Errorf("len(violations) = %d, want 1", len(violations))
+	}
+	if violations[0].Host != "blocked.example" {
+		t.Errorf("violation[0].Host = %q, want %q", violations[0].Host, "blocked.example")
+	}
+	if len(audit) != 2 {
+		t.Errorf("len(audit) = %d, want 2", len(audit))
+	}
+	if drop != 0 {
+		t.Errorf("drop = %d, want 0", drop)
+	}
+	// Second call must observe empty buffer (clear-on-snapshot).
+	violations2, audit2, drop2 := collectSeatbeltProxyDecisionsForTest(r)
+	if len(violations2) != 0 || len(audit2) != 0 || drop2 != 0 {
+		t.Errorf("buffer not cleared; got violations=%d audit=%d drop=%d", len(violations2), len(audit2), drop2)
+	}
+}
+
+// TestSeatbeltRunner_CollectProxyDecisionsConcurrentRunIsolation pins
+// the per-Run isolation contract: two goroutines, each populating its
+// own runner's buffer with a distinct allow Decision, must each see
+// only their own Decision in the resulting AuditRecords. The shared
+// projectAuditRecords helper is stateless and the per-runner mutex
+// scope keeps the buffers private.
+func TestSeatbeltRunner_CollectProxyDecisionsConcurrentRunIsolation(t *testing.T) {
+	const iterations = 200
+	for i := 0; i < iterations; i++ {
+		rA := newSeatbeltRunnerForAuditTest()
+		rB := newSeatbeltRunnerForAuditTest()
+		var wg sync.WaitGroup
+		var auditA, auditB []SandboxAuditRecord
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			seedSeatbeltProxyDecisionsForTest(rA, []Decision{{
+				Allow: true, Source: SourceNetworkProxy, Host: "alpha.example", Port: 443, Protocol: ProtocolHTTPSConnect,
+			}})
+			_, auditA, _ = collectSeatbeltProxyDecisionsForTest(rA)
+		}()
+		go func() {
+			defer wg.Done()
+			seedSeatbeltProxyDecisionsForTest(rB, []Decision{{
+				Allow: true, Source: SourceNetworkProxy, Host: "beta.example", Port: 443, Protocol: ProtocolHTTPSConnect,
+			}})
+			_, auditB, _ = collectSeatbeltProxyDecisionsForTest(rB)
+		}()
+		wg.Wait()
+		if len(auditA) != 1 || auditA[0].Host != "alpha.example" {
+			t.Fatalf("iter %d: rA audit cross-attributed: %+v", i, auditA)
+		}
+		if len(auditB) != 1 || auditB[0].Host != "beta.example" {
+			t.Fatalf("iter %d: rB audit cross-attributed: %+v", i, auditB)
+		}
+	}
+}
+
+// TestSeatbeltRunner_AuditProjectionMatchesPlatformAgnosticHelper pins
+// cross-platform parity: the darwin substrate's collectProxyDecisions
+// MUST produce identical AuditRecords to the platform-agnostic
+// projectAuditRecords helper given the same Decision input. Together
+// with the Linux equivalent (TestBwrapRunner_AuditProjectionMatchesPlatformAgnosticHelper)
+// this covers the macOS+Linux parity assertion.
+func TestSeatbeltRunner_AuditProjectionMatchesPlatformAgnosticHelper(t *testing.T) {
+	decisions := []Decision{
+		{Allow: true, Source: SourceNetworkProxy, Host: "github.com", Port: 443, Protocol: ProtocolHTTPSConnect},
+		{Allow: true, Source: SourceNetworkProxy, Host: "api.example.com", Port: 443, Protocol: ProtocolHTTPSConnect},
+		{Allow: false, Source: SourceNetworkProxy, Reason: ReasonNotInAllowlist, Host: "blocked.example", Port: 443, Protocol: ProtocolHTTPSConnect},
+	}
+	want, wantDrop := projectAuditRecords(decisions, auditRecordRetentionDefault)
+
+	r := newSeatbeltRunnerForAuditTest()
+	seedSeatbeltProxyDecisionsForTest(r, decisions)
+	_, got, gotDrop := collectSeatbeltProxyDecisionsForTest(r)
+	if gotDrop != wantDrop {
+		t.Errorf("drop count drift: substrate=%d helper=%d", gotDrop, wantDrop)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("audit length drift: substrate=%d helper=%d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("audit[%d] drift: substrate=%+v helper=%+v", i, got[i], want[i])
+		}
+	}
+}
+
 // TestSeatbeltRunner_ProxyActiveIsRaceFree pins critic Minor 3: the
 // proxyActive() helper added in v42-1a MUST hold proxyMu while reading
 // proxyHTTPPort / proxyCmd. Without the lock, `go test -race` would

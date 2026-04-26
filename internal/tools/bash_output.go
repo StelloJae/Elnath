@@ -418,6 +418,29 @@ func renderSandboxViolation(v SandboxViolation) string {
 	return fmt.Sprintf("- %s: %s", source, msg)
 }
 
+// appendAuditSummaryLine appends a one-line PERMITTED CONNECTIONS
+// summary to an already-rendered BASH RESULT body. The summary surfaces
+// only the count of retained audit records and any drop count; the host
+// list is INTENTIONALLY omitted from the LLM-facing body because the
+// per-record detail belongs in structured slog telemetry, not in the
+// agent's tool result envelope.
+//
+// Returns body unchanged when both records and dropCount are zero so
+// callers can always invoke unconditionally without polluting the body
+// of Runs that produced no audit signal.
+func appendAuditSummaryLine(body string, records []SandboxAuditRecord, dropCount int) string {
+	if len(records) == 0 && dropCount == 0 {
+		return body
+	}
+	var sb strings.Builder
+	sb.WriteString(body)
+	if !strings.HasSuffix(body, "\n") {
+		sb.WriteByte('\n')
+	}
+	fmt.Fprintf(&sb, "\nPERMITTED CONNECTIONS: %d allowed (%d dropped)\n", len(records), dropCount)
+	return sb.String()
+}
+
 // sanitizeViolationField scrubs newlines and carriage returns from a
 // rendered violation field. Replacement is a single space so the
 // surrounding text remains word-spaced. Defense in depth against a
