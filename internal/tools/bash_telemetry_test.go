@@ -25,14 +25,30 @@ import (
 func telemetryFakeRunnerWithViolations(violations []SandboxViolation, dropCount int) *fakeBashRunner {
 	r := &fakeBashRunner{
 		runResult: BashRunResult{
-			Output:               "BASH RESULT\nstatus: success\n",
-			IsError:              false,
-			Classification:       "success",
-			Violations:           violations,
-			ViolationDropCount:   dropCount,
+			Output:             "BASH RESULT\nstatus: success\n",
+			IsError:            false,
+			Classification:     "success",
+			Violations:         violations,
+			ViolationDropCount: dropCount,
 		},
 	}
 	return r
+}
+
+// telemetryFakeRunnerWithAuditRecords returns a runner that emits the
+// canned audit records list so the slog handler captures both the
+// summary fields on the primary record and the per-record detail
+// entries the v42-1b loop emits.
+func telemetryFakeRunnerWithAuditRecords(records []SandboxAuditRecord, dropCount int) *fakeBashRunner {
+	return &fakeBashRunner{
+		runResult: BashRunResult{
+			Output:               "BASH RESULT\nstatus: success\n",
+			IsError:              false,
+			Classification:       "success",
+			AuditRecords:         records,
+			AuditRecordDropCount: dropCount,
+		},
+	}
 }
 
 func TestEmitBashTelemetry_ViolationCountReflectsLength(t *testing.T) {
@@ -136,5 +152,73 @@ func TestEmitBashTelemetry_EmptyViolationsZeroCount(t *testing.T) {
 	}
 	if !strings.Contains(out, "violation_drop_count=0") {
 		t.Errorf("expected violation_drop_count=0 baseline; got: %s", out)
+	}
+}
+
+// v42-1b: emitBashTelemetry MUST surface AuditRecord summaries on the
+// primary "bash command completed" record AND emit one
+// "bash sandbox permitted connection" record per AuditRecord with the
+// structured {host, port, protocol, source, decision} fields.
+
+func TestEmitBashTelemetry_AuditRecordCountSurfaced(t *testing.T) {
+	buf := captureSlogOutput(t)
+	records := []SandboxAuditRecord{
+		{Host: "api.example.com", Port: 443, Protocol: string(ProtocolHTTPSConnect), Source: string(SourceNetworkProxy), Decision: "allow"},
+		{Host: "github.com", Port: 443, Protocol: string(ProtocolHTTPSConnect), Source: string(SourceNetworkProxy), Decision: "allow"},
+	}
+	bt := NewBashToolWithRunner(NewPathGuard(t.TempDir(), nil), telemetryFakeRunnerWithAuditRecords(records, 7))
+	if _, err := bt.Execute(context.Background(), json.RawMessage(`{"command":"echo hi"}`)); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "audit_record_count=2") {
+		t.Errorf("expected audit_record_count=2; got: %s", out)
+	}
+	if !strings.Contains(out, "audit_record_drop_count=7") {
+		t.Errorf("expected audit_record_drop_count=7; got: %s", out)
+	}
+}
+
+func TestEmitBashTelemetry_PerRecordPermittedConnectionLineEmitted(t *testing.T) {
+	buf := captureSlogOutput(t)
+	records := []SandboxAuditRecord{
+		{Host: "api.example.com", Port: 443, Protocol: string(ProtocolHTTPSConnect), Source: string(SourceNetworkProxy), Decision: "allow"},
+	}
+	bt := NewBashToolWithRunner(NewPathGuard(t.TempDir(), nil), telemetryFakeRunnerWithAuditRecords(records, 0))
+	if _, err := bt.Execute(context.Background(), json.RawMessage(`{"command":"echo hi"}`)); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "bash sandbox permitted connection") {
+		t.Errorf("missing per-record telemetry header; got: %s", out)
+	}
+	for _, want := range []string{
+		"host=api.example.com",
+		"port=443",
+		"protocol=https_connect",
+		"source=network_proxy",
+		"decision=allow",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("per-record telemetry missing %q; got: %s", want, out)
+		}
+	}
+}
+
+func TestEmitBashTelemetry_EmptyAuditRecordsZeroCount(t *testing.T) {
+	buf := captureSlogOutput(t)
+	bt := NewBashToolWithRunner(NewPathGuard(t.TempDir(), nil), telemetryFakeRunnerWithAuditRecords(nil, 0))
+	if _, err := bt.Execute(context.Background(), json.RawMessage(`{"command":"echo hi"}`)); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "audit_record_count=0") {
+		t.Errorf("expected audit_record_count=0 baseline; got: %s", out)
+	}
+	if !strings.Contains(out, "audit_record_drop_count=0") {
+		t.Errorf("expected audit_record_drop_count=0 baseline; got: %s", out)
+	}
+	if strings.Contains(out, "bash sandbox permitted connection") {
+		t.Errorf("baseline must not emit per-record entries; got: %s", out)
 	}
 }

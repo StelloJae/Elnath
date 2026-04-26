@@ -70,21 +70,35 @@ type BashRunRequest struct {
 // B3b-4-2 / B3b-4-3 when the proxy is wired through; B3b-4-1 only
 // exposes the field so emitBashTelemetry can surface non-zero drops
 // to operators (N4 closure).
+//
+// AuditRecords is the parallel observability surface for permitted
+// (allow) connections. Substrate runners that surface allow Decisions
+// project them through projectAuditRecords during the same
+// snapshot-and-clear of the per-Run Decision buffer that produces
+// Violations. The split keeps Violations focused on blocked actions
+// (the agent's actionable signal) while audit records flow into
+// telemetry-grade observability without bloating the BASH RESULT body.
+// AuditRecordDropCount mirrors ViolationDropCount: when the retention
+// cap is exceeded inside projectAuditRecords, surplus records are
+// dropped and the count surfaces here so operators can detect a
+// retention shortfall.
 type BashRunResult struct {
-	Output             string
-	IsError            bool
-	ExitCode           *int
-	Duration           time.Duration
-	CWD                string
-	TimedOut           bool
-	Canceled           bool
-	StdoutRawBytes     int64
-	StderrRawBytes     int64
-	StdoutTruncated    bool
-	StderrTruncated    bool
-	Classification     string
-	Violations         []SandboxViolation
-	ViolationDropCount int
+	Output               string
+	IsError              bool
+	ExitCode             *int
+	Duration             time.Duration
+	CWD                  string
+	TimedOut             bool
+	Canceled             bool
+	StdoutRawBytes       int64
+	StderrRawBytes       int64
+	StdoutTruncated      bool
+	StderrTruncated      bool
+	Classification       string
+	Violations           []SandboxViolation
+	ViolationDropCount   int
+	AuditRecords         []SandboxAuditRecord
+	AuditRecordDropCount int
 }
 
 // SandboxViolation is populated by substrate-aware runners when a command
@@ -143,4 +157,84 @@ func IsValidSandboxViolationSource(s string) bool {
 	default:
 		return false
 	}
+}
+
+// SandboxAuditRecord is the parallel-observability projection of a
+// permitted (allow) network proxy Decision. It carries only the five
+// retention-policy-approved fields {Host, Port, Protocol, Source,
+// Decision}; URL paths, query strings, headers, and cookies are
+// structurally absent so the type itself enforces the N6 retention
+// boundary.
+//
+// Source is always "network_proxy" (the only producer of audit records
+// today); Decision is always "allow" (the type's purpose). Both fields
+// are kept rather than implied so structured telemetry consumers and
+// future record sources stay self-describing.
+type SandboxAuditRecord struct {
+	Host     string `json:"host"`
+	Port     uint16 `json:"port"`
+	Protocol string `json:"protocol"`
+	Source   string `json:"source"`
+	Decision string `json:"decision"`
+}
+
+// auditRecordRetentionDefault caps how many SandboxAuditRecord entries
+// each Run retains before dropping the surplus. Substrate runners pass
+// this directly to projectAuditRecords. Kept as a package-level
+// constant so the cross-platform projection lane stays
+// platform-agnostic (architect lock).
+const auditRecordRetentionDefault = 200
+
+// projectAuditRecords iterates allow Decisions in arrival order,
+// retaining at most maxRetained as SandboxAuditRecord values and
+// returning the drop count for any overflow. Drops are FIFO: the first
+// maxRetained allow Decisions are kept and any later allow Decisions
+// are counted toward dropCount. This matches the partner-locked
+// "operators see the early connections" preference over reservoir
+// sampling.
+//
+// When maxRetained == 0, no records are retained but dropCount still
+// reflects the total allow-Decision volume so operators can monitor
+// "audit disabled but counted". Negative maxRetained is treated as 0.
+//
+// Reason is intentionally excluded from allow audit records (forward-compat: producer-side reason enum is v42-2 scope).
+func projectAuditRecords(decisions []Decision, maxRetained int) ([]SandboxAuditRecord, int) {
+	if maxRetained < 0 {
+		maxRetained = 0
+	}
+	var totalAllow int
+	for _, d := range decisions {
+		if d.Allow {
+			totalAllow++
+		}
+	}
+	if totalAllow == 0 {
+		return nil, 0
+	}
+	if maxRetained == 0 {
+		return nil, totalAllow
+	}
+	keep := totalAllow
+	dropCount := 0
+	if keep > maxRetained {
+		keep = maxRetained
+		dropCount = totalAllow - maxRetained
+	}
+	out := make([]SandboxAuditRecord, 0, keep)
+	for _, d := range decisions {
+		if !d.Allow {
+			continue
+		}
+		if len(out) == maxRetained {
+			break
+		}
+		out = append(out, SandboxAuditRecord{
+			Host:     sanitizeViolationField(d.Host),
+			Port:     uint16(d.Port),
+			Protocol: sanitizeViolationField(string(d.Protocol)),
+			Source:   string(d.Source),
+			Decision: "allow",
+		})
+	}
+	return out, dropCount
 }

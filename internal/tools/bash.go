@@ -222,8 +222,19 @@ func emitBashTelemetry(ctx context.Context, probe BashRunnerProbe, req BashRunRe
 		"violation_count", len(res.Violations),
 		"violation_drop_count", res.ViolationDropCount,
 		"violations", redactViolationsForTelemetry(res.Violations),
+		"audit_record_count", len(res.AuditRecords),
+		"audit_record_drop_count", res.AuditRecordDropCount,
 		"runner_error", runErrMsg,
 	)
+	for _, ar := range res.AuditRecords {
+		slog.InfoContext(ctx, "bash sandbox permitted connection",
+			"host", ar.Host,
+			"port", ar.Port,
+			"protocol", ar.Protocol,
+			"source", ar.Source,
+			"decision", ar.Decision,
+		)
+	}
 }
 
 // redactViolationsForTelemetry projects each SandboxViolation into a
