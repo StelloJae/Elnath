@@ -88,18 +88,27 @@ jobs:
         # Skip-green is the failure mode this guard exists to prevent.
         # If integrationRequireDarwinSeatbelt() ever skips because
         # sandbox-exec is missing or misbehaves, the previous step
-        # could still exit 0 with all SKIPs. Require at least one
-        # PASS line that matches the integration test prefix.
+        # could still exit 0 with all SKIPs. Require at least
+        # EXPECTED_MIN PASS lines so a partial-skip outcome (some
+        # tests pass, others silently skip) also fails the gate.
         run: |
           if ! grep -qE '^--- PASS: TestSeatbeltProxyIntegration_' seatbelt-integration.log; then
-            echo "FATAL: B3b-4-2.5 closure requires at least one SeatbeltProxyIntegration PASS; all tests skipped or none ran" >&2
+            echo "FATAL: closure requires at least one SeatbeltProxyIntegration PASS; all tests skipped or none ran" >&2
             grep -E '^=== RUN|^--- (PASS|FAIL|SKIP):' seatbelt-integration.log || true
             exit 1
           fi
           PASS_COUNT=$(grep -cE '^--- PASS: TestSeatbeltProxyIntegration_' seatbelt-integration.log)
           SKIP_COUNT=$(grep -cE '^--- SKIP: TestSeatbeltProxyIntegration_' seatbelt-integration.log || true)
           FAIL_COUNT=$(grep -cE '^--- FAIL: TestSeatbeltProxyIntegration_' seatbelt-integration.log || true)
-          echo "B3b-4-2.5: SeatbeltProxyIntegration PASS=$PASS_COUNT SKIP=$SKIP_COUNT FAIL=$FAIL_COUNT"
+          # v42-1a: 6 prior + 1 new
+          # (DeniedDomainPopulatesNetworkProxyViolation) = 7 total
+          # minimum.
+          EXPECTED_MIN=7
+          echo "SeatbeltProxyIntegration PASS=$PASS_COUNT SKIP=$SKIP_COUNT FAIL=$FAIL_COUNT (EXPECTED_MIN=$EXPECTED_MIN)"
+          if [ "$PASS_COUNT" -lt "$EXPECTED_MIN" ]; then
+            echo "FATAL: expected at least $EXPECTED_MIN SeatbeltProxyIntegration PASS lines; got $PASS_COUNT" >&2
+            exit 1
+          fi
           if [ "$FAIL_COUNT" != "0" ]; then
             exit 1
           fi
