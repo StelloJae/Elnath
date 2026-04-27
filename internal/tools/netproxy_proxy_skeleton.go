@@ -272,7 +272,7 @@ func RunProxyChildMain(ctx context.Context, cfg ProxyChildConfig) int {
 		fmt.Fprintln(cfg.ReadyWriter, "ready")
 	}
 
-	resolver := cfg.Resolver
+	resolver := resolverWithDefault(cfg.Resolver)
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()

@@ -208,7 +208,7 @@ func handleHTTPConnect(
 		return
 	}
 
-	decision := EvaluateWithDenylist(ctx, allow, deny, host, portN, ProtocolHTTPSConnect, resolver)
+	decision, pinnedIPs := EvaluateWithDenylist(ctx, allow, deny, host, portN, ProtocolHTTPSConnect, resolver)
 	sink.EmitDecision(decision)
 	if !decision.Allow {
 		writeHTTPStatus(client, 403, "forbidden",
@@ -217,12 +217,22 @@ func handleHTTPConnect(
 		return
 	}
 
-	// Tunnel: dial upstream, write 200, splice both ways.
+	// Tunnel: dial upstream, write 200, splice both ways. The dial
+	// target is the pinned IP literal collected during policy
+	// evaluation — closing the policy-time vs dial-time race within
+	// this single connection decision. Original hostname is preserved
+	// in Decision.Host, the CONNECT request line, the Host header, and
+	// any inner TLS SNI bytes (which the proxy splices opaquely).
+	//
+	// DNS rebinding is still not fully defended. Sustained DNS hijack
+	// or malicious DNS responses at policy-resolution time remain in
+	// scope as a caveat. If hostile DNS is in scope, enforce egress at
+	// a lower layer.
 	dialer := &net.Dialer{Timeout: connectIOTimeout}
-	upstream, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, port))
+	upstream, err := dialWithFallback(ctx, dialer, "tcp", host, port, pinnedIPs, resolver, sink)
 	if err != nil {
 		writeHTTPStatus(client, 502, "bad gateway", "x-proxy-error: upstream-dial-failed")
-		sink.EmitError(fmt.Errorf("netproxy http: dial %s:%s: %w", host, port, err))
+		sink.EmitError(err)
 		return
 	}
 	defer upstream.Close()
@@ -322,6 +332,99 @@ func splice(client net.Conn, upstream net.Conn, br *bufio.Reader) {
 	<-done
 }
 
+// dialWithFallback dials network/hostname:port using the pinned IP
+// slice collected during policy evaluation. Behavior:
+//
+//   - len(pinnedIPs) > 0 (production / resolver-non-nil path): try
+//     each pinned IP in resolver-emitted order, dialing the IP literal
+//     directly. Per-attempt timeout = connectIOTimeout / numAttempts.
+//     numAttempts = min(len(pinnedIPs), 4) — bounded so a CDN that
+//     returns many IPs cannot exhaust the connectIOTimeout budget.
+//     On success, returns the first connection. Each per-attempt
+//     failure is published to sink as
+//     "netproxy http: dial <hostname>:<port>: attempt <i>/<n> failed:
+//     <wrapped err>". On exhaustion, returns a single error of the
+//     form "netproxy http: dial <hostname>:<port>: failed after <n>
+//     pinned address attempts". The original hostname appears in
+//     every error string; pinned IP literals MUST NOT.
+//
+//   - len(pinnedIPs) == 0 AND resolver == nil (back-compat path for
+//     direct-Serve* tests that opt out of resolve-pin): fall back to
+//     dialer.DialContext on the hostname-string. This path matches
+//     the pre-v42-3 behavior and is reachable only when the caller
+//     explicitly passed nil Resolver. No sink emit on success; the
+//     dial-failure error is returned for the caller to publish.
+//
+//   - len(pinnedIPs) == 0 AND resolver != nil: programming error
+//     (the policy evaluator violated its contract). Fail closed with
+//     a single error; do NOT silently dial hostname-string.
+//
+// Pinned IP literals MUST NOT appear in any sink emit, returned
+// error string, slog message, or BashRunResult.Violations rendering,
+// per the N6 retention rule. Decision/SandboxAuditRecord shapes are
+// unchanged — pinned IPs are an internal dial-time mechanism, not
+// telemetry.
+func dialWithFallback(
+	ctx context.Context,
+	dialer *net.Dialer,
+	network, host, port string,
+	pinnedIPs []net.IP,
+	resolver Resolver,
+	sink EventSink,
+) (net.Conn, error) {
+	if len(pinnedIPs) == 0 {
+		if resolver == nil {
+			// Back-compat fall-through for direct-Serve* tests with
+			// nil resolver. Dial the hostname-string; matches
+			// pre-v42-3 behavior. This path does NOT pin and offers
+			// no resolve-pin defense.
+			return dialer.DialContext(ctx, network, net.JoinHostPort(host, port))
+		}
+		return nil, fmt.Errorf("netproxy http: dial %s:%s: no pinned addresses available", host, port)
+	}
+	numAttempts := len(pinnedIPs)
+	if numAttempts > 4 {
+		numAttempts = 4
+	}
+	perAttemptTimeout := connectIOTimeout / time.Duration(numAttempts)
+	for i := 0; i < numAttempts; i++ {
+		attemptCtx, cancel := context.WithTimeout(ctx, perAttemptTimeout)
+		conn, err := dialer.DialContext(attemptCtx, network, net.JoinHostPort(pinnedIPs[i].String(), port))
+		cancel()
+		if err == nil {
+			return conn, nil
+		}
+		// Per-attempt EmitError MUST use the original hostname so any
+		// downstream rendering (operator slog, x-proxy-error tags,
+		// BashRunResult.Violations) reads the user-facing target —
+		// not the internal pinned IP literal that v42-3 selected for
+		// this connection.
+		if sink != nil {
+			sink.EmitError(fmt.Errorf("netproxy http: dial %s:%s: attempt %d/%d failed: %w", host, port, i+1, numAttempts, errSanitizedAddr(err, pinnedIPs[i].String(), host)))
+		}
+	}
+	return nil, fmt.Errorf("netproxy http: dial %s:%s: failed after %d pinned address attempts", host, port, numAttempts)
+}
+
+// errSanitizedAddr substitutes any occurrence of the pinned IP
+// literal in err's message with the original hostname so the wrapped
+// per-attempt error never surfaces the internal dial target. The
+// stdlib net.OpError formats as "dial tcp 127.0.0.1:443: connect:
+// connection refused"; without sanitization the pinned IP would land
+// in the EmitError sink. Replacement is conservative — only the IP
+// literal substring is rewritten; surrounding wording (op, syscall,
+// errno) is unchanged.
+func errSanitizedAddr(err error, pinnedIP, host string) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, pinnedIP) {
+		return err
+	}
+	return errors.New(strings.ReplaceAll(msg, pinnedIP, host))
+}
+
 // ServeSOCKS5 runs a SOCKS5 listener that supports only the TCP
 // CONNECT command (0x01). No-auth (method 0x00) is the only
 // supported method. UDP ASSOCIATE (0x03), BIND (0x02), GSSAPI auth,
@@ -363,13 +466,13 @@ func ServeSOCKS5(
 
 // SOCKS5 reply codes per RFC 1928 §6.
 const (
-	socks5ReplySucceeded                byte = 0x00
-	socks5ReplyConnectionNotAllowed     byte = 0x02
-	socks5ReplyNetworkUnreachable       byte = 0x03
-	socks5ReplyHostUnreachable          byte = 0x04
-	socks5ReplyConnectionRefused        byte = 0x05
-	socks5ReplyCommandNotSupported      byte = 0x07
-	socks5ReplyAddressTypeNotSupported  byte = 0x08
+	socks5ReplySucceeded               byte = 0x00
+	socks5ReplyConnectionNotAllowed    byte = 0x02
+	socks5ReplyNetworkUnreachable      byte = 0x03
+	socks5ReplyHostUnreachable         byte = 0x04
+	socks5ReplyConnectionRefused       byte = 0x05
+	socks5ReplyCommandNotSupported     byte = 0x07
+	socks5ReplyAddressTypeNotSupported byte = 0x08
 )
 
 func handleSOCKS5(
@@ -455,18 +558,22 @@ func handleSOCKS5(
 
 	_ = client.SetDeadline(time.Time{})
 
-	decision := EvaluateWithDenylist(ctx, allow, deny, host, port, ProtocolSOCKS5TCP, resolver)
+	decision, pinnedIPs := EvaluateWithDenylist(ctx, allow, deny, host, port, ProtocolSOCKS5TCP, resolver)
 	sink.EmitDecision(decision)
 	if !decision.Allow {
 		writeSOCKS5Reply(client, socks5ReplyConnectionNotAllowed, atyp)
 		return
 	}
 
+	// Dial the pinned IP literal collected during policy evaluation
+	// (mirrors the HTTP CONNECT path). SOCKS5 BND.ADDR stays
+	// 0.0.0.0:0 so the pinned IP never leaks back to the client.
+	// DNS rebinding is still not fully defended; see handleHTTPConnect.
 	dialer := &net.Dialer{Timeout: connectIOTimeout}
-	upstream, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+	upstream, err := dialWithFallback(ctx, dialer, "tcp", host, strconv.Itoa(port), pinnedIPs, resolver, sink)
 	if err != nil {
 		writeSOCKS5Reply(client, socks5ReplyHostUnreachable, atyp)
-		sink.EmitError(fmt.Errorf("netproxy socks5: dial %s:%d: %w", host, port, err))
+		sink.EmitError(err)
 		return
 	}
 	defer upstream.Close()

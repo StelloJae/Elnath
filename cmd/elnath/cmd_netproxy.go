@@ -45,6 +45,7 @@ func cmdNetproxy(ctx context.Context, args []string) error {
 		Sink:        sink,
 		Stderr:      os.Stderr,
 		ReadyWriter: os.Stdout,
+		Resolver:    tools.NewSystemResolver(),
 	}
 	code := tools.RunProxyChildMain(ctx, cfg)
 	if code != 0 {
