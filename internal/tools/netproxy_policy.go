@@ -95,9 +95,9 @@ func (r policyRule) IsLoopbackHost() bool {
 type wildcardKind int
 
 const (
-	wildcardExact     wildcardKind = iota // "github.com"
-	wildcardSubdomain                     // "*.github.com" — subdomains only, NOT apex
-	wildcardApexAndSub                    // "**.github.com" — apex + subdomains
+	wildcardExact      wildcardKind = iota // "github.com"
+	wildcardSubdomain                      // "*.github.com" — subdomains only, NOT apex
+	wildcardApexAndSub                     // "**.github.com" — apex + subdomains
 )
 
 // Resolver abstracts host-side hostname resolution for the proxy. The
@@ -241,9 +241,12 @@ func normalizeHost(host string) string {
 
 // Evaluate is a convenience: equivalent to EvaluateWithDenylist with
 // an empty denylist. Used by tests that don't care about denylist
-// semantics.
+// semantics. The pinned-IP slice from EvaluateWithDenylist is
+// intentionally discarded here because Evaluate's callers do not
+// dial.
 func (a Allowlist) Evaluate(ctx context.Context, host string, port int, protocol ProxyProtocol, resolver Resolver) Decision {
-	return EvaluateWithDenylist(ctx, a, Denylist{}, host, port, protocol, resolver)
+	d, _ := EvaluateWithDenylist(ctx, a, Denylist{}, host, port, protocol, resolver)
+	return d
 }
 
 // EvaluateWithDenylist applies the partner-locked deny-wins policy:
@@ -257,9 +260,22 @@ func (a Allowlist) Evaluate(ctx context.Context, host string, port int, protocol
 //     unspecified) -> deny with ReasonLocalBindingDisabled.
 //  4. Otherwise -> deny with ReasonNotInAllowlist.
 //
+// Returns (Decision, []net.IP). The second element carries the
+// guard-passing pinned IP slice that the dial site must consume:
+//
+//   - Allow with hostname input: slice = all guard-passing resolved IPs
+//     in resolver-emitted order (length >= 1).
+//   - Allow with IP-literal input: slice = []net.IP{parsedIP}.
+//   - Deny outcome: slice = nil; callers MUST NOT dial.
+//   - Allow with resolver == nil (back-compat for direct-Serve* tests
+//     that opt out of resolve-pin): slice = nil; the dial site falls
+//     back to hostname-string. This path is unsafe by design and
+//     reachable only in tests; production wiring at
+//     cmd/elnath/cmd_netproxy.go injects SystemResolver explicitly.
+//
 // resolver may be nil when the host is already an IP literal or when
-// the caller does not want resolved-IP checks. Callers SHOULD pass a
-// real resolver for hostname inputs so private-range bypass via
+// the caller does not want resolved-IP checks. Production callers MUST
+// pass a real resolver for hostname inputs so private-range bypass via
 // public-resolving-to-private (e.g. shady.example.com -> 10.0.0.5)
 // is closed.
 //
@@ -276,15 +292,15 @@ func EvaluateWithDenylist(
 	port int,
 	protocol ProxyProtocol,
 	resolver Resolver,
-) Decision {
+) (Decision, []net.IP) {
 	host = strings.TrimSpace(host)
 	if host == "" {
 		d, _ := NewDeny(SourceNetworkProxy, ReasonInvalidConfig, "", port, protocol)
-		return d
+		return d, nil
 	}
 	if !protocol.IsValid() {
 		d, _ := NewDeny(SourceNetworkProxy, ReasonInvalidConfig, host, port, protocol)
-		return d
+		return d, nil
 	}
 
 	// Reject scoped IPv6 at evaluation time too; the parser already
@@ -292,7 +308,7 @@ func EvaluateWithDenylist(
 	// from the wire (HTTP CONNECT host header) bearing zone IDs.
 	if strings.Contains(host, "%") {
 		d, _ := NewDeny(SourceNetworkProxy, ReasonInvalidConfig, host, port, protocol)
-		return d
+		return d, nil
 	}
 
 	normalized := normalizeHost(host)
@@ -300,7 +316,7 @@ func EvaluateWithDenylist(
 	// --- 1. denylist (deny wins) ---
 	if matchAny(deny.rules, normalized, port) {
 		d, _ := NewDeny(SourceNetworkProxy, ReasonDeniedByRule, host, port, protocol)
-		return d
+		return d, nil
 	}
 
 	// If the host is an IP literal we can immediately apply the
@@ -308,29 +324,43 @@ func EvaluateWithDenylist(
 	if ip := net.ParseIP(host); ip != nil {
 		if matchIPRule(allow.rules, ip, port) {
 			d, _ := NewAllow(SourceNetworkProxy, host, port, protocol)
-			return d
+			return d, []net.IP{ip}
 		}
 		if isSpecialRangeIP(ip) {
 			d, _ := NewDeny(SourceNetworkProxy, ReasonLocalBindingDisabled, host, port, protocol)
-			return d
+			return d, nil
 		}
 		d, _ := NewDeny(SourceNetworkProxy, ReasonNotInAllowlist, host, port, protocol)
-		return d
+		return d, nil
 	}
 
 	// --- 2. allowlist hostname match ---
 	if !matchAny(allow.rules, normalized, port) {
 		d, _ := NewDeny(SourceNetworkProxy, ReasonNotInAllowlist, host, port, protocol)
-		return d
+		return d, nil
 	}
 
-	// --- 3. resolved-IP check (best-effort, defends public->private) ---
+	// --- 3. resolved-IP check (defends public->private + collects pin set) ---
 	if resolver != nil {
 		ips, err := resolver.LookupHost(ctx, host)
 		if err != nil {
 			d, _ := NewDeny(SourceDNSResolver, ReasonDNSResolutionBlocked, host, port, protocol)
-			return d
+			return d, nil
 		}
+		// Operationally equivalent to a resolution failure: resolver
+		// returned no usable answer. Treat as DNS resolution blocked so
+		// the dial site never sees a zero-length pin slice for an Allow
+		// outcome (eliminates divide-by-zero risk and dead-code Allow
+		// fall-through).
+		if len(ips) == 0 {
+			d, _ := NewDeny(SourceDNSResolver, ReasonDNSResolutionBlocked, host, port, protocol)
+			return d, nil
+		}
+		// Q1 (partner-locked) all-or-nothing pin set: every parsed IP
+		// must pass the special-range guard, OR be explicitly
+		// allowlisted by IP literal. A single hostile-DNS-returned
+		// private IP denies the whole connection.
+		pinned := make([]net.IP, 0, len(ips))
 		for _, addr := range ips {
 			ip := net.ParseIP(addr)
 			if ip == nil {
@@ -338,13 +368,24 @@ func EvaluateWithDenylist(
 			}
 			if isSpecialRangeIP(ip) && !matchIPRule(allow.rules, ip, port) {
 				d, _ := NewDeny(SourceDNSResolver, ReasonLocalBindingDisabled, host, port, protocol)
-				return d
+				return d, nil
 			}
+			pinned = append(pinned, ip)
 		}
+		if len(pinned) == 0 {
+			// All resolver answers failed to parse as IPs — treat as
+			// resolution blocked rather than silently allowing.
+			d, _ := NewDeny(SourceDNSResolver, ReasonDNSResolutionBlocked, host, port, protocol)
+			return d, nil
+		}
+		d, _ := NewAllow(SourceNetworkProxy, host, port, protocol)
+		return d, pinned
 	}
 
+	// Resolver-less back-compat path. Allow without a pin slice; dial
+	// site falls back to hostname-string.
 	d, _ := NewAllow(SourceNetworkProxy, host, port, protocol)
-	return d
+	return d, nil
 }
 
 // matchAny reports whether any rule in rs allows host on the given
@@ -414,14 +455,14 @@ func (r policyRule) matchesHost(host string) bool {
 // DNS record could resolve to a CGNAT address and slip past the
 // classifier.
 var extendedIPv4SpecialCIDRs = mustParseCIDRs([]string{
-	"0.0.0.0/8",        // "this network" (RFC 1122)
-	"100.64.0.0/10",    // CGNAT (RFC 6598)
-	"192.0.0.0/24",     // IETF Protocol Assignments (RFC 6890)
-	"192.0.2.0/24",     // TEST-NET-1 (RFC 5737)
-	"198.18.0.0/15",    // benchmarking (RFC 2544)
-	"198.51.100.0/24",  // TEST-NET-2 (RFC 5737)
-	"203.0.113.0/24",   // TEST-NET-3 (RFC 5737)
-	"240.0.0.0/4",      // reserved class E (RFC 6890)
+	"0.0.0.0/8",          // "this network" (RFC 1122)
+	"100.64.0.0/10",      // CGNAT (RFC 6598)
+	"192.0.0.0/24",       // IETF Protocol Assignments (RFC 6890)
+	"192.0.2.0/24",       // TEST-NET-1 (RFC 5737)
+	"198.18.0.0/15",      // benchmarking (RFC 2544)
+	"198.51.100.0/24",    // TEST-NET-2 (RFC 5737)
+	"203.0.113.0/24",     // TEST-NET-3 (RFC 5737)
+	"240.0.0.0/4",        // reserved class E (RFC 6890)
 	"255.255.255.255/32", // limited broadcast
 })
 

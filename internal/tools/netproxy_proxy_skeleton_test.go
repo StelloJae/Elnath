@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"net"
@@ -52,10 +53,10 @@ func TestRunProxyChildMain_ListenerProvidedDirectly(t *testing.T) {
 	}
 	sink := NewChannelEventSink(8)
 	cfg := ProxyChildConfig{
-		Args:           []string{"--allow", "github.com:443"},
-		HTTPListener:   httpL,
-		SOCKSListener:  socksL,
-		Sink:           sink,
+		Args:          []string{"--allow", "github.com:443"},
+		HTTPListener:  httpL,
+		SOCKSListener: socksL,
+		Sink:          sink,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan int, 1)
@@ -296,6 +297,66 @@ func TestRunProxyChildMain_ContextCancelStopsListener(t *testing.T) {
 // TestRunProxyChildMain_BothListenersStartedConcurrently confirms
 // that calling the entry function exposes both listeners in
 // parallel; if one fails to bind the other is also torn down.
+// TestRunProxyChildMain_NilCfgResolverDefaultsToSystemResolver — Test
+// #11. Architect Q4 Layer B (refined-2 form). When ProxyChildConfig
+// arrives with Resolver == nil, RunProxyChildMain MUST default-fill
+// it via resolverWithDefault(cfg.Resolver) so the in-tree SSRF guard
+// at netproxy_policy.go:328-343 is reachable. Verifies via the
+// observable that an allowlisted hostname whose system-resolver
+// resolution is impossible (RFC 6761 .test TLD) yields a deny —
+// meaning a resolver call DID happen — rather than dead-code
+// fall-through to Allow.
+func TestRunProxyChildMain_NilCfgResolverDefaultsToSystemResolver(t *testing.T) {
+	httpL, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	sink := NewChannelEventSink(8)
+	cfg := ProxyChildConfig{
+		Args:         []string{"--allow", "sentinel.test:443"},
+		HTTPListener: httpL,
+		Sink:         sink,
+		// Resolver: nil -- the test exercises the default-fill path.
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan int, 1)
+	go func() { done <- RunProxyChildMain(ctx, cfg) }()
+	time.Sleep(40 * time.Millisecond)
+
+	// Make a CONNECT request through the bound HTTP listener.
+	conn, err := net.Dial("tcp", httpL.Addr().String())
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	connReq := "CONNECT sentinel.test:443 HTTP/1.1\r\nHost: sentinel.test:443\r\n\r\n"
+	if _, err := conn.Write([]byte(connReq)); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	br := bufio.NewReader(conn)
+	statusLine, _ := br.ReadString('\n')
+	conn.Close()
+
+	// The system resolver MUST have been consulted: a .test hostname
+	// returns NXDOMAIN, so the proxy emits a 403 with
+	// blocked-by-dns-resolution. If the resolver was nil, the proxy
+	// would have attempted to dial "sentinel.test:443" via the stdlib
+	// dialer (which produces a 502). Either is observable; the
+	// load-bearing fact is that a nil cfg.Resolver did not crash the
+	// proxy AND the dial-time hostname-string fallback is suppressed
+	// when the policy guard fires.
+	if !strings.Contains(statusLine, "403") {
+		t.Errorf("expected 403 from blocked DNS resolution (system resolver active); got %q", statusLine)
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunProxyChildMain did not exit after cancel")
+	}
+}
+
 func TestRunProxyChildMain_BothListenersStartedConcurrently(t *testing.T) {
 	taken, _ := net.Listen("tcp", "127.0.0.1:0")
 	defer taken.Close()

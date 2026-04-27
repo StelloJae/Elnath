@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -237,9 +238,9 @@ func TestAllowlist_IPv4LoopbackOnlyExact(t *testing.T) {
 func TestAllowlist_IPv4PrivateBlockedByDefault(t *testing.T) {
 	emptyAl, _ := ParseAllowlist([]string{})
 	cases := []string{
-		"10.0.0.1",      // RFC1918
-		"172.16.0.1",    // RFC1918
-		"192.168.1.10",  // RFC1918
+		"10.0.0.1",        // RFC1918
+		"172.16.0.1",      // RFC1918
+		"192.168.1.10",    // RFC1918
 		"169.254.169.254", // link-local
 	}
 	for _, ip := range cases {
@@ -458,9 +459,9 @@ func TestAllowlist_IPv4CGNATBlockedByDefault(t *testing.T) {
 func TestAllowlist_IPv4TestNetBlockedByDefault(t *testing.T) {
 	emptyAl, _ := ParseAllowlist([]string{})
 	cases := []string{
-		"192.0.2.1",   // TEST-NET-1
+		"192.0.2.1",    // TEST-NET-1
 		"198.51.100.1", // TEST-NET-2
-		"203.0.113.1", // TEST-NET-3
+		"203.0.113.1",  // TEST-NET-3
 	}
 	for _, ip := range cases {
 		t.Run(ip, func(t *testing.T) {
@@ -509,7 +510,7 @@ func TestAllowlist_HostnameResolvesToCGNATBlocked(t *testing.T) {
 func TestEvaluate_DenyWinsOverAllow(t *testing.T) {
 	al, _ := ParseAllowlist([]string{"**.github.com:443"})
 	dl, _ := ParseDenylist([]string{"evil.github.com:443"})
-	d := EvaluateWithDenylist(context.Background(), al, dl, "evil.github.com", 443, ProtocolHTTPSConnect, nil)
+	d, _ := EvaluateWithDenylist(context.Background(), al, dl, "evil.github.com", 443, ProtocolHTTPSConnect, nil)
 	if d.Allow {
 		t.Errorf("denylist should win over allowlist; got %+v", d)
 	}
@@ -518,7 +519,7 @@ func TestEvaluate_DenyWinsOverAllow(t *testing.T) {
 	}
 
 	// Sibling subdomain not on denylist still allowed.
-	d = EvaluateWithDenylist(context.Background(), al, dl, "api.github.com", 443, ProtocolHTTPSConnect, nil)
+	d, _ = EvaluateWithDenylist(context.Background(), al, dl, "api.github.com", 443, ProtocolHTTPSConnect, nil)
 	if !d.Allow {
 		t.Errorf("api.github.com should be allowed; got %+v", d)
 	}
@@ -639,4 +640,256 @@ func TestAllowlist_EmptyEvaluatesAsDeny(t *testing.T) {
 	if d.Allow {
 		t.Errorf("empty allowlist should default-deny; got %+v", d)
 	}
+}
+
+// ---------------------------------------------------------------
+// v42-3 — resolve-pin tuple-return tests (#3, #4, #7, #10, #14)
+// ---------------------------------------------------------------
+//
+// Tests in this section exercise the v42-3 contract that
+// EvaluateWithDenylist returns (Decision, []net.IP) where the second
+// element is the slice of guard-passing pinned IPs that the dial site
+// must consume. Deny outcomes return pinnedIPs == nil. The empty-DNS
+// edge case (err==nil && len==0) maps to the existing
+// dns_resolution_blocked deny path. The taxonomy of Source values is
+// preserved — DNS-originated denials remain SourceDNSResolver; policy
+// allow/denylist denials remain SourceNetworkProxy.
+
+// TestEvaluateWithDenylist_LoopbackResolvedForAllowlistedDomainBlocked
+// — Partner #3. An allowlisted hostname whose resolver returns 127.0.0.1
+// MUST be denied by the resolved-IP guard with SourceDNSResolver +
+// ReasonLocalBindingDisabled, AND the returned pinned slice MUST be
+// nil (no dial allowed).
+func TestEvaluateWithDenylist_LoopbackResolvedForAllowlistedDomainBlocked(t *testing.T) {
+	al, _ := ParseAllowlist([]string{"shady.example.com:443"})
+	dl := Denylist{}
+	resolver := NewMockResolver(map[string][]string{"shady.example.com": {"127.0.0.1"}})
+
+	decision, pinned := EvaluateWithDenylist(
+		context.Background(), al, dl,
+		"shady.example.com", 443, ProtocolHTTPSConnect, resolver,
+	)
+	if decision.Allow {
+		t.Fatalf("loopback-resolved allowlisted host must be denied; got %+v", decision)
+	}
+	if decision.Source != SourceDNSResolver {
+		t.Errorf("expected SourceDNSResolver; got %q", decision.Source)
+	}
+	if decision.Reason != ReasonLocalBindingDisabled {
+		t.Errorf("expected ReasonLocalBindingDisabled; got %q", decision.Reason)
+	}
+	if decision.Host != "shady.example.com" {
+		t.Errorf("expected Host=shady.example.com; got %q", decision.Host)
+	}
+	if pinned != nil {
+		t.Errorf("expected pinned == nil for deny outcome; got %v", pinned)
+	}
+}
+
+// TestEvaluateWithDenylist_CGNATResolvedForAllowlistedDomainBlocked
+// — Partner #4. An allowlisted hostname resolving to a CGNAT IP
+// (100.64.0.0/10) MUST be denied with SourceDNSResolver +
+// ReasonLocalBindingDisabled and pinned == nil. CGNAT is the realistic
+// SSRF surface — net.IP.IsPrivate does NOT cover 100.64.0.0/10.
+func TestEvaluateWithDenylist_CGNATResolvedForAllowlistedDomainBlocked(t *testing.T) {
+	al, _ := ParseAllowlist([]string{"shady.example.com:443"})
+	dl := Denylist{}
+	resolver := NewMockResolver(map[string][]string{"shady.example.com": {"100.64.1.1"}})
+
+	decision, pinned := EvaluateWithDenylist(
+		context.Background(), al, dl,
+		"shady.example.com", 443, ProtocolHTTPSConnect, resolver,
+	)
+	if decision.Allow {
+		t.Fatalf("CGNAT-resolved allowlisted host must be denied; got %+v", decision)
+	}
+	if decision.Source != SourceDNSResolver {
+		t.Errorf("expected SourceDNSResolver; got %q", decision.Source)
+	}
+	if decision.Reason != ReasonLocalBindingDisabled {
+		t.Errorf("expected ReasonLocalBindingDisabled; got %q", decision.Reason)
+	}
+	if pinned != nil {
+		t.Errorf("expected pinned == nil for deny outcome; got %v", pinned)
+	}
+}
+
+// TestEvaluateWithDenylist_MultipleAAAAOnlyPinnedAllowedIPsUsed
+// — Partner #7 / Q1 all-or-nothing. A multi-IP DNS answer where ALL
+// entries pass the special-range guard MUST yield an Allow decision
+// AND the returned pinned slice MUST contain ONLY guard-passing IPs
+// in resolver-emitted order. Verifies the architect's multi-IP shape.
+func TestEvaluateWithDenylist_MultipleAAAAOnlyPinnedAllowedIPsUsed(t *testing.T) {
+	al, _ := ParseAllowlist([]string{"sentinel.test:443"})
+	dl := Denylist{}
+	resolver := NewMockResolver(map[string][]string{
+		"sentinel.test": {"2001:db8::1", "2001:db8::2"},
+	})
+
+	decision, pinned := EvaluateWithDenylist(
+		context.Background(), al, dl,
+		"sentinel.test", 443, ProtocolHTTPSConnect, resolver,
+	)
+	if !decision.Allow {
+		t.Fatalf("expected Allow when all resolved IPs are public; got %+v", decision)
+	}
+	if decision.Source != SourceNetworkProxy {
+		t.Errorf("expected SourceNetworkProxy; got %q", decision.Source)
+	}
+	if len(pinned) != 2 {
+		t.Fatalf("expected 2 pinned IPs; got %d (%v)", len(pinned), pinned)
+	}
+	wantOrder := []string{"2001:db8::1", "2001:db8::2"}
+	for i, want := range wantOrder {
+		if pinned[i].String() != want {
+			t.Errorf("pinned[%d] = %q; want %q", i, pinned[i].String(), want)
+		}
+	}
+}
+
+// TestEvaluateWithDenylist_DenySourcesPreserveTaxonomy — Partner #10
+// post-verdict (option B). Verifies the 4-row Source/Reason taxonomy
+// is preserved across distinct deny paths. Renamed from the original
+// "AlsoCarriesNetworkProxySource" naming, which embedded a literal-text
+// reading the partner verdict explicitly REJECTED. All four rows
+// reference constants that exist in netproxy_event.go (zero invented).
+func TestEvaluateWithDenylist_DenySourcesPreserveTaxonomy(t *testing.T) {
+	cases := []struct {
+		name       string
+		allow      []string
+		deny       []string
+		host       string
+		port       int
+		resolver   Resolver
+		wantSource ProxySource
+		wantReason ProxyReason
+	}{
+		{
+			name:       "denylist match (deny-wins)",
+			allow:      []string{"**.github.com:443"},
+			deny:       []string{"evil.github.com:443"},
+			host:       "evil.github.com",
+			port:       443,
+			resolver:   nil,
+			wantSource: SourceNetworkProxy,
+			wantReason: ReasonDeniedByRule,
+		},
+		{
+			name:       "hostname not in allowlist",
+			allow:      []string{"github.com:443"},
+			deny:       nil,
+			host:       "gitlab.com",
+			port:       443,
+			resolver:   nil,
+			wantSource: SourceNetworkProxy,
+			wantReason: ReasonNotInAllowlist,
+		},
+		{
+			name:       "DNS resolution failure",
+			allow:      []string{"unreachable.example.com:443"},
+			deny:       nil,
+			host:       "unreachable.example.com",
+			port:       443,
+			resolver:   MockResolver{Err: errors.New("simulated dns failure")},
+			wantSource: SourceDNSResolver,
+			wantReason: ReasonDNSResolutionBlocked,
+		},
+		{
+			name:       "allowlisted hostname resolves to special-range IP",
+			allow:      []string{"shady.example.com:443"},
+			deny:       nil,
+			host:       "shady.example.com",
+			port:       443,
+			resolver:   NewMockResolver(map[string][]string{"shady.example.com": {"10.0.0.5"}}),
+			wantSource: SourceDNSResolver,
+			wantReason: ReasonLocalBindingDisabled,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			al, err := ParseAllowlist(tc.allow)
+			if err != nil {
+				t.Fatalf("ParseAllowlist: %v", err)
+			}
+			dl, err := ParseDenylist(tc.deny)
+			if err != nil {
+				t.Fatalf("ParseDenylist: %v", err)
+			}
+			decision, pinned := EvaluateWithDenylist(
+				context.Background(), al, dl,
+				tc.host, tc.port, ProtocolHTTPSConnect, tc.resolver,
+			)
+			if decision.Allow {
+				t.Fatalf("expected deny; got %+v", decision)
+			}
+			if decision.Source != tc.wantSource {
+				t.Errorf("Source = %q; want %q", decision.Source, tc.wantSource)
+			}
+			if decision.Reason != tc.wantReason {
+				t.Errorf("Reason = %q; want %q", decision.Reason, tc.wantReason)
+			}
+			if pinned != nil {
+				t.Errorf("expected pinned == nil for deny outcome; got %v", pinned)
+			}
+		})
+	}
+}
+
+// TestEvaluateWithDenylist_EmptyDNSAnswerBlocked — Fix 3 / Test #14.
+// A resolver that returns (ips=[], err=nil) — operationally equivalent
+// to "host had no A/AAAA records" — MUST map to the
+// dns_resolution_blocked deny path with pinned == nil. This extends
+// the existing err≠nil deny path at netproxy_policy.go:330-332 to
+// cover the err==nil but len==0 case, eliminating the divide-by-zero
+// risk at the dial site.
+func TestEvaluateWithDenylist_EmptyDNSAnswerBlocked(t *testing.T) {
+	al, _ := ParseAllowlist([]string{"sentinel.test:443"})
+	dl := Denylist{}
+	tracking := &countingResolver{
+		inner: NewMockResolver(map[string][]string{"sentinel.test": {}}),
+	}
+
+	decision, pinned := EvaluateWithDenylist(
+		context.Background(), al, dl,
+		"sentinel.test", 443, ProtocolHTTPSConnect, tracking,
+	)
+	if decision.Allow {
+		t.Fatalf("empty DNS answer must be denied; got %+v", decision)
+	}
+	if decision.Source != SourceDNSResolver {
+		t.Errorf("expected SourceDNSResolver; got %q", decision.Source)
+	}
+	if decision.Reason != ReasonDNSResolutionBlocked {
+		t.Errorf("expected ReasonDNSResolutionBlocked; got %q", decision.Reason)
+	}
+	if decision.Host != "sentinel.test" {
+		t.Errorf("expected Host=sentinel.test; got %q", decision.Host)
+	}
+	if pinned != nil {
+		t.Errorf("expected pinned == nil; got %v", pinned)
+	}
+	if got := tracking.Count(); got != 1 {
+		t.Errorf("expected exactly 1 LookupHost call; got %d", got)
+	}
+}
+
+// countingResolver is a Resolver wrapper used by tests that need to
+// assert the policy resolver was consulted exactly once.
+type countingResolver struct {
+	inner Resolver
+	mu    sync.Mutex
+	calls int
+}
+
+func (c *countingResolver) LookupHost(ctx context.Context, host string) ([]string, error) {
+	c.mu.Lock()
+	c.calls++
+	c.mu.Unlock()
+	return c.inner.LookupHost(ctx, host)
+}
+
+func (c *countingResolver) Count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.calls
 }

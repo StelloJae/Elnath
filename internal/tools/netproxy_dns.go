@@ -89,3 +89,19 @@ func (m MockResolver) LookupHost(_ context.Context, host string) ([]string, erro
 	}
 	return nil, fmt.Errorf("netproxy mock: no canned ips for %q", host)
 }
+
+// resolverWithDefault returns r if non-nil, else a fresh
+// SystemResolver. This is the Layer B default-fill used by
+// RunProxyChildMain so that production callers (and any future
+// caller of the entry function) reach a real resolver even when the
+// ProxyChildConfig struct literal omits the Resolver field. Production
+// cmdNetproxy still installs SystemResolver explicitly via Layer A
+// (cmd/elnath/cmd_netproxy.go); Layer B is the belt-and-suspenders
+// guard so a future test author cannot accidentally re-introduce the
+// dead-SSRF-guard regression by forgetting to set Resolver.
+func resolverWithDefault(r Resolver) Resolver {
+	if r == nil {
+		return NewSystemResolver()
+	}
+	return r
+}
