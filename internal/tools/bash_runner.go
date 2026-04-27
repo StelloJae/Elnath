@@ -64,12 +64,11 @@ type BashRunRequest struct {
 // LLM-facing string already rendered by the runner; callers wrap it in
 // tools.Result without further transformation.
 //
-// ViolationDropCount carries the netproxy ChannelEventSink drop count
-// associated with this invocation (events that the sink discarded
-// because the buffer was full). The substrate runners populate it in
-// B3b-4-2 / B3b-4-3 when the proxy is wired through; B3b-4-1 only
-// exposes the field so emitBashTelemetry can surface non-zero drops
-// to operators (N4 closure).
+// ViolationDropCount carries the per-Run deny-Decision drop count
+// from the boundedDecisionBuffer (netproxy_drain.go). Populated by
+// substrate runners (Seatbelt + bwrap) when more than decisionDenyCap
+// deny events arrive in a single Run; surplus events are dropped FIFO
+// and counted here. v42-2 wired what v42-1a declared.
 //
 // AuditRecords is the parallel observability surface for permitted
 // (allow) connections. Substrate runners that surface allow Decisions
@@ -178,34 +177,44 @@ type SandboxAuditRecord struct {
 	Decision string `json:"decision"`
 }
 
-// auditRecordRetentionDefault caps how many SandboxAuditRecord entries
-// each Run retains before dropping the surplus. Substrate runners pass
-// this directly to projectAuditRecords. Kept as a package-level
-// constant so the cross-platform projection lane stays
-// platform-agnostic (architect lock).
-const auditRecordRetentionDefault = 200
+// proxySurfaces is the single-snapshot result of one drain-slice
+// consume from boundedDecisionBuffer. The shape is partner-locked at
+// 3 fields per v42-1b architect addendum §2; ViolationDropCount is
+// returned via tuple from collectProxyDecisions rather than expanding
+// this struct.
+//
+// v42-2 (priority-aware bounded event drain).
+type proxySurfaces struct {
+	Violations         []SandboxViolation
+	Permitted          []SandboxAuditRecord
+	PermittedDropCount int
+}
 
-// projectAuditRecords iterates allow Decisions in arrival order,
-// retaining at most maxRetained as SandboxAuditRecord values and
-// returning the drop count for any overflow. Drops are FIFO: the first
-// maxRetained allow Decisions are kept and any later allow Decisions
-// are counted toward dropCount. This matches the partner-locked
-// "operators see the early connections" preference over reservoir
-// sampling.
+// projectAuditRecords is preserved as a thin wrapper around
+// projectAuditRecordsFromAllowOnly + cap enforcement so v42-1b unit
+// and substrate parity tests stay byte-identical. Production substrate
+// paths now route through the boundedDecisionBuffer (netproxy_drain.go)
+// and call projectAuditRecordsFromAllowOnly directly with allow-only,
+// already-capped slices.
 //
-// When maxRetained == 0, no records are retained but dropCount still
-// reflects the total allow-Decision volume so operators can monitor
-// "audit disabled but counted". Negative maxRetained is treated as 0.
-//
-// Reason is intentionally excluded from allow audit records (forward-compat: producer-side reason enum is v42-2 scope).
+// v42-2: kept for test compatibility; production allocates allow-only
+// slices upstream so this wrapper sees no production traffic.
 func projectAuditRecords(decisions []Decision, maxRetained int) ([]SandboxAuditRecord, int) {
 	if maxRetained < 0 {
 		maxRetained = 0
 	}
 	var totalAllow int
+	var allows []Decision
 	for _, d := range decisions {
-		if d.Allow {
-			totalAllow++
+		if !d.Allow {
+			continue
+		}
+		totalAllow++
+		if maxRetained == 0 {
+			continue
+		}
+		if len(allows) < maxRetained {
+			allows = append(allows, d)
 		}
 	}
 	if totalAllow == 0 {
@@ -214,27 +223,6 @@ func projectAuditRecords(decisions []Decision, maxRetained int) ([]SandboxAuditR
 	if maxRetained == 0 {
 		return nil, totalAllow
 	}
-	keep := totalAllow
-	dropCount := 0
-	if keep > maxRetained {
-		keep = maxRetained
-		dropCount = totalAllow - maxRetained
-	}
-	out := make([]SandboxAuditRecord, 0, keep)
-	for _, d := range decisions {
-		if !d.Allow {
-			continue
-		}
-		if len(out) == maxRetained {
-			break
-		}
-		out = append(out, SandboxAuditRecord{
-			Host:     sanitizeViolationField(d.Host),
-			Port:     uint16(d.Port),
-			Protocol: sanitizeViolationField(string(d.Protocol)),
-			Source:   string(d.Source),
-			Decision: "allow",
-		})
-	}
-	return out, dropCount
+	drop := totalAllow - len(allows)
+	return projectAuditRecordsFromAllowOnly(allows), drop
 }

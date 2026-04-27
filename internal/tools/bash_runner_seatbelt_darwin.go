@@ -114,19 +114,11 @@ type SeatbeltRunner struct {
 	// bash_runner_bwrap_linux.go:126-128.
 	proxyDrainDone chan struct{}
 
-	// proxyDecisionsMu guards proxyDecisions. Held only briefly during
-	// append (drain goroutine) and snapshot+clear (Run completion). The
-	// listener accept-loop path never touches this slice directly so
-	// the lock cannot block the proxy's hot path. Mirrors Linux at
-	// bash_runner_bwrap_linux.go:130-141.
-	proxyDecisionsMu sync.Mutex
-	// proxyDecisions buffers per-connection Decision events the drain
-	// goroutine parses out of the netproxy child's stdout. v42-1a
-	// surfaces these into BashRunResult.Violations on the next Run
-	// completion via collectProxyDecisions; v42-1b extends the same
-	// projection to BashRunResult.AuditRecords for permitted-connection
-	// observability.
-	proxyDecisions []Decision
+	// decisionBuf is the per-Run drain-time buffer for Decision events
+	// the drain goroutine parses out of the netproxy child's stdout.
+	// Two FIFO ring slices (denyBuf cap=64 + allowBuf cap=200) isolate
+	// deny retention from allow-flood pressure. v42-2 wired (netproxy_drain.go).
+	decisionBuf *boundedDecisionBuffer
 }
 
 // NewSeatbeltRunner constructs a SeatbeltRunner with default-deny
@@ -162,6 +154,7 @@ func NewSeatbeltRunnerWithAllowlist(allowlist []string) (*SeatbeltRunner, error)
 		killGrace:        bashKillGrace,
 		binaryPath:       seatbeltBinary,
 		networkAllowlist: append([]string(nil), captured...),
+		decisionBuf:      newDecisionBuffer(),
 	}
 
 	// Loopback-only / empty path: validate via the legacy IP-only
@@ -268,8 +261,8 @@ func (r *SeatbeltRunner) spawnProxyChild(proxyEntries, loopbackEntries []string)
 	}
 
 	// v42-1a: drain remaining stdout AND parse `event=<json>` lines
-	// into r.proxyDecisions so the next Run completion can project
-	// them into BashRunResult.Violations as Source=network_proxy.
+	// into r.decisionBuf so the next Run completion can project them
+	// into BashRunResult.Violations as Source=network_proxy.
 	// Mirrors the Linux drain pattern at bash_runner_bwrap_linux.go:530-563.
 	// Lines that don't carry the event prefix (future preamble lines,
 	// debug noise) are silently dropped — readiness has already been
@@ -291,9 +284,7 @@ func (r *SeatbeltRunner) spawnProxyChild(proxyEntries, loopbackEntries []string)
 				if err != nil || !ok {
 					continue
 				}
-				r.proxyDecisionsMu.Lock()
-				r.proxyDecisions = append(r.proxyDecisions, d)
-				r.proxyDecisionsMu.Unlock()
+				r.decisionBuf.Push(d)
 			}
 		}()
 		select {
@@ -665,17 +656,20 @@ func (r *SeatbeltRunner) Run(ctx context.Context, req BashRunRequest) (BashRunRe
 	// authoritative; heuristic entries follow as low-confidence signal.
 	// v42-1b: the same single snapshot also yields permitted-connection
 	// audit records for the parallel observability surface.
+	// v42-2: collectProxyDecisions returns (proxySurfaces, denyDrops int)
+	// so ViolationDropCount finally writes from the deny-side cap.
 	// Mirrors Linux at bash_runner_bwrap_linux.go.
-	netViolations, auditRecords, auditDrop := r.collectProxyDecisions()
+	surfaces, denyDrops := r.collectProxyDecisions()
 	heuristic := detectSeatbeltViolations(res)
-	if len(netViolations) > 0 || len(heuristic) > 0 {
-		combined := make([]SandboxViolation, 0, len(netViolations)+len(heuristic))
-		combined = append(combined, netViolations...)
+	if len(surfaces.Violations) > 0 || len(heuristic) > 0 {
+		combined := make([]SandboxViolation, 0, len(surfaces.Violations)+len(heuristic))
+		combined = append(combined, surfaces.Violations...)
 		combined = append(combined, heuristic...)
 		res.Violations = combined
 	}
-	res.AuditRecords = auditRecords
-	res.AuditRecordDropCount = auditDrop
+	res.ViolationDropCount = denyDrops
+	res.AuditRecords = surfaces.Permitted
+	res.AuditRecordDropCount = surfaces.PermittedDropCount
 	res.Output = appendViolationsSection(res.Output, res.Violations)
 	res.Output = appendAuditSummaryLine(res.Output, res.AuditRecords, res.AuditRecordDropCount)
 	return res, nil
@@ -696,63 +690,64 @@ func overrideClassificationIfProxyDiedDarwin(res BashRunResult, proxyDied bool) 
 	return res
 }
 
-// collectProxyDecisions performs ONE snapshot-and-clear of the per-Run
-// Decision buffer and projects it onto BOTH observability surfaces:
+// collectProxyDecisions performs ONE Drain of the boundedDecisionBuffer
+// and projects it onto the v42-1b/v42-2 observability surfaces.
+// Returns the proxySurfaces struct (Violations + Permitted +
+// PermittedDropCount) AND the deny-drop count via tuple per the
+// v42-1b architect addendum §2 partner-locked 3-field constraint.
 //
-//   - deny Decisions with Source=network_proxy become SandboxViolation
-//     entries (the agent's actionable signal — what was blocked),
-//   - allow Decisions become SandboxAuditRecord entries via
-//     projectAuditRecords (the parallel observability surface — what
-//     was permitted), with auditRecordRetentionDefault as the cap.
-//
-// The single snapshot is load-bearing: taking two separate snapshots
-// would split the Decision stream across the boundary, attributing
-// some events to the wrong projection. The buffer is cleared once at
-// the end of this method so the next Run starts empty.
+// The single Drain is load-bearing: both deny and allow Decisions
+// plus both drop counts come from one mu-guarded snapshot inside the
+// buffer, so a Decision push that races the Drain lands either fully
+// in this Run or fully in the next, never split.
 //
 // The projection sanitizes Host/Reason/Protocol newlines at the
-// construction boundary (M4 closure) before they reach the renderer or
-// the audit surface. Decision.Port is bounded to uint16 by NewAllow /
-// NewDeny construction (0..65535 enforced); the explicit conversion
+// construction boundary (M4 closure) before they reach the renderer
+// or the audit surface. Decision.Port is bounded to uint16 by NewAllow
+// / NewDeny construction (0..65535 enforced); the explicit conversion
 // below cannot overflow.
 //
-// Returns: violations slice, audit records slice, audit drop count.
-//
+// v42-2: drain-time cap; producer-volume-independent memory bound.
 // Mirrors the Linux helper at bash_runner_bwrap_linux.go; the near-copy
 // is intentional per the v42-1a Option A architect call.
-func (r *SeatbeltRunner) collectProxyDecisions() ([]SandboxViolation, []SandboxAuditRecord, int) {
-	r.proxyDecisionsMu.Lock()
-	decisions := r.proxyDecisions
-	r.proxyDecisions = nil
-	r.proxyDecisionsMu.Unlock()
-	if len(decisions) == 0 {
-		return nil, nil, 0
+func (r *SeatbeltRunner) collectProxyDecisions() (proxySurfaces, int) {
+	deny, allow, denyDrops, allowDrops := r.decisionBuf.Drain()
+	if len(deny) == 0 && len(allow) == 0 && denyDrops == 0 && allowDrops == 0 {
+		return proxySurfaces{}, 0
 	}
-	violations := make([]SandboxViolation, 0, len(decisions))
-	for _, d := range decisions {
-		if d.Allow {
-			continue
+
+	var violations []SandboxViolation
+	if len(deny) > 0 {
+		violations = make([]SandboxViolation, 0, len(deny))
+		for _, d := range deny {
+			if d.Source != SourceNetworkProxy {
+				// Only network_proxy decisions belong in violations
+				// from this lane. Other Source values are reserved
+				// for substrate-direct paths that emit through
+				// detect* helpers; routing them here would
+				// double-count.
+				continue
+			}
+			violations = append(violations, SandboxViolation{
+				Source:   string(d.Source),
+				Host:     sanitizeViolationField(d.Host),
+				Port:     uint16(d.Port),
+				Protocol: sanitizeViolationField(string(d.Protocol)),
+				Reason:   sanitizeViolationField(string(d.Reason)),
+			})
 		}
-		if d.Source != SourceNetworkProxy {
-			// Only network_proxy decisions belong in violations from
-			// this lane. Other Source values are reserved for
-			// substrate-direct paths that emit through detect*
-			// helpers; routing them here would double-count.
-			continue
+		if len(violations) == 0 {
+			violations = nil
 		}
-		violations = append(violations, SandboxViolation{
-			Source:   string(d.Source),
-			Host:     sanitizeViolationField(d.Host),
-			Port:     uint16(d.Port),
-			Protocol: sanitizeViolationField(string(d.Protocol)),
-			Reason:   sanitizeViolationField(string(d.Reason)),
-		})
 	}
-	auditRecords, auditDrop := projectAuditRecords(decisions, auditRecordRetentionDefault)
-	if len(violations) == 0 {
-		violations = nil
-	}
-	return violations, auditRecords, auditDrop
+
+	audit := projectAuditRecordsFromAllowOnly(allow)
+
+	return proxySurfaces{
+		Violations:         violations,
+		Permitted:          audit,
+		PermittedDropCount: allowDrops,
+	}, denyDrops
 }
 
 // seatbeltProfile (legacy entry) emits the SBPL profile for a Run
