@@ -154,6 +154,10 @@ func NewBwrapRunner() *BwrapRunner {
 // Empty allowlist falls back to the legacy default-deny construction
 // (no proxy spawn) so existing factory paths continue to work.
 func NewBwrapRunnerWithAllowlist(allowlist []string) (*BwrapRunner, error) {
+	return NewBwrapRunnerWithNetworkPolicy(allowlist, nil)
+}
+
+func NewBwrapRunnerWithNetworkPolicy(allowlist, denylist []string) (*BwrapRunner, error) {
 	r := &BwrapRunner{
 		killGrace:   bashKillGrace,
 		binaryPath:  "/usr/bin/bwrap",
@@ -161,18 +165,23 @@ func NewBwrapRunnerWithAllowlist(allowlist []string) (*BwrapRunner, error) {
 	}
 	r.probeResult = r.runProbe()
 
-	if len(allowlist) == 0 {
+	capturedAllow := append([]string(nil), allowlist...)
+	capturedDeny := append([]string(nil), denylist...)
+	if len(capturedAllow) == 0 && len(capturedDeny) == 0 {
 		return r, nil
 	}
 
 	// Determine whether any entry requires the proxy substrate.
 	// entryRequiresProxy is the canonical classifier — a single
 	// source of truth shared with the factory.
-	loopbackEntries, proxyEntries, err := splitBwrapAllowlistByProxyNeed(allowlist)
+	loopbackEntries, proxyEntries, err := splitBwrapAllowlistByProxyNeed(capturedAllow)
 	if err != nil {
 		return nil, err
 	}
-	if len(proxyEntries) == 0 {
+	if _, err := ParseDenylist(capturedDeny); err != nil {
+		return nil, err
+	}
+	if len(proxyEntries) == 0 && len(capturedDeny) == 0 {
 		// All entries are loopback IPs. Bwrap has no SBPL-equivalent
 		// loopback rule, so loopback-only allowlists are rejected by
 		// the factory before this constructor is called. Defensive
@@ -188,7 +197,7 @@ func NewBwrapRunnerWithAllowlist(allowlist []string) (*BwrapRunner, error) {
 		return nil, fmt.Errorf("bwrap substrate unavailable: %s", r.probeResult.Message)
 	}
 
-	if err := r.spawnProxyChild(proxyEntries, loopbackEntries); err != nil {
+	if err := r.spawnProxyChild(proxyEntries, loopbackEntries, capturedDeny); err != nil {
 		// spawnProxyChild may have allocated the UDS dir; clean it up
 		// so we don't leak a dir on failure.
 		r.cleanupUDSDir()
@@ -407,7 +416,7 @@ func resolveBwrapNetproxyBinary() (string, error) {
 // notice the readyErr and clean up. That makes the helper safe to
 // call from any context and removes the foot-gun the darwin substrate
 // follow-up flagged.
-func (r *BwrapRunner) spawnProxyChild(proxyEntries, loopbackEntries []string) error {
+func (r *BwrapRunner) spawnProxyChild(proxyEntries, loopbackEntries, denyEntries []string) error {
 	binary, err := resolveBwrapNetproxyBinary()
 	if err != nil {
 		return fmt.Errorf("resolve executable: %w", err)
@@ -454,6 +463,9 @@ func (r *BwrapRunner) spawnProxyChild(proxyEntries, loopbackEntries []string) er
 	}
 	for _, e := range loopbackEntries {
 		args = append(args, "--allow", e)
+	}
+	for _, e := range denyEntries {
+		args = append(args, "--deny", e)
 	}
 
 	cmd := exec.Command(binary, args...)

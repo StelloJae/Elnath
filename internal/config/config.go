@@ -30,6 +30,7 @@ type Config struct {
 	FallbackModel string `yaml:"fallback_model"`
 
 	Permission     PermissionConfig     `yaml:"permission"`
+	Sandbox        SandboxConfig        `yaml:"sandbox"`
 	Principal      PrincipalConfig      `yaml:"principal"`
 	Daemon         DaemonConfig         `yaml:"daemon"`
 	FaultInjection FaultInjectionConfig `yaml:"fault_injection"`
@@ -91,6 +92,12 @@ type PermissionConfig struct {
 	Mode  string   `yaml:"mode"` // default, accept_edits, plan, bypass
 	Allow []string `yaml:"allow"`
 	Deny  []string `yaml:"deny"`
+}
+
+type SandboxConfig struct {
+	Mode             string   `yaml:"mode"`
+	NetworkAllowlist []string `yaml:"network_allowlist"`
+	NetworkDenylist  []string `yaml:"network_denylist"`
 }
 
 type PrincipalConfig struct {

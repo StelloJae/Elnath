@@ -26,7 +26,17 @@ func NewBwrapRunner() *BwrapRunner {
 // so cross-platform factory code stays substrate-agnostic. On
 // non-linux the allowlist is ignored and the stub Probe reports
 // Available=false.
-func NewBwrapRunnerWithAllowlist(_ []string) (*BwrapRunner, error) {
+func NewBwrapRunnerWithAllowlist(allowlist []string) (*BwrapRunner, error) {
+	return NewBwrapRunnerWithNetworkPolicy(allowlist, nil)
+}
+
+func NewBwrapRunnerWithNetworkPolicy(allowlist, denylist []string) (*BwrapRunner, error) {
+	if _, err := ParseAllowlist(allowlist); err != nil {
+		return nil, err
+	}
+	if _, err := ParseDenylist(denylist); err != nil {
+		return nil, err
+	}
 	return &BwrapRunner{killGrace: bashKillGrace}, nil
 }
 

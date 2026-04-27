@@ -49,51 +49,55 @@ func TestSandboxConfig_DenylistParsedThroughNetproxyPolicy(t *testing.T) {
 	}
 }
 
-// TestFactory_SeatbeltDomainAllowlistRejectedWithB3b42Wording pins
-// the new factory rejection wording for domain entries on Seatbelt.
-// The error MUST name the lane (B3b-4-2 / B3b-4-3) and MUST forbid
-// silent fallback to DirectRunner.
-func TestFactory_SeatbeltDomainAllowlistRejectedWithB3b42Wording(t *testing.T) {
-	if runtime.GOOS != "darwin" {
-		t.Skip("seatbelt factory only available on darwin")
-	}
+func TestFactory_DirectModeRejectsNetworkPolicy(t *testing.T) {
 	runner, err := NewBashRunnerForConfig(SandboxConfig{
-		Mode:             "seatbelt",
+		Mode:             "direct",
 		NetworkAllowlist: []string{"github.com:443"},
 	})
 	if err == nil {
-		t.Fatalf("expected factory error for domain entry, got runner=%v", runner)
+		t.Fatalf("direct mode with network policy must fail loudly, got runner=%v", runner)
 	}
 	if runner != nil {
-		t.Errorf("factory MUST NOT return a runner alongside an error (silent fallback risk)")
+		t.Fatalf("direct mode with network policy must not return a runner")
 	}
-	msg := err.Error()
-	for _, want := range []string{"github.com:443", "B3b-4", "proxy"} {
-		if !strings.Contains(msg, want) {
-			t.Errorf("rejection wording missing %q; got: %v", want, err)
+	for _, want := range []string{"direct", "network", "policy"} {
+		if !strings.Contains(strings.ToLower(err.Error()), want) {
+			t.Errorf("direct network-policy error missing %q; got: %v", want, err)
 		}
-	}
-	// Restart-required disclosure must appear so the operator knows
-	// changing config requires an Elnath restart.
-	if !strings.Contains(msg, "restart") {
-		t.Errorf("rejection wording missing restart disclosure; got: %v", err)
 	}
 }
 
-func TestFactory_SeatbeltNonLoopbackIPAllowlistRejectedWithB3b42Wording(t *testing.T) {
-	if runtime.GOOS != "darwin" {
-		t.Skip("seatbelt factory only available on darwin")
-	}
-	_, err := NewBashRunnerForConfig(SandboxConfig{
-		Mode:             "seatbelt",
-		NetworkAllowlist: []string{"10.0.0.5:5432"},
+func TestFactory_EmptyModeRejectsNetworkPolicy(t *testing.T) {
+	runner, err := NewBashRunnerForConfig(SandboxConfig{
+		NetworkDenylist: []string{"169.254.169.254:80"},
 	})
 	if err == nil {
-		t.Fatalf("expected factory error for non-loopback IP entry")
+		t.Fatalf("empty sandbox mode with network policy must fail loudly, got runner=%v", runner)
 	}
-	for _, want := range []string{"10.0.0.5:5432", "B3b-4", "proxy"} {
+	if runner != nil {
+		t.Fatalf("empty sandbox mode with network policy must not return a runner")
+	}
+	for _, want := range []string{"sandbox", "mode", "network"} {
+		if !strings.Contains(strings.ToLower(err.Error()), want) {
+			t.Errorf("empty mode network-policy error missing %q; got: %v", want, err)
+		}
+	}
+}
+
+func TestFactory_SeatbeltInvalidAllowlistFailsLoudly(t *testing.T) {
+	runner, err := NewBashRunnerForConfig(SandboxConfig{
+		Mode:             "seatbelt",
+		NetworkAllowlist: []string{"not-a-host-port"},
+	})
+	if err == nil {
+		t.Fatalf("expected invalid allowlist error, got runner=%v", runner)
+	}
+	if runner != nil {
+		t.Fatalf("invalid allowlist must not return a runner")
+	}
+	for _, want := range []string{"allowlist", "host:port"} {
 		if !strings.Contains(err.Error(), want) {
-			t.Errorf("rejection wording missing %q; got: %v", want, err)
+			t.Errorf("invalid allowlist error missing %q; got: %v", want, err)
 		}
 	}
 }

@@ -127,19 +127,19 @@ func TestNewBashRunnerForConfig_BwrapOnCurrentPlatform(t *testing.T) {
 }
 
 func TestNewBashRunnerForConfig_BwrapRejectsNetworkAllowlist(t *testing.T) {
-	// B3b-3 default-deny only; non-empty NetworkAllowlist is rejected
-	// at the factory regardless of platform so a multi-platform
-	// config that wants allowlist semantics cannot silently degrade
-	// to "no network" on linux.
+	// Bwrap still rejects loopback-only allowlists because it has no
+	// SBPL-equivalent loopback rule and must not silently broaden local
+	// access. Domain/non-loopback proxy-required entries are covered by
+	// linux proxy factory tests.
 	_, err := NewBashRunnerForConfig(SandboxConfig{
 		Mode:             "bwrap",
 		NetworkAllowlist: []string{"127.0.0.1:8080"},
 	})
 	if err == nil {
-		t.Fatalf("expected factory error when bwrap mode is given a network allowlist")
+		t.Fatalf("expected factory error when bwrap mode is given a loopback allowlist")
 	}
-	if !strings.Contains(err.Error(), "B3b-4") && !strings.Contains(err.Error(), "default-deny") {
-		t.Errorf("expected B3b-4 deferral message, got: %v", err)
+	if !strings.Contains(err.Error(), "loopback") && !strings.Contains(err.Error(), "127.0.0.1:8080") {
+		t.Errorf("expected loopback rejection message, got: %v", err)
 	}
 }
 

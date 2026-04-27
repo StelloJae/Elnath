@@ -380,7 +380,12 @@ func buildExecutionRuntime(
 		effectiveWorkDir, _ = os.Getwd()
 	}
 	guard := tools.NewPathGuard(effectiveWorkDir, protectedPaths)
-	reg := buildToolRegistry(guard, provider)
+	runner, err := buildBashRunnerForConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	app.RegisterCloser("bash runner", bashRunnerCloser{runner: runner})
+	reg := buildToolRegistry(guard, provider, runner)
 	gitSync, wikiIdx := registerWikiTools(reg, cfg.WikiDir, db.Wiki)
 	reg.Register(conversation.NewConversationSearchTool(historyStore))
 
@@ -864,27 +869,27 @@ func (rt *executionRuntime) runTask(
 		promptMessages = promptMessages[:len(promptMessages)-1]
 	}
 	renderState := &prompt.RenderState{
-		SessionID:     sess.ID,
-		UserInput:     userInput,
-		Self:          rt.selfState,
-		Principal:     rt.principal,
-		Messages:      promptMessages,
-		WikiIdx:       rt.wikiIdx,
-		TokenBudget:   0,
-		Locale:        rt.mgr.LastLocale(sess.ID),
-		PersonaExtra:  rt.personaExtra,
-		Model:         rt.wfCfg.Model,
-		Provider:      rt.provider.Name(),
+		SessionID:      sess.ID,
+		UserInput:      userInput,
+		Self:           rt.selfState,
+		Principal:      rt.principal,
+		Messages:       promptMessages,
+		WikiIdx:        rt.wikiIdx,
+		TokenBudget:    0,
+		Locale:         rt.mgr.LastLocale(sess.ID),
+		PersonaExtra:   rt.personaExtra,
+		Model:          rt.wfCfg.Model,
+		Provider:       rt.provider.Name(),
 		ToolNames:      rt.reg.Names(),
 		WorkDir:        rt.workDir,
 		SessionWorkDir: rt.sessionRenderWorkDir(sess),
-		ExistingCode:  routeCtx.ExistingCode,
-		VerifyHint:    routeCtx.VerificationHint,
-		BenchmarkMode: routeCtx.BenchmarkMode,
-		TaskLanguage:  taskLanguageFromEnv(),
-		DaemonMode:    rt.daemonMode,
-		MessageCount:  len(prepared),
-		ProjectID:     routeCtx.ProjectID,
+		ExistingCode:   routeCtx.ExistingCode,
+		VerifyHint:     routeCtx.VerificationHint,
+		BenchmarkMode:  routeCtx.BenchmarkMode,
+		TaskLanguage:   taskLanguageFromEnv(),
+		DaemonMode:     rt.daemonMode,
+		MessageCount:   len(prepared),
+		ProjectID:      routeCtx.ProjectID,
 	}
 	systemPrompt, err := rt.promptBuilder.Build(ctx, renderState)
 	if err != nil {

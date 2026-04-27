@@ -53,6 +53,19 @@ func TestDefaultConfig(t *testing.T) {
 	}
 }
 
+func TestDefaultConfig_SandboxConfigIsDirectZeroValue(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.Sandbox.Mode != "" {
+		t.Errorf("expected default sandbox mode to be empty/direct, got %q", cfg.Sandbox.Mode)
+	}
+	if len(cfg.Sandbox.NetworkAllowlist) != 0 {
+		t.Errorf("expected default sandbox allowlist to be empty, got %v", cfg.Sandbox.NetworkAllowlist)
+	}
+	if len(cfg.Sandbox.NetworkDenylist) != 0 {
+		t.Errorf("expected default sandbox denylist to be empty, got %v", cfg.Sandbox.NetworkDenylist)
+	}
+}
+
 // --- DefaultConfigPath ---
 
 func TestDefaultConfigPath(t *testing.T) {
@@ -114,6 +127,47 @@ func TestLoad_PrincipalConfig(t *testing.T) {
 	}
 	if cfg.Principal.UserID != "stello" {
 		t.Fatalf("Principal.UserID = %q, want stello", cfg.Principal.UserID)
+	}
+}
+
+func TestLoad_SandboxConfigNetworkPolicy(t *testing.T) {
+	dir := t.TempDir()
+	wikiDir := filepath.Join(dir, "wiki")
+	if err := os.MkdirAll(wikiDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	yaml := strings.Join([]string{
+		"data_dir: " + dir,
+		"wiki_dir: " + wikiDir,
+		"sandbox:",
+		"  mode: seatbelt",
+		"  network_allowlist:",
+		"    - github.com:443",
+		"    - api.github.com:443",
+		"  network_denylist:",
+		"    - 169.254.169.254:80",
+		"",
+	}, "\n")
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.Sandbox.Mode != "seatbelt" {
+		t.Fatalf("Sandbox.Mode = %q, want seatbelt", cfg.Sandbox.Mode)
+	}
+	wantAllow := []string{"github.com:443", "api.github.com:443"}
+	if strings.Join(cfg.Sandbox.NetworkAllowlist, ",") != strings.Join(wantAllow, ",") {
+		t.Fatalf("Sandbox.NetworkAllowlist = %v, want %v", cfg.Sandbox.NetworkAllowlist, wantAllow)
+	}
+	wantDeny := []string{"169.254.169.254:80"}
+	if strings.Join(cfg.Sandbox.NetworkDenylist, ",") != strings.Join(wantDeny, ",") {
+		t.Fatalf("Sandbox.NetworkDenylist = %v, want %v", cfg.Sandbox.NetworkDenylist, wantDeny)
 	}
 }
 

@@ -113,21 +113,26 @@ func TestSeatbeltRunner_LabelDisciplineFollowsEnforcement(t *testing.T) {
 }
 
 func TestNewSeatbeltRunnerWithAllowlist_ValidatesEntries(t *testing.T) {
-	cases := []struct {
+	type testCase struct {
 		name      string
 		allowlist []string
 		wantErr   bool
-	}{
+	}
+	cases := []testCase{
 		{"empty", nil, false},
 		{"valid ipv4", []string{"127.0.0.1:8080"}, false},
 		{"valid ipv6", []string{"[::1]:8080"}, false},
 		{"multiple valid loopback", []string{"127.0.0.1:80", "[::1]:443"}, false},
-		{"non-loopback rejected", []string{"10.0.0.1:443"}, true},
-		{"domain rejected", []string{"github.com:443"}, true},
 		{"missing port", []string{"127.0.0.1"}, true},
 		{"port zero rejected", []string{"127.0.0.1:0"}, true},
 		{"port out of range", []string{"127.0.0.1:99999"}, true},
 		{"empty entry", []string{""}, true},
+	}
+	if runtime.GOOS != "darwin" {
+		cases = append(cases,
+			testCase{"valid non-loopback", []string{"10.0.0.1:443"}, false},
+			testCase{"valid domain", []string{"github.com:443"}, false},
+		)
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

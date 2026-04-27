@@ -21,18 +21,15 @@ import (
 // non-loopback IPs, domain entries, scoped wildcards). The factory
 // inspects each entry's shape: a loopback-only allowlist is honored
 // by Seatbelt directly; any non-loopback IP entry or domain entry
-// requires the netproxy proxy substrate, which the substrate-wiring
-// lanes (B3b-4-2 macOS, B3b-4-3 Linux) ship later. Until those lanes
-// land the factory rejects such entries LOUDLY at construction with
-// an error naming the in-progress lane and the restart-required
-// disclosure — never a silent fallback to DirectRunner.
+// requires the netproxy proxy substrate. Seatbelt and bwrap proxy
+// substrate wiring is production code, so proxy-required entries flow
+// to those constructors. Silent fallback to DirectRunner remains
+// forbidden.
 //
 // NetworkDenylist holds explicit deny entries with the same grammar.
 // Denylist matches always win over allowlist matches (deny-wins, per
-// netproxy_policy.go EvaluateWithDenylist). Like NetworkAllowlist
-// entries, non-loopback denylist entries currently require proxy
-// wiring; until that ships, a non-empty denylist on Seatbelt or
-// Bwrap is rejected at the factory.
+// netproxy_policy.go EvaluateWithDenylist). Non-empty denylists require
+// the proxy substrate so the proxy can evaluate deny rules authoritatively.
 //
 // NetworkProxyConnectTimeout is the operator-tunable upper bound on
 // initial proxy handshake reads. Zero falls back to the default
@@ -115,28 +112,36 @@ func networkProxyDisclosure() string {
 // so the user sees the concrete reason (wrong platform, missing binary,
 // etc.) rather than a generic "unsupported".
 //
-// Allowlist/denylist shape determines whether substrate-wiring lanes
-// must be present. Loopback-only entries on Seatbelt are honored
-// directly by the SBPL `(remote ip "localhost:<port>")` rule; any
-// entry that requires the proxy substrate (non-loopback IP, domain)
-// is rejected here with explicit B3b-4-2 / B3b-4-3 wording until the
-// proxy is wired through. Bwrap rejects every non-empty allowlist
-// because the substrate has no equivalent rule yet.
+// Allowlist/denylist shape determines whether the proxy substrate is
+// needed. Loopback-only entries on Seatbelt are honored directly by the
+// SBPL `(remote ip "localhost:<port>")` rule when no denylist is
+// configured; proxy-required entries and denylists flow to the platform
+// proxy constructors. Bwrap still rejects loopback-only allowlists
+// because the substrate has no SBPL-equivalent loopback rule.
 func NewBashRunnerForConfig(cfg SandboxConfig) (BashRunner, error) {
-	switch cfg.Mode {
-	case "", "direct":
+	mode := strings.ToLower(strings.TrimSpace(cfg.Mode))
+	if err := validateNetworkPolicyEntries(cfg); err != nil {
+		return nil, err
+	}
+	switch mode {
+	case "":
+		if hasNetworkPolicy(cfg) {
+			return nil, fmt.Errorf("sandbox mode is required when network policy is configured; direct mode cannot enforce network allowlist/denylist. %s", networkProxyDisclosure())
+		}
+		return NewDirectRunner(), nil
+	case "direct":
+		if hasNetworkPolicy(cfg) {
+			return nil, fmt.Errorf("sandbox mode %q cannot enforce network policy; choose seatbelt or bwrap for network allowlist/denylist. %s", mode, networkProxyDisclosure())
+		}
 		return NewDirectRunner(), nil
 	case "seatbelt":
-		if err := rejectIfRequiresProxy(cfg.NetworkAllowlist, cfg.NetworkDenylist, "seatbelt", "B3b-4-2"); err != nil {
-			return nil, err
-		}
-		r, err := NewSeatbeltRunnerWithAllowlist(cfg.NetworkAllowlist)
+		r, err := NewSeatbeltRunnerWithNetworkPolicy(cfg.NetworkAllowlist, cfg.NetworkDenylist)
 		if err != nil {
-			return nil, fmt.Errorf("sandbox mode %q: %w", cfg.Mode, err)
+			return nil, fmt.Errorf("sandbox mode %q: %w", mode, err)
 		}
 		p := r.Probe(context.Background())
 		if !p.Available {
-			return nil, fmt.Errorf("sandbox mode %q unavailable: %s", cfg.Mode, p.Message)
+			return nil, fmt.Errorf("sandbox mode %q unavailable: %s", mode, p.Message)
 		}
 		return r, nil
 	case "bwrap":
@@ -150,13 +155,13 @@ func NewBashRunnerForConfig(cfg SandboxConfig) (BashRunner, error) {
 		if err := rejectIfBwrapLoopbackOnly(cfg.NetworkAllowlist, cfg.NetworkDenylist); err != nil {
 			return nil, err
 		}
-		r, err := NewBwrapRunnerWithAllowlist(cfg.NetworkAllowlist)
+		r, err := NewBwrapRunnerWithNetworkPolicy(cfg.NetworkAllowlist, cfg.NetworkDenylist)
 		if err != nil {
-			return nil, fmt.Errorf("sandbox mode %q: %w", cfg.Mode, err)
+			return nil, fmt.Errorf("sandbox mode %q: %w", mode, err)
 		}
 		p := r.Probe(context.Background())
 		if !p.Available {
-			return nil, fmt.Errorf("sandbox mode %q unavailable: %s", cfg.Mode, p.Message)
+			return nil, fmt.Errorf("sandbox mode %q unavailable: %s", mode, p.Message)
 		}
 		return r, nil
 	default:
@@ -164,40 +169,15 @@ func NewBashRunnerForConfig(cfg SandboxConfig) (BashRunner, error) {
 	}
 }
 
-// rejectIfRequiresProxy returns an explicit B3b-4 deferral error when
-// any allowlist or denylist entry needs the proxy substrate. Loopback
-// IP entries are accepted on Seatbelt because the SBPL filter handles
-// them directly; the same is NOT true for bwrap (handled separately).
-//
-// The error wording is partner-locked: it MUST cite the in-progress
-// lane (B3b-4-2 macOS, B3b-4-3 Linux), MUST forbid silent fallback to
-// DirectRunner, and MUST include the restart-required +
-// UDP/QUIC-blocked + DNS-rebinding disclosure so operators learn the
-// Phase 1 invariants without consulting external docs.
-func rejectIfRequiresProxy(allowlist, denylist []string, _ string, lane string) error {
-	check := func(entries []string, kind string) error {
-		for _, raw := range entries {
-			needsProxy, parseErr := entryRequiresProxy(raw)
-			if parseErr != nil {
-				return fmt.Errorf("network %s entry %q invalid: %w", kind, raw, parseErr)
-			}
-			if !needsProxy {
-				continue
-			}
-			return fmt.Errorf(
-				"network %s entry %q requires B3b-4 proxy wiring; "+
-					"Seatbelt/Bwrap proxy wiring is not available in this lane yet (%s macOS, B3b-4-3 Linux). "+
-					"Loopback-only allowlist entries (e.g. 127.0.0.1:8080, [::1]:8080) are still accepted on Seatbelt; "+
-					"or remove the entry to fall back to default-deny. %s",
-				kind, raw, lane, networkProxyDisclosure(),
-			)
-		}
-		return nil
-	}
-	if err := check(allowlist, "allowlist"); err != nil {
+func hasNetworkPolicy(cfg SandboxConfig) bool {
+	return len(cfg.NetworkAllowlist) > 0 || len(cfg.NetworkDenylist) > 0
+}
+
+func validateNetworkPolicyEntries(cfg SandboxConfig) error {
+	if _, err := ParseAllowlist(cfg.NetworkAllowlist); err != nil {
 		return err
 	}
-	if err := check(denylist, "denylist"); err != nil {
+	if _, err := ParseDenylist(cfg.NetworkDenylist); err != nil {
 		return err
 	}
 	return nil
@@ -225,20 +205,6 @@ func entryRequiresProxy(entry string) (bool, error) {
 		return true, nil
 	}
 	return !r.IP.IsLoopback(), nil
-}
-
-// firstNetEntry returns the first non-empty entry across allowlist
-// and denylist for diagnostic message formatting in the bwrap
-// rejection path. Local helper because the existing firstNonEmpty
-// elsewhere has a different signature.
-func firstNetEntry(allowlist, denylist []string) string {
-	if len(allowlist) > 0 {
-		return allowlist[0]
-	}
-	if len(denylist) > 0 {
-		return denylist[0]
-	}
-	return ""
 }
 
 // rejectIfBwrapLoopbackOnly errors when the allowlist or denylist on

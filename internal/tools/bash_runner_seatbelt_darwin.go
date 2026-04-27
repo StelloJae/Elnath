@@ -138,7 +138,16 @@ func NewSeatbeltRunner() *SeatbeltRunner {
 // descriptive error so the factory caller can surface "sandbox
 // unavailable" rather than silently falling back.
 func NewSeatbeltRunnerWithAllowlist(allowlist []string) (*SeatbeltRunner, error) {
+	return NewSeatbeltRunnerWithNetworkPolicy(allowlist, nil)
+}
+
+// NewSeatbeltRunnerWithNetworkPolicy constructs a SeatbeltRunner with
+// allowlist and denylist policy. Non-empty denylists force proxy mode so
+// deny-wins semantics are evaluated by netproxy instead of being bypassed
+// through SBPL direct loopback rules.
+func NewSeatbeltRunnerWithNetworkPolicy(allowlist, denylist []string) (*SeatbeltRunner, error) {
 	captured := append([]string(nil), allowlist...)
+	capturedDeny := append([]string(nil), denylist...)
 
 	// Determine which mode: pure-loopback (no proxy needed) or
 	// proxy-required. The factory layer runs entryRequiresProxy on
@@ -147,6 +156,9 @@ func NewSeatbeltRunnerWithAllowlist(allowlist []string) (*SeatbeltRunner, error)
 	// instantiation of the runner).
 	loopbackEntries, proxyEntries, err := splitAllowlistByProxyNeed(captured)
 	if err != nil {
+		return nil, err
+	}
+	if _, err := ParseDenylist(capturedDeny); err != nil {
 		return nil, err
 	}
 
@@ -160,7 +172,7 @@ func NewSeatbeltRunnerWithAllowlist(allowlist []string) (*SeatbeltRunner, error)
 	// Loopback-only / empty path: validate via the legacy IP-only
 	// validator so existing factory tests that pass IP literals
 	// still receive the strict "must be loopback" error.
-	if len(proxyEntries) == 0 {
+	if len(proxyEntries) == 0 && len(capturedDeny) == 0 {
 		if _, err := validateNetworkAllowlist(loopbackEntries); err != nil {
 			return nil, err
 		}
@@ -173,13 +185,17 @@ func NewSeatbeltRunnerWithAllowlist(allowlist []string) (*SeatbeltRunner, error)
 	// Proxy-required path: spawn the child, capture ports, then
 	// install the proxy-aware profile builder so the SBPL profile
 	// pins both proxy listener ports.
-	if err := r.spawnProxyChild(proxyEntries, loopbackEntries); err != nil {
+	if err := r.spawnProxyChild(proxyEntries, loopbackEntries, capturedDeny); err != nil {
 		return nil, fmt.Errorf("netproxy: spawn child: %w", err)
 	}
 	httpPort := r.proxyHTTPPort
 	socksPort := r.proxySOCKSPort
+	profileLoopbackEntries := loopbackEntries
+	if len(capturedDeny) > 0 {
+		profileLoopbackEntries = nil
+	}
 	r.profileBuilder = func(req BashRunRequest) string {
-		return seatbeltProfileWithProxyPorts(req, loopbackEntries, httpPort, socksPort)
+		return seatbeltProfileWithProxyPorts(req, profileLoopbackEntries, httpPort, socksPort)
 	}
 	return r, nil
 }
@@ -212,7 +228,7 @@ func splitAllowlistByProxyNeed(allowlist []string) (loopback, proxy []string, er
 // factory caller can return "sandbox unavailable" rather than silently
 // falling back. This is the partner-locked no-silent-fallback
 // invariant.
-func (r *SeatbeltRunner) spawnProxyChild(proxyEntries, loopbackEntries []string) error {
+func (r *SeatbeltRunner) spawnProxyChild(proxyEntries, loopbackEntries, denyEntries []string) error {
 	binary, err := resolveNetproxyBinary()
 	if err != nil {
 		return fmt.Errorf("resolve executable: %w", err)
@@ -233,6 +249,9 @@ func (r *SeatbeltRunner) spawnProxyChild(proxyEntries, loopbackEntries []string)
 	// well so the agent does not have to know which path applies.
 	for _, e := range loopbackEntries {
 		args = append(args, "--allow", e)
+	}
+	for _, e := range denyEntries {
+		args = append(args, "--deny", e)
 	}
 
 	cmd := exec.Command(binary, args...)

@@ -418,16 +418,49 @@ func registerMCPTools(ctx context.Context, reg *tools.Registry, servers []config
 	}
 }
 
-func buildToolRegistry(guard *tools.PathGuard, provider llm.Provider) *tools.Registry {
+func sandboxConfigFromConfig(cfg *config.Config) tools.SandboxConfig {
+	if cfg == nil {
+		return tools.SandboxConfig{}
+	}
+	return tools.SandboxConfig{
+		Mode:             cfg.Sandbox.Mode,
+		NetworkAllowlist: append([]string(nil), cfg.Sandbox.NetworkAllowlist...),
+		NetworkDenylist:  append([]string(nil), cfg.Sandbox.NetworkDenylist...),
+	}
+}
+
+func buildBashRunnerForConfig(cfg *config.Config) (tools.BashRunner, error) {
+	runner, err := tools.NewBashRunnerForConfig(sandboxConfigFromConfig(cfg))
+	if err != nil {
+		return nil, fmt.Errorf("configure bash runner: %w", err)
+	}
+	return runner, nil
+}
+
+type bashRunnerCloser struct {
+	runner tools.BashRunner
+}
+
+func (c bashRunnerCloser) Close() error {
+	if c.runner == nil {
+		return nil
+	}
+	return c.runner.Close(context.Background())
+}
+
+func buildToolRegistry(guard *tools.PathGuard, provider llm.Provider, runner tools.BashRunner) *tools.Registry {
+	if runner == nil {
+		panic("buildToolRegistry requires a configured BashRunner")
+	}
 	reg := tools.NewRegistry()
 	tracker := tools.NewReadTracker()
-	reg.Register(tools.NewBashTool(guard))
+	reg.Register(tools.NewBashToolWithRunner(guard, runner))
 	reg.Register(tools.NewReadTool(guard, tracker))
 	reg.Register(tools.NewWriteTool(guard, tracker))
 	reg.Register(tools.NewEditTool(guard, tracker))
 	reg.Register(tools.NewGlobTool(guard))
 	reg.Register(tools.NewGrepTool(guard, tracker))
-	reg.Register(tools.NewGitTool(guard))
+	reg.Register(tools.NewGitToolWithRunner(guard, runner))
 	reg.Register(tools.NewWebFetchTool(tools.WithSecondaryCaller(llm.NewSecondaryModelCaller(provider))))
 	return reg
 }
