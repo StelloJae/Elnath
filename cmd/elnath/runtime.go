@@ -380,6 +380,9 @@ func buildExecutionRuntime(
 		effectiveWorkDir, _ = os.Getwd()
 	}
 	guard := tools.NewPathGuard(effectiveWorkDir, protectedPaths)
+	// buildBashRunnerForConfig returns a shareable facade. Stateful
+	// sandbox/proxy runners are created inside each Run so daemon workers do
+	// not share proxy decision buffers or drain goroutines.
 	runner, err := buildBashRunnerForConfig(cfg)
 	if err != nil {
 		return nil, err

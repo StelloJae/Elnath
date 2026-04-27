@@ -430,7 +430,7 @@ func sandboxConfigFromConfig(cfg *config.Config) tools.SandboxConfig {
 }
 
 func buildBashRunnerForConfig(cfg *config.Config) (tools.BashRunner, error) {
-	runner, err := tools.NewBashRunnerForConfig(sandboxConfigFromConfig(cfg))
+	runner, err := tools.NewScopedBashRunnerForConfig(sandboxConfigFromConfig(cfg))
 	if err != nil {
 		return nil, fmt.Errorf("configure bash runner: %w", err)
 	}
