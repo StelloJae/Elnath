@@ -160,6 +160,36 @@ func TestSeatbeltRunner_DomainAllowlistSpawnsProxyChildAndCapturesPorts(t *testi
 	}
 }
 
+func TestFactory_SeatbeltDomainAllowlistReachesProxyConstructor(t *testing.T) {
+	requireSeatbeltProxyTestSupport(t)
+	binPath := buildElnathBinaryForSeatbeltProxy(t)
+	t.Setenv("ELNATH_NETPROXY_BINARY_OVERRIDE", binPath)
+
+	runner, err := NewBashRunnerForConfig(SandboxConfig{
+		Mode:             "seatbelt",
+		NetworkAllowlist: []string{"github.com:443"},
+	})
+	if err != nil {
+		if strings.Contains(err.Error(), "proxy wiring is not available") ||
+			strings.Contains(err.Error(), "requires B3b-4 proxy wiring") {
+			t.Fatalf("seatbelt domain allowlist hit obsolete factory rejection: %v", err)
+		}
+		t.Fatalf("NewBashRunnerForConfig(seatbelt domain): %v", err)
+	}
+	defer runner.Close(context.Background())
+
+	seatbelt, ok := runner.(*SeatbeltRunner)
+	if !ok {
+		t.Fatalf("expected SeatbeltRunner, got %T", runner)
+	}
+	if seatbelt.proxyChild() == nil {
+		t.Fatalf("seatbelt domain allowlist must reach proxy-backed constructor")
+	}
+	if seatbelt.httpProxyPort() == 0 || seatbelt.socksProxyPort() == 0 {
+		t.Fatalf("expected proxy ports to be captured; got http=%d socks=%d", seatbelt.httpProxyPort(), seatbelt.socksProxyPort())
+	}
+}
+
 // TestSeatbeltRunner_CloseShutsDownProxyChildCleanly asserts the
 // runner-lifetime resource is released on Close.
 func TestSeatbeltRunner_CloseShutsDownProxyChildCleanly(t *testing.T) {

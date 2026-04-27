@@ -290,7 +290,7 @@ func runAgentScenario(ctx context.Context, scenario *fault.Scenario) (string, st
 func runAgentScenarioOnce(ctx context.Context, scenario *fault.Scenario) (string, string, int, bool) {
 	workDir, cleanup, toolInput, providerName := prepareAgentScenarioResources(scenario)
 	defer cleanup()
-	reg := buildToolRegistry(tools.NewPathGuard(workDir, nil), nil)
+	reg := buildToolRegistry(tools.NewPathGuard(workDir, nil), nil, tools.NewDirectRunner())
 	if scenario.Category == fault.CategoryTool {
 		reg = newChaosToolRegistry(scenario)
 	}
@@ -400,7 +400,7 @@ func runIPCScenario(ctx context.Context, logger *slog.Logger, scenario *fault.Sc
 func chaosDaemonRunner(scenario *fault.Scenario) daemon.AgentTaskRunner {
 	return func(ctx context.Context, payload string, _ event.Sink) (daemon.TaskResult, error) {
 		_ = payload
-		reg := buildToolRegistry(tools.NewPathGuard(os.TempDir(), nil), nil)
+		reg := buildToolRegistry(tools.NewPathGuard(os.TempDir(), nil), nil, tools.NewDirectRunner())
 		provider := &chaosProvider{scenario: scenario, providerName: "anthropic"}
 		a := agent.New(provider, reg,
 			agent.WithPermission(agent.NewPermission(agent.WithMode(agent.ModeBypass))),

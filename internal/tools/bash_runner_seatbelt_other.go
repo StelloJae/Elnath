@@ -24,11 +24,17 @@ func NewSeatbeltRunner() *SeatbeltRunner {
 }
 
 func NewSeatbeltRunnerWithAllowlist(allowlist []string) (*SeatbeltRunner, error) {
-	cleaned, err := validateNetworkAllowlist(allowlist)
-	if err != nil {
+	return NewSeatbeltRunnerWithNetworkPolicy(allowlist, nil)
+}
+
+func NewSeatbeltRunnerWithNetworkPolicy(allowlist, denylist []string) (*SeatbeltRunner, error) {
+	if _, err := ParseAllowlist(allowlist); err != nil {
 		return nil, err
 	}
-	return &SeatbeltRunner{killGrace: bashKillGrace, networkAllowlist: cleaned}, nil
+	if _, err := ParseDenylist(denylist); err != nil {
+		return nil, err
+	}
+	return &SeatbeltRunner{killGrace: bashKillGrace, networkAllowlist: append([]string(nil), allowlist...)}, nil
 }
 
 func (r *SeatbeltRunner) Name() string { return "seatbelt" }
