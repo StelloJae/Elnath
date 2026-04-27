@@ -127,20 +127,11 @@ type BwrapRunner struct {
 	// can synchronously wait for the drain to finish.
 	proxyDrainDone chan struct{}
 
-	// proxyDecisionsMu guards proxyDecisions. Held only briefly during
-	// append (drain goroutine) and snapshot+clear (Run completion); the
-	// listener accept-loop path never touches this slice directly so
-	// the lock cannot block the proxy's hot path.
-	proxyDecisionsMu sync.Mutex
-	// proxyDecisions buffers per-connection Decision events the drain
-	// goroutine parses out of the netproxy child's stdout. B3b-4-3.5
-	// surfaces these into BashRunResult.Violations on the next Run
-	// completion via collectProxyDecisions; v42-1b extends the same
-	// projection to BashRunResult.AuditRecords for permitted-connection
-	// observability. Bounded by the cumulative volume of allowlist
-	// evaluations during a single Run; in practice curl invocations
-	// emit one Decision per upstream destination.
-	proxyDecisions []Decision
+	// decisionBuf is the per-Run drain-time buffer for Decision events
+	// the drain goroutine parses out of the netproxy child's stdout.
+	// Two FIFO ring slices (denyBuf cap=64 + allowBuf cap=200) isolate
+	// deny retention from allow-flood pressure. v42-2 wired (netproxy_drain.go).
+	decisionBuf *boundedDecisionBuffer
 }
 
 // NewBwrapRunner constructs a BwrapRunner with no network allowlist
@@ -164,8 +155,9 @@ func NewBwrapRunner() *BwrapRunner {
 // (no proxy spawn) so existing factory paths continue to work.
 func NewBwrapRunnerWithAllowlist(allowlist []string) (*BwrapRunner, error) {
 	r := &BwrapRunner{
-		killGrace:  bashKillGrace,
-		binaryPath: "/usr/bin/bwrap",
+		killGrace:   bashKillGrace,
+		binaryPath:  "/usr/bin/bwrap",
+		decisionBuf: newDecisionBuffer(),
 	}
 	r.probeResult = r.runProbe()
 
@@ -523,7 +515,7 @@ func (r *BwrapRunner) spawnProxyChild(proxyEntries, loopbackEntries []string) er
 	// events as `event=<json>` lines on the same stdout pipe (post-
 	// readiness preamble). The drain goroutine now parses each line
 	// via tools.ParseDecisionEventLine and appends successful parses
-	// to r.proxyDecisions for the next Run completion to surface as
+	// to r.decisionBuf for the next Run completion to surface as
 	// SandboxViolations. Lines that don't carry the event prefix
 	// (future preamble lines, debug noise) are silently dropped — the
 	// readiness preamble has already been consumed by
@@ -547,9 +539,7 @@ func (r *BwrapRunner) spawnProxyChild(proxyEntries, loopbackEntries []string) er
 				if err != nil || !ok {
 					continue
 				}
-				r.proxyDecisionsMu.Lock()
-				r.proxyDecisions = append(r.proxyDecisions, d)
-				r.proxyDecisionsMu.Unlock()
+				r.decisionBuf.Push(d)
 			}
 		}()
 		select {
@@ -785,78 +775,82 @@ func (r *BwrapRunner) Run(ctx context.Context, req BashRunRequest) (BashRunResul
 	// signal.
 	// v42-1b: the same single snapshot also yields permitted-connection
 	// audit records for the parallel observability surface.
-	netViolations, auditRecords, auditDrop := r.collectProxyDecisions()
+	// v42-2: collectProxyDecisions returns (proxySurfaces, denyDrops int)
+	// so ViolationDropCount finally writes from the deny-side cap.
+	surfaces, denyDrops := r.collectProxyDecisions()
 	heuristic := detectBwrapViolations(res)
-	if len(netViolations) > 0 || len(heuristic) > 0 {
-		combined := make([]SandboxViolation, 0, len(netViolations)+len(heuristic))
-		combined = append(combined, netViolations...)
+	if len(surfaces.Violations) > 0 || len(heuristic) > 0 {
+		combined := make([]SandboxViolation, 0, len(surfaces.Violations)+len(heuristic))
+		combined = append(combined, surfaces.Violations...)
 		combined = append(combined, heuristic...)
 		res.Violations = combined
 	}
-	res.AuditRecords = auditRecords
-	res.AuditRecordDropCount = auditDrop
+	res.ViolationDropCount = denyDrops
+	res.AuditRecords = surfaces.Permitted
+	res.AuditRecordDropCount = surfaces.PermittedDropCount
 	res.Output = appendViolationsSection(res.Output, res.Violations)
 	res.Output = appendAuditSummaryLine(res.Output, res.AuditRecords, res.AuditRecordDropCount)
 	return res, nil
 }
 
-// collectProxyDecisions performs ONE snapshot-and-clear of the per-Run
-// Decision buffer and projects it onto BOTH observability surfaces:
+// collectProxyDecisions performs ONE Drain of the boundedDecisionBuffer
+// and projects it onto the v42-1b/v42-2 observability surfaces.
+// Returns the proxySurfaces struct (Violations + Permitted +
+// PermittedDropCount) AND the deny-drop count via tuple per the
+// v42-1b architect addendum §2 partner-locked 3-field constraint.
 //
-//   - deny Decisions with Source=network_proxy become SandboxViolation
-//     entries (the agent's actionable signal — what was blocked),
-//   - allow Decisions become SandboxAuditRecord entries via
-//     projectAuditRecords (the parallel observability surface — what
-//     was permitted), with auditRecordRetentionDefault as the cap.
-//
-// The single snapshot is load-bearing: taking two separate snapshots
-// would split the Decision stream across the boundary, attributing
-// some events to the wrong projection. The buffer is cleared once at
-// the end of this method so the next Run starts empty.
+// The single Drain is load-bearing: both deny and allow Decisions
+// plus both drop counts come from one mu-guarded snapshot inside the
+// buffer, so a Decision push that races the Drain lands either fully
+// in this Run or fully in the next, never split.
 //
 // The projection sanitizes Host/Reason/Protocol newlines at the
-// construction boundary (M4 closure) before they reach the renderer or
-// the audit surface. Decision.Port is bounded to uint16 by NewAllow /
-// NewDeny construction (0..65535 enforced); the explicit conversion
+// construction boundary (M4 closure) before they reach the renderer
+// or the audit surface. Decision.Port is bounded to uint16 by NewAllow
+// / NewDeny construction (0..65535 enforced); the explicit conversion
 // below cannot overflow.
 //
-// Returns: violations slice, audit records slice, audit drop count.
-//
+// v42-2: drain-time cap; producer-volume-independent memory bound.
 // Mirrors the darwin helper at bash_runner_seatbelt_darwin.go; the
 // near-copy is intentional per the v42-1a Option A architect call.
-func (r *BwrapRunner) collectProxyDecisions() ([]SandboxViolation, []SandboxAuditRecord, int) {
-	r.proxyDecisionsMu.Lock()
-	decisions := r.proxyDecisions
-	r.proxyDecisions = nil
-	r.proxyDecisionsMu.Unlock()
-	if len(decisions) == 0 {
-		return nil, nil, 0
+func (r *BwrapRunner) collectProxyDecisions() (proxySurfaces, int) {
+	deny, allow, denyDrops, allowDrops := r.decisionBuf.Drain()
+	if len(deny) == 0 && len(allow) == 0 && denyDrops == 0 && allowDrops == 0 {
+		return proxySurfaces{}, 0
 	}
-	violations := make([]SandboxViolation, 0, len(decisions))
-	for _, d := range decisions {
-		if d.Allow {
-			continue
+
+	var violations []SandboxViolation
+	if len(deny) > 0 {
+		violations = make([]SandboxViolation, 0, len(deny))
+		for _, d := range deny {
+			if d.Source != SourceNetworkProxy {
+				// Only network_proxy decisions belong in violations
+				// from this lane. The other Source values are reserved
+				// for substrate-direct paths that emit through
+				// detect* helpers; routing them here would
+				// double-count.
+				continue
+			}
+			violations = append(violations, SandboxViolation{
+				Source:   string(d.Source),
+				Host:     sanitizeViolationField(d.Host),
+				Port:     uint16(d.Port),
+				Protocol: sanitizeViolationField(string(d.Protocol)),
+				Reason:   sanitizeViolationField(string(d.Reason)),
+			})
 		}
-		if d.Source != SourceNetworkProxy {
-			// Only network_proxy decisions belong in violations from
-			// this lane. The other Source values are reserved for
-			// substrate-direct paths that emit through detect*
-			// helpers; routing them here would double-count.
-			continue
+		if len(violations) == 0 {
+			violations = nil
 		}
-		violations = append(violations, SandboxViolation{
-			Source:   string(d.Source),
-			Host:     sanitizeViolationField(d.Host),
-			Port:     uint16(d.Port),
-			Protocol: sanitizeViolationField(string(d.Protocol)),
-			Reason:   sanitizeViolationField(string(d.Reason)),
-		})
 	}
-	auditRecords, auditDrop := projectAuditRecords(decisions, auditRecordRetentionDefault)
-	if len(violations) == 0 {
-		violations = nil
-	}
-	return violations, auditRecords, auditDrop
+
+	audit := projectAuditRecordsFromAllowOnly(allow)
+
+	return proxySurfaces{
+		Violations:         violations,
+		Permitted:          audit,
+		PermittedDropCount: allowDrops,
+	}, denyDrops
 }
 
 // buildBwrapArgsForRun composes the bwrap argv for a single Run. When
@@ -1123,4 +1117,3 @@ func overrideClassificationIfProxyDied(res BashRunResult, proxyDied bool) BashRu
 	res.IsError = true
 	return res
 }
-

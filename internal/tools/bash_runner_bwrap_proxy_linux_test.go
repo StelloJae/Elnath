@@ -466,7 +466,7 @@ func TestBwrapRunner_AuditProjectionMatchesPlatformAgnosticHelper(t *testing.T) 
 		{Allow: true, Source: SourceNetworkProxy, Host: "api.example.com", Port: 443, Protocol: ProtocolHTTPSConnect},
 		{Allow: false, Source: SourceNetworkProxy, Reason: ReasonNotInAllowlist, Host: "blocked.example", Port: 443, Protocol: ProtocolHTTPSConnect},
 	}
-	want, wantDrop := projectAuditRecords(decisions, auditRecordRetentionDefault)
+	want, wantDrop := projectAuditRecords(decisions, decisionAllowCap)
 
 	r := newBwrapRunnerForAuditTest()
 	seedBwrapProxyDecisionsForTest(r, decisions)
@@ -481,5 +481,38 @@ func TestBwrapRunner_AuditProjectionMatchesPlatformAgnosticHelper(t *testing.T) 
 		if got[i] != want[i] {
 			t.Errorf("audit[%d] drift: substrate=%+v helper=%+v", i, got[i], want[i])
 		}
+	}
+}
+
+// TestBwrapRunner_ViolationDropCountSurfacesViaDrain pins the v42-2
+// deny-side drain-time cap on Linux: when more than decisionDenyCap
+// deny Decisions land in the per-Run buffer, the surplus is dropped
+// FIFO and surfaces as ViolationDropCount via collectProxyDecisions's
+// tuple return. With cap=64 and 100 deny pushes, exactly 36 must be
+// counted as drops.
+//
+// Closes N4 (deny-path drain bound). Mirrors darwin companion
+// TestSeatbeltRunner_ViolationDropCountSurfacesViaDrain.
+func TestBwrapRunner_ViolationDropCountSurfacesViaDrain(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("bwrap drain-cap projection is linux-only")
+	}
+	r := newBwrapRunnerForAuditTest()
+	denies := make([]Decision, 0, 100)
+	for i := 0; i < 100; i++ {
+		denies = append(denies, Decision{
+			Allow:    false,
+			Source:   SourceNetworkProxy,
+			Reason:   ReasonNotInAllowlist,
+			Host:     "blocked.example",
+			Port:     443,
+			Protocol: ProtocolHTTPSConnect,
+		})
+	}
+	seedBwrapProxyDecisionsForTest(r, denies, withDecisionCaps(64, 200))
+
+	_, denyDrops := r.collectProxyDecisions()
+	if denyDrops != 36 {
+		t.Errorf("denyDrops = %d, want 36 (100 pushes - 64 cap)", denyDrops)
 	}
 }

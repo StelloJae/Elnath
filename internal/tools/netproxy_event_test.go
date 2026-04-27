@@ -2,9 +2,25 @@ package tools
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
+
+// TestDecision_FieldCountLockedAtSix pins the partner-locked Decision
+// struct shape at exactly six fields {Allow, Source, Reason, Host,
+// Port, Protocol}. Adding a field requires a partner re-decision
+// because downstream telemetry, output rendering, the N6 retention
+// policy, and v42-2 buffer storage all assume this shape.
+//
+// Relocated from v42-2 critic Finding 7: this is a struct-shape
+// assertion, not a buffer behavior assertion, so it lives next to
+// Decision.
+func TestDecision_FieldCountLockedAtSix(t *testing.T) {
+	if got := reflect.TypeOf(Decision{}).NumField(); got != 6 {
+		t.Fatalf("Decision struct field count drift: got %d, want 6", got)
+	}
+}
 
 func TestProxySource_IsValid(t *testing.T) {
 	cases := []struct {
