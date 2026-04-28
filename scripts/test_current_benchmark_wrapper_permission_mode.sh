@@ -59,6 +59,11 @@ printf 'TEMP:%s\n' "${TEMP:-}" >>"${ELNATH_FAKE_LOG:?}"
 printf 'GOMODCACHE:%s\n' "${GOMODCACHE:-}" >>"${ELNATH_FAKE_LOG:?}"
 printf 'GOCACHE:%s\n' "${GOCACHE:-}" >>"${ELNATH_FAKE_LOG:?}"
 printf 'BENCH_ENV:%s\n' "${ELNATH_BENCHMARK_ENV_DIR:-}" >>"${ELNATH_FAKE_LOG:?}"
+if [[ -f "${HOME:-}/.codex/auth.json" ]]; then
+  printf 'CODEX_AUTH:present\n' >>"${ELNATH_FAKE_LOG:?}"
+else
+  printf 'CODEX_AUTH:missing\n' >>"${ELNATH_FAKE_LOG:?}"
+fi
 printf '\npatched by fake elnath\n' >> README.md
 EOF
   chmod +x "$bin_path"
@@ -156,6 +161,7 @@ assert bench_env, values
 home = os.path.abspath(values.get("HOME", ""))
 assert home == os.path.join(bench_env, "home"), f"HOME = {home}, want benchmark env home under {bench_env}"
 assert len(home) <= max_tmp_len, f"benchmark HOME path is too long: {home} ({len(home)})"
+assert os.path.commonpath([pwd, home]) != pwd, f"benchmark Elnath process HOME is inside target repo: {home}"
 bash_tmp = os.path.join(bench_env, ".tmp")
 assert len(bash_tmp) <= max_tmp_len, f"benchmark Bash TMPDIR path is too long: {bash_tmp} ({len(bash_tmp)})"
 assert os.path.commonpath([pwd, bash_tmp]) != pwd, f"benchmark Bash TMPDIR is inside target repo: {bash_tmp}"
@@ -202,9 +208,11 @@ run_case() {
   local fake_log="$2"
   local output_path="$3"
   local repo_url="$4"
+  local host_home="$TMP_DIR/host-home"
   if [[ "$permission_mode" == "__unset__" ]]; then
     env \
       -u ELNATH_BENCHMARK_PERMISSION_MODE \
+      HOME="$host_home" \
       ELNATH_FAKE_LOG="$fake_log" \
       ELNATH_BIN="$TMP_DIR/fake-elnath.sh" \
       ELNATH_TIMEOUT=30 \
@@ -224,6 +232,7 @@ run_case() {
   ELNATH_FAKE_LOG="$fake_log" \
   ELNATH_BIN="$TMP_DIR/fake-elnath.sh" \
   ELNATH_TIMEOUT=30 \
+  HOME="$host_home" \
   ELNATH_BENCHMARK_PERMISSION_MODE="$permission_mode" \
   "$REPO_ROOT/scripts/run_current_benchmark_wrapper.sh" \
     "$output_path" \
@@ -240,6 +249,13 @@ run_case() {
 SOURCE_REPO="$TMP_DIR/source-repo"
 create_source_repo "$SOURCE_REPO"
 create_fake_elnath "$TMP_DIR/fake-elnath.sh"
+mkdir -p "$TMP_DIR/host-home/.codex"
+cat >"$TMP_DIR/host-home/.codex/auth.json" <<'EOF'
+{"auth_mode":"chatgpt","tokens":{"access_token":"test-token"}}
+EOF
+cat >"$TMP_DIR/host-home/.codex/config.toml" <<'EOF'
+model = "gpt-5.5"
+EOF
 REPO_URL="file://$SOURCE_REPO"
 
 DEFAULT_LOG="$TMP_DIR/default.log"
@@ -252,6 +268,7 @@ assert_short_benchmark_tmp_paths "$DEFAULT_LOG"
 assert_no_benchmark_noise_in_target_repo "$DEFAULT_LOG"
 grep -Fq 'ARGS:run --non-interactive' "$DEFAULT_LOG"
 grep -Fq 'MODE:bypass' "$DEFAULT_LOG"
+grep -Fq 'CODEX_AUTH:present' "$DEFAULT_LOG"
 
 OVERRIDE_LOG="$TMP_DIR/override.log"
 OVERRIDE_OUTPUT="$TMP_DIR/override.json"
@@ -262,5 +279,6 @@ assert_isolated_benchmark_env "$OVERRIDE_LOG"
 assert_short_benchmark_tmp_paths "$OVERRIDE_LOG"
 assert_no_benchmark_noise_in_target_repo "$OVERRIDE_LOG"
 grep -Fq 'MODE:accept_edits' "$OVERRIDE_LOG"
+grep -Fq 'CODEX_AUTH:present' "$OVERRIDE_LOG"
 
 echo "PASS: benchmark wrapper forces non-interactive benchmark permission mode"

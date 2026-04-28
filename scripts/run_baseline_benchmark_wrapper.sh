@@ -218,6 +218,10 @@ working_tree_changes() {
 }
 
 benchmark_specific_verification_command() {
+  if [[ "$TASK_REPO" == *"caddyserver/caddy"* && "$TASK_PROMPT" == *"graceful shutdown"* ]]; then
+    echo "go test -p 1 ./... -count=1"
+    return 0
+  fi
   if [[ "$TASK_REPO" == *"vitest-dev/vitest"* && "$TASK_PROMPT" == *"retry telemetry"* ]]; then
     echo "npx pnpm build && npx pnpm -C test/cli exec vitest --run test/worker-retry-telemetry.test.ts"
     return 0
@@ -282,6 +286,23 @@ pick_targeted_verification_command() {
   fi
 
   return 1
+}
+
+pick_final_verification_command() {
+  local cmd="${1:-}"
+  local target_cmd
+  local specific_cmd
+
+  if target_cmd="$(pick_targeted_verification_command 2>/dev/null)"; then
+    cmd="$target_cmd"
+  fi
+  if specific_cmd="$(benchmark_specific_verification_command 2>/dev/null)"; then
+    cmd="$specific_cmd"
+  fi
+  if [[ -z "$cmd" ]]; then
+    return 1
+  fi
+  echo "$cmd"
 }
 
 maybe_prepare_verification() {
@@ -398,7 +419,7 @@ fi
 if VERIFY_CMD_OVERRIDE="$(benchmark_specific_verification_command 2>/dev/null)"; then
   VERIFICATION_CMD="$VERIFY_CMD_OVERRIDE"
 fi
-if TARGET_VERIFY_CMD="$(pick_targeted_verification_command 2>/dev/null)"; then
+if TARGET_VERIFY_CMD="$(pick_final_verification_command "$VERIFICATION_CMD" 2>/dev/null)"; then
   VERIFICATION_CMD="$TARGET_VERIFY_CMD"
 fi
 export VERIFICATION_CMD
