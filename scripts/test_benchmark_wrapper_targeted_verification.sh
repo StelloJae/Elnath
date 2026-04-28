@@ -60,6 +60,25 @@ EOF
   printf '\n// changed\n' >>"$repo_dir/test/cli/test/worker-retry-telemetry.test.ts"
 }
 
+create_go_fixture() {
+  local repo_dir="$1"
+  mkdir -p "$repo_dir"
+  cat >"$repo_dir/go.mod" <<'EOF'
+module example.com/generic
+
+go 1.22
+EOF
+  cat >"$repo_dir/main.go" <<'EOF'
+package generic
+
+func Answer() int { return 42 }
+EOF
+  git -C "$repo_dir" init -q
+  git -C "$repo_dir" add .
+  git -C "$repo_dir" -c user.name='Test User' -c user.email='test@example.com' commit -qm "init"
+  printf '\n// changed\n' >>"$repo_dir/main.go"
+}
+
 run_pick_targeted_command() {
   local wrapper_path="$1"
   local repo_dir="$2"
@@ -81,6 +100,55 @@ run_pick_targeted_command() {
   bash "$runner"
 }
 
+run_benchmark_specific_command() {
+  local wrapper_path="$1"
+  local task_repo="$2"
+  local task_prompt="$3"
+  local runner="$TMP_DIR/specific-runner.sh"
+  local function_src
+  function_src="$(extract_function "$wrapper_path" "benchmark_specific_verification_command")"
+
+  {
+    echo '#!/usr/bin/env bash'
+    echo 'set -euo pipefail'
+    printf 'TASK_REPO=%q\n' "$task_repo"
+    printf 'TASK_PROMPT=%q\n' "$task_prompt"
+    printf '%s\n' "$function_src"
+    echo 'benchmark_specific_verification_command'
+  } >"$runner"
+
+  bash "$runner"
+}
+
+run_final_command_after_changes() {
+  local wrapper_path="$1"
+  local repo_dir="$2"
+  local task_repo="$3"
+  local task_prompt="$4"
+  local runner="$TMP_DIR/final-runner.sh"
+  local pick_src
+  local specific_src
+  local final_src
+  pick_src="$(extract_function "$wrapper_path" "pick_targeted_verification_command")"
+  specific_src="$(extract_function "$wrapper_path" "benchmark_specific_verification_command")"
+  final_src="$(extract_function "$wrapper_path" "pick_final_verification_command")"
+
+  {
+    echo '#!/usr/bin/env bash'
+    echo 'set -euo pipefail'
+    printf 'WORKTREE=%q\n' "$repo_dir"
+    printf 'TASK_REPO=%q\n' "$task_repo"
+    printf 'TASK_PROMPT=%q\n' "$task_prompt"
+    echo 'working_tree_changes() { git diff --name-only; }'
+    printf '%s\n' "$specific_src"
+    printf '%s\n' "$pick_src"
+    printf '%s\n' "$final_src"
+    echo 'pick_final_verification_command "go test ./..."'
+  } >"$runner"
+
+  bash "$runner"
+}
+
 assert_vitest_targeted_command() {
   local wrapper_rel="$1"
   local actual="$2"
@@ -89,6 +157,34 @@ assert_vitest_targeted_command() {
     echo "FAIL: $wrapper_rel produced unexpected targeted verification command" >&2
     echo "expected: $expected" >&2
     echo "actual:   $actual" >&2
+    exit 1
+  fi
+}
+
+assert_generic_go_command() {
+  local wrapper_rel="$1"
+  local actual="$2"
+  local expected="go test ./..."
+  if [[ "$actual" != "$expected" ]]; then
+    echo "FAIL: $wrapper_rel changed generic Go verification command" >&2
+    echo "expected: $expected" >&2
+    echo "actual:   $actual" >&2
+    exit 1
+  fi
+}
+
+assert_caddy_serialized_command() {
+  local wrapper_rel="$1"
+  local actual="$2"
+  local expected="go test -p 1 ./... -count=1"
+  if [[ "$actual" != "$expected" ]]; then
+    echo "FAIL: $wrapper_rel produced unexpected Caddy verification command" >&2
+    echo "expected: $expected" >&2
+    echo "actual:   $actual" >&2
+    exit 1
+  fi
+  if [[ "$actual" != *"./..."* ]]; then
+    echo "FAIL: $wrapper_rel Caddy verification command must retain ./... full coverage" >&2
     exit 1
   fi
 }
@@ -102,4 +198,28 @@ assert_vitest_targeted_command "scripts/run_current_benchmark_wrapper.sh" "$CURR
 BASELINE_CMD="$(run_pick_targeted_command "$REPO_ROOT/scripts/run_baseline_benchmark_wrapper.sh" "$FIXTURE_REPO")"
 assert_vitest_targeted_command "scripts/run_baseline_benchmark_wrapper.sh" "$BASELINE_CMD"
 
-echo "PASS: targeted vitest verification stays on the narrow exec vitest path"
+GO_FIXTURE_REPO="$TMP_DIR/go-fixture"
+create_go_fixture "$GO_FIXTURE_REPO"
+
+CURRENT_GO_CMD="$(run_pick_targeted_command "$REPO_ROOT/scripts/run_current_benchmark_wrapper.sh" "$GO_FIXTURE_REPO")"
+assert_generic_go_command "scripts/run_current_benchmark_wrapper.sh" "$CURRENT_GO_CMD"
+
+BASELINE_GO_CMD="$(run_pick_targeted_command "$REPO_ROOT/scripts/run_baseline_benchmark_wrapper.sh" "$GO_FIXTURE_REPO")"
+assert_generic_go_command "scripts/run_baseline_benchmark_wrapper.sh" "$BASELINE_GO_CMD"
+
+CADDY_REPO="https://github.com/caddyserver/caddy"
+CADDY_PROMPT="Extend an existing Go worker service so graceful shutdown emits structured progress logging and does not regress existing worker behavior."
+
+CURRENT_CADDY_CMD="$(run_benchmark_specific_command "$REPO_ROOT/scripts/run_current_benchmark_wrapper.sh" "$CADDY_REPO" "$CADDY_PROMPT" || true)"
+assert_caddy_serialized_command "scripts/run_current_benchmark_wrapper.sh" "$CURRENT_CADDY_CMD"
+
+BASELINE_CADDY_CMD="$(run_benchmark_specific_command "$REPO_ROOT/scripts/run_baseline_benchmark_wrapper.sh" "$CADDY_REPO" "$CADDY_PROMPT" || true)"
+assert_caddy_serialized_command "scripts/run_baseline_benchmark_wrapper.sh" "$BASELINE_CADDY_CMD"
+
+CURRENT_CADDY_FINAL_CMD="$(run_final_command_after_changes "$REPO_ROOT/scripts/run_current_benchmark_wrapper.sh" "$GO_FIXTURE_REPO" "$CADDY_REPO" "$CADDY_PROMPT" || true)"
+assert_caddy_serialized_command "scripts/run_current_benchmark_wrapper.sh final" "$CURRENT_CADDY_FINAL_CMD"
+
+BASELINE_CADDY_FINAL_CMD="$(run_final_command_after_changes "$REPO_ROOT/scripts/run_baseline_benchmark_wrapper.sh" "$GO_FIXTURE_REPO" "$CADDY_REPO" "$CADDY_PROMPT" || true)"
+assert_caddy_serialized_command "scripts/run_baseline_benchmark_wrapper.sh final" "$BASELINE_CADDY_FINAL_CMD"
+
+echo "PASS: targeted benchmark verification commands stay scoped"

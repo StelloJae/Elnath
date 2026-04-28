@@ -43,7 +43,12 @@ ELNATH_TIMEOUT="${ELNATH_TIMEOUT:-300}"
 START_TS="$(date +%s)"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/elnath-current-benchmark.XXXXXX")"
 BENCHMARK_SHORT_ROOT=""
+ORIGINAL_HOME="${HOME:-}"
 cleanup() {
+  if [[ -n "$BENCHMARK_SHORT_ROOT" ]]; then
+    rm -f "$BENCHMARK_HOME_DIR/.codex/auth.json"
+    rm -f "$BENCHMARK_HOME_DIR/.codex/config.toml"
+  fi
   if [[ "${ELNATH_BENCHMARK_KEEP_TMP:-}" == "1" ]]; then
     echo "Keeping benchmark temp dir: $TMP_DIR" >&2
     if [[ -n "$BENCHMARK_SHORT_ROOT" ]]; then
@@ -86,6 +91,22 @@ mkdir -p \
   "$BENCHMARK_TMP_DIR" \
   "$BENCHMARK_GOMODCACHE_DIR" \
   "$BENCHMARK_GOCACHE_DIR"
+
+prepare_benchmark_provider_home() {
+  if [[ -z "$ORIGINAL_HOME" || ! -f "$ORIGINAL_HOME/.codex/auth.json" ]]; then
+    return 0
+  fi
+
+  mkdir -p "$BENCHMARK_HOME_DIR/.codex"
+  cp "$ORIGINAL_HOME/.codex/auth.json" "$BENCHMARK_HOME_DIR/.codex/auth.json"
+  chmod 600 "$BENCHMARK_HOME_DIR/.codex/auth.json"
+  if [[ -f "$ORIGINAL_HOME/.codex/config.toml" ]]; then
+    cp "$ORIGINAL_HOME/.codex/config.toml" "$BENCHMARK_HOME_DIR/.codex/config.toml"
+    chmod 600 "$BENCHMARK_HOME_DIR/.codex/config.toml"
+  fi
+}
+
+prepare_benchmark_provider_home
 
 export TMPDIR="$BENCHMARK_TMP_DIR"
 export TMP="$BENCHMARK_TMP_DIR"
@@ -328,6 +349,10 @@ working_tree_changes() {
 }
 
 benchmark_specific_verification_command() {
+  if [[ "$TASK_REPO" == *"caddyserver/caddy"* && "$TASK_PROMPT" == *"graceful shutdown"* ]]; then
+    echo "go test -p 1 ./... -count=1"
+    return 0
+  fi
   if [[ "$TASK_REPO" == *"vitest-dev/vitest"* && "$TASK_PROMPT" == *"retry telemetry"* ]]; then
     echo "npx pnpm -C packages/vitest build && npx pnpm -C test/cli exec vitest --run test/worker-retry-telemetry.test.ts"
     return 0
@@ -392,6 +417,23 @@ pick_targeted_verification_command() {
   fi
 
   return 1
+}
+
+pick_final_verification_command() {
+  local cmd="${1:-}"
+  local target_cmd
+  local specific_cmd
+
+  if target_cmd="$(pick_targeted_verification_command 2>/dev/null)"; then
+    cmd="$target_cmd"
+  fi
+  if specific_cmd="$(benchmark_specific_verification_command 2>/dev/null)"; then
+    cmd="$specific_cmd"
+  fi
+  if [[ -z "$cmd" ]]; then
+    return 1
+  fi
+  echo "$cmd"
 }
 
 maybe_prepare_verification() {
@@ -633,7 +675,7 @@ if [[ "$HAS_CHANGES" == "false" ]]; then
   exit 0
 fi
 
-if TARGET_VERIFY_CMD="$(pick_targeted_verification_command 2>/dev/null)"; then
+if TARGET_VERIFY_CMD="$(pick_final_verification_command "$VERIFY_CMD" 2>/dev/null)"; then
   VERIFY_CMD="$TARGET_VERIFY_CMD"
   export VERIFICATION_CMD="$VERIFY_CMD"
 fi
