@@ -1,0 +1,171 @@
+package agentic
+
+import (
+	"database/sql"
+	"time"
+)
+
+const (
+	GoalStatusActive     = "active"
+	AutonomyLevelObserve = "observe"
+
+	SignalStatusNew = "new"
+
+	TaskStatusPending         = "pending"
+	RiskLevelLow              = "low"
+	RiskLevelMedium           = "medium"
+	PolicyDecisionObserve     = "observe"
+	VerificationStatusPending = "pending"
+
+	PolicyDecisionRequireApproval = "require_approval"
+
+	ReceiptStatusStarted   = "started"
+	ReceiptStatusSucceeded = "succeeded"
+
+	VerificationVerdictPass = "pass"
+
+	MemoryUpdateStatusPending = "pending"
+
+	FollowupStatusPending = "pending"
+)
+
+type StandingGoal struct {
+	ID            int64
+	Title         string
+	Description   string
+	Status        string
+	Priority      int
+	AutonomyLevel string
+	RiskBudget    string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+type GoalSignal struct {
+	ID          int64
+	GoalID      int64
+	WatcherID   int64
+	Source      string
+	Type        string
+	PayloadJSON string
+	Fingerprint string
+	Severity    int
+	Status      string
+	DedupeKey   string
+	ObservedAt  time.Time
+}
+
+type SignalWatcher struct {
+	ID         int64
+	GoalID     int64
+	Source     string
+	ConfigJSON string
+	Enabled    bool
+	IntervalS  int
+	LastCursor string
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
+type AgenticTask struct {
+	ID                 int64
+	GoalID             int64
+	SignalID           int64
+	ParentID           int64
+	QueueTaskID        int64
+	Title              string
+	Prompt             string
+	Status             string
+	Priority           int
+	RiskLevel          string
+	AutonomyDecision   string
+	ApprovalRequestID  string
+	VerificationStatus string
+	DueAt              sql.NullTime
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+}
+
+type TaskEdge struct {
+	ParentID  int64
+	ChildID   int64
+	EdgeType  string
+	CreatedAt time.Time
+}
+
+type AgentActor struct {
+	ID                int64
+	TaskID            int64
+	Role              string
+	StateJSON         string
+	InboxJSON         string
+	OutboxJSON        string
+	ToolAllowlistJSON string
+	BudgetJSON        string
+	Status            string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+}
+
+type PolicyDecisionRecord struct {
+	ID            int64
+	TaskID        int64
+	ActorID       int64
+	ActionKind    string
+	ToolName      string
+	RiskLevel     string
+	Decision      string
+	Reason        string
+	PolicyVersion string
+	CreatedAt     time.Time
+}
+
+type ToolActionReceipt struct {
+	ID                int64
+	TaskID            int64
+	ActorID           int64
+	PolicyDecisionID  int64
+	ApprovalRequestID string
+	ToolName          string
+	InputHash         string
+	OutputHash        string
+	OutputSummary     string
+	Status            string
+	Reversible        bool
+	StartedAt         time.Time
+	CompletedAt       sql.NullTime
+}
+
+type VerificationRun struct {
+	ID               int64
+	TaskID           int64
+	VerifierActorID  int64
+	CriteriaJSON     string
+	EvidenceRefsJSON string
+	Verdict          string
+	Reason           string
+	CreatedAt        time.Time
+}
+
+type MemoryUpdate struct {
+	ID                int64
+	TaskID            int64
+	ReceiptID         int64
+	VerificationRunID int64
+	Target            string
+	Operation         string
+	PayloadHash       string
+	Status            string
+	CreatedAt         time.Time
+}
+
+type Followup struct {
+	ID            int64
+	TaskID        int64
+	GoalID        int64
+	Reason        string
+	Status        string
+	TriggerAt     time.Time
+	CreatedTaskID int64
+	CreatedAt     time.Time
+}
