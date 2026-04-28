@@ -64,6 +64,10 @@ RECOVERY_LOG="$TMP_DIR/elnath-recovery.log"
 AUDIT_LOG="$TMP_DIR/route-audit.jsonl"
 VERIFY_LOG="$TMP_DIR/verify.log"
 VERIFY_RETRY_LOG="$TMP_DIR/verify-retry.log"
+BENCHMARK_STATE_DIR="$TMP_DIR/elnath-state"
+BENCHMARK_DATA_DIR="$BENCHMARK_STATE_DIR/data"
+BENCHMARK_WIKI_DIR="$BENCHMARK_STATE_DIR/wiki"
+mkdir -p "$BENCHMARK_DATA_DIR" "$BENCHMARK_WIKI_DIR"
 
 json_escape() {
   python3 - <<'PY' "$1"
@@ -301,7 +305,7 @@ working_tree_changes() {
 
 benchmark_specific_verification_command() {
   if [[ "$TASK_REPO" == *"vitest-dev/vitest"* && "$TASK_PROMPT" == *"retry telemetry"* ]]; then
-    echo "npx pnpm build && npx pnpm -C test/cli exec vitest --run test/worker-retry-telemetry.test.ts"
+    echo "npx pnpm -C packages/vitest build && npx pnpm -C test/cli exec vitest --run test/worker-retry-telemetry.test.ts"
     return 0
   fi
   if [[ "$TASK_REPO" == *"nestjs/nest"* && "$TASK_PROMPT" == *"cancellation tracing"* ]]; then
@@ -368,6 +372,12 @@ pick_targeted_verification_command() {
 
 maybe_prepare_verification() {
   if [[ "${VERIFY_CMD:-}" == *"packages/vitest build"* ]]; then
+    if [[ -f packages/utils/package.json ]] && command -v npx >/dev/null 2>&1; then
+      npx pnpm -C packages/utils build >/dev/null 2>&1
+    fi
+    if [[ -f packages/runner/package.json ]] && command -v npx >/dev/null 2>&1; then
+      npx pnpm -C packages/runner build >/dev/null 2>&1
+    fi
     return 0
   fi
   if [[ -f pnpm-lock.yaml ]] && command -v npx >/dev/null 2>&1; then
@@ -395,6 +405,8 @@ run_elnath() {
     export ELNATH_MAX_ITERATIONS=20
     export ELNATH_TASK_LANGUAGE="$TASK_LANGUAGE"
     export ELNATH_PERMISSION_MODE="${ELNATH_BENCHMARK_PERMISSION_MODE:-bypass}"
+    export ELNATH_DATA_DIR="$BENCHMARK_DATA_DIR"
+    export ELNATH_WIKI_DIR="$BENCHMARK_WIKI_DIR"
     local -a args=("$ELNATH_BIN" "run" "--non-interactive")
     python3 - <<'PY' "$timeout_override" "$log_path" "$prompt" "${args[@]}"
 import subprocess, sys

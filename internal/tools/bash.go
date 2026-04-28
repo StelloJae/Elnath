@@ -126,7 +126,7 @@ func (t *BashTool) Execute(ctx context.Context, params json.RawMessage) (*Result
 		timeout = d
 	}
 
-	sessionDir, sessErr := t.guard.EnsureSessionWorkDir(SessionIDFrom(ctx))
+	sessionDir, sessErr := SessionWorkDirFromContext(ctx, t.guard)
 	if sessErr != nil {
 		return ErrorResult(fmt.Sprintf("session workspace: %v", sessErr)), nil
 	}

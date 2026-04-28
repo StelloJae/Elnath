@@ -50,6 +50,8 @@ set -euo pipefail
 printf 'ARGS:%s\n' "$*" >>"${ELNATH_FAKE_LOG:?}"
 printf 'MODE:%s\n' "${ELNATH_PERMISSION_MODE:-}" >>"${ELNATH_FAKE_LOG:?}"
 printf 'PWD:%s\n' "$PWD" >>"${ELNATH_FAKE_LOG:?}"
+printf 'DATA:%s\n' "${ELNATH_DATA_DIR:-}" >>"${ELNATH_FAKE_LOG:?}"
+printf 'WIKI:%s\n' "${ELNATH_WIKI_DIR:-}" >>"${ELNATH_FAKE_LOG:?}"
 printf '\npatched by fake elnath\n' >> README.md
 EOF
   chmod +x "$bin_path"
@@ -64,6 +66,32 @@ data = json.load(open(path))
 assert data["success"] is True, data
 assert data["verification_passed"] is True, data
 assert data["failure_family"] == "", data
+PY
+}
+
+assert_isolated_elnath_state() {
+  local log_path="$1"
+  python3 - <<'PY' "$log_path"
+from pathlib import Path
+import os
+import sys
+
+log = Path(sys.argv[1]).read_text().splitlines()
+values = {}
+for line in log:
+    key, sep, value = line.partition(":")
+    if sep:
+        values.setdefault(key, value)
+
+pwd = values.get("PWD", "")
+data = values.get("DATA", "")
+wiki = values.get("WIKI", "")
+assert pwd, values
+assert data, values
+assert wiki, values
+for label, path in (("DATA", data), ("WIKI", wiki)):
+    common = os.path.commonpath([os.path.abspath(pwd), os.path.abspath(path)])
+    assert common != os.path.abspath(pwd), f"{label} dir is inside benchmark target repo: {path}"
 PY
 }
 
@@ -116,6 +144,7 @@ DEFAULT_LOG="$TMP_DIR/default.log"
 DEFAULT_OUTPUT="$TMP_DIR/default.json"
 run_case "__unset__" "$DEFAULT_LOG" "$DEFAULT_OUTPUT" "$REPO_URL"
 assert_success_json "$DEFAULT_OUTPUT"
+assert_isolated_elnath_state "$DEFAULT_LOG"
 grep -Fq 'ARGS:run --non-interactive' "$DEFAULT_LOG"
 grep -Fq 'MODE:bypass' "$DEFAULT_LOG"
 
@@ -123,6 +152,7 @@ OVERRIDE_LOG="$TMP_DIR/override.log"
 OVERRIDE_OUTPUT="$TMP_DIR/override.json"
 run_case "accept_edits" "$OVERRIDE_LOG" "$OVERRIDE_OUTPUT" "$REPO_URL"
 assert_success_json "$OVERRIDE_OUTPUT"
+assert_isolated_elnath_state "$OVERRIDE_LOG"
 grep -Fq 'MODE:accept_edits' "$OVERRIDE_LOG"
 
 echo "PASS: benchmark wrapper forces non-interactive benchmark permission mode"
