@@ -36,6 +36,7 @@ func commandRegistry() map[string]commandRunner {
 		"chaos":       cmdChaos,
 		"run":         cmdRun,
 		"setup":       cmdSetup,
+		"sandbox":     cmdSandbox,
 		"errors":      cmdErrors,
 		"daemon":      cmdDaemon,
 		"portability": cmdPortability,

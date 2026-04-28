@@ -102,6 +102,7 @@ var translations = map[Locale]map[string]string{
 Commands:
   run       Interactive chat mode
   setup     Re-run the setup wizard
+  sandbox   Sandbox configuration helpers
   errors    Error catalog lookup
   daemon    Background daemon mode
   portability Export/import encrypted portability bundles
@@ -156,6 +157,31 @@ EXAMPLES
 
 SEE ALSO
   elnath setup, elnath daemon, elnath wiki`,
+		"cmd.sandbox.help": `USAGE
+  elnath sandbox print-starter-allowlist [--list-groups]
+  elnath sandbox print-starter-allowlist --mode <seatbelt|bwrap> --group <groups>
+
+DESCRIPTION
+  Print starter sandbox network allowlist YAML for explicit opt-in.
+  This command is read-only: it does not write config, install defaults,
+  or change runtime sandbox/network policy.
+
+FLAGS
+  --list-groups       Show available starter groups without active YAML
+  --mode <mode>       Required with --group. Valid: seatbelt, bwrap
+  --group <groups>    Comma-separated groups to print as active YAML
+
+GROUPS
+  git-hosting, python, node, go, rust
+  containers          Advanced; registry workflows may require more domains
+
+EXAMPLES
+  $ elnath sandbox print-starter-allowlist --list-groups
+  $ elnath sandbox print-starter-allowlist --mode seatbelt --group git-hosting,go
+
+NOTES
+  Network allowlist changes require Elnath restart. DNS rebinding remains
+  caveated; hostile DNS requires lower-layer egress controls.`,
 		"cmd.setup.help": `USAGE
   elnath setup [--quickstart]
 
@@ -385,6 +411,7 @@ SEE ALSO
 명령:
   run       대화형 채팅 모드
   setup     설정 마법사 다시 실행
+  sandbox   샌드박스 설정 도우미
   daemon    백그라운드 데몬 모드
   research  리서치 작업 유틸리티
   lessons   lesson 관리 유틸리티
@@ -407,10 +434,35 @@ SEE ALSO
 		"cli.write_config_error": "설정 쓰기: %s",
 		"cli.no_provider":        "LLM 프로바이더가 설정되지 않았습니다. ELNATH_ANTHROPIC_API_KEY를 설정하거나 config.yaml에 anthropic.api_key를 추가하세요",
 		"cmd.run.help":           "",
-		"cmd.setup.help":         "",
-		"cmd.wiki.help":          "",
-		"cmd.lessons.help":       "",
-		"cmd.daemon.help":        "",
+		"cmd.sandbox.help": `사용법
+  elnath sandbox print-starter-allowlist [--list-groups]
+  elnath sandbox print-starter-allowlist --mode <seatbelt|bwrap> --group <groups>
+
+설명
+  명시적으로 opt-in할 수 있는 샌드박스 네트워크 allowlist YAML을 출력합니다.
+  이 명령은 읽기 전용입니다. config를 쓰거나, 기본값을 설치하거나,
+  런타임 샌드박스/네트워크 정책을 변경하지 않습니다.
+
+플래그
+  --list-groups       활성 YAML 없이 starter group 목록 표시
+  --mode <mode>       --group 사용 시 필수. 유효값: seatbelt, bwrap
+  --group <groups>    활성 YAML로 출력할 comma-separated group 목록
+
+그룹
+  git-hosting, python, node, go, rust
+  containers          고급; registry workflow에는 추가 domain이 필요할 수 있음
+
+예시
+  $ elnath sandbox print-starter-allowlist --list-groups
+  $ elnath sandbox print-starter-allowlist --mode seatbelt --group git-hosting,go
+
+주의
+  네트워크 allowlist 변경은 Elnath restart가 필요합니다. DNS rebinding은
+  계속 caveat로 남으며, hostile DNS는 lower-layer egress control이 필요합니다.`,
+		"cmd.setup.help":   "",
+		"cmd.wiki.help":    "",
+		"cmd.lessons.help": "",
+		"cmd.daemon.help":  "",
 	},
 }
 
