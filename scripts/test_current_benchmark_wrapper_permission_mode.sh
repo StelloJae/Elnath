@@ -52,6 +52,12 @@ printf 'MODE:%s\n' "${ELNATH_PERMISSION_MODE:-}" >>"${ELNATH_FAKE_LOG:?}"
 printf 'PWD:%s\n' "$PWD" >>"${ELNATH_FAKE_LOG:?}"
 printf 'DATA:%s\n' "${ELNATH_DATA_DIR:-}" >>"${ELNATH_FAKE_LOG:?}"
 printf 'WIKI:%s\n' "${ELNATH_WIKI_DIR:-}" >>"${ELNATH_FAKE_LOG:?}"
+printf 'HOME:%s\n' "${HOME:-}" >>"${ELNATH_FAKE_LOG:?}"
+printf 'TMPDIR:%s\n' "${TMPDIR:-}" >>"${ELNATH_FAKE_LOG:?}"
+printf 'TMP:%s\n' "${TMP:-}" >>"${ELNATH_FAKE_LOG:?}"
+printf 'TEMP:%s\n' "${TEMP:-}" >>"${ELNATH_FAKE_LOG:?}"
+printf 'GOMODCACHE:%s\n' "${GOMODCACHE:-}" >>"${ELNATH_FAKE_LOG:?}"
+printf 'GOCACHE:%s\n' "${GOCACHE:-}" >>"${ELNATH_FAKE_LOG:?}"
 printf '\npatched by fake elnath\n' >> README.md
 EOF
   chmod +x "$bin_path"
@@ -92,6 +98,49 @@ assert wiki, values
 for label, path in (("DATA", data), ("WIKI", wiki)):
     common = os.path.commonpath([os.path.abspath(pwd), os.path.abspath(path)])
     assert common != os.path.abspath(pwd), f"{label} dir is inside benchmark target repo: {path}"
+PY
+}
+
+assert_isolated_benchmark_env() {
+  local log_path="$1"
+  python3 - <<'PY' "$log_path"
+from pathlib import Path
+import os
+import sys
+
+log = Path(sys.argv[1]).read_text().splitlines()
+values = {}
+for line in log:
+    key, sep, value = line.partition(":")
+    if sep:
+        values.setdefault(key, value)
+
+pwd = values.get("PWD", "")
+assert pwd, values
+for label in ("HOME", "TMPDIR", "TMP", "TEMP", "GOMODCACHE", "GOCACHE"):
+    path = values.get(label, "")
+    assert path, f"{label} was not set for benchmark run: {values}"
+    common = os.path.commonpath([os.path.abspath(pwd), os.path.abspath(path)])
+    assert common != os.path.abspath(pwd), f"{label} is inside benchmark target repo: {path}"
+PY
+}
+
+assert_no_benchmark_noise_in_target_repo() {
+  local log_path="$1"
+  python3 - <<'PY' "$log_path"
+from pathlib import Path
+import sys
+
+log = Path(sys.argv[1]).read_text().splitlines()
+values = {}
+for line in log:
+    key, sep, value = line.partition(":")
+    if sep:
+        values.setdefault(key, value)
+
+pwd = Path(values["PWD"])
+for name in ("go", "Library", ".tmp", ".cache"):
+    assert not (pwd / name).exists(), f"benchmark target repo gained {name}"
 PY
 }
 
@@ -145,6 +194,8 @@ DEFAULT_OUTPUT="$TMP_DIR/default.json"
 run_case "__unset__" "$DEFAULT_LOG" "$DEFAULT_OUTPUT" "$REPO_URL"
 assert_success_json "$DEFAULT_OUTPUT"
 assert_isolated_elnath_state "$DEFAULT_LOG"
+assert_isolated_benchmark_env "$DEFAULT_LOG"
+assert_no_benchmark_noise_in_target_repo "$DEFAULT_LOG"
 grep -Fq 'ARGS:run --non-interactive' "$DEFAULT_LOG"
 grep -Fq 'MODE:bypass' "$DEFAULT_LOG"
 
@@ -153,6 +204,8 @@ OVERRIDE_OUTPUT="$TMP_DIR/override.json"
 run_case "accept_edits" "$OVERRIDE_LOG" "$OVERRIDE_OUTPUT" "$REPO_URL"
 assert_success_json "$OVERRIDE_OUTPUT"
 assert_isolated_elnath_state "$OVERRIDE_LOG"
+assert_isolated_benchmark_env "$OVERRIDE_LOG"
+assert_no_benchmark_noise_in_target_repo "$OVERRIDE_LOG"
 grep -Fq 'MODE:accept_edits' "$OVERRIDE_LOG"
 
 echo "PASS: benchmark wrapper forces non-interactive benchmark permission mode"

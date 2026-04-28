@@ -385,6 +385,8 @@ func newTestExecutionRuntimeWithConfig(t *testing.T, provider llm.Provider, daem
 
 func TestBenchmarkModeUsesRootWorkDirWithoutSessionWorkspace(t *testing.T) {
 	t.Setenv("ELNATH_BENCHMARK_MODE", "1")
+	envDir := t.TempDir()
+	t.Setenv("ELNATH_BENCHMARK_ENV_DIR", envDir)
 
 	rt := newTestExecutionRuntime(t, &countingProvider{})
 	sess := &agent.Session{ID: "bench-session"}
@@ -406,6 +408,9 @@ func TestBenchmarkModeUsesRootWorkDirWithoutSessionWorkspace(t *testing.T) {
 	}
 	if sessionDir != rt.workDir {
 		t.Fatalf("benchmark tool session dir = %q, want root %q", sessionDir, rt.workDir)
+	}
+	if got := tools.SessionEnvDirFrom(ctx); got != envDir {
+		t.Fatalf("benchmark tool env dir = %q, want %q", got, envDir)
 	}
 }
 

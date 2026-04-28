@@ -981,6 +981,9 @@ func (rt *executionRuntime) toolContextForSession(ctx context.Context, sess *age
 	}
 	ctx = tools.WithSessionID(ctx, sess.ID)
 	if benchmarkModeEnabled() {
+		if dir := benchmarkEnvDir(); dir != "" {
+			ctx = tools.WithSessionEnvDir(ctx, dir)
+		}
 		return tools.WithRootSessionWorkDir(ctx)
 	}
 	return ctx
@@ -1371,6 +1374,16 @@ func normalizeSkillInput(input string) string {
 
 func benchmarkModeEnabled() bool {
 	return os.Getenv("ELNATH_BENCHMARK_MODE") == "1"
+}
+
+func benchmarkEnvDir() string {
+	if dir := strings.TrimSpace(os.Getenv("ELNATH_BENCHMARK_ENV_DIR")); dir != "" {
+		return dir
+	}
+	if dir := strings.TrimSpace(os.Getenv("ELNATH_DATA_DIR")); dir != "" {
+		return filepath.Join(dir, "benchmark-env")
+	}
+	return ""
 }
 
 func taskLanguageFromEnv() string {

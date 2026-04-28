@@ -115,11 +115,14 @@ func sanitizeBashPath(raw string) string {
 // forwards PATH/LANG/LC_ALL from the host so common tools keep
 // resolving, strips injection and credential variables, and pins
 // HOME/TMPDIR/PWD inside the session workspace so commands cannot
-// read or write through the caller's real home directory.
+// read or write through the caller's real home directory. envRoot may
+// optionally override the HOME/cache root while keeping PWD at workingDir;
+// benchmark root-scoped runs use this to keep generated cache/state outside
+// the target repository.
 //
 // hostEnv is the "KEY=VALUE" slice typically returned by os.Environ().
 // sessionRoot and workingDir must be absolute, cleaned directory paths.
-func cleanBashEnv(hostEnv []string, sessionRoot, workingDir string) []string {
+func cleanBashEnv(hostEnv []string, sessionRoot, workingDir string, envRootOverride ...string) []string {
 	var pathValue, langValue, lcValue string
 
 	for _, entry := range hostEnv {
@@ -153,11 +156,17 @@ func cleanBashEnv(hostEnv []string, sessionRoot, workingDir string) []string {
 		lcValue = "C.UTF-8"
 	}
 
-	tmpDir := filepath.Join(sessionRoot, ".tmp")
+	envRoot := sessionRoot
+	hasEnvRootOverride := len(envRootOverride) > 0 && strings.TrimSpace(envRootOverride[0]) != ""
+	if hasEnvRootOverride {
+		envRoot = envRootOverride[0]
+	}
 
-	return []string{
+	tmpDir := filepath.Join(envRoot, ".tmp")
+
+	env := []string{
 		"PATH=" + pathValue,
-		"HOME=" + sessionRoot,
+		"HOME=" + envRoot,
 		"TMPDIR=" + tmpDir,
 		"TMP=" + tmpDir,
 		"TEMP=" + tmpDir,
@@ -167,6 +176,13 @@ func cleanBashEnv(hostEnv []string, sessionRoot, workingDir string) []string {
 		"LANG=" + langValue,
 		"LC_ALL=" + lcValue,
 	}
+	if hasEnvRootOverride {
+		env = append(env,
+			"GOMODCACHE="+filepath.Join(envRoot, "go", "pkg", "mod"),
+			"GOCACHE="+filepath.Join(envRoot, ".cache", "go-build"),
+		)
+	}
+	return env
 }
 
 // isBlockedBashEnv decides whether a single host env key should be

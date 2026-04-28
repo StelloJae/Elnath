@@ -8,6 +8,7 @@ import "context"
 // artifact contamination observed in dogfood session 4 (FU-WorkspaceScope).
 type sessionIDContextKey struct{}
 type rootSessionWorkDirContextKey struct{}
+type sessionEnvDirContextKey struct{}
 
 // WithSessionID returns a derived context tagged with the given session id.
 // An empty id is preserved as-is so downstream callers can detect "no
@@ -22,6 +23,14 @@ func WithSessionID(ctx context.Context, sessionID string) context.Context {
 // without falling back to legacy unscoped path resolution.
 func WithRootSessionWorkDir(ctx context.Context) context.Context {
 	return context.WithValue(ctx, rootSessionWorkDirContextKey{}, true)
+}
+
+// WithSessionEnvDir marks ctx with an environment/cache root for shell
+// commands. Benchmark runs use this to keep HOME, TMPDIR, GOMODCACHE, and
+// GOCACHE outside the root-scoped target repository while preserving the
+// target repo as the command working directory.
+func WithSessionEnvDir(ctx context.Context, dir string) context.Context {
+	return context.WithValue(ctx, sessionEnvDirContextKey{}, dir)
 }
 
 // SessionIDFrom returns the session id stored on ctx, or "" when no session
@@ -44,6 +53,15 @@ func RootSessionWorkDirFrom(ctx context.Context) bool {
 		return false
 	}
 	v, _ := ctx.Value(rootSessionWorkDirContextKey{}).(bool)
+	return v
+}
+
+// SessionEnvDirFrom returns the optional environment/cache root stored on ctx.
+func SessionEnvDirFrom(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	v, _ := ctx.Value(sessionEnvDirContextKey{}).(string)
 	return v
 }
 
