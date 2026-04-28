@@ -200,7 +200,7 @@ elnath sandbox print-starter-allowlist --mode bwrap --group python,node
 
 Paste the printed YAML into your Elnath config file, usually `~/.elnath/config.yaml`, then restart Elnath. Network allowlist changes require restart. DNS rebinding is still not fully defended; if hostile DNS is in scope, enforce egress at a lower layer such as firewall, VPC, corporate proxy, endpoint policy, or equivalent network controls.
 
-See [Sandbox Starter Allowlist](docs/sandbox-starter-allowlist.md) for group notes, blocked connection reasons, and safety caveats.
+See [Sandbox Starter Allowlist](docs/sandbox-starter-allowlist.md) for group notes, blocked connection reasons, and safety caveats. For the full sandbox/network operating model, see [Sandbox Network Operator Guide](docs/sandbox-network-operator-guide.md).
 
 ### Environment Variables
 
