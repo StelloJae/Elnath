@@ -383,6 +383,32 @@ func newTestExecutionRuntimeWithConfig(t *testing.T, provider llm.Provider, daem
 	return rt
 }
 
+func TestBenchmarkModeUsesRootWorkDirWithoutSessionWorkspace(t *testing.T) {
+	t.Setenv("ELNATH_BENCHMARK_MODE", "1")
+
+	rt := newTestExecutionRuntime(t, &countingProvider{})
+	sess := &agent.Session{ID: "bench-session"}
+
+	if got := rt.sessionRenderWorkDir(sess); got != rt.workDir {
+		t.Fatalf("sessionRenderWorkDir() = %q, want benchmark root %q", got, rt.workDir)
+	}
+	if _, err := os.Stat(filepath.Join(rt.workDir, "sessions")); !os.IsNotExist(err) {
+		t.Fatalf("benchmark session workdir created sessions directory: %v", err)
+	}
+
+	ctx := rt.toolContextForSession(context.Background(), sess)
+	if got := tools.SessionIDFrom(ctx); got != sess.ID {
+		t.Fatalf("benchmark tool context session id = %q, want %q", got, sess.ID)
+	}
+	sessionDir, err := tools.SessionWorkDirFromContext(ctx, rt.guard)
+	if err != nil {
+		t.Fatalf("SessionWorkDirFromContext: %v", err)
+	}
+	if sessionDir != rt.workDir {
+		t.Fatalf("benchmark tool session dir = %q, want root %q", sessionDir, rt.workDir)
+	}
+}
+
 func seedRuntimeSessionPage(t *testing.T, idx *wiki.Index, path, title, content string, tags []string) {
 	t.Helper()
 

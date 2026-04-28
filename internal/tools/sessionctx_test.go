@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -60,6 +61,26 @@ func TestBashTool_NoSessionFallsBackToRootWorkDir(t *testing.T) {
 	}
 	if strings.Contains(res.Output, filepath.Join(root, "sessions")) {
 		t.Fatalf("no session id given but cwd is under sessions/: %q", res.Output)
+	}
+}
+
+func TestRootSessionWorkDir_KeepsSessionIDButUsesRoot(t *testing.T) {
+	root := t.TempDir()
+	guard := NewPathGuard(root, nil)
+	ctx := WithRootSessionWorkDir(WithSessionID(context.Background(), "bench-session"))
+
+	if got := SessionIDFrom(ctx); got != "bench-session" {
+		t.Fatalf("SessionIDFrom() = %q, want bench-session", got)
+	}
+	dir, err := SessionWorkDirFromContext(ctx, guard)
+	if err != nil {
+		t.Fatalf("SessionWorkDirFromContext: %v", err)
+	}
+	if dir != root {
+		t.Fatalf("SessionWorkDirFromContext() = %q, want root %q", dir, root)
+	}
+	if _, err := os.Stat(filepath.Join(root, "sessions")); !os.IsNotExist(err) {
+		t.Fatalf("root-scoped session created sessions directory: %v", err)
 	}
 }
 

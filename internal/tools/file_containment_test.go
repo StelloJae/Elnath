@@ -208,6 +208,130 @@ func TestWriteTool_RejectsTildeHostHomeEscape(t *testing.T) {
 	}
 }
 
+func TestWriteTool_RootScopedSessionRejectsHostEscapes(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	ctx := WithRootSessionWorkDir(WithSessionID(context.Background(), "bench-session"))
+	tool := NewWriteTool(NewPathGuard(root, nil))
+
+	outsideTarget := filepath.Join(outside, "leak.txt")
+	res, err := tool.Execute(ctx, b3b1MarshalParams(t, map[string]any{
+		"file_path": outsideTarget,
+		"content":   "should not land",
+	}))
+	if err != nil {
+		t.Fatalf("absolute Execute: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected error for root-scoped absolute escape; output: %s", res.Output)
+	}
+	if _, statErr := os.Stat(outsideTarget); statErr == nil {
+		t.Fatalf("file unexpectedly created outside benchmark root: %s", outsideTarget)
+	}
+
+	res, err = tool.Execute(ctx, b3b1MarshalParams(t, map[string]any{
+		"file_path": "~/elnath-root-scope-leak.txt",
+		"content":   "should not land in host home",
+	}))
+	if err != nil {
+		t.Fatalf("tilde Execute: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected error for root-scoped tilde escape; output: %s", res.Output)
+	}
+}
+
+func TestWriteTool_RootScopedSessionWritesRelativePathAtRoot(t *testing.T) {
+	root := t.TempDir()
+	ctx := WithRootSessionWorkDir(WithSessionID(context.Background(), "bench-session"))
+	tool := NewWriteTool(NewPathGuard(root, nil))
+
+	res, err := tool.Execute(ctx, b3b1MarshalParams(t, map[string]any{
+		"file_path": "inside.txt",
+		"content":   "ok",
+	}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("relative write inside root-scoped session should succeed: %s", res.Output)
+	}
+	if _, err := os.Stat(filepath.Join(root, "sessions")); !os.IsNotExist(err) {
+		t.Fatalf("root-scoped session created sessions directory: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "inside.txt"))
+	if err != nil {
+		t.Fatalf("read relative root file: %v", err)
+	}
+	if string(data) != "ok" {
+		t.Fatalf("content = %q, want ok", string(data))
+	}
+}
+
+func TestGlobTool_RootScopedSessionRejectsHostEscapes(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "leak.txt"), []byte("secret"), 0o644); err != nil {
+		t.Fatalf("seed outside file: %v", err)
+	}
+	ctx := WithRootSessionWorkDir(WithSessionID(context.Background(), "bench-session"))
+	tool := NewGlobTool(NewPathGuard(root, nil))
+
+	res, err := tool.Execute(ctx, b3b1MarshalParams(t, map[string]any{
+		"pattern": "*.txt",
+		"path":    outside,
+	}))
+	if err != nil {
+		t.Fatalf("absolute Execute: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected error for root-scoped absolute glob escape; output: %s", res.Output)
+	}
+
+	res, err = tool.Execute(ctx, b3b1MarshalParams(t, map[string]any{
+		"pattern": "*.txt",
+		"path":    "~",
+	}))
+	if err != nil {
+		t.Fatalf("tilde Execute: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected error for root-scoped tilde glob escape; output: %s", res.Output)
+	}
+}
+
+func TestGrepTool_RootScopedSessionRejectsHostEscapes(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "leak.txt"), []byte("secret"), 0o644); err != nil {
+		t.Fatalf("seed outside file: %v", err)
+	}
+	ctx := WithRootSessionWorkDir(WithSessionID(context.Background(), "bench-session"))
+	tool := NewGrepTool(NewPathGuard(root, nil))
+
+	res, err := tool.Execute(ctx, b3b1MarshalParams(t, map[string]any{
+		"pattern": "secret",
+		"path":    outside,
+	}))
+	if err != nil {
+		t.Fatalf("absolute Execute: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected error for root-scoped absolute grep escape; output: %s", res.Output)
+	}
+
+	res, err = tool.Execute(ctx, b3b1MarshalParams(t, map[string]any{
+		"pattern": "secret",
+		"path":    "~",
+	}))
+	if err != nil {
+		t.Fatalf("tilde Execute: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected error for root-scoped tilde grep escape; output: %s", res.Output)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // EditTool containment
 // ---------------------------------------------------------------------------

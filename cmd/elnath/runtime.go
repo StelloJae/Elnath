@@ -772,9 +772,7 @@ func (rt *executionRuntime) runTask(
 	userInput string,
 	output orchestrationOutput,
 ) ([]llm.Message, string, error) {
-	if sess != nil {
-		ctx = tools.WithSessionID(ctx, sess.ID)
-	}
+	ctx = rt.toolContextForSession(ctx, sess)
 	bus := newBus(output, !rt.daemonMode)
 
 	if rt.app.Config.MagicDocs.Enabled && rt.wikiStore != nil {
@@ -977,18 +975,34 @@ func (rt *executionRuntime) runTask(
 	return result.Messages, result.Summary, nil
 }
 
+func (rt *executionRuntime) toolContextForSession(ctx context.Context, sess *agent.Session) context.Context {
+	if sess == nil {
+		return ctx
+	}
+	ctx = tools.WithSessionID(ctx, sess.ID)
+	if benchmarkModeEnabled() {
+		return tools.WithRootSessionWorkDir(ctx)
+	}
+	return ctx
+}
+
 // sessionRenderWorkDir returns the cwd path advertised to the LLM through
 // prompt nodes. It points at the per-session workspace subdir so the model
 // does not learn the shared root path; otherwise the LLM would stamp the
 // root into bash working_dir overrides and defeat session isolation
-// (FU-WorkspaceScope dogfood probe #335). Falls back to rt.workDir on any
-// guard / mkdir failure so prompt rendering never aborts a turn.
+// (FU-WorkspaceScope dogfood probe #335). Benchmark mode uses rt.workDir so
+// probe workspaces stay rooted at the cloned target repo and do not create
+// Elnath session dirs inside it. Falls back to rt.workDir on any guard / mkdir
+// failure so prompt rendering never aborts a turn.
 func (rt *executionRuntime) sessionRenderWorkDir(sess *agent.Session) string {
 	if rt == nil || rt.guard == nil || sess == nil {
 		if rt != nil {
 			return rt.workDir
 		}
 		return ""
+	}
+	if benchmarkModeEnabled() {
+		return rt.workDir
 	}
 	dir, err := rt.guard.EnsureSessionWorkDir(sess.ID)
 	if err != nil {

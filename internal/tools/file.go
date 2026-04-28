@@ -353,17 +353,13 @@ func (t *GlobTool) Execute(ctx context.Context, params json.RawMessage) (*Result
 		return ErrorResult(fmt.Sprintf("invalid params: %v", err)), nil
 	}
 
-	sessionBase, err := t.guard.EnsureSessionWorkDir(SessionIDFrom(ctx))
+	sessionBase, err := SessionWorkDirFromContext(ctx, t.guard)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("session workspace: %v", err)), nil
 	}
-	searchBase := sessionBase
-	if p.Path != "" {
-		abs, err := t.guard.ResolveIn(sessionBase, p.Path)
-		if err != nil {
-			return ErrorResult(err.Error()), nil
-		}
-		searchBase = abs
+	searchBase, err := resolveSearchBase(t.guard, ctx, sessionBase, p.Path)
+	if err != nil {
+		return ErrorResult(err.Error()), nil
 	}
 
 	var entries []fileEntry
@@ -493,11 +489,10 @@ type grepParams struct {
 // session-scoped resolver fails, the failure surfaces as a tool error rather
 // than degrading to legacy behavior, per the B3b-1 fail-closed contract.
 func resolveFileTarget(guard *PathGuard, ctx context.Context, rawPath string) (string, error) {
-	sessionID := SessionIDFrom(ctx)
-	if sessionID == "" {
+	if !sessionScopedPathsEnabled(ctx) {
 		return guard.Resolve(rawPath)
 	}
-	sessionDir, err := guard.EnsureSessionWorkDir(sessionID)
+	sessionDir, err := SessionWorkDirFromContext(ctx, guard)
 	if err != nil {
 		return "", err
 	}
@@ -538,17 +533,13 @@ func (t *GrepTool) Execute(ctx context.Context, params json.RawMessage) (*Result
 		return ErrorResult(fmt.Sprintf("grep: invalid pattern: %v", err)), nil
 	}
 
-	sessionBase, err := t.guard.EnsureSessionWorkDir(SessionIDFrom(ctx))
+	sessionBase, err := SessionWorkDirFromContext(ctx, t.guard)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("session workspace: %v", err)), nil
 	}
-	searchRoot := sessionBase
-	if p.Path != "" {
-		abs, err := t.guard.ResolveIn(sessionBase, p.Path)
-		if err != nil {
-			return ErrorResult(err.Error()), nil
-		}
-		searchRoot = abs
+	searchRoot, err := resolveSearchBase(t.guard, ctx, sessionBase, p.Path)
+	if err != nil {
+		return ErrorResult(err.Error()), nil
 	}
 	if msg := t.tracker.CheckGrep(searchRoot, p.Pattern); msg != "" {
 		return SuccessResult(msg), nil
@@ -596,6 +587,27 @@ func (t *GrepTool) Execute(ctx context.Context, params json.RawMessage) (*Result
 		sb.WriteString(fmt.Sprintf("... (output truncated at %d matches)\n", grepMaxMatches))
 	}
 	return SuccessResult(sb.String()), nil
+}
+
+func resolveSearchBase(guard *PathGuard, ctx context.Context, sessionBase, rawPath string) (string, error) {
+	if rawPath == "" {
+		return sessionBase, nil
+	}
+	if !sessionScopedPathsEnabled(ctx) {
+		return guard.ResolveIn(sessionBase, rawPath)
+	}
+	scoped, err := guard.ResolveSessionScoped(sessionBase, rawPath)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(scoped)
+	if err != nil {
+		return "", fmt.Errorf("search path must resolve to a directory inside session workspace: %w", err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("search path must resolve to a directory inside session workspace")
+	}
+	return scoped, nil
 }
 
 func firstTracker(trackers []*ReadTracker) *ReadTracker {
