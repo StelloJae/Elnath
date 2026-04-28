@@ -59,7 +59,7 @@ func (r *DirectRunner) Close(_ context.Context) error { return nil }
 func (r *DirectRunner) Run(ctx context.Context, req BashRunRequest) (BashRunResult, error) {
 	cmd := exec.Command(resolveBashShell(), "-c", req.Command)
 	cmd.Dir = req.WorkDir
-	cmd.Env = cleanBashEnv(os.Environ(), req.SessionDir, req.WorkDir)
+	cmd.Env = cleanBashEnv(os.Environ(), req.SessionDir, req.WorkDir, req.EnvDir)
 	configureProcessCleanup(cmd)
 	return runBashCmd(ctx, cmd, req, r.killGrace), nil
 }

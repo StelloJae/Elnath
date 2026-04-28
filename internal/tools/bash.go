@@ -138,6 +138,20 @@ func (t *BashTool) Execute(ctx context.Context, params json.RawMessage) (*Result
 		return ErrorResult(fmt.Sprintf("resolve session root: %v", err)), nil
 	}
 	sessionDir = sessionReal
+	envDir := strings.TrimSpace(SessionEnvDirFrom(ctx))
+	if envDir != "" {
+		if !filepath.IsAbs(envDir) {
+			return ErrorResult(fmt.Sprintf("invalid env_dir: %s", envDir)), nil
+		}
+		if err := os.MkdirAll(envDir, 0o700); err != nil {
+			return ErrorResult(fmt.Sprintf("prepare env root: %v", err)), nil
+		}
+		envReal, err := filepath.EvalSymlinks(envDir)
+		if err != nil {
+			return ErrorResult(fmt.Sprintf("resolve env root: %v", err)), nil
+		}
+		envDir = envReal
+	}
 
 	workDir := sessionDir
 	if p.WorkingDir != "" {
@@ -148,12 +162,25 @@ func (t *BashTool) Execute(ctx context.Context, params json.RawMessage) (*Result
 		workDir = resolved
 	}
 
-	// TMPDIR is pinned inside the session workspace; create the
+	envRoot := sessionDir
+	if envDir != "" {
+		envRoot = envDir
+	}
+
+	// TMPDIR is pinned inside the active environment root; create the
 	// directory eagerly so shell tools that rely on $TMPDIR existing
 	// (mktemp, go test cache, etc.) do not fail on first use.
-	tmpDir := filepath.Join(sessionDir, ".tmp")
+	tmpDir := filepath.Join(envRoot, ".tmp")
 	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
 		return ErrorResult(fmt.Sprintf("prepare session tmp: %v", err)), nil
+	}
+	if envDir != "" {
+		if err := os.MkdirAll(filepath.Join(envRoot, "go", "pkg", "mod"), 0o700); err != nil {
+			return ErrorResult(fmt.Sprintf("prepare go module cache: %v", err)), nil
+		}
+		if err := os.MkdirAll(filepath.Join(envRoot, ".cache", "go-build"), 0o700); err != nil {
+			return ErrorResult(fmt.Sprintf("prepare go build cache: %v", err)), nil
+		}
 	}
 
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -163,6 +190,7 @@ func (t *BashTool) Execute(ctx context.Context, params json.RawMessage) (*Result
 		Command:    p.Command,
 		WorkDir:    workDir,
 		SessionDir: sessionDir,
+		EnvDir:     envDir,
 		DisplayCWD: displayCWD(sessionDir, workDir),
 	}
 

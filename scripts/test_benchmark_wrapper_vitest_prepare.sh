@@ -45,6 +45,8 @@ create_vitest_fixture() {
     "$repo_dir/packages/vitest" \
     "$repo_dir/packages/utils" \
     "$repo_dir/packages/runner" \
+    "$repo_dir/packages/pretty-format" \
+    "$repo_dir/packages/snapshot" \
     "$repo_dir/test/cli/test"
   cat >"$repo_dir/pnpm-lock.yaml" <<'EOF'
 lockfileVersion: '9.0'
@@ -57,6 +59,12 @@ EOF
 EOF
   cat >"$repo_dir/packages/runner/package.json" <<'EOF'
 {"name":"@vitest/runner","private":true}
+EOF
+  cat >"$repo_dir/packages/pretty-format/package.json" <<'EOF'
+{"name":"@vitest/pretty-format","private":true}
+EOF
+  cat >"$repo_dir/packages/snapshot/package.json" <<'EOF'
+{"name":"@vitest/snapshot","private":true}
 EOF
   cat >"$repo_dir/test/cli/package.json" <<'EOF'
 {"name":"@vitest/test-cli","private":true}
@@ -110,5 +118,7 @@ run_prepare "$REPO_ROOT/scripts/run_current_benchmark_wrapper.sh" "$FIXTURE_REPO
 
 grep -Fxq 'pnpm -C packages/utils build' "$NPX_LOG"
 grep -Fxq 'pnpm -C packages/runner build' "$NPX_LOG"
+grep -Fxq 'pnpm -C packages/pretty-format build' "$NPX_LOG"
+grep -Fxq 'pnpm -C packages/snapshot build' "$NPX_LOG"
 
 echo "PASS: vitest retry telemetry verification prepares workspace package dist"

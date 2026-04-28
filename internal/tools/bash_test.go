@@ -576,6 +576,61 @@ func TestBash_EnvTmpDirInsideSession(t *testing.T) {
 	}
 }
 
+func TestBash_RootScopedSessionUsesExternalBenchmarkEnv(t *testing.T) {
+	root := t.TempDir()
+	envRoot := t.TempDir()
+	rootReal, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatalf("EvalSymlinks root: %v", err)
+	}
+	envReal, err := filepath.EvalSymlinks(envRoot)
+	if err != nil {
+		t.Fatalf("EvalSymlinks envRoot: %v", err)
+	}
+
+	guard := NewPathGuard(root, nil)
+	tool := NewBashTool(guard)
+	ctx := WithSessionEnvDir(WithRootSessionWorkDir(WithSessionID(context.Background(), "bench-session")), envRoot)
+
+	res, err := tool.Execute(ctx, makeBashParams(t, `printf "%s
+%s
+%s
+%s
+%s
+%s
+%s" "$PWD" "$HOME" "$TMPDIR" "$TMP" "$TEMP" "$GOMODCACHE" "$GOCACHE"`, nil))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.Output)
+	}
+	stdout := res.Output
+	if _, after, ok := strings.Cut(res.Output, "STDOUT:\n"); ok {
+		stdout = after
+	}
+	lines := strings.Split(strings.TrimSpace(stdout), "\n")
+	if len(lines) != 7 {
+		t.Fatalf("expected 7 env lines, got %d: %q", len(lines), res.Output)
+	}
+	if lines[0] != rootReal {
+		t.Fatalf("PWD = %q, want root-scoped workdir %q", lines[0], rootReal)
+	}
+	for i, value := range lines[1:] {
+		if strings.HasPrefix(value, rootReal) {
+			t.Fatalf("env line %d = %q is inside target repo root %q", i+1, value, rootReal)
+		}
+		if !strings.HasPrefix(value, envReal) {
+			t.Fatalf("env line %d = %q is not under benchmark env root %q", i+1, value, envReal)
+		}
+	}
+	for _, name := range []string{"go", "Library", ".tmp", ".cache"} {
+		if _, err := os.Stat(filepath.Join(rootReal, name)); !os.IsNotExist(err) {
+			t.Fatalf("benchmark target repo gained %s: %v", name, err)
+		}
+	}
+}
+
 // TestBash_EnvPinsShellAndTerm ensures bash sees a deterministic
 // non-interactive TERM and a known SHELL regardless of the host.
 func TestBash_EnvPinsShellAndTerm(t *testing.T) {

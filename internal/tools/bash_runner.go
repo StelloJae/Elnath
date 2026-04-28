@@ -56,6 +56,7 @@ type BashRunRequest struct {
 	Command    string
 	WorkDir    string
 	SessionDir string
+	EnvDir     string
 	DisplayCWD string
 }
 

@@ -67,7 +67,24 @@ VERIFY_RETRY_LOG="$TMP_DIR/verify-retry.log"
 BENCHMARK_STATE_DIR="$TMP_DIR/elnath-state"
 BENCHMARK_DATA_DIR="$BENCHMARK_STATE_DIR/data"
 BENCHMARK_WIKI_DIR="$BENCHMARK_STATE_DIR/wiki"
-mkdir -p "$BENCHMARK_DATA_DIR" "$BENCHMARK_WIKI_DIR"
+BENCHMARK_ENV_DIR="$BENCHMARK_STATE_DIR/env"
+BENCHMARK_HOME_DIR="$BENCHMARK_ENV_DIR/home"
+BENCHMARK_TMP_DIR="$BENCHMARK_ENV_DIR/tmp"
+BENCHMARK_GOMODCACHE_DIR="$BENCHMARK_ENV_DIR/go/pkg/mod"
+BENCHMARK_GOCACHE_DIR="$BENCHMARK_ENV_DIR/.cache/go-build"
+mkdir -p \
+  "$BENCHMARK_DATA_DIR" \
+  "$BENCHMARK_WIKI_DIR" \
+  "$BENCHMARK_HOME_DIR" \
+  "$BENCHMARK_TMP_DIR" \
+  "$BENCHMARK_GOMODCACHE_DIR" \
+  "$BENCHMARK_GOCACHE_DIR"
+
+export TMPDIR="$BENCHMARK_TMP_DIR"
+export TMP="$BENCHMARK_TMP_DIR"
+export TEMP="$BENCHMARK_TMP_DIR"
+export GOMODCACHE="$BENCHMARK_GOMODCACHE_DIR"
+export GOCACHE="$BENCHMARK_GOCACHE_DIR"
 
 json_escape() {
   python3 - <<'PY' "$1"
@@ -372,11 +389,17 @@ pick_targeted_verification_command() {
 
 maybe_prepare_verification() {
   if [[ "${VERIFY_CMD:-}" == *"packages/vitest build"* ]]; then
+    if [[ -f packages/pretty-format/package.json ]] && command -v npx >/dev/null 2>&1; then
+      npx pnpm -C packages/pretty-format build >/dev/null 2>&1
+    fi
     if [[ -f packages/utils/package.json ]] && command -v npx >/dev/null 2>&1; then
       npx pnpm -C packages/utils build >/dev/null 2>&1
     fi
     if [[ -f packages/runner/package.json ]] && command -v npx >/dev/null 2>&1; then
       npx pnpm -C packages/runner build >/dev/null 2>&1
+    fi
+    if [[ -f packages/snapshot/package.json ]] && command -v npx >/dev/null 2>&1; then
+      npx pnpm -C packages/snapshot build >/dev/null 2>&1
     fi
     return 0
   fi
@@ -389,6 +412,12 @@ run_verification_command() {
   local log_path="$1"
   (
     cd "$WORKTREE"
+    export HOME="$BENCHMARK_HOME_DIR"
+    export TMPDIR="$BENCHMARK_TMP_DIR"
+    export TMP="$BENCHMARK_TMP_DIR"
+    export TEMP="$BENCHMARK_TMP_DIR"
+    export GOMODCACHE="$BENCHMARK_GOMODCACHE_DIR"
+    export GOCACHE="$BENCHMARK_GOCACHE_DIR"
     maybe_prepare_verification
     bash -lc "$VERIFY_CMD" >"$log_path" 2>&1
   )
@@ -407,6 +436,7 @@ run_elnath() {
     export ELNATH_PERMISSION_MODE="${ELNATH_BENCHMARK_PERMISSION_MODE:-bypass}"
     export ELNATH_DATA_DIR="$BENCHMARK_DATA_DIR"
     export ELNATH_WIKI_DIR="$BENCHMARK_WIKI_DIR"
+    export ELNATH_BENCHMARK_ENV_DIR="$BENCHMARK_ENV_DIR"
     local -a args=("$ELNATH_BIN" "run" "--non-interactive")
     python3 - <<'PY' "$timeout_override" "$log_path" "$prompt" "${args[@]}"
 import subprocess, sys
@@ -425,7 +455,11 @@ PY
 }
 
 if [[ "$TASK_LANGUAGE" == "typescript" ]]; then
-  if ! (cd "$WORKTREE" && install_js_deps); then
+  if ! (
+    cd "$WORKTREE"
+    export HOME="$BENCHMARK_HOME_DIR"
+    install_js_deps
+  ); then
     write_result false false "dependency_install_failed" false false "failed to install JavaScript dependencies"
     exit 0
   fi

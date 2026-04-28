@@ -55,6 +55,25 @@ func TestCleanBashEnv_TmpDirInsideSession(t *testing.T) {
 	}
 }
 
+func TestCleanBashEnv_UsesSeparateEnvRootForBenchmarkCaches(t *testing.T) {
+	env := envSnapshot(t, cleanBashEnv(nil, "/repo/root", "/repo/root", "/bench/env"))
+
+	if env["HOME"] != "/bench/env" {
+		t.Errorf("HOME = %q, want benchmark env root", env["HOME"])
+	}
+	for _, key := range []string{"TMPDIR", "TMP", "TEMP"} {
+		if env[key] != filepath.Join("/bench/env", ".tmp") {
+			t.Errorf("%s = %q, want benchmark env tmp", key, env[key])
+		}
+	}
+	if env["GOMODCACHE"] != filepath.Join("/bench/env", "go", "pkg", "mod") {
+		t.Errorf("GOMODCACHE = %q, want benchmark env go module cache", env["GOMODCACHE"])
+	}
+	if env["GOCACHE"] != filepath.Join("/bench/env", ".cache", "go-build") {
+		t.Errorf("GOCACHE = %q, want benchmark env go build cache", env["GOCACHE"])
+	}
+}
+
 func TestCleanBashEnv_PwdMatchesWorkingDir(t *testing.T) {
 	env := envSnapshot(t, cleanBashEnv(nil, "/sess/root", "/sess/root/sub"))
 	if env["PWD"] != "/sess/root/sub" {
