@@ -58,6 +58,7 @@ printf 'TMP:%s\n' "${TMP:-}" >>"${ELNATH_FAKE_LOG:?}"
 printf 'TEMP:%s\n' "${TEMP:-}" >>"${ELNATH_FAKE_LOG:?}"
 printf 'GOMODCACHE:%s\n' "${GOMODCACHE:-}" >>"${ELNATH_FAKE_LOG:?}"
 printf 'GOCACHE:%s\n' "${GOCACHE:-}" >>"${ELNATH_FAKE_LOG:?}"
+printf 'BENCH_ENV:%s\n' "${ELNATH_BENCHMARK_ENV_DIR:-}" >>"${ELNATH_FAKE_LOG:?}"
 printf '\npatched by fake elnath\n' >> README.md
 EOF
   chmod +x "$bin_path"
@@ -125,6 +126,58 @@ for label in ("HOME", "TMPDIR", "TMP", "TEMP", "GOMODCACHE", "GOCACHE"):
 PY
 }
 
+assert_short_benchmark_tmp_paths() {
+  local log_path="$1"
+  python3 - <<'PY' "$log_path"
+from pathlib import Path
+import os
+import socket
+import sys
+
+max_tmp_len = 80
+log = Path(sys.argv[1]).read_text().splitlines()
+values = {}
+for line in log:
+    key, sep, value = line.partition(":")
+    if sep:
+        values.setdefault(key, value)
+
+pwd = os.path.abspath(values.get("PWD", ""))
+assert pwd, values
+for label in ("TMPDIR", "TMP", "TEMP"):
+    path = os.path.abspath(values.get(label, ""))
+    assert path, f"{label} was not set: {values}"
+    assert len(path) <= max_tmp_len, f"{label} path is too long for benchmark Unix socket tests: {path} ({len(path)})"
+    common = os.path.commonpath([pwd, path])
+    assert common != pwd, f"{label} is inside benchmark target repo: {path}"
+
+bench_env = os.path.abspath(values.get("BENCH_ENV", ""))
+assert bench_env, values
+home = os.path.abspath(values.get("HOME", ""))
+assert home == os.path.join(bench_env, "home"), f"HOME = {home}, want benchmark env home under {bench_env}"
+assert len(home) <= max_tmp_len, f"benchmark HOME path is too long: {home} ({len(home)})"
+bash_tmp = os.path.join(bench_env, ".tmp")
+assert len(bash_tmp) <= max_tmp_len, f"benchmark Bash TMPDIR path is too long: {bash_tmp} ({len(bash_tmp)})"
+assert os.path.commonpath([pwd, bash_tmp]) != pwd, f"benchmark Bash TMPDIR is inside target repo: {bash_tmp}"
+
+Path(values["TMPDIR"]).mkdir(parents=True, exist_ok=True)
+sock_path = os.path.join(values["TMPDIR"], "elnath-bench-test.sock")
+try:
+    os.unlink(sock_path)
+except FileNotFoundError:
+    pass
+sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+try:
+    sock.bind(sock_path)
+finally:
+    sock.close()
+    try:
+        os.unlink(sock_path)
+    except FileNotFoundError:
+        pass
+PY
+}
+
 assert_no_benchmark_noise_in_target_repo() {
   local log_path="$1"
   python3 - <<'PY' "$log_path"
@@ -139,7 +192,7 @@ for line in log:
         values.setdefault(key, value)
 
 pwd = Path(values["PWD"])
-for name in ("go", "Library", ".tmp", ".cache"):
+for name in ("go", "Library", ".tmp", ".cache", "sessions", ".elnath"):
     assert not (pwd / name).exists(), f"benchmark target repo gained {name}"
 PY
 }
@@ -195,6 +248,7 @@ run_case "__unset__" "$DEFAULT_LOG" "$DEFAULT_OUTPUT" "$REPO_URL"
 assert_success_json "$DEFAULT_OUTPUT"
 assert_isolated_elnath_state "$DEFAULT_LOG"
 assert_isolated_benchmark_env "$DEFAULT_LOG"
+assert_short_benchmark_tmp_paths "$DEFAULT_LOG"
 assert_no_benchmark_noise_in_target_repo "$DEFAULT_LOG"
 grep -Fq 'ARGS:run --non-interactive' "$DEFAULT_LOG"
 grep -Fq 'MODE:bypass' "$DEFAULT_LOG"
@@ -205,6 +259,7 @@ run_case "accept_edits" "$OVERRIDE_LOG" "$OVERRIDE_OUTPUT" "$REPO_URL"
 assert_success_json "$OVERRIDE_OUTPUT"
 assert_isolated_elnath_state "$OVERRIDE_LOG"
 assert_isolated_benchmark_env "$OVERRIDE_LOG"
+assert_short_benchmark_tmp_paths "$OVERRIDE_LOG"
 assert_no_benchmark_noise_in_target_repo "$OVERRIDE_LOG"
 grep -Fq 'MODE:accept_edits' "$OVERRIDE_LOG"
 

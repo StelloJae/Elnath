@@ -42,6 +42,22 @@ ELNATH_TIMEOUT="${ELNATH_TIMEOUT:-300}"
 
 START_TS="$(date +%s)"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/elnath-current-benchmark.XXXXXX")"
+BENCHMARK_SHORT_ROOT=""
+cleanup() {
+  if [[ "${ELNATH_BENCHMARK_KEEP_TMP:-}" == "1" ]]; then
+    echo "Keeping benchmark temp dir: $TMP_DIR" >&2
+    if [[ -n "$BENCHMARK_SHORT_ROOT" ]]; then
+      echo "Keeping benchmark short env dir: $BENCHMARK_SHORT_ROOT" >&2
+    fi
+    return
+  fi
+  if [[ -n "$BENCHMARK_SHORT_ROOT" ]]; then
+    rm -rf "$BENCHMARK_SHORT_ROOT"
+  fi
+  rm -rf "$TMP_DIR"
+}
+trap cleanup EXIT
+BENCHMARK_SHORT_ROOT="$(mktemp -d /tmp/elnath-bench-XXXXXX)"
 
 # macOS ships python3 only; LLMs often emit bare `python`.
 if ! command -v python >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
@@ -49,15 +65,6 @@ if ! command -v python >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; th
   ln -s "$(command -v python3)" "$TMP_DIR/bin/python"
   export PATH="$TMP_DIR/bin:$PATH"
 fi
-cleanup() {
-  if [[ "${ELNATH_BENCHMARK_KEEP_TMP:-}" == "1" ]]; then
-    echo "Keeping benchmark temp dir: $TMP_DIR" >&2
-    return
-  fi
-  rm -rf "$TMP_DIR"
-}
-trap cleanup EXIT
-
 WORKTREE="$TMP_DIR/repo"
 RUN_LOG="$TMP_DIR/elnath-run.log"
 RECOVERY_LOG="$TMP_DIR/elnath-recovery.log"
@@ -67,7 +74,7 @@ VERIFY_RETRY_LOG="$TMP_DIR/verify-retry.log"
 BENCHMARK_STATE_DIR="$TMP_DIR/elnath-state"
 BENCHMARK_DATA_DIR="$BENCHMARK_STATE_DIR/data"
 BENCHMARK_WIKI_DIR="$BENCHMARK_STATE_DIR/wiki"
-BENCHMARK_ENV_DIR="$BENCHMARK_STATE_DIR/env"
+BENCHMARK_ENV_DIR="$BENCHMARK_SHORT_ROOT/env"
 BENCHMARK_HOME_DIR="$BENCHMARK_ENV_DIR/home"
 BENCHMARK_TMP_DIR="$BENCHMARK_ENV_DIR/tmp"
 BENCHMARK_GOMODCACHE_DIR="$BENCHMARK_ENV_DIR/go/pkg/mod"
@@ -437,6 +444,7 @@ run_elnath() {
     export ELNATH_DATA_DIR="$BENCHMARK_DATA_DIR"
     export ELNATH_WIKI_DIR="$BENCHMARK_WIKI_DIR"
     export ELNATH_BENCHMARK_ENV_DIR="$BENCHMARK_ENV_DIR"
+    export HOME="$BENCHMARK_HOME_DIR"
     local -a args=("$ELNATH_BIN" "run" "--non-interactive")
     python3 - <<'PY' "$timeout_override" "$log_path" "$prompt" "${args[@]}"
 import subprocess, sys
