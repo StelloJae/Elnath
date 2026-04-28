@@ -98,6 +98,7 @@ Recent hardening also closed two structural follow-ups behind this operator flow
 | `daemon status` | Show queued and running jobs | `elnath daemon status` |
 | `daemon stop` | Stop daemon | `elnath daemon stop` |
 | `daemon install` | Install daemon as system service | `elnath daemon install` |
+| `sandbox print-starter-allowlist` | Print read-only starter sandbox allowlist YAML | `elnath sandbox print-starter-allowlist --mode seatbelt --group git-hosting,go` |
 | `telegram shell` | Run the thin Telegram operator shell | `elnath telegram shell` |
 | `wiki search` | Full-text search wiki | `elnath wiki search "authentication"` |
 | `wiki lint` | Validate wiki structure | `elnath wiki lint` |
@@ -164,6 +165,11 @@ permission:
   allow: []       # tools always allowed (bypass permission check)
   deny: []        # tools always denied (overrides allow)
 
+sandbox:
+  mode: ""                # direct by default; use seatbelt on macOS or bwrap on Linux
+  network_allowlist: []   # explicit host:port entries for sandboxed network access
+  network_denylist: []    # explicit host:port entries that deny even if allowlisted
+
 telegram:
   enabled: false
   bot_token: ""   # or ELNATH_TELEGRAM_BOT_TOKEN
@@ -179,6 +185,22 @@ research:
   max_rounds: 5
   cost_cap_usd: 5.0
 ```
+
+### Sandbox Starter Allowlist
+
+`elnath sandbox print-starter-allowlist` prints read-only YAML snippets for explicit opt-in sandbox network configuration. It does not write config, install defaults, or enable network access automatically.
+
+Examples:
+
+```bash
+elnath sandbox print-starter-allowlist --list-groups
+elnath sandbox print-starter-allowlist --mode seatbelt --group git-hosting,go
+elnath sandbox print-starter-allowlist --mode bwrap --group python,node
+```
+
+Paste the printed YAML into your Elnath config file, usually `~/.elnath/config.yaml`, then restart Elnath. Network allowlist changes require restart. DNS rebinding is still not fully defended; if hostile DNS is in scope, enforce egress at a lower layer such as firewall, VPC, corporate proxy, endpoint policy, or equivalent network controls.
+
+See [Sandbox Starter Allowlist](docs/sandbox-starter-allowlist.md) for group notes, blocked connection reasons, and safety caveats.
 
 ### Environment Variables
 
