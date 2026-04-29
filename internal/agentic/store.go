@@ -3,8 +3,14 @@ package agentic
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
 	"time"
 )
+
+var ErrSignalTriageFailed = errors.New("agentic: signal triage failed")
 
 type Store struct {
 	db *sql.DB
@@ -239,6 +245,52 @@ func (s *Store) GetGoalSignalByDedupeKey(ctx context.Context, goalID int64, sour
 	return s.GetGoalSignal(ctx, id)
 }
 
+func (s *Store) ListGoalSignalsByStatus(ctx context.Context, status string, limit int) ([]GoalSignal, error) {
+	query := `
+		SELECT id, goal_id, watcher_id, source, type, payload_json, fingerprint, severity, status, dedupe_key, observed_at
+		FROM goal_signals
+		WHERE status = ?
+		ORDER BY observed_at, id
+	`
+	args := []any{status}
+	if limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, limit)
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var signals []GoalSignal
+	for rows.Next() {
+		signal, err := scanGoalSignal(rows)
+		if err != nil {
+			return nil, err
+		}
+		signals = append(signals, *signal)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return signals, nil
+}
+
+func (s *Store) UpdateGoalSignalStatus(ctx context.Context, id int64, status string) (*GoalSignal, error) {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE goal_signals SET status = ? WHERE id = ?
+	`, status, id)
+	if err != nil {
+		return nil, err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return nil, sql.ErrNoRows
+	}
+	return s.GetGoalSignal(ctx, id)
+}
+
 func (s *Store) CreateAgenticTask(ctx context.Context, task AgenticTask) (*AgenticTask, error) {
 	now := nowTime()
 	if task.CreatedAt.IsZero() {
@@ -293,6 +345,54 @@ func (s *Store) GetAgenticTaskByQueueTaskID(ctx context.Context, queueTaskID int
 	return s.GetAgenticTask(ctx, id)
 }
 
+func (s *Store) GetAgenticTaskBySignalID(ctx context.Context, signalID int64) (*AgenticTask, error) {
+	var id int64
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id FROM agentic_tasks WHERE signal_id = ?
+	`, signalID).Scan(&id)
+	if err != nil {
+		return nil, err
+	}
+	return s.GetAgenticTask(ctx, id)
+}
+
+func (s *Store) LinkAgenticTaskSignal(ctx context.Context, taskID, signalID int64) (*AgenticTask, error) {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE agentic_tasks
+		SET signal_id = ?, updated_at = MAX(?, updated_at + 1)
+		WHERE id = ? AND signal_id IS NULL
+	`, signalID, timeMillis(nowTime()), taskID)
+	if err != nil {
+		return nil, err
+	}
+	n, _ := res.RowsAffected()
+	task, getErr := s.GetAgenticTask(ctx, taskID)
+	if getErr != nil {
+		return nil, getErr
+	}
+	if n == 0 && task.SignalID != signalID {
+		return nil, fmt.Errorf("agentic: task %d is already linked to signal %d", taskID, task.SignalID)
+	}
+	return task, nil
+}
+
+func (s *Store) TriageGoalSignal(ctx context.Context, signalID int64) (*SignalTriageResult, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	result, err := s.triageGoalSignalTx(ctx, tx, signalID)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 func (s *Store) UpdateAgenticTaskStatus(ctx context.Context, id int64, status string) (*AgenticTask, error) {
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE agentic_tasks SET status = ?, updated_at = MAX(?, updated_at + 1) WHERE id = ?
@@ -329,6 +429,222 @@ func (s *Store) ReconcileDaemonTaskStatuses(ctx context.Context) error {
 			)
 	`, TaskStatusSucceeded, TaskStatusFailed, TaskStatusSucceeded, TaskStatusFailed, TaskStatusCanceled)
 	return err
+}
+
+func (s *Store) triageGoalSignalTx(ctx context.Context, tx *sql.Tx, signalID int64) (*SignalTriageResult, error) {
+	signal, err := getGoalSignalTx(ctx, tx, signalID)
+	if err != nil {
+		return nil, err
+	}
+	if task, err := getAgenticTaskBySignalIDTx(ctx, tx, signal.ID); err == nil {
+		if signal.Status == SignalStatusNew {
+			if err := updateGoalSignalStatusTx(ctx, tx, signal.ID, SignalStatusTriaged); err != nil {
+				return nil, err
+			}
+		}
+		return &SignalTriageResult{Task: task}, nil
+	} else if err != sql.ErrNoRows {
+		return nil, err
+	}
+
+	queueTaskID, payloadErr := queueTaskIDFromSignalPayload(signal.PayloadJSON)
+	if payloadErr == nil && queueTaskID > 0 {
+		if task, err := getAgenticTaskByQueueTaskIDTx(ctx, tx, queueTaskID); err == nil {
+			linked := false
+			if signal.Status == SignalStatusNew {
+				if task.SignalID == 0 {
+					task, err = linkAgenticTaskSignalTx(ctx, tx, task.ID, signal.ID)
+					if err != nil {
+						return nil, err
+					}
+					linked = true
+				}
+				if err := updateGoalSignalStatusTx(ctx, tx, signal.ID, SignalStatusTriaged); err != nil {
+					return nil, err
+				}
+			}
+			return &SignalTriageResult{Task: task, Linked: linked}, nil
+		} else if err != sql.ErrNoRows {
+			return nil, err
+		}
+	}
+
+	if signal.Status != SignalStatusNew {
+		return nil, fmt.Errorf("agentic: signal %d status %q is not triageable", signal.ID, signal.Status)
+	}
+
+	if payloadErr != nil {
+		if err := updateGoalSignalStatusTx(ctx, tx, signal.ID, SignalStatusFailed); err != nil {
+			return nil, err
+		}
+		return &SignalTriageResult{Failed: true}, nil
+	}
+
+	task, err := createAgenticTaskTx(ctx, tx, taskFromSignal(signal, queueTaskID))
+	if err != nil {
+		return nil, err
+	}
+	if err := updateGoalSignalStatusTx(ctx, tx, signal.ID, SignalStatusTriaged); err != nil {
+		return nil, err
+	}
+	return &SignalTriageResult{Task: task, Created: true}, nil
+}
+
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanGoalSignal(scanner rowScanner) (*GoalSignal, error) {
+	var signal GoalSignal
+	var goalID, watcherID sql.NullInt64
+	var observedAt int64
+	if err := scanner.Scan(&signal.ID, &goalID, &watcherID, &signal.Source, &signal.Type, &signal.PayloadJSON, &signal.Fingerprint, &signal.Severity, &signal.Status, &signal.DedupeKey, &observedAt); err != nil {
+		return nil, err
+	}
+	signal.GoalID = intFromNull(goalID)
+	signal.WatcherID = intFromNull(watcherID)
+	signal.ObservedAt = millisTime(observedAt)
+	return &signal, nil
+}
+
+func scanAgenticTask(scanner rowScanner) (*AgenticTask, error) {
+	var task AgenticTask
+	var goalID, signalID, parentID, queueTaskID, dueAt sql.NullInt64
+	var createdAt, updatedAt int64
+	if err := scanner.Scan(&task.ID, &goalID, &signalID, &parentID, &queueTaskID, &task.Title, &task.Prompt, &task.Status, &task.Priority, &task.RiskLevel, &task.AutonomyDecision, &task.ApprovalRequestID, &task.VerificationStatus, &createdAt, &updatedAt, &dueAt); err != nil {
+		return nil, err
+	}
+	task.GoalID = intFromNull(goalID)
+	task.SignalID = intFromNull(signalID)
+	task.ParentID = intFromNull(parentID)
+	task.QueueTaskID = intFromNull(queueTaskID)
+	task.CreatedAt = millisTime(createdAt)
+	task.UpdatedAt = millisTime(updatedAt)
+	task.DueAt = nullTimeFromMillis(dueAt)
+	return &task, nil
+}
+
+func getGoalSignalTx(ctx context.Context, tx *sql.Tx, id int64) (*GoalSignal, error) {
+	return scanGoalSignal(tx.QueryRowContext(ctx, `
+		SELECT id, goal_id, watcher_id, source, type, payload_json, fingerprint, severity, status, dedupe_key, observed_at
+		FROM goal_signals WHERE id = ?
+	`, id))
+}
+
+func getAgenticTaskTx(ctx context.Context, tx *sql.Tx, id int64) (*AgenticTask, error) {
+	return scanAgenticTask(tx.QueryRowContext(ctx, `
+		SELECT id, goal_id, signal_id, parent_id, queue_task_id, title, prompt, status, priority, risk_level, autonomy_decision, approval_request_id, verification_status, created_at, updated_at, due_at
+		FROM agentic_tasks WHERE id = ?
+	`, id))
+}
+
+func getAgenticTaskBySignalIDTx(ctx context.Context, tx *sql.Tx, signalID int64) (*AgenticTask, error) {
+	var id int64
+	if err := tx.QueryRowContext(ctx, `SELECT id FROM agentic_tasks WHERE signal_id = ?`, signalID).Scan(&id); err != nil {
+		return nil, err
+	}
+	return getAgenticTaskTx(ctx, tx, id)
+}
+
+func getAgenticTaskByQueueTaskIDTx(ctx context.Context, tx *sql.Tx, queueTaskID int64) (*AgenticTask, error) {
+	var id int64
+	if err := tx.QueryRowContext(ctx, `SELECT id FROM agentic_tasks WHERE queue_task_id = ?`, queueTaskID).Scan(&id); err != nil {
+		return nil, err
+	}
+	return getAgenticTaskTx(ctx, tx, id)
+}
+
+func createAgenticTaskTx(ctx context.Context, tx *sql.Tx, task AgenticTask) (*AgenticTask, error) {
+	now := nowTime()
+	if task.CreatedAt.IsZero() {
+		task.CreatedAt = now
+	}
+	if task.UpdatedAt.IsZero() {
+		task.UpdatedAt = task.CreatedAt
+	}
+	res, err := tx.ExecContext(ctx, `
+		INSERT INTO agentic_tasks(goal_id, signal_id, parent_id, queue_task_id, title, prompt, status, priority, risk_level, autonomy_decision, approval_request_id, verification_status, created_at, updated_at, due_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, nullableInt(task.GoalID), nullableInt(task.SignalID), nullableInt(task.ParentID), nullableInt(task.QueueTaskID), task.Title, task.Prompt, task.Status, task.Priority, task.RiskLevel, task.AutonomyDecision, task.ApprovalRequestID, task.VerificationStatus, timeMillis(task.CreatedAt), timeMillis(task.UpdatedAt), nullableSQLTime(task.DueAt))
+	if err != nil {
+		return nil, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+	return getAgenticTaskTx(ctx, tx, id)
+}
+
+func linkAgenticTaskSignalTx(ctx context.Context, tx *sql.Tx, taskID, signalID int64) (*AgenticTask, error) {
+	res, err := tx.ExecContext(ctx, `
+		UPDATE agentic_tasks
+		SET signal_id = ?, updated_at = MAX(?, updated_at + 1)
+		WHERE id = ? AND signal_id IS NULL
+	`, signalID, timeMillis(nowTime()), taskID)
+	if err != nil {
+		return nil, err
+	}
+	n, _ := res.RowsAffected()
+	task, err := getAgenticTaskTx(ctx, tx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if n == 0 && task.SignalID != signalID {
+		return nil, fmt.Errorf("agentic: task %d is already linked to signal %d", taskID, task.SignalID)
+	}
+	return task, nil
+}
+
+func updateGoalSignalStatusTx(ctx context.Context, tx *sql.Tx, id int64, status string) error {
+	res, err := tx.ExecContext(ctx, `UPDATE goal_signals SET status = ? WHERE id = ?`, status, id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func queueTaskIDFromSignalPayload(payloadJSON string) (int64, error) {
+	if strings.TrimSpace(payloadJSON) == "" {
+		return 0, nil
+	}
+	var payload struct {
+		QueueTaskID int64 `json:"queue_task_id"`
+	}
+	if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
+		return 0, fmt.Errorf("agentic: parse signal payload: %w", err)
+	}
+	if payload.QueueTaskID < 0 {
+		return 0, fmt.Errorf("agentic: signal payload has negative queue_task_id %d", payload.QueueTaskID)
+	}
+	return payload.QueueTaskID, nil
+}
+
+func taskFromSignal(signal *GoalSignal, queueTaskID int64) AgenticTask {
+	status := TaskStatusProposed
+	title := fmt.Sprintf("Proposed task from %s signal", signal.Source)
+	prompt := fmt.Sprintf("Triage proposal for signal %d (%s/%s). Raw prompt is not reconstructed from signal payload.", signal.ID, signal.Source, signal.Type)
+	if queueTaskID > 0 {
+		status = TaskStatusPending
+		title = fmt.Sprintf("Queue-backed task from %s signal", signal.Source)
+		prompt = fmt.Sprintf("Queue-backed signal %d (%s/%s) references daemon queue task %d. Raw prompt is not reconstructed from signal payload.", signal.ID, signal.Source, signal.Type, queueTaskID)
+	}
+	return AgenticTask{
+		GoalID:             signal.GoalID,
+		SignalID:           signal.ID,
+		QueueTaskID:        queueTaskID,
+		Title:              title,
+		Prompt:             prompt,
+		Status:             status,
+		Priority:           signal.Severity,
+		RiskLevel:          RiskLevelLow,
+		AutonomyDecision:   PolicyDecisionObserve,
+		VerificationStatus: VerificationStatusPending,
+	}
 }
 
 func (s *Store) CreateTaskEdge(ctx context.Context, edge TaskEdge) (*TaskEdge, error) {

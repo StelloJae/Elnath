@@ -430,13 +430,60 @@ func ensureAgenticTaskGoalNullable(db *sql.DB) error {
 }
 
 func ensureAgenticTaskIndexes(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("agentic: ensure agentic_tasks indexes: begin: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	if err := uniquifyAgenticTaskSignalIDsTx(tx); err != nil {
+		return err
+	}
 	for _, stmt := range []string{
 		`CREATE INDEX IF NOT EXISTS idx_agentic_tasks_goal ON agentic_tasks(goal_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_agentic_tasks_signal ON agentic_tasks(signal_id)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_agentic_tasks_signal_unique ON agentic_tasks(signal_id) WHERE signal_id IS NOT NULL`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_agentic_tasks_queue_task_id ON agentic_tasks(queue_task_id) WHERE queue_task_id IS NOT NULL`,
 	} {
-		if _, err := db.Exec(stmt); err != nil {
+		if _, err := tx.Exec(stmt); err != nil {
 			return fmt.Errorf("agentic: ensure agentic_tasks index: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("agentic: ensure agentic_tasks indexes: commit: %w", err)
+	}
+	return nil
+}
+
+func uniquifyAgenticTaskSignalIDsTx(tx *sql.Tx) error {
+	rows, err := tx.Query(`
+		SELECT id FROM agentic_tasks
+		WHERE signal_id IS NOT NULL
+			AND id NOT IN (
+				SELECT MIN(id) FROM agentic_tasks
+				WHERE signal_id IS NOT NULL
+				GROUP BY signal_id
+			)
+	`)
+	if err != nil {
+		return fmt.Errorf("agentic: inspect duplicate agentic_tasks signal_id keys: %w", err)
+	}
+	defer rows.Close()
+
+	var duplicates []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return fmt.Errorf("agentic: scan duplicate agentic_tasks signal_id key: %w", err)
+		}
+		duplicates = append(duplicates, id)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("agentic: scan duplicate agentic_tasks signal_id keys: %w", err)
+	}
+	for _, id := range duplicates {
+		if _, err := tx.Exec(`UPDATE agentic_tasks SET signal_id = NULL WHERE id = ?`, id); err != nil {
+			return fmt.Errorf("agentic: clear duplicate agentic_tasks signal_id key: %w", err)
 		}
 	}
 	return nil

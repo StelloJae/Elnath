@@ -9,8 +9,11 @@ const (
 	GoalStatusActive     = "active"
 	AutonomyLevelObserve = "observe"
 
-	SignalStatusNew = "new"
+	SignalStatusNew     = "new"
+	SignalStatusTriaged = "triaged"
+	SignalStatusFailed  = "failed"
 
+	TaskStatusProposed        = "proposed"
 	TaskStatusPending         = "pending"
 	TaskStatusRunning         = "running"
 	TaskStatusSucceeded       = "succeeded"
@@ -88,6 +91,13 @@ type AgenticTask struct {
 	DueAt              sql.NullTime
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
+}
+
+type SignalTriageResult struct {
+	Task    *AgenticTask
+	Created bool
+	Linked  bool
+	Failed  bool
 }
 
 type TaskEdge struct {
