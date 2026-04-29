@@ -21,10 +21,20 @@ const (
 	TaskStatusCanceled        = "canceled"
 	RiskLevelLow              = "low"
 	RiskLevelMedium           = "medium"
+	RiskLevelHigh             = "high"
+	RiskLevelCritical         = "critical"
 	PolicyDecisionObserve     = "observe"
 	VerificationStatusPending = "pending"
 
-	PolicyDecisionRequireApproval = "require_approval"
+	PolicyDecisionAutoAllowed      = "auto_allowed"
+	PolicyDecisionApprovalRequired = "approval_required"
+	PolicyDecisionHardlineDenied   = "hardline_denied"
+	PolicyDecisionObserveOnly      = "observe_only"
+	PolicyDecisionEscalated        = "escalated"
+
+	PolicyDecisionAuto            = PolicyDecisionAutoAllowed
+	PolicyDecisionDenied          = PolicyDecisionHardlineDenied
+	PolicyDecisionRequireApproval = PolicyDecisionApprovalRequired
 
 	ReceiptStatusStarted   = "started"
 	ReceiptStatusSucceeded = "succeeded"
