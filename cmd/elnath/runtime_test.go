@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +14,8 @@ import (
 	"time"
 
 	"github.com/stello/elnath/internal/agent"
+	"github.com/stello/elnath/internal/agentic"
+	agenticruntime "github.com/stello/elnath/internal/agentic/runtime"
 	"github.com/stello/elnath/internal/audit"
 	"github.com/stello/elnath/internal/config"
 	"github.com/stello/elnath/internal/conversation"
@@ -1767,6 +1772,135 @@ func TestExecutionRuntimeRunTaskDoesNotDuplicateCurrentUserTurn_Ralph(t *testing
 	}
 }
 
+func TestExecutionRuntimeRunTaskPersistsVerifierRunWithAgenticContext(t *testing.T) {
+	ctx := context.Background()
+	provider := &sequenceStreamProvider{responses: []string{"runtime answer", "PASS"}}
+	rt := newTestExecutionRuntime(t, provider)
+	rt.router = orchestrator.NewRouter(map[string]orchestrator.Workflow{
+		"single": orchestrator.NewRalphWorkflow(),
+	})
+
+	task, err := rt.agenticStore.CreateAgenticTask(ctx, agentic.AgenticTask{
+		Title:              "Runtime verifier persistence",
+		Prompt:             "fix regression and add tests",
+		Status:             agentic.TaskStatusRunning,
+		RiskLevel:          agentic.RiskLevelLow,
+		AutonomyDecision:   agentic.PolicyDecisionObserve,
+		VerificationStatus: agentic.VerificationStatusPending,
+	})
+	if err != nil {
+		t.Fatalf("CreateAgenticTask: %v", err)
+	}
+	ctx = daemon.WithAgenticTaskID(ctx, task.ID)
+
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if _, _, err := rt.runTask(ctx, sess, nil, "fix regression and add tests", orchestrationOutput{}); err != nil {
+		t.Fatalf("runTask: %v", err)
+	}
+
+	runs, err := rt.agenticStore.ListVerificationRunsByTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListVerificationRunsByTask: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("verification runs = %d, want 1", len(runs))
+	}
+	if runs[0].Verdict != agentic.VerificationVerdictPassed {
+		t.Fatalf("verdict = %q, want %q", runs[0].Verdict, agentic.VerificationVerdictPassed)
+	}
+	if strings.Contains(runs[0].EvidenceRefsJSON, "runtime answer") {
+		t.Fatalf("evidence refs should not persist raw output: %s", runs[0].EvidenceRefsJSON)
+	}
+}
+
+func TestDaemonBackedRalphPersistsVerifierRunAndMarksDone(t *testing.T) {
+	ctx := context.Background()
+	provider := &sequenceStreamProvider{responses: []string{"runtime answer", "PASS"}}
+	rt := newTestExecutionRuntime(t, provider)
+	rt.router = orchestrator.NewRouter(map[string]orchestrator.Workflow{
+		"single": orchestrator.NewRalphWorkflow(),
+	})
+
+	queue, err := daemon.NewQueue(rt.db.Main)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+	payload := daemon.EncodeTaskPayload(daemon.TaskPayload{Prompt: "fix regression and add tests"})
+	queueTaskID, _, err := queue.Enqueue(ctx, payload, "pr8-e2e-success")
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	stopDaemon := startRuntimeDaemonForTest(t, daemon.New(queue, testSocketPath(t, "pr8-e2e"), 1, rt.newDaemonTaskRunner(), rt.app.Logger), rt.agenticStore)
+	defer stopDaemon()
+
+	task := pollRuntimeQueueStatus(t, queue, queueTaskID, daemon.StatusDone)
+	if !strings.Contains(task.Result, "runtime answer") {
+		t.Fatalf("task result = %q, want runtime answer", task.Result)
+	}
+	agenticTask, err := rt.agenticStore.GetAgenticTaskByQueueTaskID(ctx, queueTaskID)
+	if err != nil {
+		t.Fatalf("GetAgenticTaskByQueueTaskID: %v", err)
+	}
+	runs, err := rt.agenticStore.ListVerificationRunsByTask(ctx, agenticTask.ID)
+	if err != nil {
+		t.Fatalf("ListVerificationRunsByTask: %v", err)
+	}
+	if len(runs) != 1 || runs[0].Verdict != agentic.VerificationVerdictPassed {
+		t.Fatalf("verification runs = %+v, want one passed run", runs)
+	}
+}
+
+func TestDaemonBackedRalphRecorderFailureStillMarksDone(t *testing.T) {
+	ctx := context.Background()
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	oldDefaultLogger := slog.Default()
+	slog.SetDefault(logger)
+	t.Cleanup(func() { slog.SetDefault(oldDefaultLogger) })
+
+	provider := &sequenceStreamProvider{responses: []string{"runtime answer", "PASS"}}
+	rt := newTestExecutionRuntime(t, provider)
+	rt.router = orchestrator.NewRouter(map[string]orchestrator.Workflow{
+		"single": orchestrator.NewRalphWorkflow(),
+	})
+	rt.app.Logger = logger
+
+	queue, err := daemon.NewQueue(rt.db.Main)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+	payload := daemon.EncodeTaskPayload(daemon.TaskPayload{Prompt: "fix regression and add tests"})
+	queueTaskID, _, err := queue.Enqueue(ctx, payload, "pr8-e2e-recorder-failure")
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	envelopeStore := rt.agenticStore
+	badDB, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open bad db: %v", err)
+	}
+	t.Cleanup(func() { _ = badDB.Close() })
+	rt.agenticStore = agentic.NewStore(badDB)
+
+	stopDaemon := startRuntimeDaemonForTest(t, daemon.New(queue, testSocketPath(t, "pr8-e2e-fail"), 1, rt.newDaemonTaskRunner(), rt.app.Logger), envelopeStore)
+	defer stopDaemon()
+
+	task := pollRuntimeQueueStatus(t, queue, queueTaskID, daemon.StatusDone)
+	if !strings.Contains(task.Result, "runtime answer") {
+		t.Fatalf("task result = %q, want runtime answer", task.Result)
+	}
+	for _, want := range []string{"verification run persistence failed", "degraded_observability=true"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Fatalf("logs missing %q:\n%s", want, logs.String())
+		}
+	}
+}
+
 func TestParseSkillArgs(t *testing.T) {
 	t.Parallel()
 
@@ -1786,6 +1920,53 @@ func TestParseSkillArgs(t *testing.T) {
 	if len(got) != 1 || got["pr_number"] != "" {
 		t.Fatalf("parseSkillArgs() with missing arg = %#v, want pr_number empty", got)
 	}
+}
+
+func startRuntimeDaemonForTest(t *testing.T, d *daemon.Daemon, store *agentic.Store) func() {
+	t.Helper()
+	d.WithTaskEnvelope(agenticruntime.NewDaemonEnvelope(store))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- d.Start(ctx)
+	}()
+
+	return func() {
+		cancel()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("daemon Start: %v", err)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("daemon did not stop within timeout")
+		}
+	}
+}
+
+func pollRuntimeQueueStatus(t *testing.T, q *daemon.Queue, taskID int64, want daemon.TaskStatus) *daemon.Task {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		task, err := q.Get(context.Background(), taskID)
+		if err != nil {
+			t.Fatalf("queue Get: %v", err)
+		}
+		if task.Status == want {
+			return task
+		}
+		if task.Status == daemon.StatusFailed {
+			t.Fatalf("task failed while waiting for %s: %+v", want, task)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	task, err := q.Get(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("queue Get after timeout: %v", err)
+	}
+	t.Fatalf("task status = %s, want %s: %+v", task.Status, want, task)
+	return nil
 }
 
 func TestExecutionRuntimeRunTaskExecutesSkillSlashCommand(t *testing.T) {

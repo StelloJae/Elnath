@@ -42,7 +42,10 @@ const (
 	ReceiptStatusApprovalRequired = "approval_required"
 	ReceiptStatusDenied           = "denied"
 
-	VerificationVerdictPass = "pass"
+	VerificationVerdictPassed       = "passed"
+	VerificationVerdictFailed       = "failed"
+	VerificationVerdictInconclusive = "inconclusive"
+	VerificationVerdictPass         = VerificationVerdictPassed
 
 	MemoryUpdateStatusPending = "pending"
 

@@ -894,6 +894,36 @@ func (s *Store) GetVerificationRun(ctx context.Context, id int64) (*Verification
 	return &run, nil
 }
 
+func (s *Store) ListVerificationRunsByTask(ctx context.Context, taskID int64) ([]VerificationRun, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, task_id, verifier_actor_id, criteria_json, evidence_refs_json, verdict, reason, created_at
+		FROM verification_runs
+		WHERE task_id = ?
+		ORDER BY id
+	`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var runs []VerificationRun
+	for rows.Next() {
+		var run VerificationRun
+		var actorID sql.NullInt64
+		var createdAt int64
+		if err := rows.Scan(&run.ID, &run.TaskID, &actorID, &run.CriteriaJSON, &run.EvidenceRefsJSON, &run.Verdict, &run.Reason, &createdAt); err != nil {
+			return nil, err
+		}
+		run.VerifierActorID = intFromNull(actorID)
+		run.CreatedAt = millisTime(createdAt)
+		runs = append(runs, run)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return runs, nil
+}
+
 func (s *Store) CreateMemoryUpdate(ctx context.Context, update MemoryUpdate) (*MemoryUpdate, error) {
 	if update.CreatedAt.IsZero() {
 		update.CreatedAt = nowTime()

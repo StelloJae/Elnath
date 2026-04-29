@@ -14,6 +14,7 @@ import (
 	"github.com/stello/elnath/internal/agent"
 	"github.com/stello/elnath/internal/agent/reflection"
 	"github.com/stello/elnath/internal/agentic"
+	agenticverification "github.com/stello/elnath/internal/agentic/verification"
 	"github.com/stello/elnath/internal/audit"
 	"github.com/stello/elnath/internal/config"
 	"github.com/stello/elnath/internal/conversation"
@@ -183,6 +184,7 @@ func (o legacyCallbackObserver) OnEvent(e event.Event) {
 
 type executionRuntime struct {
 	app                *core.App
+	db                 *core.DB
 	provider           llm.Provider
 	mgr                *conversation.Manager
 	router             *orchestrator.Router
@@ -196,6 +198,7 @@ type executionRuntime struct {
 	breaker            *learning.Breaker
 	learningRedactor   func(string) string
 	llmComplexityGate  learning.ComplexityGate
+	agenticStore       *agentic.Store
 	outcomeStore       *learning.OutcomeStore
 	routingAdvisor     *learning.RoutingAdvisor
 	usageTracker       *llm.UsageTracker
@@ -357,6 +360,7 @@ func buildExecutionRuntime(
 	if err := agentic.InitSchema(db.Main); err != nil {
 		return nil, fmt.Errorf("init agentic schema: %w", err)
 	}
+	agenticStore := agentic.NewStore(db.Main)
 
 	historyStore := conversation.NewHistoryStore(db.Main)
 	classifier := conversation.NewLLMClassifier()
@@ -588,6 +592,7 @@ func buildExecutionRuntime(
 
 	return &executionRuntime{
 		app:                app,
+		db:                 db,
 		provider:           provider,
 		mgr:                mgr,
 		router:             buildRouter(wfCfg),
@@ -603,6 +608,7 @@ func buildExecutionRuntime(
 		breaker:            breaker,
 		learningRedactor:   learningRedactor,
 		llmComplexityGate:  llmComplexityGate,
+		agenticStore:       agenticStore,
 		usageTracker:       usageTracker,
 		researchMaxRounds:  cfg.Research.MaxRounds,
 		researchCostCapUSD: cfg.Research.CostCapUSD,
@@ -916,6 +922,12 @@ func (rt *executionRuntime) runTask(
 	switch wf.Name() {
 	case "single", "team", "ralph", "autopilot":
 		input.Learning = rt.learningDeps()
+	}
+	if wf.Name() == "ralph" && rt.agenticStore != nil {
+		if agenticTaskID, ok := daemon.AgenticTaskIDFromContext(ctx); ok {
+			input.AgenticTaskID = agenticTaskID
+			input.VerificationRecorder = agenticverification.NewRecorder(rt.agenticStore)
+		}
 	}
 	if wf.Name() == "research" && rt.wikiIdx != nil && rt.wikiStore != nil {
 		input.Extra = &orchestrator.ResearchDeps{

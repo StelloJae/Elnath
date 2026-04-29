@@ -459,7 +459,11 @@ func (d *Daemon) worker(ctx context.Context, id int) {
 			}
 		}
 
-		result, err := d.runTaskSafely(ctx, task)
+		runCtx := ctx
+		if envelopeRun != nil {
+			runCtx = WithAgenticTaskID(runCtx, envelopeRun.AgenticTaskID())
+		}
+		result, err := d.runTaskSafely(runCtx, task)
 		if err != nil {
 			d.logger.Error("worker: task failed",
 				"worker_id", id,
