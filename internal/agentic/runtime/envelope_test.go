@@ -144,11 +144,8 @@ func TestDaemonEnvelopeRecordsTaskWhenDaemonRuns(t *testing.T) {
 		t.Fatalf("unexpected daemon task result: %+v", task)
 	}
 
-	agenticTask, err := store.GetAgenticTaskByQueueTaskID(ctx, taskID)
-	if err != nil {
-		t.Fatalf("GetAgenticTaskByQueueTaskID: %v", err)
-	}
-	if agenticTask.Status != agentic.TaskStatusSucceeded || agenticTask.Prompt != "daemon-backed envelope" {
+	agenticTask := pollAgenticTaskStatus(t, store, taskID, agentic.TaskStatusSucceeded, 5*time.Second)
+	if agenticTask.Prompt != "daemon-backed envelope" {
 		t.Fatalf("unexpected agentic task: %+v", agenticTask)
 	}
 }
@@ -288,6 +285,24 @@ func pollTaskStatus(t *testing.T, queue *daemon.Queue, id int64, want daemon.Tas
 	}
 	task, _ := queue.Get(context.Background(), id)
 	t.Fatalf("task %d: status = %q after %s, want %q", id, task.Status, timeout, want)
+	return nil
+}
+
+func pollAgenticTaskStatus(t *testing.T, store *agentic.Store, queueTaskID int64, want string, timeout time.Duration) *agentic.AgenticTask {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		task, err := store.GetAgenticTaskByQueueTaskID(context.Background(), queueTaskID)
+		if err != nil {
+			t.Fatalf("GetAgenticTaskByQueueTaskID %d: %v", queueTaskID, err)
+		}
+		if task.Status == want {
+			return task
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	task, _ := store.GetAgenticTaskByQueueTaskID(context.Background(), queueTaskID)
+	t.Fatalf("agentic task for queue %d: status = %q after %s, want %q", queueTaskID, task.Status, timeout, want)
 	return nil
 }
 
