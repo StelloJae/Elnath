@@ -17,6 +17,7 @@ import (
 	"github.com/stello/elnath/internal/agent/reflection"
 	"github.com/stello/elnath/internal/agentic"
 	agenticruntime "github.com/stello/elnath/internal/agentic/runtime"
+	agenticsignals "github.com/stello/elnath/internal/agentic/signals"
 	"github.com/stello/elnath/internal/ambient"
 	"github.com/stello/elnath/internal/config"
 	"github.com/stello/elnath/internal/conversation"
@@ -181,8 +182,12 @@ func cmdDaemonStart(ctx context.Context) error {
 		router.Register(conversation.NewSpine(cfg.DataDir, wiki.NewIngester(rt.wikiStore, provider), app.Logger))
 	}
 
+	agenticStore := agentic.NewStore(db.Main)
+	signalBridge := agenticsignals.NewBridge(agenticStore)
+
 	d := daemon.New(queue, cfg.Daemon.SocketPath, cfg.Daemon.MaxWorkers, rt.newDaemonTaskRunner(), app.Logger)
-	d.WithTaskEnvelope(agenticruntime.NewDaemonEnvelope(agentic.NewStore(db.Main)))
+	d.WithTaskEnvelope(agenticruntime.NewDaemonEnvelope(agenticStore))
+	d.WithSubmitSignalBridge(signalBridge)
 	d.WithFaultGuardConfig(fault.GuardConfig{Enabled: cfg.FaultInjection.Enabled})
 	d.MarkFaultGuardChecked()
 	d.WithFaultInjection(inj, activeScenario)
@@ -214,7 +219,7 @@ func cmdDaemonStart(ctx context.Context) error {
 			researchOpts...,
 		))
 	}
-	sch, scheduledPath, taskCount, err := loadScheduler(cfg, queue, app.Logger)
+	sch, scheduledPath, taskCount, err := loadScheduler(cfg, queue, app.Logger, signalBridge)
 	if err != nil {
 		app.Logger.Error("scheduler config load failed", "path", scheduledPath, "error", err)
 		return err
@@ -255,6 +260,7 @@ func cmdDaemonStart(ctx context.Context) error {
 				Tasks:         bootTasks,
 				Runner:        ambient.TaskRunFunc(rt.newDaemonTaskRunner()),
 				NotifyFn:      notifyFn,
+				SignalBridge:  signalBridge,
 				MaxConcurrent: maxConc,
 				Logger:        app.Logger.With("component", "ambient"),
 			})
@@ -372,7 +378,7 @@ func autoRotateLessons(logger *slog.Logger, store *learning.Store, opts learning
 	}
 }
 
-func loadScheduler(cfg *config.Config, queue scheduler.Enqueuer, logger *slog.Logger) (daemon.Scheduler, string, int, error) {
+func loadScheduler(cfg *config.Config, queue scheduler.Enqueuer, logger *slog.Logger, bridges ...scheduler.SignalBridge) (daemon.Scheduler, string, int, error) {
 	if cfg.Daemon.ScheduledTasksPath == "" {
 		return nil, "", 0, nil
 	}
@@ -390,7 +396,11 @@ func loadScheduler(cfg *config.Config, queue scheduler.Enqueuer, logger *slog.Lo
 		return nil, path, 0, nil
 	}
 
-	return scheduler.New(tasks, queue, logger), path, len(tasks), nil
+	var opts []scheduler.Option
+	if len(bridges) > 0 && bridges[0] != nil {
+		opts = append(opts, scheduler.WithSignalBridge(bridges[0]))
+	}
+	return scheduler.New(tasks, queue, logger, opts...), path, len(tasks), nil
 }
 
 func cmdDaemonSubmit(ctx context.Context, args []string) error {

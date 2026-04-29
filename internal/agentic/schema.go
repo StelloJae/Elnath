@@ -3,6 +3,7 @@ package agentic
 import (
 	"database/sql"
 	"fmt"
+	"strconv"
 )
 
 func InitSchema(db *sql.DB) error {
@@ -20,7 +21,7 @@ func InitSchema(db *sql.DB) error {
 		)`,
 		`CREATE TABLE IF NOT EXISTS signal_watchers (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			goal_id INTEGER NOT NULL REFERENCES standing_goals(id) ON DELETE CASCADE,
+			goal_id INTEGER REFERENCES standing_goals(id) ON DELETE SET NULL,
 			source TEXT NOT NULL,
 			config_json TEXT NOT NULL DEFAULT '{}',
 			enabled INTEGER NOT NULL DEFAULT 1,
@@ -31,7 +32,7 @@ func InitSchema(db *sql.DB) error {
 		)`,
 		`CREATE TABLE IF NOT EXISTS goal_signals (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			goal_id INTEGER NOT NULL REFERENCES standing_goals(id) ON DELETE CASCADE,
+			goal_id INTEGER REFERENCES standing_goals(id) ON DELETE SET NULL,
 			watcher_id INTEGER REFERENCES signal_watchers(id) ON DELETE SET NULL,
 			source TEXT NOT NULL,
 			type TEXT NOT NULL,
@@ -159,6 +160,216 @@ func InitSchema(db *sql.DB) error {
 	}
 	if err := ensureAgenticTaskIndexes(db); err != nil {
 		return err
+	}
+	if err := ensureSignalWatcherGoalNullable(db); err != nil {
+		return err
+	}
+	if err := ensureSignalWatcherIndexes(db); err != nil {
+		return err
+	}
+	if err := ensureGoalSignalGoalNullable(db); err != nil {
+		return err
+	}
+	if err := ensureGoalSignalIndexes(db); err != nil {
+		return err
+	}
+	return nil
+}
+
+func ensureSignalWatcherGoalNullable(db *sql.DB) error {
+	notNull, err := columnNotNull(db, "signal_watchers", "goal_id")
+	if err != nil {
+		return fmt.Errorf("agentic: inspect signal_watchers.goal_id: %w", err)
+	}
+	if !notNull {
+		return nil
+	}
+	if _, err := db.Exec(`PRAGMA foreign_keys=OFF`); err != nil {
+		return fmt.Errorf("agentic: disable foreign keys for signal_watchers migration: %w", err)
+	}
+	defer db.Exec(`PRAGMA foreign_keys=ON`) //nolint:errcheck
+
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("agentic: migrate signal_watchers: begin: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	stmts := []string{
+		`CREATE TABLE signal_watchers_new (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			goal_id INTEGER REFERENCES standing_goals(id) ON DELETE SET NULL,
+			source TEXT NOT NULL,
+			config_json TEXT NOT NULL DEFAULT '{}',
+			enabled INTEGER NOT NULL DEFAULT 1,
+			interval_s INTEGER NOT NULL DEFAULT 0,
+			last_cursor TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		)`,
+		`INSERT INTO signal_watchers_new(id, goal_id, source, config_json, enabled, interval_s, last_cursor, created_at, updated_at)
+		 SELECT id, goal_id, source, config_json, enabled, interval_s, last_cursor, created_at, updated_at
+		 FROM signal_watchers`,
+		`DROP TABLE signal_watchers`,
+		`ALTER TABLE signal_watchers_new RENAME TO signal_watchers`,
+	}
+	for _, stmt := range stmts {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("agentic: migrate signal_watchers: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("agentic: migrate signal_watchers: commit: %w", err)
+	}
+	return nil
+}
+
+func ensureSignalWatcherIndexes(db *sql.DB) error {
+	if err := uniquifySignalWatcherKeys(db); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_signal_watchers_source_config ON signal_watchers(COALESCE(goal_id, 0), source, config_json)`); err != nil {
+		return fmt.Errorf("agentic: ensure signal_watchers index: %w", err)
+	}
+	return nil
+}
+
+func uniquifySignalWatcherKeys(db *sql.DB) error {
+	rows, err := db.Query(`
+		SELECT id, config_json FROM signal_watchers
+		WHERE id NOT IN (
+			SELECT MIN(id) FROM signal_watchers
+			GROUP BY COALESCE(goal_id, 0), source, config_json
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("agentic: inspect duplicate signal_watchers keys: %w", err)
+	}
+	defer rows.Close()
+
+	type duplicate struct {
+		id         int64
+		configJSON string
+	}
+	var duplicates []duplicate
+	for rows.Next() {
+		var dup duplicate
+		if err := rows.Scan(&dup.id, &dup.configJSON); err != nil {
+			return fmt.Errorf("agentic: scan duplicate signal_watchers key: %w", err)
+		}
+		duplicates = append(duplicates, dup)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("agentic: scan duplicate signal_watchers keys: %w", err)
+	}
+	for _, dup := range duplicates {
+		replacement := fmt.Sprintf(`{"legacy_duplicate_id":%d,"legacy_config_json":%s}`, dup.id, strconv.Quote(dup.configJSON))
+		if _, err := db.Exec(`UPDATE signal_watchers SET config_json = ? WHERE id = ?`, replacement, dup.id); err != nil {
+			return fmt.Errorf("agentic: rewrite duplicate signal_watchers key: %w", err)
+		}
+	}
+	return nil
+}
+
+func ensureGoalSignalGoalNullable(db *sql.DB) error {
+	notNull, err := columnNotNull(db, "goal_signals", "goal_id")
+	if err != nil {
+		return fmt.Errorf("agentic: inspect goal_signals.goal_id: %w", err)
+	}
+	if !notNull {
+		return nil
+	}
+	if _, err := db.Exec(`PRAGMA foreign_keys=OFF`); err != nil {
+		return fmt.Errorf("agentic: disable foreign keys for goal_signals migration: %w", err)
+	}
+	defer db.Exec(`PRAGMA foreign_keys=ON`) //nolint:errcheck
+
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("agentic: migrate goal_signals: begin: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	stmts := []string{
+		`CREATE TABLE goal_signals_new (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			goal_id INTEGER REFERENCES standing_goals(id) ON DELETE SET NULL,
+			watcher_id INTEGER REFERENCES signal_watchers(id) ON DELETE SET NULL,
+			source TEXT NOT NULL,
+			type TEXT NOT NULL,
+			payload_json TEXT NOT NULL,
+			fingerprint TEXT NOT NULL,
+			severity INTEGER NOT NULL DEFAULT 0,
+			status TEXT NOT NULL,
+			dedupe_key TEXT NOT NULL DEFAULT '',
+			observed_at INTEGER NOT NULL
+		)`,
+		`INSERT INTO goal_signals_new(id, goal_id, watcher_id, source, type, payload_json, fingerprint, severity, status, dedupe_key, observed_at)
+		 SELECT id, goal_id, watcher_id, source, type, payload_json, fingerprint, severity, status, dedupe_key, observed_at
+		 FROM goal_signals`,
+		`DROP TABLE goal_signals`,
+		`ALTER TABLE goal_signals_new RENAME TO goal_signals`,
+	}
+	for _, stmt := range stmts {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("agentic: migrate goal_signals: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("agentic: migrate goal_signals: commit: %w", err)
+	}
+	return nil
+}
+
+func ensureGoalSignalIndexes(db *sql.DB) error {
+	if err := uniquifyGoalSignalDedupeKeys(db); err != nil {
+		return err
+	}
+	for _, stmt := range []string{
+		`CREATE INDEX IF NOT EXISTS idx_goal_signals_goal ON goal_signals(goal_id)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_goal_signals_dedupe ON goal_signals(COALESCE(goal_id, 0), source, type, dedupe_key) WHERE dedupe_key <> ''`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("agentic: ensure goal_signals index: %w", err)
+		}
+	}
+	return nil
+}
+
+func uniquifyGoalSignalDedupeKeys(db *sql.DB) error {
+	rows, err := db.Query(`
+		SELECT id, dedupe_key FROM goal_signals
+		WHERE dedupe_key <> ''
+			AND id NOT IN (
+				SELECT MIN(id) FROM goal_signals
+				WHERE dedupe_key <> ''
+				GROUP BY COALESCE(goal_id, 0), source, type, dedupe_key
+			)
+	`)
+	if err != nil {
+		return fmt.Errorf("agentic: inspect duplicate goal_signals dedupe keys: %w", err)
+	}
+	defer rows.Close()
+
+	type duplicate struct {
+		id        int64
+		dedupeKey string
+	}
+	var duplicates []duplicate
+	for rows.Next() {
+		var dup duplicate
+		if err := rows.Scan(&dup.id, &dup.dedupeKey); err != nil {
+			return fmt.Errorf("agentic: scan duplicate goal_signals dedupe key: %w", err)
+		}
+		duplicates = append(duplicates, dup)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("agentic: scan duplicate goal_signals dedupe keys: %w", err)
+	}
+	for _, dup := range duplicates {
+		if _, err := db.Exec(`UPDATE goal_signals SET dedupe_key = ? WHERE id = ?`, fmt.Sprintf("%s:legacy:%d", dup.dedupeKey, dup.id), dup.id); err != nil {
+			return fmt.Errorf("agentic: rewrite duplicate goal_signals dedupe key: %w", err)
+		}
 	}
 	return nil
 }

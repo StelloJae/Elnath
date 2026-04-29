@@ -72,6 +72,10 @@ type Scheduler interface {
 	Run(ctx context.Context) error
 }
 
+type SubmitSignalBridge interface {
+	RecordManualSubmitSignal(ctx context.Context, payload string, queueTaskID int64, existed bool) error
+}
+
 // Daemon runs background task processing with Unix domain socket IPC.
 type Daemon struct {
 	queue             *Queue
@@ -88,6 +92,7 @@ type Daemon struct {
 	watchdogInterval  time.Duration
 	progressObserver  ProgressObserver
 	taskEnvelope      TaskEnvelope
+	submitSignal      SubmitSignalBridge
 	scheduler         Scheduler
 	faultInjector     fault.Injector
 	faultScenario     *fault.Scenario
@@ -155,6 +160,10 @@ func (d *Daemon) WithProgressObserver(obs ProgressObserver) {
 
 func (d *Daemon) WithTaskEnvelope(envelope TaskEnvelope) {
 	d.taskEnvelope = envelope
+}
+
+func (d *Daemon) WithSubmitSignalBridge(bridge SubmitSignalBridge) {
+	d.submitSignal = bridge
 }
 
 func (d *Daemon) WithScheduler(s Scheduler) {
@@ -336,6 +345,11 @@ func (d *Daemon) handleSubmit(ctx context.Context, conn net.Conn, req IPCRequest
 	if err != nil {
 		d.writeResponse(conn, IPCResponse{Err: fmt.Sprintf("enqueue: %v", err)})
 		return
+	}
+	if d.submitSignal != nil {
+		if signalErr := d.submitSignal.RecordManualSubmitSignal(ctx, payload, id, existed); signalErr != nil {
+			d.logger.Warn("daemon: submit signal bridge failed", "task_id", id, "existed", existed, "error", signalErr)
+		}
 	}
 
 	d.writeResponse(conn, IPCResponse{

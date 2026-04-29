@@ -70,7 +70,7 @@ func (s *Store) CreateSignalWatcher(ctx context.Context, watcher SignalWatcher) 
 	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO signal_watchers(goal_id, source, config_json, enabled, interval_s, last_cursor, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	`, watcher.GoalID, watcher.Source, watcher.ConfigJSON, boolInt(watcher.Enabled), watcher.IntervalS, watcher.LastCursor, timeMillis(watcher.CreatedAt), timeMillis(watcher.UpdatedAt))
+	`, nullableInt(watcher.GoalID), watcher.Source, watcher.ConfigJSON, boolInt(watcher.Enabled), watcher.IntervalS, watcher.LastCursor, timeMillis(watcher.CreatedAt), timeMillis(watcher.UpdatedAt))
 	if err != nil {
 		return nil, err
 	}
@@ -83,29 +83,89 @@ func (s *Store) CreateSignalWatcher(ctx context.Context, watcher SignalWatcher) 
 
 func (s *Store) GetSignalWatcher(ctx context.Context, id int64) (*SignalWatcher, error) {
 	var watcher SignalWatcher
+	var goalID sql.NullInt64
 	var enabled int
 	var createdAt, updatedAt int64
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id, goal_id, source, config_json, enabled, interval_s, last_cursor, created_at, updated_at
 		FROM signal_watchers WHERE id = ?
-	`, id).Scan(&watcher.ID, &watcher.GoalID, &watcher.Source, &watcher.ConfigJSON, &enabled, &watcher.IntervalS, &watcher.LastCursor, &createdAt, &updatedAt)
+	`, id).Scan(&watcher.ID, &goalID, &watcher.Source, &watcher.ConfigJSON, &enabled, &watcher.IntervalS, &watcher.LastCursor, &createdAt, &updatedAt)
 	if err != nil {
 		return nil, err
 	}
+	watcher.GoalID = intFromNull(goalID)
 	watcher.Enabled = enabled != 0
 	watcher.CreatedAt = millisTime(createdAt)
 	watcher.UpdatedAt = millisTime(updatedAt)
 	return &watcher, nil
 }
 
+func (s *Store) CreateOrGetSignalWatcher(ctx context.Context, watcher SignalWatcher) (*SignalWatcher, bool, error) {
+	now := nowTime()
+	if watcher.CreatedAt.IsZero() {
+		watcher.CreatedAt = now
+	}
+	if watcher.UpdatedAt.IsZero() {
+		watcher.UpdatedAt = watcher.CreatedAt
+	}
+	res, err := s.db.ExecContext(ctx, `
+		INSERT OR IGNORE INTO signal_watchers(goal_id, source, config_json, enabled, interval_s, last_cursor, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`, nullableInt(watcher.GoalID), watcher.Source, watcher.ConfigJSON, boolInt(watcher.Enabled), watcher.IntervalS, watcher.LastCursor, timeMillis(watcher.CreatedAt), timeMillis(watcher.UpdatedAt))
+	if err != nil {
+		return nil, false, err
+	}
+	n, _ := res.RowsAffected()
+	if n > 0 {
+		id, err := res.LastInsertId()
+		if err != nil {
+			return nil, false, err
+		}
+		created, err := s.GetSignalWatcher(ctx, id)
+		return created, false, err
+	}
+
+	var id int64
+	err = s.db.QueryRowContext(ctx, `
+		SELECT id FROM signal_watchers
+		WHERE COALESCE(goal_id, 0) = ?
+			AND source = ?
+			AND config_json = ?
+		ORDER BY id
+		LIMIT 1
+	`, watcher.GoalID, watcher.Source, watcher.ConfigJSON).Scan(&id)
+	if err != nil {
+		return nil, false, err
+	}
+	existing, err := s.GetSignalWatcher(ctx, id)
+	return existing, true, err
+}
+
+func (s *Store) UpdateSignalWatcherCursor(ctx context.Context, id int64, cursor string) (*SignalWatcher, error) {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE signal_watchers SET last_cursor = ?, updated_at = MAX(?, updated_at + 1) WHERE id = ?
+	`, cursor, timeMillis(nowTime()), id)
+	if err != nil {
+		return nil, err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return nil, sql.ErrNoRows
+	}
+	return s.GetSignalWatcher(ctx, id)
+}
+
 func (s *Store) CreateGoalSignal(ctx context.Context, signal GoalSignal) (*GoalSignal, error) {
 	if signal.ObservedAt.IsZero() {
 		signal.ObservedAt = nowTime()
 	}
+	if signal.Status == "" {
+		signal.Status = SignalStatusNew
+	}
 	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO goal_signals(goal_id, watcher_id, source, type, payload_json, fingerprint, severity, status, dedupe_key, observed_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, signal.GoalID, nullableInt(signal.WatcherID), signal.Source, signal.Type, signal.PayloadJSON, signal.Fingerprint, signal.Severity, signal.Status, signal.DedupeKey, timeMillis(signal.ObservedAt))
+	`, nullableInt(signal.GoalID), nullableInt(signal.WatcherID), signal.Source, signal.Type, signal.PayloadJSON, signal.Fingerprint, signal.Severity, signal.Status, signal.DedupeKey, timeMillis(signal.ObservedAt))
 	if err != nil {
 		return nil, err
 	}
@@ -116,20 +176,67 @@ func (s *Store) CreateGoalSignal(ctx context.Context, signal GoalSignal) (*GoalS
 	return s.GetGoalSignal(ctx, id)
 }
 
+func (s *Store) CreateOrGetGoalSignal(ctx context.Context, signal GoalSignal) (*GoalSignal, bool, error) {
+	if signal.DedupeKey == "" {
+		created, err := s.CreateGoalSignal(ctx, signal)
+		return created, false, err
+	}
+	if signal.ObservedAt.IsZero() {
+		signal.ObservedAt = nowTime()
+	}
+	if signal.Status == "" {
+		signal.Status = SignalStatusNew
+	}
+	res, err := s.db.ExecContext(ctx, `
+		INSERT OR IGNORE INTO goal_signals(goal_id, watcher_id, source, type, payload_json, fingerprint, severity, status, dedupe_key, observed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, nullableInt(signal.GoalID), nullableInt(signal.WatcherID), signal.Source, signal.Type, signal.PayloadJSON, signal.Fingerprint, signal.Severity, signal.Status, signal.DedupeKey, timeMillis(signal.ObservedAt))
+	if err != nil {
+		return nil, false, err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		existing, err := s.GetGoalSignalByDedupeKey(ctx, signal.GoalID, signal.Source, signal.Type, signal.DedupeKey)
+		return existing, true, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return nil, false, err
+	}
+	created, err := s.GetGoalSignal(ctx, id)
+	return created, false, err
+}
+
 func (s *Store) GetGoalSignal(ctx context.Context, id int64) (*GoalSignal, error) {
 	var signal GoalSignal
-	var watcherID sql.NullInt64
+	var goalID, watcherID sql.NullInt64
 	var observedAt int64
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id, goal_id, watcher_id, source, type, payload_json, fingerprint, severity, status, dedupe_key, observed_at
 		FROM goal_signals WHERE id = ?
-	`, id).Scan(&signal.ID, &signal.GoalID, &watcherID, &signal.Source, &signal.Type, &signal.PayloadJSON, &signal.Fingerprint, &signal.Severity, &signal.Status, &signal.DedupeKey, &observedAt)
+	`, id).Scan(&signal.ID, &goalID, &watcherID, &signal.Source, &signal.Type, &signal.PayloadJSON, &signal.Fingerprint, &signal.Severity, &signal.Status, &signal.DedupeKey, &observedAt)
 	if err != nil {
 		return nil, err
 	}
+	signal.GoalID = intFromNull(goalID)
 	signal.WatcherID = intFromNull(watcherID)
 	signal.ObservedAt = millisTime(observedAt)
 	return &signal, nil
+}
+
+func (s *Store) GetGoalSignalByDedupeKey(ctx context.Context, goalID int64, source, signalType, dedupeKey string) (*GoalSignal, error) {
+	var id int64
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id FROM goal_signals
+		WHERE COALESCE(goal_id, 0) = ?
+			AND source = ?
+			AND type = ?
+			AND dedupe_key = ?
+	`, goalID, source, signalType, dedupeKey).Scan(&id)
+	if err != nil {
+		return nil, err
+	}
+	return s.GetGoalSignal(ctx, id)
 }
 
 func (s *Store) CreateAgenticTask(ctx context.Context, task AgenticTask) (*AgenticTask, error) {

@@ -1,7 +1,9 @@
 package scheduler
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -40,6 +42,35 @@ func (m *mockEnq) snapshot() ([]string, []string) {
 
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+type mockSchedulerSignalBridge struct {
+	mu       sync.Mutex
+	err      error
+	calls    []ScheduledTask
+	taskIDs  []int64
+	existed  []bool
+	failures []error
+}
+
+func (m *mockSchedulerSignalBridge) RecordScheduledSignal(_ context.Context, task ScheduledTask, queueTaskID int64, existed bool, enqueueErr error) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls = append(m.calls, task)
+	m.taskIDs = append(m.taskIDs, queueTaskID)
+	m.existed = append(m.existed, existed)
+	m.failures = append(m.failures, enqueueErr)
+	return m.err
+}
+
+func (m *mockSchedulerSignalBridge) snapshot() ([]ScheduledTask, []int64, []bool, []error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]ScheduledTask(nil), m.calls...), append([]int64(nil), m.taskIDs...), append([]bool(nil), m.existed...), append([]error(nil), m.failures...)
+}
+
+func captureLogger(buf *bytes.Buffer) *slog.Logger {
+	return slog.New(slog.NewTextHandler(buf, nil))
 }
 
 func waitForCallCount(t *testing.T, enq *mockEnq, want int, timeout time.Duration) {
@@ -318,6 +349,60 @@ func TestSchedulerRunOnStartEnqueuesImmediately(t *testing.T) {
 		}
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("Run() did not return after cancel")
+	}
+}
+
+func TestSchedulerBridge_RecordsSignalWithoutChangingQueueBehavior(t *testing.T) {
+	enq := &mockEnq{}
+	bridge := &mockSchedulerSignalBridge{}
+	s := New(
+		[]ScheduledTask{{Name: "task1", Prompt: "hello", Interval: 10 * time.Millisecond, RunOnStart: true}},
+		enq,
+		discardLogger(),
+		WithSignalBridge(bridge),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- s.Run(ctx)
+	}()
+
+	waitForCallCount(t, enq, 1, 200*time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Run() did not return after cancel")
+	}
+
+	calls, _ := enq.snapshot()
+	signals, taskIDs, existed, failures := bridge.snapshot()
+	if len(calls) != 1 || calls[0] != "scheduled:task1" {
+		t.Fatalf("queue calls = %v, want scheduled task enqueue", calls)
+	}
+	if len(signals) != 1 || signals[0].Name != "task1" || taskIDs[0] == 0 || existed[0] || failures[0] != nil {
+		t.Fatalf("signals=%+v taskIDs=%v existed=%v failures=%v", signals, taskIDs, existed, failures)
+	}
+}
+
+func TestSignalBridge_FailureObservable(t *testing.T) {
+	enq := &mockEnq{}
+	bridge := &mockSchedulerSignalBridge{err: errors.New("signal store unavailable")}
+	var logs bytes.Buffer
+	s := New(nil, enq, captureLogger(&logs), WithSignalBridge(bridge))
+
+	s.enqueueOnce(context.Background(), ScheduledTask{Name: "task1", Prompt: "hello", Interval: time.Minute})
+
+	calls, _ := enq.snapshot()
+	if len(calls) != 1 || calls[0] != "scheduled:task1" {
+		t.Fatalf("queue calls = %v, want scheduler enqueue despite bridge failure", calls)
+	}
+	if got := logs.String(); !strings.Contains(got, "scheduler: signal bridge failed") || !strings.Contains(got, "signal store unavailable") {
+		t.Fatalf("logs = %q, want observable signal bridge failure", got)
 	}
 }
 
