@@ -1,8 +1,11 @@
 package ambient
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -15,6 +18,16 @@ func makeRunner(result daemon.TaskResult, err error) TaskRunFunc {
 	return func(_ context.Context, _ string, _ event.Sink) (daemon.TaskResult, error) {
 		return result, err
 	}
+}
+
+type mockAmbientSignalBridge struct {
+	err   error
+	calls atomic.Int64
+}
+
+func (m *mockAmbientSignalBridge) RecordAmbientSignal(context.Context, BootTask) error {
+	m.calls.Add(1)
+	return m.err
 }
 
 func TestScheduler_StartupTask(t *testing.T) {
@@ -37,6 +50,55 @@ func TestScheduler_StartupTask(t *testing.T) {
 
 	if calls.Load() != 1 {
 		t.Errorf("expected runner called once, got %d", calls.Load())
+	}
+}
+
+func TestAmbientBridge_RecordsSignalWithoutChangingAmbientBehavior(t *testing.T) {
+	var calls atomic.Int64
+	bridge := &mockAmbientSignalBridge{}
+	runner := func(_ context.Context, _ string, _ event.Sink) (daemon.TaskResult, error) {
+		calls.Add(1)
+		return daemon.TaskResult{Summary: "done"}, nil
+	}
+
+	cfg := Config{
+		Tasks: []BootTask{
+			{Title: "startup", Path: "boot/startup.md", Schedule: Schedule{Type: ScheduleStartup}, Silent: true},
+		},
+		Runner:        runner,
+		MaxConcurrent: 2,
+		SignalBridge:  bridge,
+	}
+	s := NewScheduler(cfg)
+	s.Start(context.Background())
+	s.Stop()
+
+	if calls.Load() != 1 {
+		t.Fatalf("runner calls = %d, want 1", calls.Load())
+	}
+	if bridge.calls.Load() != 1 {
+		t.Fatalf("signal bridge calls = %d, want 1", bridge.calls.Load())
+	}
+}
+
+func TestAmbientBridge_FailureObservable(t *testing.T) {
+	bridge := &mockAmbientSignalBridge{err: errors.New("ambient signal unavailable")}
+	var logs bytes.Buffer
+	cfg := Config{
+		Tasks: []BootTask{
+			{Title: "startup", Path: "boot/startup.md", Schedule: Schedule{Type: ScheduleStartup}, Silent: true},
+		},
+		Runner:        makeRunner(daemon.TaskResult{Summary: "done"}, nil),
+		MaxConcurrent: 2,
+		SignalBridge:  bridge,
+		Logger:        slog.New(slog.NewTextHandler(&logs, nil)),
+	}
+	s := NewScheduler(cfg)
+	s.Start(context.Background())
+	s.Stop()
+
+	if got := logs.String(); !strings.Contains(got, "ambient: signal bridge failed") || !strings.Contains(got, "ambient signal unavailable") {
+		t.Fatalf("logs = %q, want observable ambient signal bridge failure", got)
 	}
 }
 

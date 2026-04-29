@@ -18,11 +18,16 @@ type TaskRunFunc func(ctx context.Context, payload string, sink event.Sink) (dae
 // NotifyFunc sends a user-visible notification with the given title and body.
 type NotifyFunc func(ctx context.Context, title, body string) error
 
+type SignalBridge interface {
+	RecordAmbientSignal(ctx context.Context, task BootTask) error
+}
+
 // Config holds the dependencies and tuning parameters for a Scheduler.
 type Config struct {
 	Tasks         []BootTask
 	Runner        TaskRunFunc
 	NotifyFn      NotifyFunc
+	SignalBridge  SignalBridge
 	MaxConcurrent int
 	Logger        *slog.Logger
 }
@@ -117,6 +122,12 @@ func (s *Scheduler) executeTask(ctx context.Context, task BootTask) {
 			s.logger.Error("boot task panic", "title", task.Title, "recover", r)
 		}
 	}()
+
+	if s.cfg.SignalBridge != nil {
+		if err := s.cfg.SignalBridge.RecordAmbientSignal(ctx, task); err != nil {
+			s.logger.Warn("ambient: signal bridge failed", "has_title", task.Title != "", "has_path", task.Path != "", "error", err)
+		}
+	}
 
 	result, err := s.cfg.Runner(ctx, task.Prompt, event.NopSink{})
 	if err != nil {

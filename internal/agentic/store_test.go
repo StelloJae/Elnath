@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/stello/elnath/internal/conversation"
@@ -21,6 +23,28 @@ func openTestDB(t *testing.T) *sql.DB {
 	t.Cleanup(func() { _ = db.Close() })
 	if _, err := db.Exec(`PRAGMA foreign_keys=ON`); err != nil {
 		t.Fatalf("enable foreign keys: %v", err)
+	}
+	return db
+}
+
+func openConcurrentTestDB(t *testing.T) *sql.DB {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "agentic.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open concurrent db: %v", err)
+	}
+	db.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = db.Close() })
+	for _, pragma := range []string{
+		`PRAGMA journal_mode=WAL`,
+		`PRAGMA synchronous=NORMAL`,
+		`PRAGMA busy_timeout=5000`,
+		`PRAGMA foreign_keys=ON`,
+	} {
+		if _, err := db.Exec(pragma); err != nil {
+			t.Fatalf("exec %s: %v", pragma, err)
+		}
 	}
 	return db
 }
@@ -165,6 +189,99 @@ func TestAgenticStore_InsertReadSignalWatcher(t *testing.T) {
 	}
 }
 
+func TestSignalWatcher_InsertReadUpdateCursor(t *testing.T) {
+	ctx := context.Background()
+	_, store := newTestStore(t)
+	goal := createTestGoal(t, ctx, store)
+
+	watcher, err := store.CreateSignalWatcher(ctx, SignalWatcher{
+		GoalID:     goal.ID,
+		Source:     "scheduler",
+		ConfigJSON: `{"path":"scheduled_tasks.yaml"}`,
+		Enabled:    true,
+		IntervalS:  60,
+		LastCursor: "before",
+	})
+	if err != nil {
+		t.Fatalf("CreateSignalWatcher: %v", err)
+	}
+
+	updated, err := store.UpdateSignalWatcherCursor(ctx, watcher.ID, "after")
+	if err != nil {
+		t.Fatalf("UpdateSignalWatcherCursor: %v", err)
+	}
+	if updated.LastCursor != "after" || !updated.UpdatedAt.After(watcher.UpdatedAt) {
+		t.Fatalf("unexpected updated watcher: %+v before=%+v", updated, watcher)
+	}
+}
+
+func TestSignalWatcher_CreateOrGetAllowsNullableGoal(t *testing.T) {
+	ctx := context.Background()
+	_, store := newTestStore(t)
+
+	first, existed, err := store.CreateOrGetSignalWatcher(ctx, SignalWatcher{
+		Source:     "scheduler",
+		ConfigJSON: `{"bridge":"agentic_pr3","source":"scheduler"}`,
+		Enabled:    true,
+		LastCursor: "before",
+	})
+	if err != nil {
+		t.Fatalf("CreateOrGetSignalWatcher first: %v", err)
+	}
+	if existed || first.GoalID != 0 {
+		t.Fatalf("unexpected first watcher: existed=%v watcher=%+v", existed, first)
+	}
+
+	second, existed, err := store.CreateOrGetSignalWatcher(ctx, SignalWatcher{
+		Source:     "scheduler",
+		ConfigJSON: `{"bridge":"agentic_pr3","source":"scheduler"}`,
+		Enabled:    true,
+		LastCursor: "ignored",
+	})
+	if err != nil {
+		t.Fatalf("CreateOrGetSignalWatcher second: %v", err)
+	}
+	if !existed || second.ID != first.ID || second.LastCursor != first.LastCursor {
+		t.Fatalf("dedupe watcher = existed %v %+v, want original %+v", existed, second, first)
+	}
+}
+
+func TestSignalWatcher_CreateOrGetConcurrentSingleton(t *testing.T) {
+	ctx := context.Background()
+	db := openConcurrentTestDB(t)
+	if err := InitSchema(db); err != nil {
+		t.Fatalf("InitSchema: %v", err)
+	}
+	store := NewStore(db)
+
+	const workers = 12
+	var wg sync.WaitGroup
+	errs := make(chan error, workers)
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _, err := store.CreateOrGetSignalWatcher(ctx, SignalWatcher{
+				Source:     "scheduler",
+				ConfigJSON: `{"bridge":"agentic_pr3","source":"scheduler"}`,
+				Enabled:    true,
+			})
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("CreateOrGetSignalWatcher concurrent: %v", err)
+		}
+	}
+
+	if got := countTableRows(t, db, "signal_watchers"); got != 1 {
+		t.Fatalf("signal_watchers rows = %d, want 1", got)
+	}
+}
+
 func TestAgenticStore_InsertReadGoalSignal(t *testing.T) {
 	ctx := context.Background()
 	_, store := newTestStore(t)
@@ -190,6 +307,212 @@ func TestAgenticStore_InsertReadGoalSignal(t *testing.T) {
 	}
 	if got.GoalID != goal.ID || got.Type != "canary_regression" || got.PayloadJSON == "" || got.ObservedAt.IsZero() {
 		t.Fatalf("unexpected signal: %+v", got)
+	}
+}
+
+func TestGoalSignal_InsertReadNullableGoal(t *testing.T) {
+	ctx := context.Background()
+	_, store := newTestStore(t)
+
+	signal, err := store.CreateGoalSignal(ctx, GoalSignal{
+		Source:      "manual",
+		Type:        "daemon_submit",
+		PayloadJSON: `{"prompt":"hello"}`,
+		Fingerprint: "manual-submit-hello",
+		Severity:    1,
+		Status:      SignalStatusNew,
+		DedupeKey:   "manual:1",
+	})
+	if err != nil {
+		t.Fatalf("CreateGoalSignal nullable goal: %v", err)
+	}
+
+	got, err := store.GetGoalSignal(ctx, signal.ID)
+	if err != nil {
+		t.Fatalf("GetGoalSignal: %v", err)
+	}
+	if got.GoalID != 0 || got.Source != "manual" || got.Type != "daemon_submit" || got.PayloadJSON == "" || got.ObservedAt.IsZero() {
+		t.Fatalf("unexpected nullable-goal signal: %+v", got)
+	}
+}
+
+func TestGoalSignal_DedupeByKey(t *testing.T) {
+	ctx := context.Background()
+	_, store := newTestStore(t)
+	goal := createTestGoal(t, ctx, store)
+
+	first, existed, err := store.CreateOrGetGoalSignal(ctx, GoalSignal{
+		GoalID:      goal.ID,
+		Source:      "scheduler",
+		Type:        "scheduled_task",
+		PayloadJSON: `{"task":"task1"}`,
+		Fingerprint: "first",
+		Status:      SignalStatusNew,
+		DedupeKey:   "scheduler:task1",
+	})
+	if err != nil {
+		t.Fatalf("CreateOrGetGoalSignal first: %v", err)
+	}
+	if existed {
+		t.Fatal("first signal unexpectedly reported deduped")
+	}
+
+	second, existed, err := store.CreateOrGetGoalSignal(ctx, GoalSignal{
+		GoalID:      goal.ID,
+		Source:      "scheduler",
+		Type:        "scheduled_task",
+		PayloadJSON: `{"task":"task1","changed":true}`,
+		Fingerprint: "second",
+		Status:      SignalStatusNew,
+		DedupeKey:   "scheduler:task1",
+	})
+	if err != nil {
+		t.Fatalf("CreateOrGetGoalSignal second: %v", err)
+	}
+	if !existed {
+		t.Fatal("duplicate signal did not report deduped")
+	}
+	if second.ID != first.ID || second.Fingerprint != "first" {
+		t.Fatalf("dedupe returned %+v, want original %+v", second, first)
+	}
+}
+
+func TestAgenticSchema_MigratesDuplicateGoalSignalDedupeKeys(t *testing.T) {
+	db := openTestDB(t)
+	if _, err := db.Exec(`
+		CREATE TABLE standing_goals (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			title TEXT NOT NULL,
+			description TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL,
+			priority INTEGER NOT NULL DEFAULT 0,
+			autonomy_level TEXT NOT NULL,
+			risk_budget TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		);
+		CREATE TABLE signal_watchers (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			goal_id INTEGER REFERENCES standing_goals(id) ON DELETE SET NULL,
+			source TEXT NOT NULL,
+			config_json TEXT NOT NULL DEFAULT '{}',
+			enabled INTEGER NOT NULL DEFAULT 1,
+			interval_s INTEGER NOT NULL DEFAULT 0,
+			last_cursor TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		);
+		CREATE TABLE goal_signals (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			goal_id INTEGER REFERENCES standing_goals(id) ON DELETE SET NULL,
+			watcher_id INTEGER REFERENCES signal_watchers(id) ON DELETE SET NULL,
+			source TEXT NOT NULL,
+			type TEXT NOT NULL,
+			payload_json TEXT NOT NULL,
+			fingerprint TEXT NOT NULL,
+			severity INTEGER NOT NULL DEFAULT 0,
+			status TEXT NOT NULL,
+			dedupe_key TEXT NOT NULL DEFAULT '',
+			observed_at INTEGER NOT NULL
+		);
+		INSERT INTO goal_signals(id, goal_id, watcher_id, source, type, payload_json, fingerprint, severity, status, dedupe_key, observed_at)
+		VALUES
+			(1, NULL, NULL, 'scheduler', 'scheduled_task', '{}', 'first', 1, 'new', 'scheduler:dup', 100),
+			(2, NULL, NULL, 'scheduler', 'scheduled_task', '{}', 'second', 1, 'new', 'scheduler:dup', 101);
+	`); err != nil {
+		t.Fatalf("seed duplicate goal_signals: %v", err)
+	}
+
+	if err := InitSchema(db); err != nil {
+		t.Fatalf("InitSchema with duplicate goal_signals: %v", err)
+	}
+
+	var duplicateCount int
+	if err := db.QueryRow(`
+		SELECT COUNT(*) FROM (
+			SELECT COALESCE(goal_id, 0), source, type, dedupe_key, COUNT(*) n
+			FROM goal_signals
+			WHERE dedupe_key <> ''
+			GROUP BY COALESCE(goal_id, 0), source, type, dedupe_key
+			HAVING n > 1
+		)
+	`).Scan(&duplicateCount); err != nil {
+		t.Fatalf("count duplicate dedupe keys: %v", err)
+	}
+	if duplicateCount != 0 {
+		t.Fatalf("duplicate dedupe keys remain: %d", duplicateCount)
+	}
+
+	if _, _, err := NewStore(db).CreateOrGetGoalSignal(context.Background(), GoalSignal{
+		Source:      "scheduler",
+		Type:        "scheduled_task",
+		PayloadJSON: `{}`,
+		Fingerprint: "third",
+		Status:      SignalStatusNew,
+		DedupeKey:   "scheduler:dup",
+	}); err != nil {
+		t.Fatalf("CreateOrGetGoalSignal after dedupe migration: %v", err)
+	}
+}
+
+func TestAgenticSchema_MigratesDuplicateSignalWatcherKeys(t *testing.T) {
+	db := openTestDB(t)
+	if _, err := db.Exec(`
+		CREATE TABLE standing_goals (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			title TEXT NOT NULL,
+			description TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL,
+			priority INTEGER NOT NULL DEFAULT 0,
+			autonomy_level TEXT NOT NULL,
+			risk_budget TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		);
+		CREATE TABLE signal_watchers (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			goal_id INTEGER REFERENCES standing_goals(id) ON DELETE SET NULL,
+			source TEXT NOT NULL,
+			config_json TEXT NOT NULL DEFAULT '{}',
+			enabled INTEGER NOT NULL DEFAULT 1,
+			interval_s INTEGER NOT NULL DEFAULT 0,
+			last_cursor TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		);
+		INSERT INTO signal_watchers(id, goal_id, source, config_json, enabled, interval_s, last_cursor, created_at, updated_at)
+		VALUES
+			(1, NULL, 'scheduler', '{"bridge":"agentic_pr3","source":"scheduler"}', 1, 0, 'old-1', 100, 100),
+			(2, NULL, 'scheduler', '{"bridge":"agentic_pr3","source":"scheduler"}', 1, 0, 'old-2', 101, 101);
+	`); err != nil {
+		t.Fatalf("seed duplicate signal_watchers: %v", err)
+	}
+
+	if err := InitSchema(db); err != nil {
+		t.Fatalf("InitSchema with duplicate signal_watchers: %v", err)
+	}
+
+	var duplicateCount int
+	if err := db.QueryRow(`
+		SELECT COUNT(*) FROM (
+			SELECT COALESCE(goal_id, 0), source, config_json, COUNT(*) n
+			FROM signal_watchers
+			GROUP BY COALESCE(goal_id, 0), source, config_json
+			HAVING n > 1
+		)
+	`).Scan(&duplicateCount); err != nil {
+		t.Fatalf("count duplicate watcher keys: %v", err)
+	}
+	if duplicateCount != 0 {
+		t.Fatalf("duplicate watcher keys remain: %d", duplicateCount)
+	}
+
+	if _, _, err := NewStore(db).CreateOrGetSignalWatcher(context.Background(), SignalWatcher{
+		Source:     "scheduler",
+		ConfigJSON: `{"bridge":"agentic_pr3","source":"scheduler"}`,
+		Enabled:    true,
+	}); err != nil {
+		t.Fatalf("CreateOrGetSignalWatcher after watcher migration: %v", err)
 	}
 }
 
@@ -637,6 +960,18 @@ func TestAgenticSchema_MigratesPR1AgenticTaskGoalNullable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateAgenticTask after migration: %v", err)
 	}
+
+	_, err = store.CreateGoalSignal(ctx, GoalSignal{
+		Source:      "manual",
+		Type:        "daemon_submit",
+		PayloadJSON: `{"prompt":"nullable signal migration"}`,
+		Fingerprint: "nullable-signal-migration",
+		Status:      SignalStatusNew,
+		DedupeKey:   "manual:44",
+	})
+	if err != nil {
+		t.Fatalf("CreateGoalSignal with nullable goal after migration: %v", err)
+	}
 }
 
 func createTestGoal(t *testing.T, ctx context.Context, store *Store) *StandingGoal {
@@ -782,6 +1117,15 @@ func tableColumns(t *testing.T, db *sql.DB, table string) map[string]bool {
 		t.Fatalf("table_info rows %s: %v", table, err)
 	}
 	return columns
+}
+
+func countTableRows(t *testing.T, db *sql.DB, table string) int {
+	t.Helper()
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&n); err != nil {
+		t.Fatalf("count %s: %v", table, err)
+	}
+	return n
 }
 
 func assertNotFound(t *testing.T, err error) {

@@ -87,6 +87,31 @@ type recordingTaskEnvelope struct {
 	failed       []int64
 }
 
+type recordingSubmitSignalBridge struct {
+	mu      sync.Mutex
+	err     error
+	payload string
+	taskID  int64
+	existed bool
+	calls   int
+}
+
+func (b *recordingSubmitSignalBridge) RecordManualSubmitSignal(_ context.Context, payload string, taskID int64, existed bool) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.payload = payload
+	b.taskID = taskID
+	b.existed = existed
+	b.calls++
+	return b.err
+}
+
+func (b *recordingSubmitSignalBridge) snapshot() (payload string, taskID int64, existed bool, calls int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.payload, b.taskID, b.existed, b.calls
+}
+
 func (e *recordingTaskEnvelope) Start(_ context.Context, task Task) (TaskEnvelopeRun, error) {
 	if e.startErr != nil {
 		return nil, e.startErr
@@ -560,6 +585,57 @@ func TestDaemonSubmitDeduplicatesByPrincipalAndPrompt(t *testing.T) {
 	}
 	if secondID := extractTaskID(t, second); secondID != firstID {
 		t.Fatalf("second submit task id = %d, want %d", secondID, firstID)
+	}
+}
+
+func TestManualSignalBridge_RecordsSignalIfApplicable(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+	bridge := &recordingSubmitSignalBridge{}
+	socketPath := shortDaemonSocketPath("elnath-manual-signal")
+	d := New(q, socketPath, 1, mockTaskRunner{text: "done"}.run, nil)
+	d.WithSubmitSignalBridge(bridge)
+	startDaemonInstance(t, d, socketPath)
+
+	resp := sendIPC(t, socketPath, IPCRequest{
+		Command: "submit",
+		Payload: mustMarshalString(t, "manual task"),
+	})
+	if !resp.OK {
+		t.Fatalf("submit: %s", resp.Err)
+	}
+	taskID := extractTaskID(t, resp)
+	payload, gotTaskID, existed, calls := bridge.snapshot()
+	if calls != 1 || gotTaskID != taskID || existed || payload == "" {
+		t.Fatalf("bridge payload=%q taskID=%d existed=%v calls=%d, want one non-deduped signal for task %d", payload, gotTaskID, existed, calls, taskID)
+	}
+}
+
+func TestManualSignalBridge_FailureObservable(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+	bridge := &recordingSubmitSignalBridge{err: errors.New("manual signal unavailable")}
+	var logs bytes.Buffer
+	socketPath := shortDaemonSocketPath("elnath-manual-signal-failure")
+	d := New(q, socketPath, 1, mockTaskRunner{text: "done"}.run, slog.New(slog.NewTextHandler(&logs, nil)))
+	d.WithSubmitSignalBridge(bridge)
+	startDaemonInstance(t, d, socketPath)
+
+	resp := sendIPC(t, socketPath, IPCRequest{
+		Command: "submit",
+		Payload: mustMarshalString(t, "manual task"),
+	})
+	if !resp.OK {
+		t.Fatalf("submit should preserve queue behavior after signal failure: %s", resp.Err)
+	}
+	if got := logs.String(); !strings.Contains(got, "daemon: submit signal bridge failed") || !strings.Contains(got, "manual signal unavailable") {
+		t.Fatalf("logs = %q, want observable manual signal bridge failure", got)
 	}
 }
 

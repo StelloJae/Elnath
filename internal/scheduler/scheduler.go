@@ -13,17 +13,34 @@ type Enqueuer interface {
 	Enqueue(ctx context.Context, payload string, idemKey string) (int64, bool, error)
 }
 
-type Scheduler struct {
-	tasks  []ScheduledTask
-	enq    Enqueuer
-	logger *slog.Logger
+type SignalBridge interface {
+	RecordScheduledSignal(ctx context.Context, task ScheduledTask, queueTaskID int64, existed bool, enqueueErr error) error
 }
 
-func New(tasks []ScheduledTask, enq Enqueuer, logger *slog.Logger) *Scheduler {
+type Option func(*Scheduler)
+
+type Scheduler struct {
+	tasks        []ScheduledTask
+	enq          Enqueuer
+	logger       *slog.Logger
+	signalBridge SignalBridge
+}
+
+func WithSignalBridge(bridge SignalBridge) Option {
+	return func(s *Scheduler) {
+		s.signalBridge = bridge
+	}
+}
+
+func New(tasks []ScheduledTask, enq Enqueuer, logger *slog.Logger, opts ...Option) *Scheduler {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Scheduler{tasks: tasks, enq: enq, logger: logger}
+	s := &Scheduler{tasks: tasks, enq: enq, logger: logger}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 func (s *Scheduler) Run(ctx context.Context) error {
@@ -73,6 +90,11 @@ func (s *Scheduler) enqueueOnce(ctx context.Context, task ScheduledTask) {
 	idemKey := "scheduled:" + task.Name
 
 	id, existed, err := s.enq.Enqueue(ctx, encoded, idemKey)
+	if s.signalBridge != nil {
+		if bridgeErr := s.signalBridge.RecordScheduledSignal(ctx, task, id, existed, err); bridgeErr != nil {
+			s.logger.Warn("scheduler: signal bridge failed", "task", task.Name, "error", bridgeErr)
+		}
+	}
 	switch {
 	case err != nil:
 		s.logger.Warn("scheduler: enqueue failed", "task", task.Name, "error", err)
