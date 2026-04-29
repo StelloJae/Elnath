@@ -216,7 +216,7 @@ func TestShellHandleUpdateApprovalsAndNotifyCompletions(t *testing.T) {
 
 	if err := shell.HandleUpdate(context.Background(), Update{
 		ID:      2,
-		Message: Message{ChatID: "chat-1", Text: "/approve 1"},
+		Message: Message{ChatID: "chat-1", UserID: "77", Text: "/approve 1"},
 	}); err != nil {
 		t.Fatalf("HandleUpdate approve: %v", err)
 	}
@@ -226,6 +226,9 @@ func TestShellHandleUpdateApprovalsAndNotifyCompletions(t *testing.T) {
 	}
 	if row.Decision != daemon.ApprovalDecisionApproved {
 		t.Fatalf("approval decision = %q, want approved", row.Decision)
+	}
+	if row.DecidedBy != "telegram:77" {
+		t.Fatalf("approval decided_by = %q, want telegram:77", row.DecidedBy)
 	}
 
 	taskID, _, err := queue.Enqueue(context.Background(), "terminal task", "")
@@ -261,6 +264,59 @@ func TestShellHandleUpdateApprovalsAndNotifyCompletions(t *testing.T) {
 	}
 	if len(bot.sent) != 3 {
 		t.Fatalf("completion notifications duplicated: %#v", bot.sent)
+	}
+}
+
+func TestTelegramApprovals_RenderProvenanceWhenPresent(t *testing.T) {
+	shell, _, approvals, bot := newTestShell(t)
+	if _, err := approvals.CreateWithContext(context.Background(), daemon.ApprovalCreateRequest{
+		ToolName:         "bash",
+		Input:            []byte(`{"cmd":"make test"}`),
+		TaskID:           42,
+		PolicyDecisionID: 77,
+		ActionKind:       "tool_call",
+		RiskLevel:        "high",
+		Reason:           "shell command requires approval",
+		PolicyVersion:    "agentic-policy-v1",
+	}); err != nil {
+		t.Fatalf("CreateWithContext: %v", err)
+	}
+
+	if err := shell.HandleUpdate(context.Background(), Update{
+		ID:      100,
+		Message: Message{ChatID: "chat-1", Text: "/approvals"},
+	}); err != nil {
+		t.Fatalf("HandleUpdate approvals: %v", err)
+	}
+	if len(bot.sent) != 1 {
+		t.Fatalf("sent messages = %d, want 1", len(bot.sent))
+	}
+	got := bot.sent[0].text
+	for _, want := range []string{"Task #42", "Policy #77", "Risk: high", "shell command requires approval", "make test"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("approval text = %q, want %q", got, want)
+		}
+	}
+}
+
+func TestTelegramApprovals_RenderLegacyApprovalStillWorks(t *testing.T) {
+	shell, _, approvals, bot := newTestShell(t)
+	if _, err := approvals.Create(context.Background(), "bash", []byte(`{"cmd":"git status"}`)); err != nil {
+		t.Fatalf("Create legacy approval: %v", err)
+	}
+
+	if err := shell.HandleUpdate(context.Background(), Update{
+		ID:      101,
+		Message: Message{ChatID: "chat-1", Text: "/approvals"},
+	}); err != nil {
+		t.Fatalf("HandleUpdate approvals: %v", err)
+	}
+	if len(bot.sent) != 1 {
+		t.Fatalf("sent messages = %d, want 1", len(bot.sent))
+	}
+	got := bot.sent[0].text
+	if !strings.Contains(got, "git status") || strings.Contains(got, "Policy #") || strings.Contains(got, "Task #") {
+		t.Fatalf("legacy approval text = %q", got)
 	}
 }
 

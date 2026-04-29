@@ -411,9 +411,9 @@ func (s *Shell) handleCommand(ctx context.Context, text string, principal identi
 	case "/approvals":
 		return s.renderApprovals(ctx)
 	case "/approve":
-		return s.resolveApproval(ctx, fields, true)
+		return s.resolveApproval(ctx, fields, true, principal)
 	case "/deny":
-		return s.resolveApproval(ctx, fields, false)
+		return s.resolveApproval(ctx, fields, false, principal)
 	case "/followup", "/resume":
 		return s.enqueueFollowUp(ctx, text, principal, userMsgID)
 	case "/submit":
@@ -649,12 +649,29 @@ func (s *Shell) renderApprovals(ctx context.Context) (string, error) {
 		if len(input) > 80 {
 			input = input[:77] + "..."
 		}
-		lines = append(lines, fmt.Sprintf("• <code>#%d</code> <b>%s</b>\n  <code>%s</code>", req.ID, escapeHTML(req.ToolName), escapeHTML(input)))
+		entry := fmt.Sprintf("• <code>#%d</code> <b>%s</b>\n  <code>%s</code>", req.ID, escapeHTML(req.ToolName), escapeHTML(input))
+		var provenance []string
+		if req.TaskID != 0 {
+			provenance = append(provenance, fmt.Sprintf("Task #%d", req.TaskID))
+		}
+		if req.PolicyDecisionID != 0 {
+			provenance = append(provenance, fmt.Sprintf("Policy #%d", req.PolicyDecisionID))
+		}
+		if req.RiskLevel != "" {
+			provenance = append(provenance, "Risk: "+escapeHTML(req.RiskLevel))
+		}
+		if req.Reason != "" {
+			provenance = append(provenance, escapeHTML(req.Reason))
+		}
+		if len(provenance) > 0 {
+			entry += "\n  " + strings.Join(provenance, " · ")
+		}
+		lines = append(lines, entry)
 	}
 	return strings.Join(lines, "\n"), nil
 }
 
-func (s *Shell) resolveApproval(ctx context.Context, fields []string, approved bool) (string, error) {
+func (s *Shell) resolveApproval(ctx context.Context, fields []string, approved bool, principal identity.Principal) (string, error) {
 	if len(fields) < 2 {
 		return "", fmt.Errorf("usage: %s <id>", fields[0])
 	}
@@ -662,13 +679,20 @@ func (s *Shell) resolveApproval(ctx context.Context, fields []string, approved b
 	if err != nil {
 		return "", fmt.Errorf("invalid approval id %q", fields[1])
 	}
-	if err := s.approvals.Decide(ctx, id, approved); err != nil {
+	if err := s.approvals.DecideBy(ctx, id, approved, approvalDecider(principal)); err != nil {
 		return "", err
 	}
 	if approved {
 		return fmt.Sprintf("✅ Approved <code>#%d</code>", id), nil
 	}
 	return fmt.Sprintf("❌ Denied <code>#%d</code>", id), nil
+}
+
+func approvalDecider(principal identity.Principal) string {
+	if principal.UserID == "" {
+		return "telegram"
+	}
+	return "telegram:" + principal.UserID
 }
 
 func (s *Shell) enqueueTaskReturningID(ctx context.Context, prompt string, principal identity.Principal) (int64, bool, error) {

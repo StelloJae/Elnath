@@ -407,6 +407,38 @@ func (s *Store) UpdateAgenticTaskStatus(ctx context.Context, id int64, status st
 	return s.GetAgenticTask(ctx, id)
 }
 
+func (s *Store) SetAgenticTaskApprovalRequestID(ctx context.Context, id int64, approvalRequestID string) (*AgenticTask, error) {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE agentic_tasks
+		SET approval_request_id = ?, updated_at = MAX(?, updated_at + 1)
+		WHERE id = ?
+	`, approvalRequestID, timeMillis(nowTime()), id)
+	if err != nil {
+		return nil, err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return nil, sql.ErrNoRows
+	}
+	return s.GetAgenticTask(ctx, id)
+}
+
+func (s *Store) SetAgenticTaskApprovalRequestIDTx(ctx context.Context, tx *sql.Tx, id int64, approvalRequestID string) (*AgenticTask, error) {
+	res, err := tx.ExecContext(ctx, `
+		UPDATE agentic_tasks
+		SET approval_request_id = ?, updated_at = MAX(?, updated_at + 1)
+		WHERE id = ?
+	`, approvalRequestID, timeMillis(nowTime()), id)
+	if err != nil {
+		return nil, err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return nil, sql.ErrNoRows
+	}
+	return getAgenticTaskTx(ctx, tx, id)
+}
+
 func (s *Store) ReconcileDaemonTaskStatuses(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE agentic_tasks
