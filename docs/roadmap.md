@@ -12,7 +12,7 @@ The central implementation principle is:
 
 Elnath already has a strong execution substrate: agent loop, tool registry, daemon queue, workflow router, fixed workflows, planner/subagent execution, verification loop, research loop, static scheduling, approval store, audit trail, outcomes, and wiki memory.
 
-As of 2026-04-29, the first durable agentic foundation is implemented: `internal/agentic/{schema,store,types,test}.go` exists, runtime startup initializes the agentic schema, and daemon queue tasks are linked to durable `agentic_tasks` envelopes. The roadmap now starts from that foundation instead of treating it as future work.
+As of 2026-04-29, the first durable agentic foundation is implemented: `internal/agentic/{schema,store,types,test}.go` exists, runtime startup initializes the agentic schema, daemon queue tasks are linked to durable `agentic_tasks` envelopes, and scheduler/ambient/manual submit surfaces can record observe-only `goal_signals`. The roadmap now starts from that foundation instead of treating it as future work.
 
 Hermes Agent moved from the v0.8/v0.9 baseline to v0.10/v0.11 and an active post-v0.11 `main` branch. The Elnath takeaway is not to copy Hermes wholesale. The useful deltas are: ToolGateway-style execution routing, hardline-vs-approval policy separation, plugin/hook lifecycle points, webhook/cron signal hardening, bounded delegation, receipt-backed tool results, and verification-gated memory.
 
@@ -33,9 +33,9 @@ standing goal
 → follow-up scheduler
 ```
 
-## 2. Current Agentic Readiness: 55/100
+## 2. Current Agentic Readiness: 60/100
 
-Elnath is currently a strong workflow runner and tool-using agent platform with an initial durable agentic control-plane schema and observe-only daemon task envelope linkage. It is not yet a complete standing-goal-driven autonomous system because signals, tool execution, approvals, verification, memory, and follow-ups are not yet forced through the agentic runtime.
+Elnath is currently a strong workflow runner and tool-using agent platform with an initial durable agentic control-plane schema, observe-only daemon task envelope linkage, and an observe-only signal ledger bridge. It is not yet a complete standing-goal-driven autonomous system because signals are not converted into tasks yet, and tool execution, approvals, verification, memory, and follow-ups are not yet forced through the agentic runtime.
 
 Implemented foundations:
 
@@ -60,6 +60,7 @@ Implemented foundations:
 | Agentic store | `internal/agentic/store.go` | Typed create/read APIs for agentic control-plane records. |
 | Agentic startup init | `cmd/elnath/runtime.go` | Initializes agentic schema alongside conversation schema. |
 | Agentic daemon envelope | `internal/agentic/runtime/envelope.go` | Links existing daemon queue tasks to durable `agentic_tasks` records and mirrors coarse lifecycle state. |
+| Agentic signal bridge | `internal/agentic/signals/bridge.go` | Records scheduler, ambient, and manual-submit observations as observe-only `goal_signals` with watcher cursors. |
 | Hook surface | `internal/agent/hooks.go` | Pre/post tool and LLM lifecycle hooks; useful base for receipt-aware gateway hooks. |
 
 ## 3. Workflow vs Agentic Gap
@@ -103,7 +104,6 @@ followups
 
 Still missing as runtime behavior:
 
-- Signal watcher bridge from scheduler/ambient/manual events into `goal_signals`.
 - Signal triage that creates `agentic_tasks`.
 - Policy engine with explicit `auto_allowed`, `approval_required`, `hardline_denied`, and `observe_only` outcomes.
 - Approval bridge that links user decisions to task/action/risk/policy provenance.
@@ -114,9 +114,10 @@ Still missing as runtime behavior:
 - Follow-up scheduler with dedupe/cooldown/fanout limits.
 - Durable actor runtime for planner/executor/verifier/critic/memory/scheduler roles.
 
-Non-claims after PR1 and PR2:
+Non-claims after PR1, PR2, and PR3:
 
 - No autonomous runtime behavior is enabled.
+- Signals are not converted into tasks yet.
 - No ToolGateway is active.
 - No policy enforcement is active.
 - No approval bridge is active.
@@ -351,17 +352,21 @@ Status: shipped observe-only daemon task envelope; do not expand into policy/too
 
 #### PR3: `feat(signals): add signal ledger and watcher bridge`
 
+Status: shipped observe-only signal ledger and watcher bridge; do not convert signals into tasks until PR4.
+
 - Purpose: Persist observations before they become work.
 - Current related files: `internal/scheduler/scheduler.go`, `internal/ambient/scheduler.go`, `internal/event/*`.
-- Files to modify: `internal/scheduler/scheduler.go`, `internal/ambient/scheduler.go`, `cmd/elnath/cmd_daemon.go`.
-- Files to add: `internal/agentic/signals/store.go`, `internal/agentic/signals/watcher.go`, `internal/agentic/signals/dedupe.go`.
-- Core implementation: Convert scheduler/ambient/manual triggers into `goal_signals`.
+- Files modified: `cmd/elnath/cmd_daemon.go`, `internal/scheduler/scheduler.go`, `internal/ambient/scheduler.go`, `internal/daemon/daemon.go`, `internal/agentic/schema.go`, `internal/agentic/store.go`.
+- Files added: `internal/agentic/signals/bridge.go`, `internal/agentic/signals/bridge_test.go`.
+- Core implementation: Convert scheduler/ambient/manual submit observations into observe-only `goal_signals`, link them to source `signal_watchers`, update watcher cursors, dedupe/fingerprint occurrences, and minimize persisted payloads.
 - Dependency: PR1.
-- Completion criteria: Repeated same signal is deduped.
-- Test criteria: Fingerprint, watcher bridge, scheduler/ambient signal insert tests.
+- Completion criteria: Scheduler, ambient, and manual submit observations are persisted without changing task execution behavior.
+- Test criteria: Fingerprint, watcher bridge, scheduler/ambient/manual signal insert tests, repeated occurrence tests, watcher singleton tests, bridge failure observability, and no autonomous side effects.
 - Agentic capability: Elnath can remember what it noticed.
 
 #### PR4: `feat(triage): convert signals to tasks`
+
+Status: next dependency-ready implementation PR.
 
 - Purpose: Turn signal ledger entries into task graph nodes.
 - Current related files: `internal/daemon/queue.go`, `internal/scheduler/scheduler.go`.
@@ -539,7 +544,7 @@ Next-task selection:
 Default current next PR:
 
 ```text
-PR3: feat(signals): add signal ledger and watcher bridge
+PR4: feat(triage): convert signals to tasks
 ```
 
 Autonomy rules for Codex/Elnath work:
