@@ -225,6 +225,67 @@ func TestAgenticStore_InsertReadAgenticTask(t *testing.T) {
 	}
 }
 
+func TestAgenticStore_InsertReadDaemonOriginTaskAllowsNullableGoalSignal(t *testing.T) {
+	ctx := context.Background()
+	_, store := newTestStore(t)
+
+	task, err := store.CreateAgenticTask(ctx, AgenticTask{
+		QueueTaskID:        123,
+		Title:              "Daemon task",
+		Prompt:             "fix the failing test",
+		Status:             TaskStatusRunning,
+		Priority:           1,
+		RiskLevel:          RiskLevelLow,
+		AutonomyDecision:   PolicyDecisionObserve,
+		VerificationStatus: VerificationStatusPending,
+	})
+	if err != nil {
+		t.Fatalf("CreateAgenticTask daemon-origin: %v", err)
+	}
+
+	got, err := store.GetAgenticTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetAgenticTask: %v", err)
+	}
+	if got.GoalID != 0 || got.SignalID != 0 || got.QueueTaskID != 123 || got.Status != TaskStatusRunning {
+		t.Fatalf("unexpected daemon-origin task: %+v", got)
+	}
+}
+
+func TestAgenticStore_GetByQueueTaskIDAndUpdateStatus(t *testing.T) {
+	ctx := context.Background()
+	_, store := newTestStore(t)
+
+	task, err := store.CreateAgenticTask(ctx, AgenticTask{
+		QueueTaskID:        321,
+		Title:              "Daemon task",
+		Prompt:             "ship it",
+		Status:             TaskStatusRunning,
+		RiskLevel:          RiskLevelLow,
+		AutonomyDecision:   PolicyDecisionObserve,
+		VerificationStatus: VerificationStatusPending,
+	})
+	if err != nil {
+		t.Fatalf("CreateAgenticTask: %v", err)
+	}
+
+	byQueue, err := store.GetAgenticTaskByQueueTaskID(ctx, 321)
+	if err != nil {
+		t.Fatalf("GetAgenticTaskByQueueTaskID: %v", err)
+	}
+	if byQueue.ID != task.ID {
+		t.Fatalf("GetAgenticTaskByQueueTaskID ID = %d, want %d", byQueue.ID, task.ID)
+	}
+
+	updated, err := store.UpdateAgenticTaskStatus(ctx, task.ID, TaskStatusSucceeded)
+	if err != nil {
+		t.Fatalf("UpdateAgenticTaskStatus: %v", err)
+	}
+	if updated.Status != TaskStatusSucceeded || !updated.UpdatedAt.After(task.UpdatedAt) {
+		t.Fatalf("unexpected updated task: %+v before=%+v", updated, task)
+	}
+}
+
 func TestAgenticStore_InsertReadTaskEdge(t *testing.T) {
 	ctx := context.Background()
 	_, store := newTestStore(t)
@@ -480,6 +541,101 @@ func TestAgenticSchema_EnforcesForeignKeys(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("CreateGoalSignal with missing goal unexpectedly succeeded")
+	}
+}
+
+func TestAgenticSchema_MigratesPR1AgenticTaskGoalNullable(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	if _, err := db.Exec(`
+		CREATE TABLE standing_goals (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			title TEXT NOT NULL,
+			description TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL,
+			priority INTEGER NOT NULL DEFAULT 0,
+			autonomy_level TEXT NOT NULL,
+			risk_budget TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+			);
+			CREATE TABLE signal_watchers (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				goal_id INTEGER NOT NULL REFERENCES standing_goals(id) ON DELETE CASCADE,
+				source TEXT NOT NULL,
+				config_json TEXT NOT NULL DEFAULT '{}',
+				enabled INTEGER NOT NULL DEFAULT 1,
+				interval_s INTEGER NOT NULL DEFAULT 0,
+				last_cursor TEXT NOT NULL DEFAULT '',
+				created_at INTEGER NOT NULL,
+				updated_at INTEGER NOT NULL
+			);
+			CREATE TABLE goal_signals (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				goal_id INTEGER NOT NULL REFERENCES standing_goals(id) ON DELETE CASCADE,
+				watcher_id INTEGER REFERENCES signal_watchers(id) ON DELETE SET NULL,
+				source TEXT NOT NULL,
+				type TEXT NOT NULL,
+				payload_json TEXT NOT NULL,
+				fingerprint TEXT NOT NULL,
+				severity INTEGER NOT NULL DEFAULT 0,
+				status TEXT NOT NULL,
+				dedupe_key TEXT NOT NULL DEFAULT '',
+				observed_at INTEGER NOT NULL
+			);
+			CREATE TABLE agentic_tasks (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			goal_id INTEGER NOT NULL REFERENCES standing_goals(id) ON DELETE CASCADE,
+			signal_id INTEGER REFERENCES goal_signals(id) ON DELETE SET NULL,
+			parent_id INTEGER REFERENCES agentic_tasks(id) ON DELETE SET NULL,
+			queue_task_id INTEGER,
+			title TEXT NOT NULL,
+			prompt TEXT NOT NULL,
+			status TEXT NOT NULL,
+			priority INTEGER NOT NULL DEFAULT 0,
+			risk_level TEXT NOT NULL,
+			autonomy_decision TEXT NOT NULL,
+			approval_request_id TEXT NOT NULL DEFAULT '',
+			verification_status TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			due_at INTEGER
+		);
+		`); err != nil {
+		t.Fatalf("create PR1-like schema: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO standing_goals(id, title, description, status, priority, autonomy_level, risk_budget, created_at, updated_at)
+		VALUES (1, 'Existing goal', 'before PR2', 'active', 5, 'observe', 'low', 100, 100);
+		INSERT INTO agentic_tasks(id, goal_id, queue_task_id, title, prompt, status, priority, risk_level, autonomy_decision, approval_request_id, verification_status, created_at, updated_at)
+		VALUES (7, 1, 77, 'Existing task', 'keep this row', 'running', 3, 'low', 'observe', '', 'pending', 110, 110);
+	`); err != nil {
+		t.Fatalf("seed PR1-like agentic task: %v", err)
+	}
+	if err := InitSchema(db); err != nil {
+		t.Fatalf("InitSchema migration: %v", err)
+	}
+
+	store := NewStore(db)
+	preserved, err := store.GetAgenticTask(ctx, 7)
+	if err != nil {
+		t.Fatalf("GetAgenticTask preserved row: %v", err)
+	}
+	if preserved.GoalID != 1 || preserved.QueueTaskID != 77 || preserved.Title != "Existing task" || preserved.Prompt != "keep this row" {
+		t.Fatalf("migration did not preserve existing task: %+v", preserved)
+	}
+
+	_, err = store.CreateAgenticTask(ctx, AgenticTask{
+		QueueTaskID:        44,
+		Title:              "Daemon task",
+		Prompt:             "nullable goal migration",
+		Status:             TaskStatusRunning,
+		RiskLevel:          RiskLevelLow,
+		AutonomyDecision:   PolicyDecisionObserve,
+		VerificationStatus: VerificationStatusPending,
+	})
+	if err != nil {
+		t.Fatalf("CreateAgenticTask after migration: %v", err)
 	}
 }
 
