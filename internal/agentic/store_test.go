@@ -516,6 +516,80 @@ func TestAgenticSchema_MigratesDuplicateSignalWatcherKeys(t *testing.T) {
 	}
 }
 
+func TestAgenticSchema_MigratesDuplicateAgenticTaskSignalIDs(t *testing.T) {
+	db := openTestDB(t)
+	if _, err := db.Exec(`
+		CREATE TABLE standing_goals (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			title TEXT NOT NULL,
+			description TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL,
+			priority INTEGER NOT NULL DEFAULT 0,
+			autonomy_level TEXT NOT NULL,
+			risk_budget TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		);
+		CREATE TABLE goal_signals (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			goal_id INTEGER REFERENCES standing_goals(id) ON DELETE SET NULL,
+			watcher_id INTEGER,
+			source TEXT NOT NULL,
+			type TEXT NOT NULL,
+			payload_json TEXT NOT NULL,
+			fingerprint TEXT NOT NULL,
+			severity INTEGER NOT NULL DEFAULT 0,
+			status TEXT NOT NULL,
+			dedupe_key TEXT NOT NULL DEFAULT '',
+			observed_at INTEGER NOT NULL
+		);
+		CREATE TABLE agentic_tasks (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			goal_id INTEGER REFERENCES standing_goals(id) ON DELETE SET NULL,
+			signal_id INTEGER REFERENCES goal_signals(id) ON DELETE SET NULL,
+			parent_id INTEGER REFERENCES agentic_tasks(id) ON DELETE SET NULL,
+			queue_task_id INTEGER,
+			title TEXT NOT NULL,
+			prompt TEXT NOT NULL,
+			status TEXT NOT NULL,
+			priority INTEGER NOT NULL DEFAULT 0,
+			risk_level TEXT NOT NULL,
+			autonomy_decision TEXT NOT NULL,
+			approval_request_id TEXT NOT NULL DEFAULT '',
+			verification_status TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			due_at INTEGER
+		);
+		INSERT INTO goal_signals(id, goal_id, watcher_id, source, type, payload_json, fingerprint, severity, status, dedupe_key, observed_at)
+		VALUES (1, NULL, NULL, 'ambient', 'ambient_boot_task', '{}', 'signal', 1, 'new', 'signal:1', 100);
+		INSERT INTO agentic_tasks(id, signal_id, title, prompt, status, priority, risk_level, autonomy_decision, approval_request_id, verification_status, created_at, updated_at)
+		VALUES
+			(1, 1, 'first', 'first', 'proposed', 0, 'low', 'observe', '', 'pending', 100, 100),
+			(2, 1, 'duplicate', 'duplicate', 'proposed', 0, 'low', 'observe', '', 'pending', 101, 101);
+	`); err != nil {
+		t.Fatalf("seed duplicate agentic_tasks signal_id: %v", err)
+	}
+
+	if err := InitSchema(db); err != nil {
+		t.Fatalf("InitSchema with duplicate agentic_tasks signal_id: %v", err)
+	}
+
+	var linked int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM agentic_tasks WHERE signal_id = 1`).Scan(&linked); err != nil {
+		t.Fatalf("count linked tasks: %v", err)
+	}
+	if linked != 1 {
+		t.Fatalf("signal_id duplicate cleanup kept %d links, want 1", linked)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO agentic_tasks(signal_id, title, prompt, status, priority, risk_level, autonomy_decision, approval_request_id, verification_status, created_at, updated_at)
+		VALUES (1, 'should fail', 'should fail', 'proposed', 0, 'low', 'observe', '', 'pending', 102, 102)
+	`); err == nil {
+		t.Fatal("duplicate signal_id insert unexpectedly succeeded")
+	}
+}
+
 func TestAgenticStore_InsertReadAgenticTask(t *testing.T) {
 	ctx := context.Background()
 	_, store := newTestStore(t)
