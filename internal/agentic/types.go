@@ -36,8 +36,11 @@ const (
 	PolicyDecisionDenied          = PolicyDecisionHardlineDenied
 	PolicyDecisionRequireApproval = PolicyDecisionApprovalRequired
 
-	ReceiptStatusStarted   = "started"
-	ReceiptStatusSucceeded = "succeeded"
+	ReceiptStatusStarted          = "started"
+	ReceiptStatusSucceeded        = "succeeded"
+	ReceiptStatusFailed           = "failed"
+	ReceiptStatusApprovalRequired = "approval_required"
+	ReceiptStatusDenied           = "denied"
 
 	VerificationVerdictPass = "pass"
 
@@ -145,19 +148,24 @@ type PolicyDecisionRecord struct {
 }
 
 type ToolActionReceipt struct {
-	ID                int64
-	TaskID            int64
-	ActorID           int64
-	PolicyDecisionID  int64
-	ApprovalRequestID string
-	ToolName          string
-	InputHash         string
-	OutputHash        string
-	OutputSummary     string
-	Status            string
-	Reversible        bool
-	StartedAt         time.Time
-	CompletedAt       sql.NullTime
+	ID                 int64
+	TaskID             int64
+	ActorID            int64
+	PolicyDecisionID   int64
+	ApprovalRequestID  string
+	ToolName           string
+	ToolCallID         string
+	InputHash          string
+	OutputHash         string
+	RawOutputHash      string
+	VisibleOutputHash  string
+	OutputSummary      string
+	Status             string
+	FailureReason      string
+	HookProvenanceJSON string
+	Reversible         bool
+	StartedAt          time.Time
+	CompletedAt        sql.NullTime
 }
 
 type VerificationRun struct {

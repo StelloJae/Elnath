@@ -17,11 +17,16 @@ type Store struct {
 }
 
 type ToolActionReceiptCompletion struct {
-	OutputHash    string
-	OutputSummary string
-	Status        string
-	Reversible    bool
-	CompletedAt   sql.NullTime
+	ApprovalRequestID  string
+	OutputHash         string
+	RawOutputHash      string
+	VisibleOutputHash  string
+	OutputSummary      string
+	Status             string
+	FailureReason      string
+	HookProvenanceJSON string
+	Reversible         bool
+	CompletedAt        sql.NullTime
 }
 
 func NewStore(db *sql.DB) *Store {
@@ -783,9 +788,9 @@ func (s *Store) CreateToolActionReceipt(ctx context.Context, receipt ToolActionR
 		receipt.StartedAt = nowTime()
 	}
 	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO tool_action_receipts(task_id, actor_id, policy_decision_id, approval_request_id, tool_name, input_hash, output_hash, output_summary, status, reversible, started_at, completed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, receipt.TaskID, nullableInt(receipt.ActorID), nullableInt(receipt.PolicyDecisionID), receipt.ApprovalRequestID, receipt.ToolName, receipt.InputHash, receipt.OutputHash, receipt.OutputSummary, receipt.Status, boolInt(receipt.Reversible), timeMillis(receipt.StartedAt), nullableSQLTime(receipt.CompletedAt))
+		INSERT INTO tool_action_receipts(task_id, actor_id, policy_decision_id, approval_request_id, tool_name, tool_call_id, input_hash, output_hash, raw_output_hash, visible_output_hash, output_summary, status, failure_reason, hook_provenance_json, reversible, started_at, completed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, receipt.TaskID, nullableInt(receipt.ActorID), nullableInt(receipt.PolicyDecisionID), receipt.ApprovalRequestID, receipt.ToolName, receipt.ToolCallID, receipt.InputHash, receipt.OutputHash, receipt.RawOutputHash, receipt.VisibleOutputHash, receipt.OutputSummary, receipt.Status, receipt.FailureReason, receipt.HookProvenanceJSON, boolInt(receipt.Reversible), timeMillis(receipt.StartedAt), nullableSQLTime(receipt.CompletedAt))
 	if err != nil {
 		return nil, err
 	}
@@ -803,9 +808,10 @@ func (s *Store) CompleteToolActionReceipt(ctx context.Context, id int64, complet
 	}
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE tool_action_receipts
-		SET output_hash = ?, output_summary = ?, status = ?, reversible = ?, completed_at = ?
+		SET approval_request_id = CASE WHEN ? <> '' THEN ? ELSE approval_request_id END,
+			output_hash = ?, raw_output_hash = ?, visible_output_hash = ?, output_summary = ?, status = ?, failure_reason = ?, hook_provenance_json = ?, reversible = ?, completed_at = ?
 		WHERE id = ?
-	`, completion.OutputHash, completion.OutputSummary, completion.Status, boolInt(completion.Reversible), nullableSQLTime(completedAt), id)
+	`, completion.ApprovalRequestID, completion.ApprovalRequestID, completion.OutputHash, completion.RawOutputHash, completion.VisibleOutputHash, completion.OutputSummary, completion.Status, completion.FailureReason, completion.HookProvenanceJSON, boolInt(completion.Reversible), nullableSQLTime(completedAt), id)
 	if err != nil {
 		return nil, err
 	}
@@ -818,9 +824,9 @@ func (s *Store) GetToolActionReceipt(ctx context.Context, id int64) (*ToolAction
 	var reversible int
 	var startedAt int64
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, task_id, actor_id, policy_decision_id, approval_request_id, tool_name, input_hash, output_hash, output_summary, status, reversible, started_at, completed_at
+		SELECT id, task_id, actor_id, policy_decision_id, approval_request_id, tool_name, tool_call_id, input_hash, output_hash, raw_output_hash, visible_output_hash, output_summary, status, failure_reason, hook_provenance_json, reversible, started_at, completed_at
 		FROM tool_action_receipts WHERE id = ?
-	`, id).Scan(&receipt.ID, &receipt.TaskID, &actorID, &decisionID, &receipt.ApprovalRequestID, &receipt.ToolName, &receipt.InputHash, &receipt.OutputHash, &receipt.OutputSummary, &receipt.Status, &reversible, &startedAt, &completedAt)
+	`, id).Scan(&receipt.ID, &receipt.TaskID, &actorID, &decisionID, &receipt.ApprovalRequestID, &receipt.ToolName, &receipt.ToolCallID, &receipt.InputHash, &receipt.OutputHash, &receipt.RawOutputHash, &receipt.VisibleOutputHash, &receipt.OutputSummary, &receipt.Status, &receipt.FailureReason, &receipt.HookProvenanceJSON, &reversible, &startedAt, &completedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -830,6 +836,28 @@ func (s *Store) GetToolActionReceipt(ctx context.Context, id int64) (*ToolAction
 	receipt.StartedAt = millisTime(startedAt)
 	receipt.CompletedAt = nullTimeFromMillis(completedAt)
 	return &receipt, nil
+}
+
+func (s *Store) FindReusableApprovalRequestID(ctx context.Context, taskID, actorID int64, toolName, inputHash string) (string, error) {
+	var approvalRequestID string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT r.approval_request_id
+		FROM tool_action_receipts r
+		JOIN approval_requests a ON a.id = CAST(r.approval_request_id AS INTEGER)
+		WHERE r.task_id = ?
+			AND COALESCE(r.actor_id, 0) = ?
+			AND r.tool_name = ?
+			AND r.input_hash = ?
+			AND r.status = ?
+			AND r.approval_request_id <> ''
+			AND a.decision = 'pending'
+		ORDER BY r.id
+		LIMIT 1
+	`, taskID, actorID, toolName, inputHash, ReceiptStatusApprovalRequired).Scan(&approvalRequestID)
+	if err != nil {
+		return "", err
+	}
+	return approvalRequestID, nil
 }
 
 func (s *Store) CreateVerificationRun(ctx context.Context, run VerificationRun) (*VerificationRun, error) {

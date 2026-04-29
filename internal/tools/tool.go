@@ -45,6 +45,12 @@ type Executor interface {
 	Execute(ctx context.Context, name string, params json.RawMessage) (*Result, error)
 }
 
+// ResultFinalizer observes the final model-visible tool result after post-tool
+// hooks have run. Executors can implement this to complete external ledgers.
+type ResultFinalizer interface {
+	FinalizeToolResult(ctx context.Context, name string, params json.RawMessage, result *Result) error
+}
+
 // Result holds the output of a tool execution.
 type Result struct {
 	Output  string
