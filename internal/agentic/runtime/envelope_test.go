@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -67,6 +68,30 @@ func TestDaemonEnvelopeIsIdempotentForQueueTask(t *testing.T) {
 	}
 	if first.AgenticTaskID() != second.AgenticTaskID() {
 		t.Fatalf("AgenticTaskID first=%d second=%d", first.AgenticTaskID(), second.AgenticTaskID())
+	}
+}
+
+func TestDaemonEnvelopeMarkRunningFailureReturnsError(t *testing.T) {
+	ctx := context.Background()
+	db, store := newTestStore(t)
+	envelope := NewDaemonEnvelope(store)
+	task := daemon.Task{ID: 8, Payload: "existing task"}
+
+	if _, err := envelope.Start(ctx, task); err != nil {
+		t.Fatalf("Start create: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		CREATE TRIGGER fail_agentic_task_update
+		BEFORE UPDATE ON agentic_tasks
+		BEGIN
+			SELECT RAISE(FAIL, 'mark running unavailable');
+		END;
+	`); err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+
+	if _, err := envelope.Start(ctx, task); err == nil || !strings.Contains(err.Error(), "mark running unavailable") {
+		t.Fatalf("Start existing error = %v, want mark running unavailable", err)
 	}
 }
 
