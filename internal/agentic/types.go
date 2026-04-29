@@ -12,6 +12,10 @@ const (
 	SignalStatusNew = "new"
 
 	TaskStatusPending         = "pending"
+	TaskStatusRunning         = "running"
+	TaskStatusSucceeded       = "succeeded"
+	TaskStatusFailed          = "failed"
+	TaskStatusCanceled        = "canceled"
 	RiskLevelLow              = "low"
 	RiskLevelMedium           = "medium"
 	PolicyDecisionObserve     = "observe"

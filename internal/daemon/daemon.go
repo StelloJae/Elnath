@@ -87,6 +87,7 @@ type Daemon struct {
 	wallClockTimeout  time.Duration
 	watchdogInterval  time.Duration
 	progressObserver  ProgressObserver
+	taskEnvelope      TaskEnvelope
 	scheduler         Scheduler
 	faultInjector     fault.Injector
 	faultScenario     *fault.Scenario
@@ -152,6 +153,10 @@ func (d *Daemon) WithProgressObserver(obs ProgressObserver) {
 	d.progressObserver = obs
 }
 
+func (d *Daemon) WithTaskEnvelope(envelope TaskEnvelope) {
+	d.taskEnvelope = envelope
+}
+
 func (d *Daemon) WithScheduler(s Scheduler) {
 	d.scheduler = s
 }
@@ -192,6 +197,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 	d.listener = ln
 	d.logger.Info("daemon started", "socket", d.socketPath, "workers", d.maxWorkers)
 	d.deliverExistingCompletions(ctx)
+	d.reconcileTaskEnvelope(ctx)
 
 	for i := 0; i < d.maxWorkers; i++ {
 		d.wg.Add(1)
@@ -426,6 +432,18 @@ func (d *Daemon) worker(ctx context.Context, id int) {
 			"principal_surface", principal.Surface,
 		)
 
+		var envelopeRun TaskEnvelopeRun
+		if d.taskEnvelope != nil {
+			envelopeRun, err = d.taskEnvelope.Start(ctx, *task)
+			if err != nil {
+				d.logger.Error("worker: task envelope start failed",
+					"worker_id", id,
+					"task_id", task.ID,
+					"error", err,
+				)
+			}
+		}
+
 		result, err := d.runTaskSafely(ctx, task)
 		if err != nil {
 			d.logger.Error("worker: task failed",
@@ -438,6 +456,10 @@ func (d *Daemon) worker(ctx context.Context, id int) {
 			)
 			if markErr := d.queue.MarkFailed(ctx, task.ID, err.Error()); markErr != nil {
 				d.logger.Error("worker: mark failed", "task_id", task.ID, "error", markErr)
+			} else if envelopeRun != nil {
+				if envelopeErr := envelopeRun.Fail(ctx); envelopeErr != nil {
+					d.logger.Error("worker: task envelope fail update", "task_id", task.ID, "error", envelopeErr)
+				}
 			}
 			d.deliver(ctx, task.ID)
 			continue
@@ -452,6 +474,10 @@ func (d *Daemon) worker(ctx context.Context, id int) {
 		)
 		if markErr := d.queue.MarkDone(ctx, task.ID, result.Result, result.Summary); markErr != nil {
 			d.logger.Error("worker: mark done", "task_id", task.ID, "error", markErr)
+		} else if envelopeRun != nil {
+			if envelopeErr := envelopeRun.Succeed(ctx); envelopeErr != nil {
+				d.logger.Error("worker: task envelope success update", "task_id", task.ID, "error", envelopeErr)
+			}
 		}
 		d.deliver(ctx, task.ID)
 	}
@@ -518,6 +544,19 @@ func (d *Daemon) deliverExistingCompletions(ctx context.Context) {
 			continue
 		}
 		d.deliver(ctx, task.ID)
+	}
+}
+
+func (d *Daemon) reconcileTaskEnvelope(ctx context.Context) {
+	if d.taskEnvelope == nil {
+		return
+	}
+	reconciler, ok := d.taskEnvelope.(TaskEnvelopeReconciler)
+	if !ok {
+		return
+	}
+	if err := reconciler.Reconcile(ctx); err != nil {
+		d.logger.Error("daemon: task envelope reconcile failed", "error", err)
 	}
 }
 

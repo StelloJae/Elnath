@@ -143,7 +143,7 @@ func (s *Store) CreateAgenticTask(ctx context.Context, task AgenticTask) (*Agent
 	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO agentic_tasks(goal_id, signal_id, parent_id, queue_task_id, title, prompt, status, priority, risk_level, autonomy_decision, approval_request_id, verification_status, created_at, updated_at, due_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, task.GoalID, nullableInt(task.SignalID), nullableInt(task.ParentID), nullableInt(task.QueueTaskID), task.Title, task.Prompt, task.Status, task.Priority, task.RiskLevel, task.AutonomyDecision, task.ApprovalRequestID, task.VerificationStatus, timeMillis(task.CreatedAt), timeMillis(task.UpdatedAt), nullableSQLTime(task.DueAt))
+	`, nullableInt(task.GoalID), nullableInt(task.SignalID), nullableInt(task.ParentID), nullableInt(task.QueueTaskID), task.Title, task.Prompt, task.Status, task.Priority, task.RiskLevel, task.AutonomyDecision, task.ApprovalRequestID, task.VerificationStatus, timeMillis(task.CreatedAt), timeMillis(task.UpdatedAt), nullableSQLTime(task.DueAt))
 	if err != nil {
 		return nil, err
 	}
@@ -156,15 +156,16 @@ func (s *Store) CreateAgenticTask(ctx context.Context, task AgenticTask) (*Agent
 
 func (s *Store) GetAgenticTask(ctx context.Context, id int64) (*AgenticTask, error) {
 	var task AgenticTask
-	var signalID, parentID, queueTaskID, dueAt sql.NullInt64
+	var goalID, signalID, parentID, queueTaskID, dueAt sql.NullInt64
 	var createdAt, updatedAt int64
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id, goal_id, signal_id, parent_id, queue_task_id, title, prompt, status, priority, risk_level, autonomy_decision, approval_request_id, verification_status, created_at, updated_at, due_at
 		FROM agentic_tasks WHERE id = ?
-	`, id).Scan(&task.ID, &task.GoalID, &signalID, &parentID, &queueTaskID, &task.Title, &task.Prompt, &task.Status, &task.Priority, &task.RiskLevel, &task.AutonomyDecision, &task.ApprovalRequestID, &task.VerificationStatus, &createdAt, &updatedAt, &dueAt)
+	`, id).Scan(&task.ID, &goalID, &signalID, &parentID, &queueTaskID, &task.Title, &task.Prompt, &task.Status, &task.Priority, &task.RiskLevel, &task.AutonomyDecision, &task.ApprovalRequestID, &task.VerificationStatus, &createdAt, &updatedAt, &dueAt)
 	if err != nil {
 		return nil, err
 	}
+	task.GoalID = intFromNull(goalID)
 	task.SignalID = intFromNull(signalID)
 	task.ParentID = intFromNull(parentID)
 	task.QueueTaskID = intFromNull(queueTaskID)
@@ -172,6 +173,55 @@ func (s *Store) GetAgenticTask(ctx context.Context, id int64) (*AgenticTask, err
 	task.UpdatedAt = millisTime(updatedAt)
 	task.DueAt = nullTimeFromMillis(dueAt)
 	return &task, nil
+}
+
+func (s *Store) GetAgenticTaskByQueueTaskID(ctx context.Context, queueTaskID int64) (*AgenticTask, error) {
+	var id int64
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id FROM agentic_tasks WHERE queue_task_id = ?
+	`, queueTaskID).Scan(&id)
+	if err != nil {
+		return nil, err
+	}
+	return s.GetAgenticTask(ctx, id)
+}
+
+func (s *Store) UpdateAgenticTaskStatus(ctx context.Context, id int64, status string) (*AgenticTask, error) {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE agentic_tasks SET status = ?, updated_at = MAX(?, updated_at + 1) WHERE id = ?
+	`, status, timeMillis(nowTime()), id)
+	if err != nil {
+		return nil, err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return nil, sql.ErrNoRows
+	}
+	return s.GetAgenticTask(ctx, id)
+}
+
+func (s *Store) ReconcileDaemonTaskStatuses(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE agentic_tasks
+		SET status = CASE (
+				SELECT status FROM task_queue WHERE task_queue.id = agentic_tasks.queue_task_id
+			)
+			WHEN 'done' THEN ?
+			WHEN 'failed' THEN ?
+			ELSE status
+			END,
+			updated_at = MAX((
+				SELECT updated_at FROM task_queue WHERE task_queue.id = agentic_tasks.queue_task_id
+			), updated_at + 1)
+		WHERE queue_task_id IS NOT NULL
+			AND status NOT IN (?, ?, ?)
+			AND EXISTS (
+				SELECT 1 FROM task_queue
+				WHERE task_queue.id = agentic_tasks.queue_task_id
+					AND task_queue.status IN ('done', 'failed')
+			)
+	`, TaskStatusSucceeded, TaskStatusFailed, TaskStatusSucceeded, TaskStatusFailed, TaskStatusCanceled)
+	return err
 }
 
 func (s *Store) CreateTaskEdge(ctx context.Context, edge TaskEdge) (*TaskEdge, error) {

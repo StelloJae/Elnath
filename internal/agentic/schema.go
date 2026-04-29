@@ -44,7 +44,7 @@ func InitSchema(db *sql.DB) error {
 		)`,
 		`CREATE TABLE IF NOT EXISTS agentic_tasks (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			goal_id INTEGER NOT NULL REFERENCES standing_goals(id) ON DELETE CASCADE,
+			goal_id INTEGER REFERENCES standing_goals(id) ON DELETE SET NULL,
 			signal_id INTEGER REFERENCES goal_signals(id) ON DELETE SET NULL,
 			parent_id INTEGER REFERENCES agentic_tasks(id) ON DELETE SET NULL,
 			queue_task_id INTEGER,
@@ -141,6 +141,7 @@ func InitSchema(db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_goal_signals_goal ON goal_signals(goal_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_agentic_tasks_goal ON agentic_tasks(goal_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_agentic_tasks_signal ON agentic_tasks(signal_id)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_agentic_tasks_queue_task_id ON agentic_tasks(queue_task_id) WHERE queue_task_id IS NOT NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_policy_decisions_task ON policy_decisions(task_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_tool_action_receipts_task ON tool_action_receipts(task_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_verification_runs_task ON verification_runs(task_id)`,
@@ -153,5 +154,103 @@ func InitSchema(db *sql.DB) error {
 			return fmt.Errorf("agentic: init schema: %w", err)
 		}
 	}
+	if err := ensureAgenticTaskGoalNullable(db); err != nil {
+		return err
+	}
+	if err := ensureAgenticTaskIndexes(db); err != nil {
+		return err
+	}
 	return nil
+}
+
+func ensureAgenticTaskGoalNullable(db *sql.DB) error {
+	notNull, err := columnNotNull(db, "agentic_tasks", "goal_id")
+	if err != nil {
+		return fmt.Errorf("agentic: inspect agentic_tasks.goal_id: %w", err)
+	}
+	if !notNull {
+		return nil
+	}
+	if _, err := db.Exec(`PRAGMA foreign_keys=OFF`); err != nil {
+		return fmt.Errorf("agentic: disable foreign keys for migration: %w", err)
+	}
+	defer db.Exec(`PRAGMA foreign_keys=ON`) //nolint:errcheck
+
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("agentic: migrate agentic_tasks: begin: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	stmts := []string{
+		`CREATE TABLE agentic_tasks_new (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			goal_id INTEGER REFERENCES standing_goals(id) ON DELETE SET NULL,
+			signal_id INTEGER REFERENCES goal_signals(id) ON DELETE SET NULL,
+			parent_id INTEGER REFERENCES agentic_tasks(id) ON DELETE SET NULL,
+			queue_task_id INTEGER,
+			title TEXT NOT NULL,
+			prompt TEXT NOT NULL,
+			status TEXT NOT NULL,
+			priority INTEGER NOT NULL DEFAULT 0,
+			risk_level TEXT NOT NULL,
+			autonomy_decision TEXT NOT NULL,
+			approval_request_id TEXT NOT NULL DEFAULT '',
+			verification_status TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			due_at INTEGER
+		)`,
+		`INSERT INTO agentic_tasks_new(id, goal_id, signal_id, parent_id, queue_task_id, title, prompt, status, priority, risk_level, autonomy_decision, approval_request_id, verification_status, created_at, updated_at, due_at)
+		 SELECT id, goal_id, signal_id, parent_id, queue_task_id, title, prompt, status, priority, risk_level, autonomy_decision, approval_request_id, verification_status, created_at, updated_at, due_at
+		 FROM agentic_tasks`,
+		`DROP TABLE agentic_tasks`,
+		`ALTER TABLE agentic_tasks_new RENAME TO agentic_tasks`,
+	}
+	for _, stmt := range stmts {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("agentic: migrate agentic_tasks: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("agentic: migrate agentic_tasks: commit: %w", err)
+	}
+	return nil
+}
+
+func ensureAgenticTaskIndexes(db *sql.DB) error {
+	for _, stmt := range []string{
+		`CREATE INDEX IF NOT EXISTS idx_agentic_tasks_goal ON agentic_tasks(goal_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_agentic_tasks_signal ON agentic_tasks(signal_id)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_agentic_tasks_queue_task_id ON agentic_tasks(queue_task_id) WHERE queue_task_id IS NOT NULL`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("agentic: ensure agentic_tasks index: %w", err)
+		}
+	}
+	return nil
+}
+
+func columnNotNull(db *sql.DB, table, column string) (bool, error) {
+	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notNull, pk int
+		var dflt any
+		if err := rows.Scan(&cid, &name, &ctype, &notNull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return notNull != 0, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	return false, fmt.Errorf("column %s.%s not found", table, column)
 }

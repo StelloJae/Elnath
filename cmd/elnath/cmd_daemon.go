@@ -15,6 +15,8 @@ import (
 
 	"github.com/stello/elnath/internal/agent"
 	"github.com/stello/elnath/internal/agent/reflection"
+	"github.com/stello/elnath/internal/agentic"
+	agenticruntime "github.com/stello/elnath/internal/agentic/runtime"
 	"github.com/stello/elnath/internal/ambient"
 	"github.com/stello/elnath/internal/config"
 	"github.com/stello/elnath/internal/conversation"
@@ -180,6 +182,7 @@ func cmdDaemonStart(ctx context.Context) error {
 	}
 
 	d := daemon.New(queue, cfg.Daemon.SocketPath, cfg.Daemon.MaxWorkers, rt.newDaemonTaskRunner(), app.Logger)
+	d.WithTaskEnvelope(agenticruntime.NewDaemonEnvelope(agentic.NewStore(db.Main)))
 	d.WithFaultGuardConfig(fault.GuardConfig{Enabled: cfg.FaultInjection.Enabled})
 	d.MarkFaultGuardChecked()
 	d.WithFaultInjection(inj, activeScenario)
