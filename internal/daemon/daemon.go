@@ -439,6 +439,7 @@ func (d *Daemon) worker(ctx context.Context, id int) {
 				d.logger.Error("worker: task envelope start failed",
 					"worker_id", id,
 					"task_id", task.ID,
+					"degraded_observability", true,
 					"error", err,
 				)
 			}
@@ -458,7 +459,12 @@ func (d *Daemon) worker(ctx context.Context, id int) {
 				d.logger.Error("worker: mark failed", "task_id", task.ID, "error", markErr)
 			} else if envelopeRun != nil {
 				if envelopeErr := envelopeRun.Fail(ctx); envelopeErr != nil {
-					d.logger.Error("worker: task envelope fail update", "task_id", task.ID, "error", envelopeErr)
+					d.logger.Error("worker: task envelope fail update",
+						"task_id", task.ID,
+						"agentic_task_id", envelopeRun.AgenticTaskID(),
+						"degraded_observability", true,
+						"error", envelopeErr,
+					)
 				}
 			}
 			d.deliver(ctx, task.ID)
@@ -476,7 +482,12 @@ func (d *Daemon) worker(ctx context.Context, id int) {
 			d.logger.Error("worker: mark done", "task_id", task.ID, "error", markErr)
 		} else if envelopeRun != nil {
 			if envelopeErr := envelopeRun.Succeed(ctx); envelopeErr != nil {
-				d.logger.Error("worker: task envelope success update", "task_id", task.ID, "error", envelopeErr)
+				d.logger.Error("worker: task envelope success update",
+					"task_id", task.ID,
+					"agentic_task_id", envelopeRun.AgenticTaskID(),
+					"degraded_observability", true,
+					"error", envelopeErr,
+				)
 			}
 		}
 		d.deliver(ctx, task.ID)
@@ -556,7 +567,7 @@ func (d *Daemon) reconcileTaskEnvelope(ctx context.Context) {
 		return
 	}
 	if err := reconciler.Reconcile(ctx); err != nil {
-		d.logger.Error("daemon: task envelope reconcile failed", "error", err)
+		d.logger.Error("daemon: task envelope reconcile failed", "degraded_observability", true, "error", err)
 	}
 }
 

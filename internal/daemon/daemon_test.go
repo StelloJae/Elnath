@@ -2,10 +2,12 @@ package daemon
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net"
 	"path/filepath"
 	"strconv"
@@ -76,6 +78,8 @@ func (m *mockScheduler) Run(ctx context.Context) error {
 type recordingTaskEnvelope struct {
 	mu           sync.Mutex
 	startErr     error
+	succeedErr   error
+	failErr      error
 	reconcileErr error
 	reconciled   bool
 	started      []int64
@@ -114,14 +118,14 @@ func (r *recordingTaskEnvelopeRun) Succeed(context.Context) error {
 	r.envelope.mu.Lock()
 	defer r.envelope.mu.Unlock()
 	r.envelope.succeeded = append(r.envelope.succeeded, r.taskID)
-	return nil
+	return r.envelope.succeedErr
 }
 
 func (r *recordingTaskEnvelopeRun) Fail(context.Context) error {
 	r.envelope.mu.Lock()
 	defer r.envelope.mu.Unlock()
 	r.envelope.failed = append(r.envelope.failed, r.taskID)
-	return nil
+	return r.envelope.failErr
 }
 
 func (e *recordingTaskEnvelope) snapshot() (started, succeeded, failed []int64) {
@@ -252,6 +256,15 @@ func sameIDs(got, want []int64) bool {
 
 func shortDaemonSocketPath(prefix string) string {
 	return filepath.Join("/tmp", prefix+"-"+strconv.FormatInt(time.Now().UnixNano(), 10)+".sock")
+}
+
+func assertLogContains(t *testing.T, logs string, want ...string) {
+	t.Helper()
+	for _, text := range want {
+		if !strings.Contains(logs, text) {
+			t.Fatalf("log output missing %q:\n%s", text, logs)
+		}
+	}
 }
 
 // --- tests ---
@@ -388,11 +401,13 @@ func TestDaemonTaskEnvelopeCreationFailureDoesNotBlockQueueCompletion(t *testing
 	}
 	var runnerCalled atomic.Bool
 	envelope := &recordingTaskEnvelope{startErr: errors.New("envelope unavailable")}
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
 	socketPath := shortDaemonSocketPath("elnath-envelope-start-failure")
 	d := New(q, socketPath, 1, func(context.Context, string, event.Sink) (TaskResult, error) {
 		runnerCalled.Store(true)
 		return TaskResult{Result: "ran after envelope failure", Summary: "ran after envelope failure"}, nil
-	}, nil)
+	}, logger)
 	d.WithTaskEnvelope(envelope)
 	startDaemonInstance(t, d, socketPath)
 
@@ -411,6 +426,65 @@ func TestDaemonTaskEnvelopeCreationFailureDoesNotBlockQueueCompletion(t *testing
 	if task.Result != "ran after envelope failure" {
 		t.Fatalf("task result = %q, want runner result", task.Result)
 	}
+	assertLogContains(t, logs.String(), "worker: task envelope start failed", "degraded_observability=true", "envelope unavailable")
+}
+
+func TestDaemonTaskEnvelopeSuccessUpdateFailureDoesNotCorruptQueueCompletion(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+	envelope := &recordingTaskEnvelope{succeedErr: errors.New("success mirror unavailable")}
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	socketPath := shortDaemonSocketPath("elnath-envelope-success-update-failure")
+	d := New(q, socketPath, 1, mockTaskRunner{text: "hello from mock"}.run, logger)
+	d.WithTaskEnvelope(envelope)
+	startDaemonInstance(t, d, socketPath)
+
+	resp := sendIPC(t, socketPath, IPCRequest{
+		Command: "submit",
+		Payload: mustMarshalString(t, "tell me a joke"),
+	})
+	if !resp.OK {
+		t.Fatalf("submit: not OK: %s", resp.Err)
+	}
+	taskID := extractTaskID(t, resp)
+	task := pollTaskStatus(t, q, taskID, StatusDone, 5*time.Second)
+	if task.Result != "hello from mock" {
+		t.Fatalf("task result = %q, want runner result", task.Result)
+	}
+	assertLogContains(t, logs.String(), "worker: task envelope success update", "degraded_observability=true", "success mirror unavailable")
+}
+
+func TestDaemonTaskEnvelopeFailureUpdateFailureDoesNotCorruptQueueFailure(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+	envelope := &recordingTaskEnvelope{failErr: errors.New("failure mirror unavailable")}
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	socketPath := shortDaemonSocketPath("elnath-envelope-failure-update-failure")
+	d := New(q, socketPath, 1, mockTaskRunner{err: errors.New("runner boom")}.run, logger)
+	d.WithTaskEnvelope(envelope)
+	startDaemonInstance(t, d, socketPath)
+
+	resp := sendIPC(t, socketPath, IPCRequest{
+		Command: "submit",
+		Payload: mustMarshalString(t, "break"),
+	})
+	if !resp.OK {
+		t.Fatalf("submit: not OK: %s", resp.Err)
+	}
+	taskID := extractTaskID(t, resp)
+	task := pollTaskStatus(t, q, taskID, StatusFailed, 5*time.Second)
+	if !strings.Contains(task.Result, "runner boom") {
+		t.Fatalf("task result = %q, want runner boom", task.Result)
+	}
+	assertLogContains(t, logs.String(), "worker: task envelope fail update", "degraded_observability=true", "failure mirror unavailable")
 }
 
 func TestDaemonTaskEnvelopeReconcileFailureDoesNotBlockQueueCompletion(t *testing.T) {
@@ -420,8 +494,10 @@ func TestDaemonTaskEnvelopeReconcileFailureDoesNotBlockQueueCompletion(t *testin
 		t.Fatalf("NewQueue: %v", err)
 	}
 	envelope := &recordingTaskEnvelope{reconcileErr: errors.New("reconcile unavailable")}
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
 	socketPath := shortDaemonSocketPath("elnath-envelope-reconcile-failure")
-	d := New(q, socketPath, 1, mockTaskRunner{text: "hello from mock"}.run, nil)
+	d := New(q, socketPath, 1, mockTaskRunner{text: "hello from mock"}.run, logger)
 	d.WithTaskEnvelope(envelope)
 	startDaemonInstance(t, d, socketPath)
 
@@ -440,6 +516,7 @@ func TestDaemonTaskEnvelopeReconcileFailureDoesNotBlockQueueCompletion(t *testin
 	if !envelope.wasReconciled() {
 		t.Fatal("task envelope reconcile was not called")
 	}
+	assertLogContains(t, logs.String(), "daemon: task envelope reconcile failed", "degraded_observability=true", "reconcile unavailable")
 }
 
 func TestDaemonSubmitDeduplicatesByPrincipalAndPrompt(t *testing.T) {
