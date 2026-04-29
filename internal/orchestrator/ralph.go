@@ -2,11 +2,15 @@ package orchestrator
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
 
 	"github.com/stello/elnath/internal/agent"
+	"github.com/stello/elnath/internal/agentic"
 	"github.com/stello/elnath/internal/event"
 	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
@@ -101,7 +105,7 @@ func (w *RalphWorkflow) Run(ctx context.Context, input WorkflowInput) (*Workflow
 		lastFinishReason = result.FinishReason
 		finalResult = result
 
-		verdict, feedback, verifyUsage, err := w.verify(ctx, input, result)
+		verdict, feedback, verifyUsage, err := w.verify(ctx, input, result, a)
 		if err != nil {
 			return nil, fmt.Errorf("ralph workflow verify attempt %d: %w", a, err)
 		}
@@ -231,7 +235,7 @@ func (w *RalphWorkflow) Run(ctx context.Context, input WorkflowInput) (*Workflow
 	return finalResult, nil
 }
 
-func (w *RalphWorkflow) verify(ctx context.Context, input WorkflowInput, result *WorkflowResult) (VerifyVerdict, string, llm.UsageStats, error) {
+func (w *RalphWorkflow) verify(ctx context.Context, input WorkflowInput, result *WorkflowResult, attempt int) (VerifyVerdict, string, llm.UsageStats, error) {
 	evidence := buildVerificationEvidence(result.Messages)
 
 	verifyPrompt := fmt.Sprintf(`You are an independent quality reviewer evaluating task completion.
@@ -284,17 +288,83 @@ Your response must start with PASS, NEEDS_REVISION, INCONCLUSIVE, or FAIL.`, inp
 	}
 
 	upper := strings.ToUpper(verdict)
+	parsed := VerdictNeedsRevision
+	feedback := verdict
 	switch {
 	case strings.HasPrefix(upper, "PASS"):
-		return VerdictPass, "", verifyResult.Usage, nil
+		parsed = VerdictPass
+		feedback = ""
 	case strings.HasPrefix(upper, "NEEDS_REVISION"):
-		return VerdictNeedsRevision, extractFeedback(verdict), verifyResult.Usage, nil
+		parsed = VerdictNeedsRevision
+		feedback = extractFeedback(verdict)
 	case strings.HasPrefix(upper, "INCONCLUSIVE"):
-		return VerdictInconclusive, extractFeedback(verdict), verifyResult.Usage, nil
+		parsed = VerdictInconclusive
+		feedback = extractFeedback(verdict)
 	case strings.HasPrefix(upper, "FAIL"):
-		return VerdictFail, extractFeedback(verdict), verifyResult.Usage, nil
+		parsed = VerdictFail
+		feedback = extractFeedback(verdict)
 	default:
-		return VerdictNeedsRevision, verdict, verifyResult.Usage, nil
+		parsed = VerdictNeedsRevision
+		feedback = verdict
+	}
+	if err := recordVerificationRun(ctx, input, result, evidence, attempt, parsed, feedback); err != nil {
+		w.logger.Error("ralph workflow: verification run persistence failed",
+			"degraded_observability", true,
+			"task_id", input.AgenticTaskID,
+			"attempt", attempt,
+			"error", err,
+		)
+	}
+	return parsed, feedback, verifyResult.Usage, nil
+}
+
+func recordVerificationRun(ctx context.Context, input WorkflowInput, result *WorkflowResult, evidence string, attempt int, verdict VerifyVerdict, reason string) error {
+	if input.VerificationRecorder == nil {
+		return nil
+	}
+	if input.AgenticTaskID == 0 {
+		return fmt.Errorf("record verification run: missing agentic task id")
+	}
+	criteriaJSON, err := json.Marshal(map[string]any{
+		"workflow":       "ralph",
+		"prompt_version": "ralph-verifier-v1",
+		"criteria":       []string{"correctness", "completeness", "verification"},
+	})
+	if err != nil {
+		return fmt.Errorf("record verification run: criteria json: %w", err)
+	}
+	hash := sha256.Sum256([]byte(evidence))
+	evidenceRefsJSON, err := json.Marshal(map[string]any{
+		"workflow":      "ralph",
+		"attempt":       attempt,
+		"message_count": len(result.Messages),
+		"evidence_hash": "sha256:" + hex.EncodeToString(hash[:]),
+	})
+	if err != nil {
+		return fmt.Errorf("record verification run: evidence refs json: %w", err)
+	}
+	_, err = input.VerificationRecorder.RecordVerificationRun(ctx, agentic.VerificationRun{
+		TaskID:           input.AgenticTaskID,
+		VerifierActorID:  input.VerifierActorID,
+		CriteriaJSON:     string(criteriaJSON),
+		EvidenceRefsJSON: string(evidenceRefsJSON),
+		Verdict:          agenticVerdict(verdict),
+		Reason:           reason,
+	})
+	if err != nil {
+		return fmt.Errorf("record verification run: %w", err)
+	}
+	return nil
+}
+
+func agenticVerdict(verdict VerifyVerdict) string {
+	switch verdict {
+	case VerdictPass:
+		return agentic.VerificationVerdictPassed
+	case VerdictInconclusive:
+		return agentic.VerificationVerdictInconclusive
+	default:
+		return agentic.VerificationVerdictFailed
 	}
 }
 

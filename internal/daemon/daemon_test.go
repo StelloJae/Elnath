@@ -388,6 +388,46 @@ func TestDaemonTaskEnvelopeDoesNotChangeQueueCompletion(t *testing.T) {
 	}
 }
 
+func TestDaemonTaskEnvelopePassesAgenticTaskIDToRunner(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+	envelope := &recordingTaskEnvelope{}
+	seenAgenticTaskID := make(chan int64, 1)
+	socketPath := shortDaemonSocketPath("elnath-envelope-context")
+	d := New(q, socketPath, 1, func(ctx context.Context, _ string, _ event.Sink) (TaskResult, error) {
+		id, ok := AgenticTaskIDFromContext(ctx)
+		if !ok {
+			return TaskResult{}, errors.New("missing agentic task id")
+		}
+		seenAgenticTaskID <- id
+		return TaskResult{Result: "ok", Summary: "ok"}, nil
+	}, nil)
+	d.WithTaskEnvelope(envelope)
+	startDaemonInstance(t, d, socketPath)
+
+	resp := sendIPC(t, socketPath, IPCRequest{
+		Command: "submit",
+		Payload: mustMarshalString(t, "tell me a joke"),
+	})
+	if !resp.OK {
+		t.Fatalf("submit: not OK: %s", resp.Err)
+	}
+	taskID := extractTaskID(t, resp)
+	pollTaskStatus(t, q, taskID, StatusDone, 5*time.Second)
+
+	select {
+	case got := <-seenAgenticTaskID:
+		if got != taskID {
+			t.Fatalf("agentic task id = %d, want queue task id %d", got, taskID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runner did not observe agentic task id")
+	}
+}
+
 func TestDaemonTaskEnvelopeFailureMarksFailed(t *testing.T) {
 	db := openTestDB(t)
 	q, err := NewQueue(db)

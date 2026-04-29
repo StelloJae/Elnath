@@ -5,6 +5,7 @@ import (
 	"log/slog"
 
 	"github.com/stello/elnath/internal/agent"
+	"github.com/stello/elnath/internal/agentic"
 	"github.com/stello/elnath/internal/event"
 	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
@@ -26,9 +27,17 @@ type WorkflowInput struct {
 	Tools    *tools.Registry
 	Provider llm.Provider
 	Config   WorkflowConfig
-	Sink     event.Sink   // typed event sink (use event.NopSink{} for silent)
-	Extra    interface{}  // workflow-specific dependencies (e.g. *ResearchDeps)
+	Sink     event.Sink  // typed event sink (use event.NopSink{} for silent)
+	Extra    interface{} // workflow-specific dependencies (e.g. *ResearchDeps)
 	Learning *LearningDeps
+
+	AgenticTaskID        int64
+	VerifierActorID      int64
+	VerificationRecorder AgenticVerificationRecorder
+}
+
+type AgenticVerificationRecorder interface {
+	RecordVerificationRun(ctx context.Context, run agentic.VerificationRun) (*agentic.VerificationRun, error)
 }
 
 type LearningDeps struct {

@@ -1,11 +1,15 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/stello/elnath/internal/agentic"
 	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/tools"
@@ -45,10 +49,10 @@ func TestRalphWorkflow_RetryThenPass(t *testing.T) {
 	ctx := context.Background()
 
 	provider := newTestProvider(
-		"Incomplete answer",                          // attempt 1
-		"NEEDS_REVISION: missing error handling",     // verify 1 → needs revision
-		"Complete answer with error handling",        // attempt 2
-		"PASS",                                       // verify 2 → pass
+		"Incomplete answer",                      // attempt 1
+		"NEEDS_REVISION: missing error handling", // verify 1 → needs revision
+		"Complete answer with error handling",    // attempt 2
+		"PASS",                                   // verify 2 → pass
 	)
 
 	wf := NewRalphWorkflow()
@@ -73,6 +77,137 @@ func TestRalphWorkflow_RetryThenPass(t *testing.T) {
 	wantTokens := 4 * 10
 	if result.Usage.InputTokens != wantTokens {
 		t.Errorf("input tokens = %d, want %d", result.Usage.InputTokens, wantTokens)
+	}
+}
+
+func TestExistingVerifierBehaviorUnchanged(t *testing.T) {
+	ctx := context.Background()
+	provider := newTestProvider(
+		"Complete answer with all details",
+		"PASS",
+	)
+
+	wf := NewRalphWorkflow()
+	input := testInput("Explain goroutines", provider)
+
+	result, err := wf.Run(ctx, input)
+	if err != nil {
+		t.Fatalf("RalphWorkflow.Run: %v", err)
+	}
+	if result.Workflow != "ralph" {
+		t.Fatalf("workflow = %q, want ralph", result.Workflow)
+	}
+	if provider.CallCount() != 2 {
+		t.Fatalf("provider calls = %d, want 2", provider.CallCount())
+	}
+}
+
+func TestRalph_PersistsVerificationRunOnPass(t *testing.T) {
+	ctx := context.Background()
+	provider := newTestProvider(
+		"Complete answer with test evidence",
+		"PASS",
+	)
+	recorder := &recordingVerificationRecorder{}
+
+	input := testInput("verify this change", provider)
+	input.AgenticTaskID = 42
+	input.VerificationRecorder = recorder
+
+	if _, err := NewRalphWorkflow().Run(ctx, input); err != nil {
+		t.Fatalf("RalphWorkflow.Run: %v", err)
+	}
+
+	if len(recorder.runs) != 1 {
+		t.Fatalf("recorded runs = %d, want 1", len(recorder.runs))
+	}
+	run := recorder.runs[0]
+	if run.TaskID != 42 || run.Verdict != agentic.VerificationVerdictPassed || run.CriteriaJSON == "" || run.EvidenceRefsJSON == "" {
+		t.Fatalf("unexpected recorded run: %+v", run)
+	}
+}
+
+func TestRalph_PersistsVerificationRunOnNeedsRevision(t *testing.T) {
+	ctx := context.Background()
+	provider := newTestProvider(
+		"Incomplete answer",
+		"NEEDS_REVISION: missing tests",
+		"Complete answer with tests",
+		"PASS",
+	)
+	recorder := &recordingVerificationRecorder{}
+
+	input := testInput("verify this change", provider)
+	input.AgenticTaskID = 42
+	input.VerificationRecorder = recorder
+
+	if _, err := NewRalphWorkflow().Run(ctx, input); err != nil {
+		t.Fatalf("RalphWorkflow.Run: %v", err)
+	}
+
+	if len(recorder.runs) != 2 {
+		t.Fatalf("recorded runs = %d, want 2", len(recorder.runs))
+	}
+	if recorder.runs[0].Verdict != agentic.VerificationVerdictFailed || recorder.runs[0].Reason != "missing tests" {
+		t.Fatalf("unexpected first run: %+v", recorder.runs[0])
+	}
+	if recorder.runs[1].Verdict != agentic.VerificationVerdictPassed {
+		t.Fatalf("unexpected second run: %+v", recorder.runs[1])
+	}
+}
+
+func TestRalph_PersistsVerificationRunOnInconclusive(t *testing.T) {
+	ctx := context.Background()
+	provider := newTestProvider(
+		"Inline answer",
+		"INCONCLUSIVE: no runnable evidence",
+		"Inline answer again",
+		"INCONCLUSIVE: still no runnable evidence",
+	)
+	recorder := &recordingVerificationRecorder{}
+
+	input := testInput("update cmd/foo.go to export Bar", provider)
+	input.AgenticTaskID = 42
+	input.VerificationRecorder = recorder
+
+	_, err := NewRalphWorkflow().Run(ctx, input)
+	if err == nil {
+		t.Fatal("expected inconclusive workflow error")
+	}
+	if len(recorder.runs) != 2 {
+		t.Fatalf("recorded runs = %d, want 2", len(recorder.runs))
+	}
+	if recorder.runs[0].Verdict != agentic.VerificationVerdictInconclusive || recorder.runs[0].Reason != "no runnable evidence" {
+		t.Fatalf("unexpected first run: %+v", recorder.runs[0])
+	}
+}
+
+func TestRalph_VerificationRecorderFailureIsObservableButDoesNotChangeOutcome(t *testing.T) {
+	ctx := context.Background()
+	provider := newTestProvider(
+		"Complete answer with all details",
+		"PASS",
+	)
+	recorder := &recordingVerificationRecorder{err: errors.New("ledger unavailable")}
+	var logs bytes.Buffer
+
+	input := testInput("verify this change", provider)
+	input.AgenticTaskID = 42
+	input.VerificationRecorder = recorder
+
+	wf := NewRalphWorkflow()
+	wf.logger = slog.New(slog.NewTextHandler(&logs, nil))
+	result, err := wf.Run(ctx, input)
+	if err != nil {
+		t.Fatalf("RalphWorkflow.Run: %v", err)
+	}
+	if result.Workflow != "ralph" {
+		t.Fatalf("workflow = %q, want ralph", result.Workflow)
+	}
+	for _, want := range []string{"verification run persistence failed", "degraded_observability=true", "ledger unavailable"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Fatalf("logs missing %q:\n%s", want, logs.String())
+		}
 	}
 }
 
@@ -436,6 +571,20 @@ func ralphLearningInput(msg string, provider llm.Provider, store *learning.Store
 	return input
 }
 
+type recordingVerificationRecorder struct {
+	runs []agentic.VerificationRun
+	err  error
+}
+
+func (r *recordingVerificationRecorder) RecordVerificationRun(_ context.Context, run agentic.VerificationRun) (*agentic.VerificationRun, error) {
+	if r.err != nil {
+		return nil, r.err
+	}
+	run.ID = int64(len(r.runs) + 1)
+	r.runs = append(r.runs, run)
+	return &run, nil
+}
+
 func assertRetryLesson(t *testing.T, store *learning.Store, wantSubstring string, wantRetry bool) {
 	t.Helper()
 	lessons, err := store.List()
@@ -537,7 +686,7 @@ func TestRalphVerifyPromptUsesExecutionEvidence(t *testing.T) {
 		},
 	}
 
-	verdict, _, _, err := wf.verify(context.Background(), input, result)
+	verdict, _, _, err := wf.verify(context.Background(), input, result, 1)
 	if err != nil {
 		t.Fatalf("verify: %v", err)
 	}
@@ -576,7 +725,7 @@ func TestRalphWorkflow_InconclusiveAcceptsUnverifiedInline(t *testing.T) {
 	// no tool_use → guard pass → immediate accept as unverified_inline.
 	inlineAnswer := "Here's the snippet:\n```python\nclass TokenBucket:\n    def __init__(self):\n        self.rate = 1.0\n```"
 	provider := newTestProvider(
-		inlineAnswer,                                      // attempt 1
+		inlineAnswer, // attempt 1
 		"INCONCLUSIVE: inline answer present, no tool_use", // verify 1
 	)
 
@@ -605,9 +754,9 @@ func TestRalphWorkflow_InconclusiveGuardBlocksFileModTask(t *testing.T) {
 	inlineAnswer1 := "```go\nfunc Update() {}\n```"
 	inlineAnswer2 := "```go\nfunc UpdateV2() {}\n```"
 	provider := newTestProvider(
-		inlineAnswer1,                    // attempt 1
-		"INCONCLUSIVE: no file ops yet",  // verify 1
-		inlineAnswer2,                    // attempt 2 (retry)
+		inlineAnswer1,                     // attempt 1
+		"INCONCLUSIVE: no file ops yet",   // verify 1
+		inlineAnswer2,                     // attempt 2 (retry)
 		"INCONCLUSIVE: still no file ops", // verify 2 (retry exhausted, guard still fails)
 	)
 
@@ -714,13 +863,13 @@ func TestCanAcceptUnverifiedInline(t *testing.T) {
 
 func TestScanInlineArtifacts(t *testing.T) {
 	tests := []struct {
-		name            string
-		input           string
-		wantCodeBlocks  int
-		wantCodeLines   int
-		wantCfgBlocks   int
-		wantCfgLines    int
-		wantConfigLang  string
+		name           string
+		input          string
+		wantCodeBlocks int
+		wantCodeLines  int
+		wantCfgBlocks  int
+		wantCfgLines   int
+		wantConfigLang string
 	}{
 		{
 			name:           "empty",
