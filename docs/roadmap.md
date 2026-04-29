@@ -12,7 +12,7 @@ The central implementation principle is:
 
 Elnath already has a strong execution substrate: agent loop, tool registry, daemon queue, workflow router, fixed workflows, planner/subagent execution, verification loop, research loop, static scheduling, approval store, audit trail, outcomes, and wiki memory.
 
-As of 2026-04-29, the first durable agentic foundation is implemented: `internal/agentic/{schema,store,types,test}.go` exists, runtime startup initializes the agentic schema, daemon queue tasks are linked to durable `agentic_tasks` envelopes, scheduler/ambient/manual submit surfaces can record observe-only `goal_signals`, and explicit triage can convert or link signals into `agentic_tasks` without execution. The roadmap now starts from that foundation instead of treating it as future work.
+As of 2026-04-29, the first durable agentic foundation is implemented: `internal/agentic/{schema,store,types,test}.go` exists, runtime startup initializes the agentic schema, daemon queue tasks are linked to durable `agentic_tasks` envelopes, scheduler/ambient/manual submit surfaces can record observe-only `goal_signals`, explicit triage can convert or link signals into `agentic_tasks` without execution, and a standalone policy evaluator can persist durable `policy_decisions`. The roadmap now starts from that foundation instead of treating it as future work.
 
 Hermes Agent moved from the v0.8/v0.9 baseline to v0.10/v0.11 and an active post-v0.11 `main` branch. The Elnath takeaway is not to copy Hermes wholesale. The useful deltas are: ToolGateway-style execution routing, hardline-vs-approval policy separation, plugin/hook lifecycle points, webhook/cron signal hardening, bounded delegation, receipt-backed tool results, and verification-gated memory.
 
@@ -33,9 +33,9 @@ standing goal
 → follow-up scheduler
 ```
 
-## 2. Current Agentic Readiness: 66/100
+## 2. Current Agentic Readiness: 70/100
 
-Elnath is currently a strong workflow runner and tool-using agent platform with an initial durable agentic control-plane schema, observe-only daemon task envelope linkage, an observe-only signal ledger bridge, and explicit signal-to-agentic-task triage. It is not yet a complete standing-goal-driven autonomous system because triaged tasks are not automatically enqueued or executed, and tool execution, approvals, verification, memory, and follow-ups are not yet forced through the agentic runtime.
+Elnath is currently a strong workflow runner and tool-using agent platform with an initial durable agentic control-plane schema, observe-only daemon task envelope linkage, an observe-only signal ledger bridge, explicit signal-to-agentic-task triage, and standalone autonomy policy decision records. It is not yet a complete standing-goal-driven autonomous system because triaged tasks are not automatically enqueued or executed, and tool execution, approvals, verification, memory, and follow-ups are not yet forced through the agentic runtime.
 
 Implemented foundations:
 
@@ -62,6 +62,7 @@ Implemented foundations:
 | Agentic daemon envelope | `internal/agentic/runtime/envelope.go` | Links existing daemon queue tasks to durable `agentic_tasks` records and mirrors coarse lifecycle state. |
 | Agentic signal bridge | `internal/agentic/signals/bridge.go` | Records scheduler, ambient, and manual-submit observations as observe-only `goal_signals` with watcher cursors. |
 | Agentic signal triage | `internal/agentic/triage/triage.go` | Explicitly converts or links `goal_signals` into durable `agentic_tasks` without daemon queue enqueue. |
+| Agentic policy evaluator | `internal/agentic/policy/policy.go` | Standalone evaluator that records durable policy decisions without runtime enforcement. |
 | Hook surface | `internal/agent/hooks.go` | Pre/post tool and LLM lifecycle hooks; useful base for receipt-aware gateway hooks. |
 
 ## 3. Workflow vs Agentic Gap
@@ -105,7 +106,7 @@ followups
 
 Still missing as runtime behavior:
 
-- Policy engine with explicit `auto_allowed`, `approval_required`, `hardline_denied`, and `observe_only` outcomes.
+- Runtime policy enforcement that gates tool execution on recorded decisions.
 - Approval bridge that links user decisions to task/action/risk/policy provenance.
 - ToolGateway that all agentic tool calls must pass through.
 - Receipt enforcement before task completion.
@@ -114,12 +115,13 @@ Still missing as runtime behavior:
 - Follow-up scheduler with dedupe/cooldown/fanout limits.
 - Durable actor runtime for planner/executor/verifier/critic/memory/scheduler roles.
 
-Non-claims after PR1, PR2, PR3, and PR4:
+Non-claims after PR1, PR2, PR3, PR4, and PR5:
 
 - No autonomous runtime behavior is enabled.
 - Signals are not enqueued into daemon work.
 - No ToolGateway is active.
 - No policy enforcement is active.
+- Policy decisions are recorded only when explicitly evaluated and do not yet gate tool execution.
 - No approval bridge is active.
 - No receipt enforcement is active.
 - No verifier gate is active.
@@ -383,20 +385,22 @@ Status: shipped explicit signal-to-agentic-task triage; do not enqueue daemon wo
 
 #### PR5: `feat(policy): add autonomy decisions`
 
-Status: next dependency-ready planning/fact-pack target.
+Status: shipped standalone policy decision foundation; do not enforce policy at runtime without later PRs.
 
 - Purpose: Decide auto/approval/observe/hardline-deny/escalate before execution.
 - Current related files: `internal/agent/permission.go`, `internal/config/config.go`.
-- Files to modify: `internal/agent/permission.go` if needed for autonomous fail-closed behavior.
-- Files to add: `internal/agentic/policy/policy.go`, `internal/agentic/policy/risk.go`, `internal/agentic/policy/store.go`.
-- Core implementation: Persist `policy_decisions`; normalize command/input text before classification; separate `hardline_denied` from `approval_required`.
+- Files modified: `internal/agentic/types.go`.
+- Files added: `internal/agentic/policy/policy.go`, `internal/agentic/policy/policy_test.go`.
+- Core implementation: Persist `policy_decisions`; normalize command/input text before classification; separate `hardline_denied` from `approval_required`; keep evaluator standalone.
 - Dependency: PR2, PR4.
 - Completion criteria: Read-only actions can be auto-approved; mutating actions require approval unless explicit policy permits; hardline actions are blocked even in bypass/autonomous contexts.
-- Test criteria: Policy table tests; no-prompter autonomous mutating action is not silently allowed; hardline bash/git/filesystem examples are denied.
+- Test criteria: Policy table tests; deterministic evaluator tests; no-side-effect tests; hardline bash/git/filesystem examples are denied.
 - Agentic capability: Elnath gains explicit autonomy boundaries.
 - Hermes update: mirror the useful split from Hermes approval hardening, but keep the rule set Elnath-local and testable.
 
 #### PR6: `feat(approvals): link approvals to agentic tasks`
+
+Status: next dependency-ready planning/fact-pack target.
 
 - Purpose: Make HITL approval provenance complete.
 - Current related files: `internal/daemon/approval_store.go`, `internal/telegram/shell.go`.
@@ -547,7 +551,7 @@ Next-task selection:
 Default current next PR:
 
 ```text
-PR5: feat(policy): add autonomy decisions
+PR6: feat(approvals): link approvals to agentic tasks
 ```
 
 Autonomy rules for Codex/Elnath work:
