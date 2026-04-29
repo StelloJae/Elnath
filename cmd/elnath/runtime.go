@@ -13,6 +13,7 @@ import (
 
 	"github.com/stello/elnath/internal/agent"
 	"github.com/stello/elnath/internal/agent/reflection"
+	"github.com/stello/elnath/internal/agentic"
 	"github.com/stello/elnath/internal/audit"
 	"github.com/stello/elnath/internal/config"
 	"github.com/stello/elnath/internal/conversation"
@@ -352,6 +353,9 @@ func buildExecutionRuntime(
 ) (*executionRuntime, error) {
 	if err := conversation.InitSchema(db.Main); err != nil {
 		return nil, fmt.Errorf("init conversation schema: %w", err)
+	}
+	if err := agentic.InitSchema(db.Main); err != nil {
+		return nil, fmt.Errorf("init agentic schema: %w", err)
 	}
 
 	historyStore := conversation.NewHistoryStore(db.Main)

@@ -1,0 +1,157 @@
+package agentic
+
+import (
+	"database/sql"
+	"fmt"
+)
+
+func InitSchema(db *sql.DB) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS standing_goals (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			title TEXT NOT NULL,
+			description TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL,
+			priority INTEGER NOT NULL DEFAULT 0,
+			autonomy_level TEXT NOT NULL,
+			risk_budget TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS signal_watchers (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			goal_id INTEGER NOT NULL REFERENCES standing_goals(id) ON DELETE CASCADE,
+			source TEXT NOT NULL,
+			config_json TEXT NOT NULL DEFAULT '{}',
+			enabled INTEGER NOT NULL DEFAULT 1,
+			interval_s INTEGER NOT NULL DEFAULT 0,
+			last_cursor TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS goal_signals (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			goal_id INTEGER NOT NULL REFERENCES standing_goals(id) ON DELETE CASCADE,
+			watcher_id INTEGER REFERENCES signal_watchers(id) ON DELETE SET NULL,
+			source TEXT NOT NULL,
+			type TEXT NOT NULL,
+			payload_json TEXT NOT NULL,
+			fingerprint TEXT NOT NULL,
+			severity INTEGER NOT NULL DEFAULT 0,
+			status TEXT NOT NULL,
+			dedupe_key TEXT NOT NULL DEFAULT '',
+			observed_at INTEGER NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS agentic_tasks (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			goal_id INTEGER NOT NULL REFERENCES standing_goals(id) ON DELETE CASCADE,
+			signal_id INTEGER REFERENCES goal_signals(id) ON DELETE SET NULL,
+			parent_id INTEGER REFERENCES agentic_tasks(id) ON DELETE SET NULL,
+			queue_task_id INTEGER,
+			title TEXT NOT NULL,
+			prompt TEXT NOT NULL,
+			status TEXT NOT NULL,
+			priority INTEGER NOT NULL DEFAULT 0,
+			risk_level TEXT NOT NULL,
+			autonomy_decision TEXT NOT NULL,
+			approval_request_id TEXT NOT NULL DEFAULT '',
+			verification_status TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			due_at INTEGER
+		)`,
+		`CREATE TABLE IF NOT EXISTS task_edges (
+			parent_id INTEGER NOT NULL REFERENCES agentic_tasks(id) ON DELETE CASCADE,
+			child_id INTEGER NOT NULL REFERENCES agentic_tasks(id) ON DELETE CASCADE,
+			edge_type TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			UNIQUE(parent_id, child_id, edge_type)
+		)`,
+		`CREATE TABLE IF NOT EXISTS agent_actors (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			task_id INTEGER NOT NULL REFERENCES agentic_tasks(id) ON DELETE CASCADE,
+			role TEXT NOT NULL,
+			state_json TEXT NOT NULL DEFAULT '{}',
+			inbox_json TEXT NOT NULL DEFAULT '[]',
+			outbox_json TEXT NOT NULL DEFAULT '[]',
+			tool_allowlist_json TEXT NOT NULL DEFAULT '[]',
+			budget_json TEXT NOT NULL DEFAULT '{}',
+			status TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS policy_decisions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			task_id INTEGER NOT NULL REFERENCES agentic_tasks(id) ON DELETE CASCADE,
+			actor_id INTEGER REFERENCES agent_actors(id) ON DELETE SET NULL,
+			action_kind TEXT NOT NULL,
+			tool_name TEXT NOT NULL,
+			risk_level TEXT NOT NULL,
+			decision TEXT NOT NULL,
+			reason TEXT NOT NULL DEFAULT '',
+			policy_version TEXT NOT NULL,
+			created_at INTEGER NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS tool_action_receipts (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			task_id INTEGER NOT NULL REFERENCES agentic_tasks(id) ON DELETE CASCADE,
+			actor_id INTEGER REFERENCES agent_actors(id) ON DELETE SET NULL,
+			policy_decision_id INTEGER REFERENCES policy_decisions(id) ON DELETE SET NULL,
+			approval_request_id TEXT NOT NULL DEFAULT '',
+			tool_name TEXT NOT NULL,
+			input_hash TEXT NOT NULL,
+			output_hash TEXT NOT NULL DEFAULT '',
+			output_summary TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL,
+			reversible INTEGER NOT NULL DEFAULT 0,
+			started_at INTEGER NOT NULL,
+			completed_at INTEGER
+		)`,
+		`CREATE TABLE IF NOT EXISTS verification_runs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			task_id INTEGER NOT NULL REFERENCES agentic_tasks(id) ON DELETE CASCADE,
+			verifier_actor_id INTEGER REFERENCES agent_actors(id) ON DELETE SET NULL,
+			criteria_json TEXT NOT NULL,
+			evidence_refs_json TEXT NOT NULL,
+			verdict TEXT NOT NULL,
+			reason TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS memory_updates (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			task_id INTEGER NOT NULL REFERENCES agentic_tasks(id) ON DELETE CASCADE,
+			receipt_id INTEGER REFERENCES tool_action_receipts(id) ON DELETE SET NULL,
+			verification_run_id INTEGER REFERENCES verification_runs(id) ON DELETE SET NULL,
+			target TEXT NOT NULL,
+			operation TEXT NOT NULL,
+			payload_hash TEXT NOT NULL,
+			status TEXT NOT NULL,
+			created_at INTEGER NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS followups (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			task_id INTEGER REFERENCES agentic_tasks(id) ON DELETE SET NULL,
+			goal_id INTEGER REFERENCES standing_goals(id) ON DELETE SET NULL,
+			reason TEXT NOT NULL,
+			status TEXT NOT NULL,
+			trigger_at INTEGER NOT NULL,
+			created_task_id INTEGER REFERENCES agentic_tasks(id) ON DELETE SET NULL,
+			created_at INTEGER NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_goal_signals_goal ON goal_signals(goal_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_agentic_tasks_goal ON agentic_tasks(goal_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_agentic_tasks_signal ON agentic_tasks(signal_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_policy_decisions_task ON policy_decisions(task_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_tool_action_receipts_task ON tool_action_receipts(task_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_verification_runs_task ON verification_runs(task_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_memory_updates_task ON memory_updates(task_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_followups_goal ON followups(goal_id)`,
+	}
+
+	for _, stmt := range stmts {
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("agentic: init schema: %w", err)
+		}
+	}
+	return nil
+}
