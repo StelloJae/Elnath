@@ -146,8 +146,9 @@ func (a *Agent) executeToolBatch(ctx context.Context, batch []scheduledToolCall,
 		go func() {
 			defer wg.Done()
 
+			callCtx := tools.WithAgenticToolCallID(childCtx, call.call.ID)
 			start := time.Now()
-			result, err := a.executor.Execute(childCtx, call.call.Name, call.call.Input)
+			result, err := a.executor.Execute(callCtx, call.call.Name, call.call.Input)
 			duration := time.Since(start)
 			if a.readTracker != nil {
 				a.readTracker.NotifyTool(call.call.Name)
@@ -185,8 +186,14 @@ func (a *Agent) executeToolBatch(ctx context.Context, batch []scheduledToolCall,
 			}
 
 			if a.hooks != nil {
-				if hookErr := a.hooks.RunPostToolUse(childCtx, call.call.Name, call.call.Input, result); hookErr != nil {
+				if hookErr := a.hooks.RunPostToolUse(callCtx, call.call.Name, call.call.Input, result); hookErr != nil {
 					a.logger.Warn("post-tool hook error", "tool", call.call.Name, "error", hookErr)
+				}
+			}
+			if finalizer, ok := a.executor.(tools.ResultFinalizer); ok {
+				if finalizeErr := finalizer.FinalizeToolResult(callCtx, call.call.Name, call.call.Input, result); finalizeErr != nil {
+					a.logger.Warn("tool result finalizer error", "tool", call.call.Name, "error", finalizeErr)
+					result = tools.ErrorResult("tool result finalizer error: " + finalizeErr.Error())
 				}
 			}
 			results[call.index] = toolExecResult{id: call.call.ID, name: call.call.Name, output: result.Output, isError: result.IsError, duration: duration}

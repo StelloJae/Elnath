@@ -119,7 +119,8 @@ func TestAgenticSchema_RoadmapColumnsExist(t *testing.T) {
 		},
 		"tool_action_receipts": {
 			"id", "task_id", "actor_id", "policy_decision_id", "approval_request_id", "tool_name", "input_hash", "output_hash",
-			"output_summary", "status", "reversible", "started_at", "completed_at",
+			"tool_call_id", "raw_output_hash", "visible_output_hash", "output_summary", "status", "failure_reason",
+			"hook_provenance_json", "reversible", "started_at", "completed_at",
 		},
 		"verification_runs": {
 			"id", "task_id", "verifier_actor_id", "criteria_json", "evidence_refs_json", "verdict", "reason", "created_at",

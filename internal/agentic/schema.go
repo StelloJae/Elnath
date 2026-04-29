@@ -100,10 +100,15 @@ func InitSchema(db *sql.DB) error {
 			policy_decision_id INTEGER REFERENCES policy_decisions(id) ON DELETE SET NULL,
 			approval_request_id TEXT NOT NULL DEFAULT '',
 			tool_name TEXT NOT NULL,
+			tool_call_id TEXT NOT NULL DEFAULT '',
 			input_hash TEXT NOT NULL,
 			output_hash TEXT NOT NULL DEFAULT '',
+			raw_output_hash TEXT NOT NULL DEFAULT '',
+			visible_output_hash TEXT NOT NULL DEFAULT '',
 			output_summary TEXT NOT NULL DEFAULT '',
 			status TEXT NOT NULL,
+			failure_reason TEXT NOT NULL DEFAULT '',
+			hook_provenance_json TEXT NOT NULL DEFAULT '',
 			reversible INTEGER NOT NULL DEFAULT 0,
 			started_at INTEGER NOT NULL,
 			completed_at INTEGER
@@ -172,6 +177,35 @@ func InitSchema(db *sql.DB) error {
 	}
 	if err := ensureGoalSignalIndexes(db); err != nil {
 		return err
+	}
+	if err := ensureToolActionReceiptColumns(db); err != nil {
+		return err
+	}
+	return nil
+}
+
+func ensureToolActionReceiptColumns(db *sql.DB) error {
+	columns := []struct {
+		name string
+		def  string
+	}{
+		{"tool_call_id", "TEXT NOT NULL DEFAULT ''"},
+		{"raw_output_hash", "TEXT NOT NULL DEFAULT ''"},
+		{"visible_output_hash", "TEXT NOT NULL DEFAULT ''"},
+		{"failure_reason", "TEXT NOT NULL DEFAULT ''"},
+		{"hook_provenance_json", "TEXT NOT NULL DEFAULT ''"},
+	}
+	for _, column := range columns {
+		exists, err := columnExists(db, "tool_action_receipts", column.name)
+		if err != nil {
+			return fmt.Errorf("agentic: inspect tool_action_receipts.%s: %w", column.name, err)
+		}
+		if exists {
+			continue
+		}
+		if _, err := db.Exec(fmt.Sprintf("ALTER TABLE tool_action_receipts ADD COLUMN %s %s", column.name, column.def)); err != nil {
+			return fmt.Errorf("agentic: add tool_action_receipts.%s: %w", column.name, err)
+		}
 	}
 	return nil
 }
@@ -511,4 +545,28 @@ func columnNotNull(db *sql.DB, table, column string) (bool, error) {
 		return false, err
 	}
 	return false, fmt.Errorf("column %s.%s not found", table, column)
+}
+
+func columnExists(db *sql.DB, table, column string) (bool, error) {
+	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notNull, pk int
+		var dflt any
+		if err := rows.Scan(&cid, &name, &ctype, &notNull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	return false, nil
 }
