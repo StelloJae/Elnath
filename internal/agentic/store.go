@@ -1069,6 +1069,9 @@ func (s *Store) UpdateMemoryUpdateStatus(ctx context.Context, id int64, status, 
 
 func (s *Store) CreateFollowup(ctx context.Context, followup Followup) (*Followup, error) {
 	now := nowTime()
+	if followup.Status == "" {
+		followup.Status = FollowupStatusPending
+	}
 	if followup.TriggerAt.IsZero() {
 		followup.TriggerAt = now
 	}
@@ -1076,9 +1079,9 @@ func (s *Store) CreateFollowup(ctx context.Context, followup Followup) (*Followu
 		followup.CreatedAt = now
 	}
 	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO followups(task_id, goal_id, reason, status, trigger_at, created_task_id, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, nullableInt(followup.TaskID), nullableInt(followup.GoalID), followup.Reason, followup.Status, timeMillis(followup.TriggerAt), nullableInt(followup.CreatedTaskID), timeMillis(followup.CreatedAt))
+		INSERT INTO followups(task_id, goal_id, reason, status, trigger_at, created_task_id, dedupe_key, failure_reason, processed_at, wake_agent, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, nullableInt(followup.TaskID), nullableInt(followup.GoalID), followup.Reason, followup.Status, timeMillis(followup.TriggerAt), nullableInt(followup.CreatedTaskID), followup.DedupeKey, followup.FailureReason, nullableSQLTime(followup.ProcessedAt), boolInt(followup.WakeAgent), timeMillis(followup.CreatedAt))
 	if err != nil {
 		return nil, err
 	}
@@ -1086,26 +1089,189 @@ func (s *Store) CreateFollowup(ctx context.Context, followup Followup) (*Followu
 	if err != nil {
 		return nil, err
 	}
+	if followup.DedupeKey == "" {
+		if _, err := s.db.ExecContext(ctx, `UPDATE followups SET dedupe_key = ? WHERE id = ?`, followupDedupeKey(id), id); err != nil {
+			return nil, err
+		}
+	}
 	return s.GetFollowup(ctx, id)
+}
+
+func (s *Store) CreateOrGetFollowup(ctx context.Context, followup Followup) (*Followup, bool, error) {
+	if followup.DedupeKey == "" {
+		created, err := s.CreateFollowup(ctx, followup)
+		return created, false, err
+	}
+	now := nowTime()
+	if followup.Status == "" {
+		followup.Status = FollowupStatusPending
+	}
+	if followup.TriggerAt.IsZero() {
+		followup.TriggerAt = now
+	}
+	if followup.CreatedAt.IsZero() {
+		followup.CreatedAt = now
+	}
+	res, err := s.db.ExecContext(ctx, `
+		INSERT OR IGNORE INTO followups(task_id, goal_id, reason, status, trigger_at, created_task_id, dedupe_key, failure_reason, processed_at, wake_agent, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, nullableInt(followup.TaskID), nullableInt(followup.GoalID), followup.Reason, followup.Status, timeMillis(followup.TriggerAt), nullableInt(followup.CreatedTaskID), followup.DedupeKey, followup.FailureReason, nullableSQLTime(followup.ProcessedAt), boolInt(followup.WakeAgent), timeMillis(followup.CreatedAt))
+	if err != nil {
+		return nil, false, err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		existing, err := s.GetFollowupByDedupeKey(ctx, followup.DedupeKey)
+		return existing, true, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return nil, false, err
+	}
+	created, err := s.GetFollowup(ctx, id)
+	return created, false, err
 }
 
 func (s *Store) GetFollowup(ctx context.Context, id int64) (*Followup, error) {
 	var followup Followup
 	var taskID, goalID, createdTaskID sql.NullInt64
+	var processedAt sql.NullInt64
 	var triggerAt, createdAt int64
+	var wakeAgent int
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, task_id, goal_id, reason, status, trigger_at, created_task_id, created_at
+		SELECT id, task_id, goal_id, reason, status, trigger_at, created_task_id, dedupe_key, failure_reason, processed_at, wake_agent, created_at
 		FROM followups WHERE id = ?
-	`, id).Scan(&followup.ID, &taskID, &goalID, &followup.Reason, &followup.Status, &triggerAt, &createdTaskID, &createdAt)
+	`, id).Scan(&followup.ID, &taskID, &goalID, &followup.Reason, &followup.Status, &triggerAt, &createdTaskID, &followup.DedupeKey, &followup.FailureReason, &processedAt, &wakeAgent, &createdAt)
 	if err != nil {
 		return nil, err
 	}
 	followup.TaskID = intFromNull(taskID)
 	followup.GoalID = intFromNull(goalID)
 	followup.CreatedTaskID = intFromNull(createdTaskID)
+	followup.ProcessedAt = nullTimeFromMillis(processedAt)
+	followup.WakeAgent = wakeAgent != 0
 	followup.TriggerAt = millisTime(triggerAt)
 	followup.CreatedAt = millisTime(createdAt)
 	return &followup, nil
+}
+
+func (s *Store) GetFollowupByDedupeKey(ctx context.Context, dedupeKey string) (*Followup, error) {
+	var id int64
+	if err := s.db.QueryRowContext(ctx, `SELECT id FROM followups WHERE dedupe_key = ?`, dedupeKey).Scan(&id); err != nil {
+		return nil, err
+	}
+	return s.GetFollowup(ctx, id)
+}
+
+func (s *Store) FindFollowupInCooldown(ctx context.Context, followup Followup, cooldown time.Duration) (*Followup, error) {
+	if cooldown <= 0 {
+		return nil, sql.ErrNoRows
+	}
+	triggerAt := timeMillis(followup.TriggerAt)
+	window := cooldown.Milliseconds()
+	var id int64
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id
+		FROM followups
+		WHERE COALESCE(task_id, 0) = ?
+			AND COALESCE(goal_id, 0) = ?
+			AND reason = ?
+			AND wake_agent = ?
+			AND status NOT IN (?, ?)
+			AND trigger_at BETWEEN ? AND ?
+		ORDER BY ABS(trigger_at - ?), id
+		LIMIT 1
+	`, followup.TaskID, followup.GoalID, followup.Reason, boolInt(followup.WakeAgent), FollowupStatusFailed, FollowupStatusCanceled, triggerAt-window, triggerAt+window, triggerAt).Scan(&id)
+	if err != nil {
+		return nil, err
+	}
+	return s.GetFollowup(ctx, id)
+}
+
+func (s *Store) ListDueFollowups(ctx context.Context, now time.Time, limit int) ([]Followup, error) {
+	query := `
+		SELECT id, task_id, goal_id, reason, status, trigger_at, created_task_id, dedupe_key, failure_reason, processed_at, wake_agent, created_at
+		FROM followups
+		WHERE status IN (?, ?)
+			AND trigger_at <= ?
+		ORDER BY trigger_at, id
+	`
+	args := []any{FollowupStatusPending, FollowupStatusProcessing, timeMillis(now)}
+	if limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, limit)
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var followups []Followup
+	for rows.Next() {
+		followup, err := scanFollowup(rows)
+		if err != nil {
+			return nil, err
+		}
+		followups = append(followups, *followup)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return followups, nil
+}
+
+func (s *Store) MarkFollowupProcessing(ctx context.Context, id int64) (*Followup, error) {
+	return s.updateFollowupStatus(ctx, id, FollowupStatusProcessing, "", sql.NullTime{}, 0)
+}
+
+func (s *Store) MarkFollowupCreated(ctx context.Context, id, createdTaskID int64) (*Followup, error) {
+	return s.updateFollowupStatus(ctx, id, FollowupStatusCreated, "", sql.NullTime{Time: nowTime(), Valid: true}, createdTaskID)
+}
+
+func (s *Store) MarkFollowupSkipped(ctx context.Context, id int64, reason string) (*Followup, error) {
+	return s.updateFollowupStatus(ctx, id, FollowupStatusSkipped, reason, sql.NullTime{Time: nowTime(), Valid: true}, 0)
+}
+
+func (s *Store) MarkFollowupFailed(ctx context.Context, id int64, reason string) (*Followup, error) {
+	return s.updateFollowupStatus(ctx, id, FollowupStatusFailed, reason, sql.NullTime{Time: nowTime(), Valid: true}, 0)
+}
+
+func (s *Store) updateFollowupStatus(ctx context.Context, id int64, status, reason string, processedAt sql.NullTime, createdTaskID int64) (*Followup, error) {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE followups
+		SET status = ?,
+			failure_reason = CASE WHEN ? != '' THEN ? ELSE failure_reason END,
+			processed_at = CASE WHEN ? IS NOT NULL THEN ? ELSE processed_at END,
+			created_task_id = CASE WHEN ? IS NOT NULL THEN ? ELSE created_task_id END
+		WHERE id = ?
+	`, status, reason, reason, nullableSQLTime(processedAt), nullableSQLTime(processedAt), nullableInt(createdTaskID), nullableInt(createdTaskID), id)
+	if err != nil {
+		return nil, err
+	}
+	return s.GetFollowup(ctx, id)
+}
+
+func scanFollowup(scanner rowScanner) (*Followup, error) {
+	var followup Followup
+	var taskID, goalID, createdTaskID, processedAt sql.NullInt64
+	var triggerAt, createdAt int64
+	var wakeAgent int
+	if err := scanner.Scan(&followup.ID, &taskID, &goalID, &followup.Reason, &followup.Status, &triggerAt, &createdTaskID, &followup.DedupeKey, &followup.FailureReason, &processedAt, &wakeAgent, &createdAt); err != nil {
+		return nil, err
+	}
+	followup.TaskID = intFromNull(taskID)
+	followup.GoalID = intFromNull(goalID)
+	followup.CreatedTaskID = intFromNull(createdTaskID)
+	followup.ProcessedAt = nullTimeFromMillis(processedAt)
+	followup.WakeAgent = wakeAgent != 0
+	followup.TriggerAt = millisTime(triggerAt)
+	followup.CreatedAt = millisTime(createdAt)
+	return &followup, nil
+}
+
+func followupDedupeKey(id int64) string {
+	return fmt.Sprintf("followup:%d:due", id)
 }
 
 func nowTime() time.Time {

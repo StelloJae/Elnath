@@ -145,6 +145,10 @@ func InitSchema(db *sql.DB) error {
 			status TEXT NOT NULL,
 			trigger_at INTEGER NOT NULL,
 			created_task_id INTEGER REFERENCES agentic_tasks(id) ON DELETE SET NULL,
+			dedupe_key TEXT NOT NULL DEFAULT '',
+			failure_reason TEXT NOT NULL DEFAULT '',
+			processed_at INTEGER,
+			wake_agent INTEGER NOT NULL DEFAULT 0,
 			created_at INTEGER NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_goal_signals_goal ON goal_signals(goal_id)`,
@@ -156,6 +160,8 @@ func InitSchema(db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_verification_runs_task ON verification_runs(task_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_memory_updates_task ON memory_updates(task_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_followups_goal ON followups(goal_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_followups_due ON followups(status, trigger_at)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_followups_dedupe_key ON followups(dedupe_key) WHERE dedupe_key != ''`,
 	}
 
 	for _, stmt := range stmts {
@@ -189,6 +195,51 @@ func InitSchema(db *sql.DB) error {
 	}
 	if err := ensureMemoryUpdateIndexes(db); err != nil {
 		return err
+	}
+	if err := ensureFollowupColumns(db); err != nil {
+		return err
+	}
+	if err := ensureFollowupIndexes(db); err != nil {
+		return err
+	}
+	return nil
+}
+
+func ensureFollowupColumns(db *sql.DB) error {
+	columns := []struct {
+		name string
+		def  string
+	}{
+		{"dedupe_key", "TEXT NOT NULL DEFAULT ''"},
+		{"failure_reason", "TEXT NOT NULL DEFAULT ''"},
+		{"processed_at", "INTEGER"},
+		{"wake_agent", "INTEGER NOT NULL DEFAULT 0"},
+	}
+	for _, column := range columns {
+		exists, err := columnExists(db, "followups", column.name)
+		if err != nil {
+			return fmt.Errorf("agentic: inspect followups.%s: %w", column.name, err)
+		}
+		if exists {
+			continue
+		}
+		if _, err := db.Exec(fmt.Sprintf("ALTER TABLE followups ADD COLUMN %s %s", column.name, column.def)); err != nil {
+			return fmt.Errorf("agentic: add followups.%s: %w", column.name, err)
+		}
+	}
+	return nil
+}
+
+func ensureFollowupIndexes(db *sql.DB) error {
+	stmts := []string{
+		`CREATE INDEX IF NOT EXISTS idx_followups_goal ON followups(goal_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_followups_due ON followups(status, trigger_at)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_followups_dedupe_key ON followups(dedupe_key) WHERE dedupe_key != ''`,
+	}
+	for _, stmt := range stmts {
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("agentic: ensure followup indexes: %w", err)
+		}
 	}
 	return nil
 }
