@@ -14,6 +14,7 @@ import (
 	"github.com/stello/elnath/internal/agent"
 	"github.com/stello/elnath/internal/agent/reflection"
 	"github.com/stello/elnath/internal/agentic"
+	agenticmemory "github.com/stello/elnath/internal/agentic/memory"
 	agenticverification "github.com/stello/elnath/internal/agentic/verification"
 	"github.com/stello/elnath/internal/audit"
 	"github.com/stello/elnath/internal/config"
@@ -763,7 +764,7 @@ func (rt *executionRuntime) learningDeps() *orchestrator.LearningDeps {
 	if rt.learningStore == nil || benchmarkModeEnabled() {
 		return nil
 	}
-	return &orchestrator.LearningDeps{
+	deps := &orchestrator.LearningDeps{
 		Store:          rt.learningStore,
 		SelfState:      rt.selfState,
 		Logger:         rt.app.Logger,
@@ -773,6 +774,10 @@ func (rt *executionRuntime) learningDeps() *orchestrator.LearningDeps {
 		ComplexityGate: rt.llmComplexityGate,
 		Redact:         rt.learningRedactor,
 	}
+	if rt.agenticStore != nil {
+		deps.MemoryGate = agenticmemory.NewGate(rt.agenticStore)
+	}
+	return deps
 }
 
 func (rt *executionRuntime) runTask(
@@ -910,6 +915,7 @@ func (rt *executionRuntime) runTask(
 	cfg.SystemPrompt = systemPrompt
 	cfg.ReflectionEnqueuer = rt.buildReflectionEnqueuer(sess, userInput)
 
+	agenticTaskID, hasAgenticTask := daemon.AgenticTaskIDFromContext(ctx)
 	input := orchestrator.WorkflowInput{
 		Message:  userInput,
 		Messages: promptMessages,
@@ -922,12 +928,13 @@ func (rt *executionRuntime) runTask(
 	switch wf.Name() {
 	case "single", "team", "ralph", "autopilot":
 		input.Learning = rt.learningDeps()
-	}
-	if wf.Name() == "ralph" && rt.agenticStore != nil {
-		if agenticTaskID, ok := daemon.AgenticTaskIDFromContext(ctx); ok {
-			input.AgenticTaskID = agenticTaskID
-			input.VerificationRecorder = agenticverification.NewRecorder(rt.agenticStore)
+		if input.Learning != nil && hasAgenticTask {
+			input.Learning.AgenticTaskID = agenticTaskID
 		}
+	}
+	if wf.Name() == "ralph" && rt.agenticStore != nil && hasAgenticTask {
+		input.AgenticTaskID = agenticTaskID
+		input.VerificationRecorder = agenticverification.NewRecorder(rt.agenticStore)
 	}
 	if wf.Name() == "research" && rt.wikiIdx != nil && rt.wikiStore != nil {
 		input.Extra = &orchestrator.ResearchDeps{
@@ -936,6 +943,9 @@ func (rt *executionRuntime) runTask(
 			UsageTracker:  rt.usageTracker,
 			LearningStore: rt.learningStore,
 			SelfState:     rt.selfState,
+			MemoryGate:    agenticmemory.NewGate(rt.agenticStore),
+			AgenticTaskID: agenticTaskID,
+			Redact:        rt.learningRedactor,
 			MaxRounds:     rt.researchMaxRounds,
 			CostCapUSD:    rt.researchCostCapUSD,
 		}
@@ -945,7 +955,8 @@ func (rt *executionRuntime) runTask(
 	result, err := wf.Run(ctx, input)
 	elapsed := time.Since(wfStart)
 	if err != nil {
-		rt.recordOutcome(outcomeInput{
+		rt.recordOutcome(ctx, outcomeInput{
+			agenticTaskID:  agenticTaskID,
 			routeCtx:       routeCtx,
 			intent:         intent,
 			workflow:       wf.Name(),
@@ -961,7 +972,8 @@ func (rt *executionRuntime) runTask(
 	}
 
 	if learning.ShouldRecord(result.FinishReason) {
-		rt.recordOutcome(outcomeInput{
+		rt.recordOutcome(ctx, outcomeInput{
+			agenticTaskID:  agenticTaskID,
 			routeCtx:       routeCtx,
 			intent:         intent,
 			workflow:       result.Workflow,
@@ -1063,6 +1075,7 @@ func (rt *executionRuntime) maybePurgeSessionWorkspace(sess *agent.Session) {
 // Using a struct keeps the arg list manageable now that the P3 learning-
 // observability extension adds session/usage/tool telemetry.
 type outcomeInput struct {
+	agenticTaskID  int64
 	routeCtx       *orchestrator.RoutingContext
 	intent         conversation.Intent
 	workflow       string
@@ -1079,8 +1092,11 @@ type outcomeInput struct {
 	toolStats      []agent.ToolStat
 }
 
-func (rt *executionRuntime) recordOutcome(in outcomeInput) {
+func (rt *executionRuntime) recordOutcome(ctx context.Context, in outcomeInput) {
 	if rt.outcomeStore == nil || in.routeCtx == nil || in.routeCtx.ProjectID == "" {
+		return
+	}
+	if in.agenticTaskID != 0 && !rt.agenticOutcomeVerified(ctx, in.agenticTaskID) {
 		return
 	}
 	record := learning.OutcomeRecord{
@@ -1123,6 +1139,37 @@ func (rt *executionRuntime) recordOutcome(in outcomeInput) {
 	}
 }
 
+func (rt *executionRuntime) agenticOutcomeVerified(ctx context.Context, taskID int64) bool {
+	if taskID == 0 {
+		return true
+	}
+	if rt.agenticStore == nil {
+		rt.app.Logger.Warn("agentic outcome skipped: missing agentic store", "task_id", taskID)
+		return false
+	}
+	runs, err := rt.agenticStore.ListVerificationRunsByTask(ctx, taskID)
+	if err != nil {
+		rt.app.Logger.Warn("agentic outcome skipped: verification lookup failed", "task_id", taskID, "error", err)
+		return false
+	}
+	var latest *agentic.VerificationRun
+	for i := range runs {
+		run := runs[i]
+		if latest == nil || run.ID > latest.ID {
+			latest = &run
+		}
+	}
+	if latest == nil {
+		rt.app.Logger.Warn("agentic outcome skipped: missing verification run", "task_id", taskID)
+		return false
+	}
+	if latest.Verdict != agentic.VerificationVerdictPassed {
+		rt.app.Logger.Warn("agentic outcome skipped: verification not passed", "task_id", taskID, "verification_run_id", latest.ID, "verdict", latest.Verdict)
+		return false
+	}
+	return true
+}
+
 // agentToolStatsToLearning converts the agent-level tool-stat type into the
 // learning-package type stored in outcomes.jsonl. Returns nil when the input
 // has no entries so the JSON encoder honors omitempty on the outcome field.
@@ -1147,12 +1194,16 @@ func agentToolStatsToLearning(src []agent.ToolStat) []learning.AgentToolStat {
 // that abort before a routing decision is made. Without this, such failures
 // would be invisible to the routing advisor and to `elnath explain last`.
 func (rt *executionRuntime) recordSetupOutcome(
+	ctx context.Context,
 	p identity.Principal,
 	userInput string,
 	finishReason string,
 	elapsed time.Duration,
 ) {
 	if rt.outcomeStore == nil || p.ProjectID == "" {
+		return
+	}
+	if agenticTaskID, ok := daemon.AgenticTaskIDFromContext(ctx); ok && !rt.agenticOutcomeVerified(ctx, agenticTaskID) {
 		return
 	}
 	record := learning.OutcomeRecord{
@@ -1451,14 +1502,14 @@ func (rt *executionRuntime) newDaemonTaskRunner() daemon.AgentTaskRunner {
 		if taskPayload.SessionID != "" {
 			sess, err = rt.mgr.LoadSessionForPrincipal(taskPayload.SessionID, principal)
 			if err != nil {
-				rt.recordSetupOutcome(principal, userInput, "load_session_failed", time.Since(start))
+				rt.recordSetupOutcome(ctx, principal, userInput, "load_session_failed", time.Since(start))
 				return daemon.TaskResult{}, fmt.Errorf("load session %s: %w", taskPayload.SessionID, err)
 			}
 			if principal.IsZero() {
 				principal = sess.Principal
 			}
 			if err := sess.RecordResume(principal); err != nil {
-				rt.recordSetupOutcome(principal, userInput, "record_resume_failed", time.Since(start))
+				rt.recordSetupOutcome(ctx, principal, userInput, "record_resume_failed", time.Since(start))
 				return daemon.TaskResult{}, fmt.Errorf("record resume %s: %w", taskPayload.SessionID, err)
 			}
 			messages = sess.Messages
@@ -1468,7 +1519,7 @@ func (rt *executionRuntime) newDaemonTaskRunner() daemon.AgentTaskRunner {
 			}
 			sess, err = rt.mgr.NewSessionWithPrincipal(principal)
 			if err != nil {
-				rt.recordSetupOutcome(principal, userInput, "create_session_failed", time.Since(start))
+				rt.recordSetupOutcome(ctx, principal, userInput, "create_session_failed", time.Since(start))
 				return daemon.TaskResult{}, fmt.Errorf("create session: %w", err)
 			}
 		}

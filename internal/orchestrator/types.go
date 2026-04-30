@@ -6,6 +6,7 @@ import (
 
 	"github.com/stello/elnath/internal/agent"
 	"github.com/stello/elnath/internal/agentic"
+	agenticmemory "github.com/stello/elnath/internal/agentic/memory"
 	"github.com/stello/elnath/internal/event"
 	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
@@ -53,6 +54,8 @@ type LearningDeps struct {
 	ToolCallCount  int
 	CompactSummary func() (text string, lastLine int)
 	Redact         func(string) string
+	AgenticTaskID  int64
+	MemoryGate     *agenticmemory.Gate
 }
 
 // WorkflowResult is the output of a completed workflow execution.

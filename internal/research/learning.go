@@ -1,17 +1,31 @@
 package research
 
 import (
+	"context"
 	"log/slog"
 
 	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/self"
 )
 
+type LearningAppender func(context.Context, learning.Lesson) (bool, error)
+
 func ApplyLearning(result *ResearchResult, store *learning.Store, selfState *self.SelfState, logger *slog.Logger) {
 	if store == nil || result == nil {
 		return
 	}
+	ApplyLearningWithAppender(context.Background(), result, func(_ context.Context, lesson learning.Lesson) (bool, error) {
+		if err := store.Append(lesson); err != nil {
+			return false, err
+		}
+		return true, nil
+	}, selfState, logger)
+}
 
+func ApplyLearningWithAppender(ctx context.Context, result *ResearchResult, appendLesson LearningAppender, selfState *self.SelfState, logger *slog.Logger) {
+	if appendLesson == nil || result == nil {
+		return
+	}
 	lessons := learning.Extract(toResultInfo(result))
 	if len(lessons) == 0 {
 		return
@@ -23,11 +37,12 @@ func ApplyLearning(result *ResearchResult, store *learning.Store, selfState *sel
 
 	personaChanged := false
 	for _, lesson := range lessons {
-		if err := store.Append(lesson); err != nil {
+		added, err := appendLesson(ctx, lesson)
+		if err != nil {
 			logger.Warn("learning: append failed", "error", err)
 			continue
 		}
-		if len(lesson.PersonaDelta) > 0 && selfState != nil {
+		if added && len(lesson.PersonaDelta) > 0 && selfState != nil {
 			selfState.ApplyLessons(lesson.PersonaDelta)
 			personaChanged = true
 		}

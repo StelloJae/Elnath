@@ -125,6 +125,9 @@ func TestAgenticSchema_RoadmapColumnsExist(t *testing.T) {
 		"verification_runs": {
 			"id", "task_id", "verifier_actor_id", "criteria_json", "evidence_refs_json", "verdict", "reason", "created_at",
 		},
+		"memory_updates": {
+			"id", "task_id", "receipt_id", "verification_run_id", "target", "operation", "payload_hash", "status", "source", "reason", "created_at", "applied_at",
+		},
 	}
 
 	for table, columns := range required {
@@ -136,6 +139,87 @@ func TestAgenticSchema_RoadmapColumnsExist(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestAgenticSchema_MigratesMemoryUpdateColumns(t *testing.T) {
+	db := openTestDB(t)
+	if _, err := db.Exec(`
+		CREATE TABLE standing_goals (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			title TEXT NOT NULL,
+			description TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL,
+			priority INTEGER NOT NULL DEFAULT 0,
+			autonomy_level TEXT NOT NULL,
+			risk_budget TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		);
+		CREATE TABLE agentic_tasks (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			goal_id INTEGER REFERENCES standing_goals(id) ON DELETE SET NULL,
+			signal_id INTEGER,
+			parent_id INTEGER,
+			queue_task_id INTEGER,
+			title TEXT NOT NULL,
+			prompt TEXT NOT NULL,
+			status TEXT NOT NULL,
+			priority INTEGER NOT NULL DEFAULT 0,
+			risk_level TEXT NOT NULL,
+			autonomy_decision TEXT NOT NULL,
+			approval_request_id TEXT NOT NULL DEFAULT '',
+			verification_status TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			due_at INTEGER
+		);
+		CREATE TABLE verification_runs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			task_id INTEGER NOT NULL REFERENCES agentic_tasks(id) ON DELETE CASCADE,
+			verifier_actor_id INTEGER,
+			criteria_json TEXT NOT NULL,
+			evidence_refs_json TEXT NOT NULL,
+			verdict TEXT NOT NULL,
+			reason TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL
+		);
+		CREATE TABLE memory_updates (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			task_id INTEGER NOT NULL REFERENCES agentic_tasks(id) ON DELETE CASCADE,
+			receipt_id INTEGER,
+			verification_run_id INTEGER REFERENCES verification_runs(id) ON DELETE SET NULL,
+			target TEXT NOT NULL,
+			operation TEXT NOT NULL,
+			payload_hash TEXT NOT NULL,
+			status TEXT NOT NULL,
+			created_at INTEGER NOT NULL
+		);
+		INSERT INTO agentic_tasks(title, prompt, status, risk_level, autonomy_decision, verification_status, created_at, updated_at)
+		VALUES ('legacy', 'legacy', 'succeeded', 'low', 'observe_only', 'passed', 1, 1);
+		INSERT INTO verification_runs(task_id, criteria_json, evidence_refs_json, verdict, reason, created_at)
+		VALUES (1, '{}', '[]', 'passed', 'legacy', 1);
+		INSERT INTO memory_updates(task_id, verification_run_id, target, operation, payload_hash, status, created_at)
+		VALUES (1, 1, 'wiki', 'append', 'abc', 'pending', 1);
+	`); err != nil {
+		t.Fatalf("seed legacy memory_updates: %v", err)
+	}
+
+	if err := InitSchema(db); err != nil {
+		t.Fatalf("InitSchema: %v", err)
+	}
+	columns := tableColumns(t, db, "memory_updates")
+	for _, col := range []string{"source", "reason", "applied_at"} {
+		if !columns[col] {
+			t.Fatalf("memory_updates missing migrated column %s; got %v", col, columns)
+		}
+	}
+	got, err := NewStore(db).GetMemoryUpdate(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("GetMemoryUpdate legacy row: %v", err)
+	}
+	if got.Source != "" || got.Reason != "" || got.AppliedAt.Valid {
+		t.Fatalf("unexpected migrated defaults: %+v", got)
 	}
 }
 
@@ -869,6 +953,8 @@ func TestAgenticStore_InsertReadMemoryUpdate(t *testing.T) {
 		Operation:         "append",
 		PayloadHash:       "payload-sha256",
 		Status:            MemoryUpdateStatusPending,
+		Source:            "agentic",
+		Reason:            "waiting for target write",
 	})
 	if err != nil {
 		t.Fatalf("CreateMemoryUpdate: %v", err)
@@ -878,8 +964,66 @@ func TestAgenticStore_InsertReadMemoryUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetMemoryUpdate: %v", err)
 	}
-	if got.TaskID != task.ID || got.ReceiptID != receipt.ID || got.VerificationRunID != verification.ID || got.Status != MemoryUpdateStatusPending {
+	if got.TaskID != task.ID || got.ReceiptID != receipt.ID || got.VerificationRunID != verification.ID || got.Status != MemoryUpdateStatusPending || got.Source != "agentic" || got.Reason == "" {
 		t.Fatalf("unexpected memory update: %+v", got)
+	}
+}
+
+func TestAgenticStore_MemoryUpdateConcurrentSingleton(t *testing.T) {
+	ctx := context.Background()
+	db := openConcurrentTestDB(t)
+	if err := InitSchema(db); err != nil {
+		t.Fatalf("InitSchema: %v", err)
+	}
+	store := NewStore(db)
+	task := createTestTask(t, ctx, store)
+	verification := createTestVerificationRun(t, ctx, store, task.ID)
+
+	const workers = 12
+	var wg sync.WaitGroup
+	ids := make(chan int64, workers)
+	errs := make(chan error, workers)
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			update, err := store.CreateMemoryUpdate(ctx, MemoryUpdate{
+				TaskID:            task.ID,
+				VerificationRunID: verification.ID,
+				Target:            "learning.lesson",
+				Operation:         "append",
+				PayloadHash:       "shared-payload-sha256",
+				Status:            MemoryUpdateStatusPending,
+				Source:            "agentic",
+				Reason:            "verification passed",
+			})
+			if err != nil {
+				errs <- err
+				return
+			}
+			ids <- update.ID
+		}()
+	}
+	wg.Wait()
+	close(ids)
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("CreateMemoryUpdate concurrent: %v", err)
+		}
+	}
+	var first int64
+	for id := range ids {
+		if first == 0 {
+			first = id
+			continue
+		}
+		if id != first {
+			t.Fatalf("memory update id = %d, want singleton id %d", id, first)
+		}
+	}
+	if got := countTableRows(t, db, "memory_updates"); got != 1 {
+		t.Fatalf("memory_updates rows = %d, want 1", got)
 	}
 }
 

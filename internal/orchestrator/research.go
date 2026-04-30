@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 
+	agenticmemory "github.com/stello/elnath/internal/agentic/memory"
 	"github.com/stello/elnath/internal/event"
 	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
@@ -36,6 +37,9 @@ type ResearchDeps struct {
 	UsageTracker  *llm.UsageTracker
 	LearningStore *learning.Store
 	SelfState     *self.SelfState
+	MemoryGate    *agenticmemory.Gate
+	AgenticTaskID int64
+	Redact        func(string) string
 	MaxRounds     int
 	CostCapUSD    float64
 }
@@ -78,6 +82,16 @@ func (w *ResearchWorkflow) Run(ctx context.Context, input WorkflowInput) (*Workf
 		opts = append(opts, research.WithSessionID(input.Session.ID))
 	}
 	opts = append(opts, research.WithSink(input.Sink))
+	if deps.MemoryGate != nil && deps.AgenticTaskID != 0 {
+		opts = append(opts, research.WithWikiWriteGate(func(ctx context.Context, page *wiki.Page, write func(*wiki.Page) error) error {
+			_, _, err := deps.MemoryGate.UpsertWikiPage(ctx, agenticmemory.WikiWriteRequest{
+				TaskID: deps.AgenticTaskID,
+				Source: agenticmemory.SourceAgentic,
+				Redact: deps.Redact,
+			}, wikiWriteFunc(write), page)
+			return err
+		}))
+	}
 
 	loop := research.NewLoop(
 		hypGen,
@@ -95,7 +109,18 @@ func (w *ResearchWorkflow) Run(ctx context.Context, input WorkflowInput) (*Workf
 	if err != nil {
 		return nil, fmt.Errorf("research workflow: %w", err)
 	}
-	research.ApplyLearning(result, deps.LearningStore, deps.SelfState, w.logger)
+	if deps.MemoryGate != nil && deps.AgenticTaskID != 0 {
+		research.ApplyLearningWithAppender(ctx, result, func(ctx context.Context, lesson learning.Lesson) (bool, error) {
+			added, _, err := deps.MemoryGate.AppendLearningLesson(ctx, agenticmemory.LearningWriteRequest{
+				TaskID: deps.AgenticTaskID,
+				Source: agenticmemory.SourceAgentic,
+				Redact: deps.Redact,
+			}, deps.LearningStore, lesson)
+			return added, err
+		}, deps.SelfState, w.logger)
+	} else {
+		research.ApplyLearning(result, deps.LearningStore, deps.SelfState, w.logger)
+	}
 
 	messages := append(input.Messages,
 		llm.NewUserMessage(input.Message),
@@ -124,3 +149,9 @@ func totalResearchUsage(r *research.ResearchResult) llm.UsageStats {
 
 // Ensure the interface is satisfied at compile time.
 var _ Workflow = (*ResearchWorkflow)(nil)
+
+type wikiWriteFunc func(*wiki.Page) error
+
+func (f wikiWriteFunc) Upsert(page *wiki.Page) error {
+	return f(page)
+}

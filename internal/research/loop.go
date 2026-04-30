@@ -33,10 +33,15 @@ type Loop struct {
 	logger       *slog.Logger
 	sink         event.Sink
 	pipeline     PromptPrefixRenderer
+	wikiWrite    WikiWriteGate
 }
 
 // LoopOption configures a Loop.
 type LoopOption func(*Loop)
+
+// WikiWriteGate wraps research wiki writes. It is used by higher-level
+// runtimes that need to decide whether a page may become trusted memory.
+type WikiWriteGate func(ctx context.Context, page *wiki.Page, write func(*wiki.Page) error) error
 
 // WithMaxRounds sets the maximum number of research rounds.
 func WithMaxRounds(n int) LoopOption {
@@ -63,6 +68,12 @@ func WithSink(s event.Sink) LoopOption {
 // pipeline preserves the legacy behaviour.
 func WithLoopPipeline(p PromptPrefixRenderer) LoopOption {
 	return func(l *Loop) { l.pipeline = p }
+}
+
+// WithWikiWriteGate wraps research wiki page writes without changing the
+// research loop itself.
+func WithWikiWriteGate(g WikiWriteGate) LoopOption {
+	return func(l *Loop) { l.wikiWrite = g }
 }
 
 // NewLoop creates a research Loop with sensible defaults.
@@ -288,7 +299,14 @@ func (l *Loop) writeRoundToWiki(ctx context.Context, topic string, round int, ro
 	}
 	page.SetSource(wiki.SourceResearch, "", "research_loop")
 
-	if err := l.wikiStore.Upsert(page); err != nil {
+	write := l.wikiStore.Upsert
+	if l.wikiWrite != nil {
+		if err := l.wikiWrite(ctx, page, write); err != nil {
+			l.logger.Error("failed to write round to wiki", "path", path, "error", err)
+		}
+		return
+	}
+	if err := write(page); err != nil {
 		l.logger.Error("failed to write round to wiki", "path", path, "error", err)
 	}
 }

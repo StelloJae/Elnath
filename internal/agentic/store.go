@@ -929,11 +929,14 @@ func (s *Store) CreateMemoryUpdate(ctx context.Context, update MemoryUpdate) (*M
 		update.CreatedAt = nowTime()
 	}
 	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO memory_updates(task_id, receipt_id, verification_run_id, target, operation, payload_hash, status, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	`, update.TaskID, nullableInt(update.ReceiptID), nullableInt(update.VerificationRunID), update.Target, update.Operation, update.PayloadHash, update.Status, timeMillis(update.CreatedAt))
+		INSERT OR IGNORE INTO memory_updates(task_id, receipt_id, verification_run_id, target, operation, payload_hash, status, source, reason, created_at, applied_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, update.TaskID, nullableInt(update.ReceiptID), nullableInt(update.VerificationRunID), update.Target, update.Operation, update.PayloadHash, update.Status, update.Source, update.Reason, timeMillis(update.CreatedAt), nullableSQLTime(update.AppliedAt))
 	if err != nil {
 		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return s.findMemoryUpdateByKey(ctx, update)
 	}
 	id, err := res.LastInsertId()
 	if err != nil {
@@ -944,19 +947,124 @@ func (s *Store) CreateMemoryUpdate(ctx context.Context, update MemoryUpdate) (*M
 
 func (s *Store) GetMemoryUpdate(ctx context.Context, id int64) (*MemoryUpdate, error) {
 	var update MemoryUpdate
-	var receiptID, verificationRunID sql.NullInt64
+	var receiptID, verificationRunID, appliedAt sql.NullInt64
 	var createdAt int64
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, task_id, receipt_id, verification_run_id, target, operation, payload_hash, status, created_at
+		SELECT id, task_id, receipt_id, verification_run_id, target, operation, payload_hash, status, source, reason, created_at, applied_at
 		FROM memory_updates WHERE id = ?
-	`, id).Scan(&update.ID, &update.TaskID, &receiptID, &verificationRunID, &update.Target, &update.Operation, &update.PayloadHash, &update.Status, &createdAt)
+	`, id).Scan(&update.ID, &update.TaskID, &receiptID, &verificationRunID, &update.Target, &update.Operation, &update.PayloadHash, &update.Status, &update.Source, &update.Reason, &createdAt, &appliedAt)
 	if err != nil {
 		return nil, err
 	}
 	update.ReceiptID = intFromNull(receiptID)
 	update.VerificationRunID = intFromNull(verificationRunID)
 	update.CreatedAt = millisTime(createdAt)
+	update.AppliedAt = nullTimeFromMillis(appliedAt)
 	return &update, nil
+}
+
+func (s *Store) ListMemoryUpdatesByTask(ctx context.Context, taskID int64) ([]MemoryUpdate, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, task_id, receipt_id, verification_run_id, target, operation, payload_hash, status, source, reason, created_at, applied_at
+		FROM memory_updates
+		WHERE task_id = ?
+		ORDER BY id
+	`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var updates []MemoryUpdate
+	for rows.Next() {
+		var update MemoryUpdate
+		var receiptID, verificationRunID, appliedAt sql.NullInt64
+		var createdAt int64
+		if err := rows.Scan(&update.ID, &update.TaskID, &receiptID, &verificationRunID, &update.Target, &update.Operation, &update.PayloadHash, &update.Status, &update.Source, &update.Reason, &createdAt, &appliedAt); err != nil {
+			return nil, err
+		}
+		update.ReceiptID = intFromNull(receiptID)
+		update.VerificationRunID = intFromNull(verificationRunID)
+		update.CreatedAt = millisTime(createdAt)
+		update.AppliedAt = nullTimeFromMillis(appliedAt)
+		updates = append(updates, update)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return updates, nil
+}
+
+func (s *Store) FindMemoryUpdate(ctx context.Context, update MemoryUpdate) (*MemoryUpdate, error) {
+	query := `
+		SELECT id
+		FROM memory_updates
+		WHERE task_id = ?
+			AND target = ?
+			AND operation = ?
+			AND payload_hash = ?
+			AND status = ?
+	`
+	args := []any{update.TaskID, update.Target, update.Operation, update.PayloadHash, update.Status}
+	if update.Source != "" {
+		query += ` AND source = ?`
+		args = append(args, update.Source)
+	}
+	if update.VerificationRunID == 0 {
+		query += ` AND verification_run_id IS NULL`
+	} else {
+		query += ` AND verification_run_id = ?`
+		args = append(args, update.VerificationRunID)
+	}
+	query += ` ORDER BY id LIMIT 1`
+
+	var id int64
+	if err := s.db.QueryRowContext(ctx, query, args...).Scan(&id); err != nil {
+		return nil, err
+	}
+	return s.GetMemoryUpdate(ctx, id)
+}
+
+func (s *Store) findMemoryUpdateByKey(ctx context.Context, update MemoryUpdate) (*MemoryUpdate, error) {
+	query := `
+		SELECT id
+		FROM memory_updates
+		WHERE task_id = ?
+			AND target = ?
+			AND operation = ?
+			AND payload_hash = ?
+			AND source = ?
+	`
+	args := []any{update.TaskID, update.Target, update.Operation, update.PayloadHash, update.Source}
+	if update.VerificationRunID == 0 {
+		query += ` AND verification_run_id IS NULL`
+	} else {
+		query += ` AND verification_run_id = ?`
+		args = append(args, update.VerificationRunID)
+	}
+	query += ` ORDER BY id LIMIT 1`
+
+	var id int64
+	if err := s.db.QueryRowContext(ctx, query, args...).Scan(&id); err != nil {
+		return nil, err
+	}
+	return s.GetMemoryUpdate(ctx, id)
+}
+
+func (s *Store) UpdateMemoryUpdateStatus(ctx context.Context, id int64, status, reason string, appliedAt sql.NullTime) (*MemoryUpdate, error) {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE memory_updates
+		SET status = ?, reason = ?, applied_at = ?
+		WHERE id = ?
+	`, status, reason, nullableSQLTime(appliedAt), id)
+	if err != nil {
+		return nil, err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return nil, sql.ErrNoRows
+	}
+	return s.GetMemoryUpdate(ctx, id)
 }
 
 func (s *Store) CreateFollowup(ctx context.Context, followup Followup) (*Followup, error) {
