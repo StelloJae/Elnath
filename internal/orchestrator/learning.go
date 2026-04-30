@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/stello/elnath/internal/agent"
+	agenticmemory "github.com/stello/elnath/internal/agentic/memory"
 	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
@@ -101,7 +102,7 @@ func applyAgentLearning(deps *LearningDeps, info learning.AgentResultInfo) {
 func appendAndApply(deps *LearningDeps, log *slog.Logger, lessons []learning.Lesson) bool {
 	personaChanged := false
 	for _, lesson := range lessons {
-		added, err := deps.Store.AppendNew(lesson)
+		added, err := appendLearningLesson(deps, lesson)
 		if err != nil {
 			log.Warn("agent learning: append failed", "error", err)
 			continue
@@ -115,6 +116,18 @@ func appendAndApply(deps *LearningDeps, log *slog.Logger, lessons []learning.Les
 		}
 	}
 	return personaChanged
+}
+
+func appendLearningLesson(deps *LearningDeps, lesson learning.Lesson) (bool, error) {
+	if deps != nil && deps.MemoryGate != nil && deps.AgenticTaskID != 0 {
+		added, _, err := deps.MemoryGate.AppendLearningLesson(context.Background(), agenticmemory.LearningWriteRequest{
+			TaskID: deps.AgenticTaskID,
+			Source: agenticmemory.SourceAgentic,
+			Redact: deps.Redact,
+		}, deps.Store, lesson)
+		return added, err
+	}
+	return agenticmemory.AppendLegacyLearningLesson(deps.Store, lesson)
 }
 
 func prepareLearningDeps(base *LearningDeps, session *agent.Session, messages []llm.Message, previousMessageCount int, toolStats []agent.ToolStat) *LearningDeps {

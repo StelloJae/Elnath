@@ -48,6 +48,10 @@ const (
 	VerificationVerdictPass         = VerificationVerdictPassed
 
 	MemoryUpdateStatusPending = "pending"
+	MemoryUpdateStatusApplied = "applied"
+	MemoryUpdateStatusBlocked = "blocked"
+	MemoryUpdateStatusFailed  = "failed"
+	MemoryUpdateStatusSkipped = "skipped"
 
 	FollowupStatusPending = "pending"
 )
@@ -191,7 +195,10 @@ type MemoryUpdate struct {
 	Operation         string
 	PayloadHash       string
 	Status            string
+	Source            string
+	Reason            string
 	CreatedAt         time.Time
+	AppliedAt         sql.NullTime
 }
 
 type Followup struct {

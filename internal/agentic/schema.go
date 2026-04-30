@@ -132,7 +132,10 @@ func InitSchema(db *sql.DB) error {
 			operation TEXT NOT NULL,
 			payload_hash TEXT NOT NULL,
 			status TEXT NOT NULL,
-			created_at INTEGER NOT NULL
+			source TEXT NOT NULL DEFAULT '',
+			reason TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL,
+			applied_at INTEGER
 		)`,
 		`CREATE TABLE IF NOT EXISTS followups (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -180,6 +183,49 @@ func InitSchema(db *sql.DB) error {
 	}
 	if err := ensureToolActionReceiptColumns(db); err != nil {
 		return err
+	}
+	if err := ensureMemoryUpdateColumns(db); err != nil {
+		return err
+	}
+	if err := ensureMemoryUpdateIndexes(db); err != nil {
+		return err
+	}
+	return nil
+}
+
+func ensureMemoryUpdateColumns(db *sql.DB) error {
+	columns := []struct {
+		name string
+		def  string
+	}{
+		{"source", "TEXT NOT NULL DEFAULT ''"},
+		{"reason", "TEXT NOT NULL DEFAULT ''"},
+		{"applied_at", "INTEGER"},
+	}
+	for _, column := range columns {
+		exists, err := columnExists(db, "memory_updates", column.name)
+		if err != nil {
+			return fmt.Errorf("agentic: inspect memory_updates.%s: %w", column.name, err)
+		}
+		if exists {
+			continue
+		}
+		if _, err := db.Exec(fmt.Sprintf("ALTER TABLE memory_updates ADD COLUMN %s %s", column.name, column.def)); err != nil {
+			return fmt.Errorf("agentic: add memory_updates.%s: %w", column.name, err)
+		}
+	}
+	return nil
+}
+
+func ensureMemoryUpdateIndexes(db *sql.DB) error {
+	stmts := []string{
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_updates_dedupe_null ON memory_updates(task_id, target, operation, payload_hash, source) WHERE verification_run_id IS NULL`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_updates_dedupe_run ON memory_updates(task_id, verification_run_id, target, operation, payload_hash, source) WHERE verification_run_id IS NOT NULL`,
+	}
+	for _, stmt := range stmts {
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("agentic: ensure memory update indexes: %w", err)
+		}
 	}
 	return nil
 }

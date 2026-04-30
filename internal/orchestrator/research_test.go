@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stello/elnath/internal/agentic"
+	agenticmemory "github.com/stello/elnath/internal/agentic/memory"
 	"github.com/stello/elnath/internal/event"
 	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
@@ -37,6 +39,34 @@ func newTestWikiStore(t *testing.T) *wiki.Store {
 		t.Fatal(err)
 	}
 	return store
+}
+
+func newTestAgenticStore(t *testing.T) (*agentic.Store, *agentic.AgenticTask) {
+	t.Helper()
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if _, err := db.Exec(`PRAGMA foreign_keys=ON`); err != nil {
+		t.Fatalf("foreign_keys: %v", err)
+	}
+	if err := agentic.InitSchema(db); err != nil {
+		t.Fatalf("InitSchema: %v", err)
+	}
+	store := agentic.NewStore(db)
+	task, err := store.CreateAgenticTask(context.Background(), agentic.AgenticTask{
+		Title:              "Agentic research",
+		Prompt:             "Research guarded memory writes.",
+		Status:             agentic.TaskStatusRunning,
+		RiskLevel:          agentic.RiskLevelLow,
+		AutonomyDecision:   agentic.PolicyDecisionObserveOnly,
+		VerificationStatus: agentic.VerificationStatusPending,
+	})
+	if err != nil {
+		t.Fatalf("CreateAgenticTask: %v", err)
+	}
+	return store, task
 }
 
 func TestResearchWorkflow_E2E(t *testing.T) {
@@ -193,5 +223,146 @@ func TestResearchWorkflowAppliesLearning(t *testing.T) {
 	}
 	if selfState.GetPersona().Persistence <= before.Persistence {
 		t.Fatalf("Persistence = %v, want > %v", selfState.GetPersona().Persistence, before.Persistence)
+	}
+}
+
+func TestResearchWorkflowAgenticMemoryGateBlocksUnverifiedWrites(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		verdict string
+	}{
+		{name: "missing verification"},
+		{name: "failed verification", verdict: agentic.VerificationVerdictFailed},
+		{name: "inconclusive verification", verdict: agentic.VerificationVerdictInconclusive},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			provider := newTestProvider(
+				`[{"id":"H1","statement":"Useful hypothesis","rationale":"Because","test_plan":"Do X","priority":1}]`,
+				`I investigated. {"findings":"Found something","evidence":"Data","confidence":"high","supported":true}`,
+				`Research summary`,
+			)
+			dataDir := t.TempDir()
+			lessonStore := learning.NewStore(filepath.Join(dataDir, "lessons.jsonl"))
+			wikiStore := newTestWikiStore(t)
+			agenticStore, task := newTestAgenticStore(t)
+			if tc.verdict != "" {
+				if _, err := agenticStore.CreateVerificationRun(ctx, agentic.VerificationRun{
+					TaskID:           task.ID,
+					CriteriaJSON:     `{"kind":"research-memory"}`,
+					EvidenceRefsJSON: `[]`,
+					Verdict:          tc.verdict,
+					Reason:           "test verifier result",
+				}); err != nil {
+					t.Fatalf("CreateVerificationRun: %v", err)
+				}
+			}
+
+			input := testInput("Go concurrency patterns performance", provider)
+			input.Extra = &ResearchDeps{
+				WikiIndex:     &testWikiSearcher{},
+				WikiStore:     wikiStore,
+				UsageTracker:  newTestUsageTracker(t),
+				LearningStore: lessonStore,
+				MemoryGate:    agenticmemory.NewGate(agenticStore),
+				AgenticTaskID: task.ID,
+				MaxRounds:     1,
+				CostCapUSD:    10.0,
+			}
+
+			if _, err := NewResearchWorkflow().Run(ctx, input); err != nil {
+				t.Fatalf("ResearchWorkflow.Run: %v", err)
+			}
+			lessons, err := lessonStore.List()
+			if err != nil {
+				t.Fatalf("lessonStore.List: %v", err)
+			}
+			if len(lessons) != 0 {
+				t.Fatalf("lessons = %d, want 0 while unverified", len(lessons))
+			}
+			pages, err := wikiStore.List()
+			if err != nil {
+				t.Fatalf("wikiStore.List: %v", err)
+			}
+			if len(pages) != 0 {
+				t.Fatalf("wiki pages = %d, want 0 while unverified", len(pages))
+			}
+			updates, err := agenticStore.ListMemoryUpdatesByTask(ctx, task.ID)
+			if err != nil {
+				t.Fatalf("ListMemoryUpdatesByTask: %v", err)
+			}
+			if len(updates) < 2 {
+				t.Fatalf("memory updates = %d, want blocked wiki and learning updates", len(updates))
+			}
+			for _, update := range updates {
+				if update.Status != agentic.MemoryUpdateStatusBlocked {
+					t.Fatalf("memory update = %+v, want blocked", update)
+				}
+			}
+		})
+	}
+}
+
+func TestResearchWorkflowAgenticMemoryGateAllowsPassedWrites(t *testing.T) {
+	ctx := context.Background()
+	provider := newTestProvider(
+		`[{"id":"H1","statement":"Useful hypothesis","rationale":"Because","test_plan":"Do X","priority":1}]`,
+		`I investigated. {"findings":"Found something","evidence":"Data","confidence":"high","supported":true}`,
+		`Research summary`,
+	)
+	dataDir := t.TempDir()
+	lessonStore := learning.NewStore(filepath.Join(dataDir, "lessons.jsonl"))
+	wikiStore := newTestWikiStore(t)
+	agenticStore, task := newTestAgenticStore(t)
+	if _, err := agenticStore.CreateVerificationRun(ctx, agentic.VerificationRun{
+		TaskID:           task.ID,
+		CriteriaJSON:     `{"kind":"research-memory"}`,
+		EvidenceRefsJSON: `[]`,
+		Verdict:          agentic.VerificationVerdictPassed,
+		Reason:           "test verifier passed",
+	}); err != nil {
+		t.Fatalf("CreateVerificationRun: %v", err)
+	}
+
+	input := testInput("Go concurrency patterns performance", provider)
+	input.Extra = &ResearchDeps{
+		WikiIndex:     &testWikiSearcher{},
+		WikiStore:     wikiStore,
+		UsageTracker:  newTestUsageTracker(t),
+		LearningStore: lessonStore,
+		MemoryGate:    agenticmemory.NewGate(agenticStore),
+		AgenticTaskID: task.ID,
+		MaxRounds:     1,
+		CostCapUSD:    10.0,
+	}
+
+	if _, err := NewResearchWorkflow().Run(ctx, input); err != nil {
+		t.Fatalf("ResearchWorkflow.Run: %v", err)
+	}
+	lessons, err := lessonStore.List()
+	if err != nil {
+		t.Fatalf("lessonStore.List: %v", err)
+	}
+	if len(lessons) == 0 {
+		t.Fatal("lessons = 0, want verified research lessons")
+	}
+	pages, err := wikiStore.List()
+	if err != nil {
+		t.Fatalf("wikiStore.List: %v", err)
+	}
+	if len(pages) == 0 {
+		t.Fatal("wiki pages = 0, want verified research wiki writes")
+	}
+	updates, err := agenticStore.ListMemoryUpdatesByTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListMemoryUpdatesByTask: %v", err)
+	}
+	if len(updates) < 2 {
+		t.Fatalf("memory updates = %d, want applied wiki and learning updates", len(updates))
+	}
+	for _, update := range updates {
+		if update.Status != agentic.MemoryUpdateStatusApplied {
+			t.Fatalf("memory update = %+v, want applied", update)
+		}
 	}
 }

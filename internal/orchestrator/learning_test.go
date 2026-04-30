@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"sort"
@@ -9,10 +10,14 @@ import (
 	"testing"
 
 	"github.com/stello/elnath/internal/agent"
+	"github.com/stello/elnath/internal/agentic"
+	agenticmemory "github.com/stello/elnath/internal/agentic/memory"
 	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/self"
 	"github.com/stello/elnath/internal/tools"
+
+	_ "modernc.org/sqlite"
 )
 
 type countingExtractor struct {
@@ -165,6 +170,69 @@ func TestApplyAgentLearningRuleAndLLMParallel(t *testing.T) {
 		if sources[i] != want[i] {
 			t.Fatalf("sources = %#v, want %#v", sources, want)
 		}
+	}
+}
+
+func TestApplyAgentLearningWithAgenticMemoryGateBlocksWithoutVerification(t *testing.T) {
+	ctx := context.Background()
+	_, agenticStore := newOrchestratorAgenticStore(t)
+	task := createOrchestratorAgenticTask(t, ctx, agenticStore)
+	lessonStore := learning.NewStore(filepath.Join(t.TempDir(), "lessons.jsonl"))
+
+	applyAgentLearning(&LearningDeps{
+		Store:         lessonStore,
+		AgenticTaskID: task.ID,
+		MemoryGate:    agenticmemory.NewGate(agenticStore),
+	}, learning.AgentResultInfo{
+		Workflow: "ralph",
+		ToolStats: []learning.AgentToolStat{{
+			Name:   "bash",
+			Calls:  1,
+			Errors: 3,
+		}},
+	})
+
+	if got := listOrchestratorLessons(t, lessonStore); len(got) != 0 {
+		t.Fatalf("lessons = %d, want 0 without verification", len(got))
+	}
+	updates, err := agenticStore.ListMemoryUpdatesByTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListMemoryUpdatesByTask: %v", err)
+	}
+	if len(updates) != 1 || updates[0].Status != agentic.MemoryUpdateStatusBlocked {
+		t.Fatalf("updates = %+v, want one blocked update", updates)
+	}
+}
+
+func TestApplyAgentLearningWithAgenticMemoryGateAllowsPassedVerification(t *testing.T) {
+	ctx := context.Background()
+	_, agenticStore := newOrchestratorAgenticStore(t)
+	task := createOrchestratorAgenticTask(t, ctx, agenticStore)
+	createOrchestratorVerification(t, ctx, agenticStore, task.ID, agentic.VerificationVerdictPassed)
+	lessonStore := learning.NewStore(filepath.Join(t.TempDir(), "lessons.jsonl"))
+
+	applyAgentLearning(&LearningDeps{
+		Store:         lessonStore,
+		AgenticTaskID: task.ID,
+		MemoryGate:    agenticmemory.NewGate(agenticStore),
+	}, learning.AgentResultInfo{
+		Workflow: "ralph",
+		ToolStats: []learning.AgentToolStat{{
+			Name:   "bash",
+			Calls:  1,
+			Errors: 3,
+		}},
+	})
+
+	if got := listOrchestratorLessons(t, lessonStore); len(got) != 1 {
+		t.Fatalf("lessons = %d, want 1 after passed verification", len(got))
+	}
+	updates, err := agenticStore.ListMemoryUpdatesByTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListMemoryUpdatesByTask: %v", err)
+	}
+	if len(updates) != 1 || updates[0].Status != agentic.MemoryUpdateStatusApplied {
+		t.Fatalf("updates = %+v, want one applied update", updates)
 	}
 }
 
@@ -427,4 +495,60 @@ func TestSingleWorkflowLearningUsesCopiedDeps(t *testing.T) {
 	if shared.SessionID != "shared-session" || shared.MessageCount != 99 || shared.ToolCallCount != 99 {
 		t.Fatalf("shared deps mutated = %#v", shared)
 	}
+}
+
+func newOrchestratorAgenticStore(t *testing.T) (*sql.DB, *agentic.Store) {
+	t.Helper()
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.Exec(`PRAGMA foreign_keys=ON`); err != nil {
+		t.Fatalf("foreign_keys: %v", err)
+	}
+	if err := agentic.InitSchema(db); err != nil {
+		t.Fatalf("InitSchema: %v", err)
+	}
+	return db, agentic.NewStore(db)
+}
+
+func createOrchestratorAgenticTask(t *testing.T, ctx context.Context, store *agentic.Store) *agentic.AgenticTask {
+	t.Helper()
+	task, err := store.CreateAgenticTask(ctx, agentic.AgenticTask{
+		Title:              "Learning memory task",
+		Prompt:             "Gate learning memory.",
+		Status:             agentic.TaskStatusSucceeded,
+		RiskLevel:          agentic.RiskLevelLow,
+		AutonomyDecision:   agentic.PolicyDecisionObserveOnly,
+		VerificationStatus: agentic.VerificationVerdictPassed,
+	})
+	if err != nil {
+		t.Fatalf("CreateAgenticTask: %v", err)
+	}
+	return task
+}
+
+func createOrchestratorVerification(t *testing.T, ctx context.Context, store *agentic.Store, taskID int64, verdict string) *agentic.VerificationRun {
+	t.Helper()
+	run, err := store.CreateVerificationRun(ctx, agentic.VerificationRun{
+		TaskID:           taskID,
+		CriteriaJSON:     `{"kind":"learning"}`,
+		EvidenceRefsJSON: `[]`,
+		Verdict:          verdict,
+		Reason:           "test verifier",
+	})
+	if err != nil {
+		t.Fatalf("CreateVerificationRun: %v", err)
+	}
+	return run
+}
+
+func listOrchestratorLessons(t *testing.T, store *learning.Store) []learning.Lesson {
+	t.Helper()
+	lessons, err := store.List()
+	if err != nil {
+		t.Fatalf("List lessons: %v", err)
+	}
+	return lessons
 }

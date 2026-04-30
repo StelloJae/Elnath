@@ -750,6 +750,88 @@ func TestExecutionRuntimeRunTaskRecordsOutcomeOnWorkflowError(t *testing.T) {
 	}
 }
 
+func TestExecutionRuntimeRecordOutcomeSkipsAgenticOutcomeWithoutPassedVerification(t *testing.T) {
+	ctx := context.Background()
+	provider := &countingProvider{}
+	rt := newTestExecutionRuntime(t, provider)
+	task, err := rt.agenticStore.CreateAgenticTask(ctx, agentic.AgenticTask{
+		Title:              "Unverified routing outcome",
+		Prompt:             "do not teach routing yet",
+		Status:             agentic.TaskStatusSucceeded,
+		RiskLevel:          agentic.RiskLevelLow,
+		AutonomyDecision:   agentic.PolicyDecisionObserveOnly,
+		VerificationStatus: agentic.VerificationStatusPending,
+	})
+	if err != nil {
+		t.Fatalf("CreateAgenticTask: %v", err)
+	}
+
+	rt.recordOutcome(ctx, outcomeInput{
+		agenticTaskID: task.ID,
+		routeCtx:      &orchestrator.RoutingContext{ProjectID: "elnath"},
+		intent:        conversation.IntentQuestion,
+		workflow:      "single",
+		finishReason:  "success",
+		success:       true,
+		userInput:     "what changed?",
+	})
+
+	records, err := rt.outcomeStore.ForProject("elnath", 10)
+	if err != nil {
+		t.Fatalf("ForProject: %v", err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("outcome records = %+v, want none before passed verification", records)
+	}
+}
+
+func TestExecutionRuntimeRecordOutcomeAppendsAgenticOutcomeAfterPassedVerification(t *testing.T) {
+	ctx := context.Background()
+	provider := &countingProvider{}
+	rt := newTestExecutionRuntime(t, provider)
+	task, err := rt.agenticStore.CreateAgenticTask(ctx, agentic.AgenticTask{
+		Title:              "Verified routing outcome",
+		Prompt:             "routing may learn this",
+		Status:             agentic.TaskStatusSucceeded,
+		RiskLevel:          agentic.RiskLevelLow,
+		AutonomyDecision:   agentic.PolicyDecisionObserveOnly,
+		VerificationStatus: agentic.VerificationStatusPending,
+	})
+	if err != nil {
+		t.Fatalf("CreateAgenticTask: %v", err)
+	}
+	if _, err := rt.agenticStore.CreateVerificationRun(ctx, agentic.VerificationRun{
+		TaskID:           task.ID,
+		CriteriaJSON:     `{"kind":"routing-outcome"}`,
+		EvidenceRefsJSON: `[]`,
+		Verdict:          agentic.VerificationVerdictPassed,
+		Reason:           "verified outcome",
+	}); err != nil {
+		t.Fatalf("CreateVerificationRun: %v", err)
+	}
+
+	rt.recordOutcome(ctx, outcomeInput{
+		agenticTaskID: task.ID,
+		routeCtx:      &orchestrator.RoutingContext{ProjectID: "elnath"},
+		intent:        conversation.IntentQuestion,
+		workflow:      "single",
+		finishReason:  "success",
+		success:       true,
+		userInput:     "what changed?",
+	})
+
+	records, err := rt.outcomeStore.ForProject("elnath", 10)
+	if err != nil {
+		t.Fatalf("ForProject: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("outcome records = %d, want 1", len(records))
+	}
+	if records[0].Workflow != "single" || !records[0].Success {
+		t.Fatalf("unexpected outcome record: %+v", records[0])
+	}
+}
+
 func TestDaemonTaskRunnerRecordsOutcomeOnLoadSessionFailure(t *testing.T) {
 	provider := &countingProvider{}
 	rt := newTestExecutionRuntime(t, provider)
@@ -793,6 +875,48 @@ func TestDaemonTaskRunnerRecordsOutcomeOnLoadSessionFailure(t *testing.T) {
 	}
 	if rec.ProjectID != "proj-b" {
 		t.Errorf("ProjectID = %q, want proj-b", rec.ProjectID)
+	}
+}
+
+func TestDaemonTaskRunnerSkipsAgenticSetupFailureOutcomeWithoutPassedVerification(t *testing.T) {
+	ctx := context.Background()
+	provider := &countingProvider{}
+	rt := newTestExecutionRuntime(t, provider)
+	agenticTask, err := rt.agenticStore.CreateAgenticTask(ctx, agentic.AgenticTask{
+		Title:              "Unverified setup failure",
+		Prompt:             "load stale session",
+		Status:             agentic.TaskStatusRunning,
+		RiskLevel:          agentic.RiskLevelLow,
+		AutonomyDecision:   agentic.PolicyDecisionObserveOnly,
+		VerificationStatus: agentic.VerificationStatusPending,
+	})
+	if err != nil {
+		t.Fatalf("CreateAgenticTask: %v", err)
+	}
+
+	ownerPrincipal := identity.Principal{UserID: "owner", ProjectID: "proj-a", Surface: "cli"}
+	sess, err := rt.mgr.NewSessionWithPrincipal(ownerPrincipal)
+	if err != nil {
+		t.Fatalf("NewSessionWithPrincipal: %v", err)
+	}
+	otherPrincipal := identity.Principal{UserID: "intruder", ProjectID: "proj-b", Surface: "telegram"}
+	payload := daemon.EncodeTaskPayload(daemon.TaskPayload{
+		Prompt:    "steal this session",
+		SessionID: sess.ID,
+		Surface:   "telegram",
+		Principal: otherPrincipal,
+	})
+	ctx = daemon.WithAgenticTaskID(ctx, agenticTask.ID)
+	if _, err := rt.newDaemonTaskRunner()(ctx, payload, nil); err == nil {
+		t.Fatal("expected load session failure, got nil")
+	}
+
+	records, err := rt.outcomeStore.ForProject("proj-b", 10)
+	if err != nil {
+		t.Fatalf("ForProject: %v", err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("agentic setup failure outcomes = %+v, want none before passed verification", records)
 	}
 }
 

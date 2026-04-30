@@ -1208,6 +1208,30 @@ func TestShellRememberCommand(t *testing.T) {
 	}
 }
 
+func TestShellRememberCommandRemainsLegacyWithoutAgenticVerification(t *testing.T) {
+	store := newTestLearningStore(t)
+	shell, _, _, bot := newTestShellWithOptions(t, nil, WithLearningStore(store))
+
+	if err := shell.HandleUpdate(context.Background(), Update{
+		Message: Message{ChatID: "chat-1", UserID: "42", Text: "/remember user-approved memory"},
+	}); err != nil {
+		t.Fatalf("HandleUpdate: %v", err)
+	}
+	if got := lastSentText(bot); !strings.Contains(got, "Remembered") {
+		t.Fatalf("response = %q, want Remembered", got)
+	}
+	lessons, err := store.List()
+	if err != nil {
+		t.Fatalf("store.List: %v", err)
+	}
+	if len(lessons) != 1 {
+		t.Fatalf("stored lessons = %d, want 1", len(lessons))
+	}
+	if lessons[0].Source != "user:telegram" {
+		t.Fatalf("lesson source = %q, want user:telegram", lessons[0].Source)
+	}
+}
+
 func TestShellForgetCommand(t *testing.T) {
 	tests := []struct {
 		name        string
