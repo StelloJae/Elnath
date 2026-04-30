@@ -53,7 +53,12 @@ const (
 	MemoryUpdateStatusFailed  = "failed"
 	MemoryUpdateStatusSkipped = "skipped"
 
-	FollowupStatusPending = "pending"
+	FollowupStatusPending    = "pending"
+	FollowupStatusProcessing = "processing"
+	FollowupStatusCreated    = "created"
+	FollowupStatusSkipped    = "skipped"
+	FollowupStatusFailed     = "failed"
+	FollowupStatusCanceled   = "canceled"
 )
 
 type StandingGoal struct {
@@ -209,5 +214,9 @@ type Followup struct {
 	Status        string
 	TriggerAt     time.Time
 	CreatedTaskID int64
+	DedupeKey     string
+	FailureReason string
+	ProcessedAt   sql.NullTime
+	WakeAgent     bool
 	CreatedAt     time.Time
 }
