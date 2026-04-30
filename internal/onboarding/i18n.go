@@ -107,6 +107,7 @@ Commands:
   daemon    Background daemon mode
   portability Export/import encrypted portability bundles
   research  Research task utilities
+  agentic   Read-only agentic status and lineage
   lessons   Lessons management utilities
   eval      Benchmark/eval utilities
 	 wiki      Wiki management (search, lint, ingest)
@@ -264,6 +265,25 @@ EXAMPLES
 
 SEE ALSO
   elnath run, elnath wiki`,
+		"cmd.agentic.help": `USAGE
+  elnath agentic <subcommand> [flags]
+
+DESCRIPTION
+  Inspect the durable agentic control-plane in read-only mode. These commands
+  summarize status and task lineage without enqueueing work, deciding
+  approvals, executing tools, running verifiers, writing memory, or processing
+  followups.
+
+SUBCOMMANDS
+  status [--json]                         Show control-plane counts and attention items
+  task <id> [--json]                      Show one agentic task summary
+  task --queue-task-id <id> [--json]      Resolve an agentic task from a daemon queue task
+  lineage <task-id> [--json]              Show task lineage across ledgers
+
+EXAMPLES
+  $ elnath agentic status
+  $ elnath agentic task 42
+  $ elnath agentic lineage 42 --json`,
 		"cmd.portability.help": `USAGE
   elnath portability <subcommand>
 
@@ -414,6 +434,7 @@ SEE ALSO
   sandbox   샌드박스 설정 도우미
   daemon    백그라운드 데몬 모드
   research  리서치 작업 유틸리티
+  agentic   에이전틱 상태/라인리지 읽기 전용 조회
   lessons   lesson 관리 유틸리티
   eval      벤치마크/평가 유틸리티
 	 wiki      위키 관리 (검색, 린트, 수집)
@@ -463,6 +484,19 @@ SEE ALSO
 		"cmd.wiki.help":    "",
 		"cmd.lessons.help": "",
 		"cmd.daemon.help":  "",
+		"cmd.agentic.help": `사용법
+  elnath agentic <하위명령> [플래그]
+
+설명
+  durable agentic control-plane을 읽기 전용으로 조회합니다. 작업 큐 등록,
+  승인 결정, 도구 실행, verifier 실행, memory write, followup 처리는 하지
+  않습니다.
+
+하위 명령
+  status [--json]                         control-plane 카운트와 주의 항목 표시
+  task <id> [--json]                      agentic task 요약 표시
+  task --queue-task-id <id> [--json]      daemon queue task에서 agentic task 조회
+  lineage <task-id> [--json]              ledger lineage 표시`,
 	},
 }
 

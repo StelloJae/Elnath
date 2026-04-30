@@ -91,3 +91,34 @@ func TestPrintCommandHelp_DaemonMatchesDispatcher(t *testing.T) {
 		}
 	}
 }
+
+func TestPrintCommandHelp_AgenticMatchesDispatcher(t *testing.T) {
+	stdout, stderr := captureOutput(t, func() {
+		if err := printCommandHelp("agentic"); err != nil {
+			t.Fatalf("printCommandHelp(agentic) error = %v", err)
+		}
+	})
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+
+	mustContain := []string{
+		"USAGE",
+		"status",
+		"task <id>",
+		"task --queue-task-id <id>",
+		"lineage <task-id>",
+	}
+	for _, term := range mustContain {
+		if !strings.Contains(stdout, term) {
+			t.Fatalf("agentic help missing expected term %q; got:\n%s", term, stdout)
+		}
+	}
+
+	mustNotContain := []string{"approve <id>", "deny <id>", "enqueue <task>", "execute <tool>"}
+	for _, term := range mustNotContain {
+		if strings.Contains(stdout, term) {
+			t.Fatalf("agentic help advertises non-read-only term %q; got:\n%s", term, stdout)
+		}
+	}
+}
