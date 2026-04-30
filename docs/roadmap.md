@@ -12,11 +12,11 @@ The central implementation principle is:
 
 Elnath already has a strong execution substrate: agent loop, tool registry, daemon queue, workflow router, fixed workflows, planner/subagent execution, verification loop, research loop, static scheduling, approval store, audit trail, outcomes, and wiki memory.
 
-As of 2026-04-30, the durable agentic foundation is implemented through PR10: `internal/agentic/{schema,store,types,test}.go` exists, runtime startup initializes the agentic schema, daemon queue tasks are linked to durable `agentic_tasks` envelopes, scheduler/ambient/manual submit surfaces can record observe-only `goal_signals`, explicit triage can convert or link signals into `agentic_tasks` without execution, a standalone policy evaluator can persist durable `policy_decisions`, provenance-aware approval requests can link agentic tasks, policy decisions, actor/action/risk/reason metadata, explicit agentic tool calls can pass through a context-gated ToolGateway that records policy decisions and tool action receipts, Ralph verifier runs can be persisted with criteria/evidence refs when explicit agentic verification context is configured, explicit agentic memory writes are gated by latest verification status, and verified outcomes can create non-executing followups that later create deduped signals plus proposed agentic tasks. The roadmap now starts from that foundation instead of treating it as future work.
+As of 2026-04-30, the durable agentic foundation is implemented through PR11: `internal/agentic/{schema,store,types,test}.go` exists, runtime startup initializes the agentic schema, daemon queue tasks are linked to durable `agentic_tasks` envelopes, scheduler/ambient/manual submit surfaces can record observe-only `goal_signals`, explicit triage can convert or link signals into `agentic_tasks` without execution, a standalone policy evaluator can persist durable `policy_decisions`, provenance-aware approval requests can link agentic tasks, policy decisions, actor/action/risk/reason metadata, explicit agentic tool calls can pass through a context-gated ToolGateway that records policy decisions and tool action receipts, Ralph verifier runs can be persisted with criteria/evidence refs when explicit agentic verification context is configured, explicit agentic memory writes are gated by latest verification status, verified outcomes can create non-executing followups that later create deduped signals plus proposed agentic tasks, and TeamWorkflow planner/executor/synthesizer roles now produce durable actor and handoff provenance. The roadmap now starts from that foundation instead of treating it as future work.
 
 Hermes Agent moved from the v0.8/v0.9 baseline to v0.10/v0.11 and an active post-v0.11 `main` branch. The Elnath takeaway is not to copy Hermes wholesale. The useful deltas are: ToolGateway-style execution routing, hardline-vs-approval policy separation, plugin/hook lifecycle points, webhook/cron signal hardening, bounded delegation, receipt-backed tool results, and verification-gated memory.
 
-The next roadmap step is not "more workflows." The next dependency-ready implementation step is to promote transient team roles into durable actors while preserving the same broader runtime target:
+The next roadmap step is not "more workflows" or a new feature PR. The PR1-PR11 control-plane foundation is shipped; the next dependency-ready step is a post-agentic-control-plane consolidation / readiness review while preserving the same broader runtime target:
 
 ```text
 standing goal
@@ -33,9 +33,9 @@ standing goal
 → follow-up scheduler
 ```
 
-## 2. Current Agentic Readiness: 88/100
+## 2. Current Agentic Readiness: 92/100
 
-Elnath is currently a strong workflow runner and tool-using agent platform with a durable agentic control-plane schema, observe-only daemon task envelope linkage, an observe-only signal ledger bridge, explicit signal-to-agentic-task triage, standalone autonomy policy decision records, provenance-aware approval request storage/bridge foundations, a context-gated ToolGateway for explicit agentic tool calls, durable verifier-run persistence for explicit agentic verification context, verification-gated trusted memory writes for explicit agentic memory context, and a non-executing follow-up scheduler foundation for verified outcomes. It is not yet a complete standing-goal-driven autonomous system because triaged and follow-up proposed tasks are not automatically enqueued or executed, the gateway is not globally enabled for legacy tool execution, verifier results do not gate task completion, Queue.MarkDone remains ungated, followups do not wake agent runs, and team roles are not yet durable actors.
+Elnath is currently a strong workflow runner and tool-using agent platform with a durable agentic control-plane schema, observe-only daemon task envelope linkage, an observe-only signal ledger bridge, explicit signal-to-agentic-task triage, standalone autonomy policy decision records, provenance-aware approval request storage/bridge foundations, a context-gated ToolGateway for explicit agentic tool calls, durable verifier-run persistence for explicit agentic verification context, verification-gated trusted memory writes for explicit agentic memory context, a non-executing follow-up scheduler foundation for verified outcomes, and durable TeamWorkflow planner/executor/synthesizer actor provenance. It is not yet a complete standing-goal-driven autonomous system because triaged and follow-up proposed tasks are not automatically enqueued or executed, the gateway is not globally enabled for legacy tool execution, verifier results do not gate task completion, Queue.MarkDone remains ungated, followups do not wake agent runs, and actors record provenance rather than driving execution.
 
 Implemented foundations:
 
@@ -69,6 +69,7 @@ Implemented foundations:
 | Agentic verifier runs | `internal/agentic/verification/recorder.go` | Persists Ralph verifier criteria, evidence refs, verdict, and redacted reason when explicit agentic verification context is configured. |
 | Agentic memory gate | `internal/agentic/memory/` | Gates explicit agentic learning/wiki memory writes on latest passed verification, with memory_updates ledger records for applied, blocked, and failed outcomes. |
 | Agentic follow-up scheduler | `internal/agentic/followup/` | Records verified outcome followups and processes due followups into deduped signals plus proposed tasks without daemon queue enqueue or agent wake. |
+| Agentic actor provenance | `internal/agentic/actors/` and `internal/orchestrator/team.go` | Records durable planner/executor/synthesizer actor lifecycle and handoffs for explicit agentic TeamWorkflow contexts without actor-driven execution. |
 | Hook surface | `internal/agent/hooks.go` | Pre/post tool and LLM lifecycle hooks; useful base for receipt-aware gateway hooks. |
 
 ## 3. Workflow vs Agentic Gap
@@ -78,7 +79,7 @@ Workflow-like today:
 - `autopilot` is a fixed pipeline, not a dynamic control-plane.
 - `router` selects a workflow from intent and heuristics, not from standing goals.
 - `scheduler` and `ambient` start static prompts, not signal-driven tasks.
-- `team` subagents are prompt-scoped goroutines, not durable actors.
+- `team` subagents now have durable actor provenance for planner/executor/synthesizer roles when explicit agentic context is present, but those actors do not drive execution.
 
 Agentic foundation already present:
 
@@ -118,9 +119,9 @@ Still missing as runtime behavior:
 - Verification gate before `Queue.MarkDone` for required agentic tasks.
 - Broader/global memory gate wiring beyond explicit agentic context.
 - Executing follow-up wake/enqueue loop beyond the non-executing PR10 foundation.
-- Durable actor runtime for planner/executor/verifier/critic/memory/scheduler roles.
+- Broader durable actor runtime for verifier/critic/memory/scheduler roles and actor-driven scheduling.
 
-Non-claims after PR1, PR2, PR3, PR4, PR5, PR6, PR7, PR8, PR9, and PR10:
+Non-claims after PR1, PR2, PR3, PR4, PR5, PR6, PR7, PR8, PR9, PR10, and PR11:
 
 - No autonomous runtime behavior is enabled.
 - Signals are not enqueued into daemon work.
@@ -131,6 +132,7 @@ Non-claims after PR1, PR2, PR3, PR4, PR5, PR6, PR7, PR8, PR9, and PR10:
 - Verifier runs can be persisted when explicit agentic verification context is configured, but no verifier gate is active.
 - Memory writes are gated only for explicit agentic memory context; legacy non-agentic learning/wiki behavior and explicit user memory remain compatible.
 - Followups can create deduped signals and proposed tasks, but they do not enqueue daemon queue work, wake agent runs, or change `Queue.MarkDone`.
+- Actor records and handoffs are durable provenance only; actors do not enqueue daemon work, call tools, or drive autonomous execution.
 
 ## 5. Target Architecture
 
@@ -181,6 +183,7 @@ Implemented:
 - `internal/agentic/verification/recorder.go` provides durable verifier-run recording with criteria/evidence refs and reason redaction/truncation.
 - `internal/agentic/memory/` provides explicit agentic memory gating for learning lessons and research wiki writes, with applied/blocked/failed memory_updates ledger entries.
 - `internal/agentic/followup/` provides verified outcome followup recording and due followup processing into deduped signals plus proposed tasks without executable work.
+- `internal/agentic/actors/` provides a TeamWorkflow actor recorder adapter over the agentic store.
 - `cmd/elnath/runtime.go` initializes the agentic schema during runtime startup.
 
 Current tables:
@@ -192,6 +195,7 @@ goal_signals(id, goal_id, watcher_id, source, type, payload_json, fingerprint, s
 agentic_tasks(id, goal_id, signal_id, parent_id, queue_task_id, title, prompt, status, priority, risk_level, autonomy_decision, approval_request_id, verification_status, created_at, updated_at, due_at)
 task_edges(parent_id, child_id, edge_type, created_at)
 agent_actors(id, task_id, role, state_json, inbox_json, outbox_json, tool_allowlist_json, budget_json, status, created_at, updated_at)
+actor_handoffs(id, task_id, from_actor_id, to_actor_id, handoff_type, payload_json, status, created_at)
 policy_decisions(id, task_id, actor_id, action_kind, tool_name, risk_level, decision, reason, policy_version, created_at)
 tool_action_receipts(id, task_id, actor_id, policy_decision_id, approval_request_id, tool_name, input_hash, output_hash, output_summary, status, reversible, started_at, completed_at, tool_call_id, raw_output_hash, visible_output_hash, failure_reason, hook_provenance_json)
 verification_runs(id, task_id, verifier_actor_id, criteria_json, evidence_refs_json, verdict, reason, created_at)
@@ -492,32 +496,38 @@ Status: shipped non-executing follow-up scheduler foundation; do not enqueue dae
 
 #### PR11: `feat(actors): promote team roles to durable actors`
 
-Status: next dependency-ready planning/fact-pack target.
+Status: shipped durable TeamWorkflow actor provenance; do not expand into actor-driven runtime without a later reviewed roadmap.
 
 - Purpose: Turn prompt-role subagents into actor records with state/inbox/outbox/budgets.
 - Current related files: `internal/orchestrator/team.go`, `internal/orchestrator/types.go`, `internal/agent/agent.go`.
-- Files to modify: `internal/orchestrator/team.go`, `cmd/elnath/runtime.go`.
-- Files to add: `internal/agentic/actors/store.go`, `internal/agentic/actors/orchestrator.go`, `internal/agentic/actors/handoff.go`.
-- Core implementation: Record planner/executor/verifier/critic/memory actor state and handoffs around existing workflow execution.
+- Files modified: `cmd/elnath/runtime.go`, `internal/orchestrator/team.go`, `internal/orchestrator/types.go`, `internal/agentic/schema.go`, `internal/agentic/store.go`, `internal/agentic/store_test.go`, `internal/agentic/types.go`.
+- Files added: `internal/agentic/actors/recorder.go`, `internal/orchestrator/team_actor_test.go`.
+- Core implementation: Record planner/executor/synthesizer actor state and planner-to-executor / executor-to-synthesizer handoffs around existing TeamWorkflow execution when explicit agentic context is present.
 - Dependency: PR2, PR7, PR8.
-- Completion criteria: Team decomposition creates durable actor records and handoff records.
-- Test criteria: Actor lifecycle and handoff tests; existing team workflow tests stay green.
-- Agentic capability: Agent roles become inspectable actors rather than transient prompts.
-- Hermes update: enforce inherited/intersected toolsets and max actor depth. Child actors must not escalate permissions.
+- Completion criteria: Team decomposition creates durable actor records and handoff records while no-recorder TeamWorkflow behavior remains unchanged.
+- Test criteria: Actor lifecycle and handoff tests; degraded recorder tests; empty-plan terminal-state tests; secret redaction tests; no-autonomous-side-effect tests; existing team workflow tests stay green.
+- Agentic capability: TeamWorkflow planner/executor/synthesizer roles become inspectable actor provenance rather than only transient prompts.
+- Hermes update: budget/depth metadata is recorded as observability only in this slice. Inherited/intersected toolset enforcement and broader actor-depth enforcement remain future work.
 
-### Phase 8: Operator visibility and autonomous push loop
+### Phase 8: Post-control-plane consolidation
 
-#### PR12: `feat(agentic): add operator status and next-task selection`
+#### Next: `docs/review(agentic): post-control-plane consolidation and readiness review`
 
-- Purpose: Let Elnath and Codex continue the roadmap from the highest-priority dependency-ready PR without guessing.
-- Current related files: `docs/roadmap.md`, `cmd/elnath/commands.go`, `cmd/elnath/cmd_daemon.go`.
-- Files to modify: `cmd/elnath/commands.go`, `cmd/elnath/cmd_daemon.go`.
-- Files to add: `internal/agentic/runtime/next.go`, `internal/agentic/runtime/status.go`.
-- Core implementation: Add read-only operator status for goals/signals/tasks/receipts/verification/followups and a deterministic next-work selector.
-- Dependency: PR2, PR3, PR4.
-- Completion criteria: Operator can ask what the current agentic state is and what the next dependency-ready task is.
-- Test criteria: Status rendering tests; next-task selector tests for blocked, ready, and complete phases.
-- Agentic capability: Elnath can push itself forward through an inspectable queue instead of relying on ad hoc chat memory.
+- Purpose: Close the initial PR1-PR11 control-plane roadmap with evidence-backed capability inventory, readiness score, claim grammar, and next-roadmap options.
+- Current related files: `docs/roadmap.md`, `internal/agentic/*`, `cmd/elnath/runtime.go`, `internal/orchestrator/*`, `internal/daemon/*`.
+- Files to modify: documentation and research artifacts only unless the review finds a small correctness bug that must be split into a separate PR.
+- Core review: Build a capability table for PR1-PR11, identify which paths are observe-only versus enforced, list allowed/forbidden claims, and compare next roadmap candidates.
+- Dependency: PR1 through PR11 shipped.
+- Completion criteria: The project can state exactly what is operationally enabled, what is merely durable/provenance foundation, and what remains blocked before global autonomous runtime claims.
+- Test criteria: No production code required. If examples are checked, run focused read-only commands and keep evidence links in the review artifact.
+- Agentic capability: Elnath gains an explicit readiness boundary before any next feature lane.
+
+Post-review candidate, not the current next step:
+
+- `feat(agentic): add operator status and next-task selection`
+- `feat(agentic): broaden ToolGateway/runtime enforcement`
+- `feat(verification): gate agentic task completion`
+- `feat(runtime): enqueue approved proposed tasks`
 
 ## 12. Risks and Guardrails
 
@@ -570,17 +580,17 @@ Next-task selection:
 3. Prefer the smallest PR that increases runtime traceability, policy safety, receipt enforcement, or verification.
 4. Do not jump to higher-autonomy features before policy, approval, receipt, and verification gates exist.
 
-Default current next PR:
+Default current next step:
 
 ```text
-PR11: feat(actors): promote team roles to durable actors
+post-agentic-control-plane consolidation / readiness review
 ```
 
 Autonomy rules for Codex/Elnath work:
 
 - Documentation-only updates may proceed when they keep this roadmap accurate.
 - Read-only inspection and focused tests may proceed without asking.
-- Code edits should stay inside the selected PR surface.
+- Code edits should not start a new feature lane until the post-control-plane readiness review is complete.
 - Mutating runtime behavior should start observe-only, then become enforceable in a later PR.
 - External actions, destructive commands, credential changes, publishing, GitHub writes, or broad autonomous execution require explicit user approval.
 - Memory/wiki updates are allowed only when explicitly requested or when a verified memory-update gate exists.
