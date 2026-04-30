@@ -12,7 +12,7 @@ The central implementation principle is:
 
 Elnath already has a strong execution substrate: agent loop, tool registry, daemon queue, workflow router, fixed workflows, planner/subagent execution, verification loop, research loop, static scheduling, approval store, audit trail, outcomes, and wiki memory.
 
-As of 2026-04-30, the durable agentic foundation is implemented through PR8: `internal/agentic/{schema,store,types,test}.go` exists, runtime startup initializes the agentic schema, daemon queue tasks are linked to durable `agentic_tasks` envelopes, scheduler/ambient/manual submit surfaces can record observe-only `goal_signals`, explicit triage can convert or link signals into `agentic_tasks` without execution, a standalone policy evaluator can persist durable `policy_decisions`, provenance-aware approval requests can link agentic tasks, policy decisions, actor/action/risk/reason metadata, explicit agentic tool calls can pass through a context-gated ToolGateway that records policy decisions and tool action receipts, and Ralph verifier runs can be persisted with criteria/evidence refs when explicit agentic verification context is configured. The roadmap now starts from that foundation instead of treating it as future work.
+As of 2026-04-30, the durable agentic foundation is implemented through PR9: `internal/agentic/{schema,store,types,test}.go` exists, runtime startup initializes the agentic schema, daemon queue tasks are linked to durable `agentic_tasks` envelopes, scheduler/ambient/manual submit surfaces can record observe-only `goal_signals`, explicit triage can convert or link signals into `agentic_tasks` without execution, a standalone policy evaluator can persist durable `policy_decisions`, provenance-aware approval requests can link agentic tasks, policy decisions, actor/action/risk/reason metadata, explicit agentic tool calls can pass through a context-gated ToolGateway that records policy decisions and tool action receipts, Ralph verifier runs can be persisted with criteria/evidence refs when explicit agentic verification context is configured, and explicit agentic memory writes are gated by latest verification status. The roadmap now starts from that foundation instead of treating it as future work.
 
 Hermes Agent moved from the v0.8/v0.9 baseline to v0.10/v0.11 and an active post-v0.11 `main` branch. The Elnath takeaway is not to copy Hermes wholesale. The useful deltas are: ToolGateway-style execution routing, hardline-vs-approval policy separation, plugin/hook lifecycle points, webhook/cron signal hardening, bounded delegation, receipt-backed tool results, and verification-gated memory.
 
@@ -33,9 +33,9 @@ standing goal
 → follow-up scheduler
 ```
 
-## 2. Current Agentic Readiness: 80/100
+## 2. Current Agentic Readiness: 84/100
 
-Elnath is currently a strong workflow runner and tool-using agent platform with a durable agentic control-plane schema, observe-only daemon task envelope linkage, an observe-only signal ledger bridge, explicit signal-to-agentic-task triage, standalone autonomy policy decision records, provenance-aware approval request storage/bridge foundations, a context-gated ToolGateway for explicit agentic tool calls, and durable verifier-run persistence for explicit agentic verification context. It is not yet a complete standing-goal-driven autonomous system because triaged tasks are not automatically enqueued or executed, the gateway is not globally enabled for legacy tool execution, verifier results do not gate task completion, and memory/follow-ups are not yet forced through the agentic runtime.
+Elnath is currently a strong workflow runner and tool-using agent platform with a durable agentic control-plane schema, observe-only daemon task envelope linkage, an observe-only signal ledger bridge, explicit signal-to-agentic-task triage, standalone autonomy policy decision records, provenance-aware approval request storage/bridge foundations, a context-gated ToolGateway for explicit agentic tool calls, durable verifier-run persistence for explicit agentic verification context, and verification-gated trusted memory writes for explicit agentic memory context. It is not yet a complete standing-goal-driven autonomous system because triaged tasks are not automatically enqueued or executed, the gateway is not globally enabled for legacy tool execution, verifier results do not gate task completion, Queue.MarkDone remains ungated, and follow-ups are not yet scheduled through the agentic runtime.
 
 Implemented foundations:
 
@@ -67,6 +67,7 @@ Implemented foundations:
 | Agentic ToolGateway | `internal/agentic/tools/gateway.go` | Context-gated gateway for explicit agentic tool calls; records policy decisions and tool action receipts, and fails closed for denied or approval-required actions. |
 | Agentic tool context | `internal/tools/agentic_context.go` | Carries task, actor, and tool-call identity plus result finalization hooks for explicit agentic tool calls. |
 | Agentic verifier runs | `internal/agentic/verification/recorder.go` | Persists Ralph verifier criteria, evidence refs, verdict, and redacted reason when explicit agentic verification context is configured. |
+| Agentic memory gate | `internal/agentic/memory/` | Gates explicit agentic learning/wiki memory writes on latest passed verification, with memory_updates ledger records for applied, blocked, and failed outcomes. |
 | Hook surface | `internal/agent/hooks.go` | Pre/post tool and LLM lifecycle hooks; useful base for receipt-aware gateway hooks. |
 
 ## 3. Workflow vs Agentic Gap
@@ -114,11 +115,11 @@ Still missing as runtime behavior:
 - End-to-end runtime wiring that injects task/action/risk/policy provenance into every enforced approval path.
 - Receipt enforcement before task completion.
 - Verification gate before `Queue.MarkDone` for required agentic tasks.
-- Verified-only memory/outcome/wiki update policy.
+- Broader/global memory gate wiring beyond explicit agentic context.
 - Follow-up scheduler with dedupe/cooldown/fanout limits.
 - Durable actor runtime for planner/executor/verifier/critic/memory/scheduler roles.
 
-Non-claims after PR1, PR2, PR3, PR4, PR5, PR6, PR7, and PR8:
+Non-claims after PR1, PR2, PR3, PR4, PR5, PR6, PR7, PR8, and PR9:
 
 - No autonomous runtime behavior is enabled.
 - Signals are not enqueued into daemon work.
@@ -127,7 +128,7 @@ Non-claims after PR1, PR2, PR3, PR4, PR5, PR6, PR7, and PR8:
 - Approval provenance storage and bridge foundations exist; approval-required gateway calls fail closed and create/reuse approvals, but there is no synchronous approval wait or retry-after-approval UX yet.
 - Tool action receipts are recorded through the context-gated gateway, but receipt-based task completion gates are not active.
 - Verifier runs can be persisted when explicit agentic verification context is configured, but no verifier gate is active.
-- No memory gate is active.
+- Memory writes are gated only for explicit agentic memory context; legacy non-agentic learning/wiki behavior and explicit user memory remain compatible.
 - No follow-up scheduler is active.
 
 ## 5. Target Architecture
@@ -177,6 +178,7 @@ Implemented:
 - `internal/agentic/triage/triage.go` provides explicit signal-to-task triage without execution.
 - `internal/agentic/tools/gateway.go` provides a context-gated ToolGateway for explicit agentic tool calls.
 - `internal/agentic/verification/recorder.go` provides durable verifier-run recording with criteria/evidence refs and reason redaction/truncation.
+- `internal/agentic/memory/` provides explicit agentic memory gating for learning lessons and research wiki writes, with applied/blocked/failed memory_updates ledger entries.
 - `cmd/elnath/runtime.go` initializes the agentic schema during runtime startup.
 
 Current tables:
@@ -191,7 +193,7 @@ agent_actors(id, task_id, role, state_json, inbox_json, outbox_json, tool_allowl
 policy_decisions(id, task_id, actor_id, action_kind, tool_name, risk_level, decision, reason, policy_version, created_at)
 tool_action_receipts(id, task_id, actor_id, policy_decision_id, approval_request_id, tool_name, input_hash, output_hash, output_summary, status, reversible, started_at, completed_at, tool_call_id, raw_output_hash, visible_output_hash, failure_reason, hook_provenance_json)
 verification_runs(id, task_id, verifier_actor_id, criteria_json, evidence_refs_json, verdict, reason, created_at)
-memory_updates(id, task_id, receipt_id, verification_run_id, target, operation, payload_hash, status, created_at)
+memory_updates(id, task_id, receipt_id, verification_run_id, target, operation, payload_hash, status, source, reason, created_at, applied_at)
 followups(id, task_id, goal_id, trigger_at, reason, status, created_task_id, created_at)
 ```
 
@@ -274,8 +276,9 @@ Verification:
 
 Memory:
 
-- Trusted memory update requires verifier pass or explicit user memory command.
-- Outcome records should include task/verification/receipt provenance.
+- Explicit agentic trusted memory updates require verifier pass or explicit user memory command.
+- Agentic outcome records should not become trusted routing memory until verification has passed.
+- Legacy non-agentic learning/wiki behavior remains compatible until broader runtime gates are introduced.
 
 Scheduler:
 
@@ -302,7 +305,7 @@ MVP Agentic Runtime Control Plane:
 - Mutating tools require approval by default: write/edit/bash/git/wiki_write and comparable MCP mutators.
 - Every tool call creates a receipt.
 - Task completion requires one verifier run.
-- Memory/outcome writes require verifier pass or explicit user memory action.
+- Explicit agentic memory/outcome writes require verifier pass or explicit user memory action.
 - Follow-up supports one-shot scheduled tasks.
 
 ## 10. Ultimate Scope
@@ -452,21 +455,24 @@ Status: shipped verifier-run persistence foundation; do not add verifier, memory
 
 #### PR9: `feat(memory): gate memory updates on verification`
 
-Status: next dependency-ready planning/fact-pack target.
+Status: shipped explicit agentic memory verification gate; do not gate Queue.MarkDone or rewrite legacy memory behavior without later PRs.
 
 - Purpose: Prevent unverified outcomes from becoming trusted future context.
-- Current related files: `internal/learning/outcome.go`, `internal/learning/outcome_store.go`, `internal/wiki/index.go`, `cmd/elnath/runtime.go`.
-- Files to modify: `internal/learning/outcome.go`, `cmd/elnath/runtime.go`, wiki/learning integration points.
-- Files to add: `internal/agentic/memory/policy.go`, `internal/agentic/memory/store.go`.
-- Core implementation: Write `memory_updates`; allow trusted memory only after verifier pass or explicit user memory command.
+- Current related files: `internal/learning/outcome.go`, `internal/learning/outcome_store.go`, `internal/wiki/index.go`, `cmd/elnath/runtime.go`, `internal/orchestrator/research.go`, `internal/research/loop.go`.
+- Files modified: `cmd/elnath/runtime.go`, `internal/agentic/schema.go`, `internal/agentic/store.go`, `internal/agentic/store_test.go`, `internal/agentic/types.go`, `internal/orchestrator/learning.go`, `internal/orchestrator/research.go`, `internal/research/learning.go`, `internal/research/loop.go`, `internal/telegram/shell_test.go`.
+- Files added: `internal/agentic/memory/gate.go`, `internal/agentic/memory/learning.go`, `internal/agentic/memory/wiki.go`, `internal/agentic/memory/gate_test.go`.
+- Core implementation: Explicit agentic learning/wiki memory writes pass through a verification gate; latest passed verifier permits trusted writes, while failed, inconclusive, or missing verification records blocked ledger entries and prevents trusted writes.
 - Dependency: PR8.
-- Completion criteria: Failed/unverified agentic tasks do not update trusted memory.
-- Test criteria: Memory gate tests for pass/fail/user-explicit cases.
-- Agentic capability: Memory becomes safer and provenance-aware.
+- Completion criteria: Failed/unverified agentic tasks do not update trusted learning/wiki memory, explicit user memory remains allowed, and legacy non-agentic learning/wiki behavior remains unchanged.
+- Test criteria: Memory gate tests cover passed/failed/inconclusive/missing verification, explicit user memory, legacy no-context behavior, Queue.MarkDone non-gating, no policy/approval/receipt/follow-up side effects, research learning/wiki gate paths, routing outcome verification gating, and concurrent memory_updates dedupe.
+- Agentic capability: Explicit agentic memory becomes safer and provenance-aware.
+- Non-goal: PR9 does not gate queue completion, does not globally rewrite legacy memory behavior, and does not create follow-ups.
 
 ### Phase 6: Follow-up and autonomous continuation
 
 #### PR10: `feat(followup): schedule follow-up tasks from task outcomes`
+
+Status: next dependency-ready planning/fact-pack target.
 
 - Purpose: Let verified outcomes create bounded future work.
 - Current related files: `internal/scheduler/scheduler.go`, `internal/ambient/scheduler.go`, `cmd/elnath/cmd_daemon.go`.
@@ -531,7 +537,7 @@ MVP acceptance:
 - Read-only tool calls can execute with receipts.
 - Mutating tool calls require approval unless an explicit policy permits them.
 - Required verifier pass is recorded before agentic task completion.
-- Trusted memory/outcome writes record provenance to verification/receipt IDs.
+- Trusted agentic memory/outcome writes record provenance to verification/receipt IDs.
 - One-shot follow-up can create a future bounded task.
 
 Ultimate acceptance:
@@ -562,7 +568,7 @@ Next-task selection:
 Default current next PR:
 
 ```text
-PR9: feat(memory): gate memory updates on verification
+PR10: feat(followup): schedule follow-up tasks from task outcomes
 ```
 
 Autonomy rules for Codex/Elnath work:
