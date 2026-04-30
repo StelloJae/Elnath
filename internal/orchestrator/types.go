@@ -35,10 +35,17 @@ type WorkflowInput struct {
 	AgenticTaskID        int64
 	VerifierActorID      int64
 	VerificationRecorder AgenticVerificationRecorder
+	ActorRecorder        AgenticActorRecorder
 }
 
 type AgenticVerificationRecorder interface {
 	RecordVerificationRun(ctx context.Context, run agentic.VerificationRun) (*agentic.VerificationRun, error)
+}
+
+type AgenticActorRecorder interface {
+	CreateActor(ctx context.Context, actor agentic.AgentActor) (*agentic.AgentActor, error)
+	UpdateActor(ctx context.Context, actor agentic.AgentActor) (*agentic.AgentActor, error)
+	CreateHandoff(ctx context.Context, handoff agentic.ActorHandoff) (*agentic.ActorHandoff, error)
 }
 
 type LearningDeps struct {

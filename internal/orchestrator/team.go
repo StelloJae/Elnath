@@ -10,9 +10,11 @@ import (
 	"sync"
 
 	"github.com/stello/elnath/internal/agent"
+	"github.com/stello/elnath/internal/agentic"
 	"github.com/stello/elnath/internal/event"
 	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
+	"github.com/stello/elnath/internal/secret"
 )
 
 // TeamWorkflow splits a task into parallel subtasks, runs each in its own
@@ -38,10 +40,11 @@ type subtask struct {
 
 // subtaskResult carries the output of one goroutine.
 type subtaskResult struct {
-	subtask subtask
-	result  *agent.RunResult
-	stream  string
-	err     error
+	subtask         subtask
+	result          *agent.RunResult
+	stream          string
+	executorActorID int64
+	err             error
 }
 
 // Run implements Workflow.
@@ -57,8 +60,42 @@ func (w *TeamWorkflow) Run(ctx context.Context, input WorkflowInput) (*WorkflowR
 	workflowInput := input
 	workflowInput.Messages = append(workflowInput.Messages, llm.NewUserMessage(input.Message))
 
+	var plannerActor *agentic.AgentActor
+	if teamActorRecordingEnabled(input) {
+		var err error
+		plannerActor, err = w.createTeamActor(ctx, input, agentic.ActorRolePlanner, agentic.ActorStatusCreated, map[string]any{
+			"phase": "created",
+		}, []map[string]any{
+			{"kind": "task", "summary": actorPreview(input.Message)},
+		}, nil)
+		if err != nil {
+			emitActorRecorderDegraded(input, agentic.ActorRolePlanner, "create", err)
+			plannerActor = nil
+			input.ActorRecorder = nil
+			workflowInput.ActorRecorder = nil
+		} else {
+			plannerActor, err = w.updateTeamActor(ctx, input, *plannerActor, agentic.ActorStatusRunning, map[string]any{
+				"phase": "planning",
+			}, nil)
+			if err != nil {
+				emitActorRecorderDegraded(input, agentic.ActorRolePlanner, "running", err)
+				plannerActor = nil
+				input.ActorRecorder = nil
+				workflowInput.ActorRecorder = nil
+			}
+		}
+	}
+
 	subtasks, err := w.planSubtasks(ctx, input)
 	if err != nil {
+		if plannerActor != nil {
+			if _, recordErr := w.updateTeamActor(ctx, input, *plannerActor, agentic.ActorStatusFailed, map[string]any{
+				"phase": "failed",
+				"error": actorPreview(err.Error()),
+			}, nil); recordErr != nil {
+				emitActorRecorderDegraded(input, agentic.ActorRolePlanner, "failed", recordErr)
+			}
+		}
 		w.logger.Warn("team workflow: planner failed, falling back to single workflow", "error", err)
 		input.Sink.Emit(event.TextDeltaEvent{Base: event.NewBase(), Content: fmt.Sprintf("[team] planner recovery failed: %v\n", err)})
 		input.Sink.Emit(event.TextDeltaEvent{Base: event.NewBase(), Content: "[team] falling back to single workflow\n"})
@@ -66,21 +103,95 @@ func (w *TeamWorkflow) Run(ctx context.Context, input WorkflowInput) (*WorkflowR
 	}
 
 	if len(subtasks) == 0 {
+		if plannerActor != nil {
+			if _, err := w.updateTeamActor(ctx, input, *plannerActor, agentic.ActorStatusCanceled, map[string]any{
+				"phase": "fallback_empty_plan",
+			}, nil); err != nil {
+				emitActorRecorderDegraded(input, agentic.ActorRolePlanner, "fallback_empty_plan", err)
+			}
+		}
 		// Degenerate case: planner returned nothing — fall back to single.
 		return NewSingleWorkflow().Run(ctx, input)
+	}
+	if plannerActor != nil {
+		var err error
+		plannerActor, err = w.updateTeamActor(ctx, input, *plannerActor, agentic.ActorStatusSucceeded, map[string]any{
+			"phase": "planned",
+			"count": len(subtasks),
+		}, []map[string]any{
+			{"kind": "subtasks", "items": actorSubtaskSummaries(subtasks)},
+		})
+		if err != nil {
+			emitActorRecorderDegraded(input, agentic.ActorRolePlanner, "succeeded", err)
+			plannerActor = nil
+			input.ActorRecorder = nil
+			workflowInput.ActorRecorder = nil
+		}
 	}
 
 	w.logger.Info("team workflow: subtasks planned", "count", len(subtasks))
 	input.Sink.Emit(event.TextDeltaEvent{Base: event.NewBase(), Content: fmt.Sprintf("[team] planned %d subtasks\n", len(subtasks))})
 
-	results, totalUsage, err := w.runSubtasks(ctx, workflowInput, subtasks)
+	results, totalUsage, err := w.runSubtasks(ctx, workflowInput, subtasks, plannerActor)
 	if err != nil {
 		return nil, fmt.Errorf("team workflow: execute: %w", err)
 	}
 
+	var synthesizerActor *agentic.AgentActor
+	if teamActorRecordingEnabled(input) {
+		synthesizerActor, err = w.createTeamActor(ctx, input, agentic.ActorRoleSynthesizer, agentic.ActorStatusCreated, map[string]any{
+			"phase": "created",
+		}, []map[string]any{
+			{"kind": "executor_results", "count": len(results)},
+		}, nil)
+		if err != nil {
+			emitActorRecorderDegraded(input, agentic.ActorRoleSynthesizer, "create", err)
+			synthesizerActor = nil
+		} else {
+			synthesizerActor, err = w.updateTeamActor(ctx, input, *synthesizerActor, agentic.ActorStatusRunning, map[string]any{
+				"phase": "synthesizing",
+				"count": len(results),
+			}, nil)
+			if err != nil {
+				emitActorRecorderDegraded(input, agentic.ActorRoleSynthesizer, "running", err)
+				synthesizerActor = nil
+			}
+			for _, result := range results {
+				if synthesizerActor == nil || result.executorActorID == 0 {
+					continue
+				}
+				if err := w.recordTeamHandoff(ctx, input, result.executorActorID, synthesizerActor.ID, "executor_to_synthesizer", map[string]any{
+					"subtask_id": result.subtask.ID,
+					"title":      actorPreview(result.subtask.Title),
+					"status":     actorResultStatus(result),
+					"summary":    actorPreview(subtaskResultSummary(result)),
+				}); err != nil {
+					emitActorRecorderDegraded(input, agentic.ActorRoleSynthesizer, "handoff executor_to_synthesizer", err)
+				}
+			}
+		}
+	}
+
 	finalMessages, summary, synthUsage, err := w.synthesise(ctx, workflowInput, results)
 	if err != nil {
+		if synthesizerActor != nil {
+			if _, recordErr := w.updateTeamActor(ctx, input, *synthesizerActor, agentic.ActorStatusFailed, map[string]any{
+				"phase": "failed",
+				"error": actorPreview(err.Error()),
+			}, nil); recordErr != nil {
+				emitActorRecorderDegraded(input, agentic.ActorRoleSynthesizer, "failed", recordErr)
+			}
+		}
 		return nil, fmt.Errorf("team workflow: synthesise: %w", err)
+	}
+	if synthesizerActor != nil {
+		if _, err := w.updateTeamActor(ctx, input, *synthesizerActor, agentic.ActorStatusSucceeded, map[string]any{
+			"phase": "synthesized",
+		}, []map[string]any{
+			{"kind": "summary", "summary": actorPreview(summary)},
+		}); err != nil {
+			emitActorRecorderDegraded(input, agentic.ActorRoleSynthesizer, "succeeded", err)
+		}
 	}
 
 	totalUsage.InputTokens += synthUsage.InputTokens
@@ -321,7 +432,7 @@ func mergeTeamLearningMessages(results []subtaskResult, finalMessages []llm.Mess
 
 // runSubtasks launches one goroutine per subtask and collects results.
 // Context cancellation propagates to all goroutines.
-func (w *TeamWorkflow) runSubtasks(ctx context.Context, input WorkflowInput, subtasks []subtask) ([]subtaskResult, llm.UsageStats, error) {
+func (w *TeamWorkflow) runSubtasks(ctx context.Context, input WorkflowInput, subtasks []subtask, plannerActor *agentic.AgentActor) ([]subtaskResult, llm.UsageStats, error) {
 	resultCh := make(chan subtaskResult, len(subtasks))
 
 	safeInput := input
@@ -345,7 +456,62 @@ func (w *TeamWorkflow) runSubtasks(ctx context.Context, input WorkflowInput, sub
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
+			var executorActor *agentic.AgentActor
+			if teamActorRecordingEnabled(input) {
+				var err error
+				executorActor, err = w.createTeamActor(ctx, input, agentic.ActorRoleExecutor, agentic.ActorStatusCreated, map[string]any{
+					"phase":      "created",
+					"subtask_id": st.ID,
+				}, []map[string]any{
+					{"kind": "subtask", "id": st.ID, "title": actorPreview(st.Title), "instruction": actorPreview(st.Instruction)},
+				}, nil)
+				if err != nil {
+					emitActorRecorderDegraded(safeInput, agentic.ActorRoleExecutor, "create", err)
+					executorActor = nil
+				}
+				if executorActor != nil && plannerActor != nil {
+					if err := w.recordTeamHandoff(ctx, input, plannerActor.ID, executorActor.ID, "planner_to_executor", map[string]any{
+						"subtask_id":  st.ID,
+						"title":       actorPreview(st.Title),
+						"instruction": actorPreview(st.Instruction),
+					}); err != nil {
+						emitActorRecorderDegraded(safeInput, agentic.ActorRoleExecutor, "handoff planner_to_executor", err)
+						executorActor = nil
+					}
+				}
+				if executorActor != nil {
+					executorActor, err = w.updateTeamActor(ctx, input, *executorActor, agentic.ActorStatusRunning, map[string]any{
+						"phase":      "running",
+						"subtask_id": st.ID,
+					}, nil)
+					if err != nil {
+						emitActorRecorderDegraded(safeInput, agentic.ActorRoleExecutor, "running", err)
+						executorActor = nil
+					}
+				}
+			}
 			res := w.runOne(ctx, safeInput, st, perSubagentMax)
+			if executorActor != nil {
+				status := agentic.ActorStatusSucceeded
+				if res.err != nil {
+					status = agentic.ActorStatusFailed
+				}
+				outbox := []map[string]any{{
+					"kind":    "result",
+					"status":  actorResultStatus(res),
+					"summary": actorPreview(subtaskResultSummary(res)),
+				}}
+				updated, err := w.updateTeamActor(ctx, input, *executorActor, status, map[string]any{
+					"phase":      status,
+					"subtask_id": st.ID,
+				}, outbox)
+				if err != nil {
+					emitActorRecorderDegraded(safeInput, agentic.ActorRoleExecutor, "final", err)
+					resultCh <- res
+					return
+				}
+				res.executorActorID = updated.ID
+			}
 			resultCh <- res
 		}(st)
 	}
@@ -439,6 +605,124 @@ Execution rules:
 	tee := &teeSink{a: captureSink, b: input.Sink}
 	result, err := a.Run(ctx, messages, tee)
 	return subtaskResult{subtask: st, result: result, stream: stream.String(), err: err}
+}
+
+func teamActorRecordingEnabled(input WorkflowInput) bool {
+	return input.AgenticTaskID != 0 && input.ActorRecorder != nil
+}
+
+func (w *TeamWorkflow) createTeamActor(ctx context.Context, input WorkflowInput, role, status string, state any, inbox any, outbox any) (*agentic.AgentActor, error) {
+	return input.ActorRecorder.CreateActor(ctx, agentic.AgentActor{
+		TaskID:            input.AgenticTaskID,
+		Role:              role,
+		StateJSON:         actorJSON(state, "{}"),
+		InboxJSON:         actorJSON(inbox, "[]"),
+		OutboxJSON:        actorJSON(outbox, "[]"),
+		ToolAllowlistJSON: actorToolAllowlistJSON(input),
+		BudgetJSON:        actorBudgetJSON(input),
+		Status:            status,
+	})
+}
+
+func (w *TeamWorkflow) updateTeamActor(ctx context.Context, input WorkflowInput, actor agentic.AgentActor, status string, state any, outbox any) (*agentic.AgentActor, error) {
+	actor.Status = status
+	if state != nil {
+		actor.StateJSON = actorJSON(state, "{}")
+	}
+	if outbox != nil {
+		actor.OutboxJSON = actorJSON(outbox, "[]")
+	}
+	return input.ActorRecorder.UpdateActor(ctx, actor)
+}
+
+func (w *TeamWorkflow) recordTeamHandoff(ctx context.Context, input WorkflowInput, fromActorID, toActorID int64, handoffType string, payload any) error {
+	_, err := input.ActorRecorder.CreateHandoff(ctx, agentic.ActorHandoff{
+		TaskID:      input.AgenticTaskID,
+		FromActorID: fromActorID,
+		ToActorID:   toActorID,
+		HandoffType: handoffType,
+		PayloadJSON: actorJSON(payload, "{}"),
+		Status:      agentic.ActorStatusCreated,
+	})
+	return err
+}
+
+func emitActorRecorderDegraded(input WorkflowInput, role, phase string, err error) {
+	if input.Sink == nil {
+		return
+	}
+	input.Sink.Emit(event.TextDeltaEvent{
+		Base: event.NewBase(),
+		Content: fmt.Sprintf(
+			"[team] actor recorder degraded: task_id=%d role=%s phase=%s error=%v\n",
+			input.AgenticTaskID,
+			role,
+			phase,
+			err,
+		),
+	})
+}
+
+func actorJSON(v any, fallback string) string {
+	if v == nil {
+		return fallback
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return fallback
+	}
+	return string(b)
+}
+
+func actorPreview(s string) string {
+	s = strings.TrimSpace(secret.NewDetector().RedactString(s))
+	const max = 512
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "...[truncated]"
+}
+
+func actorToolAllowlistJSON(input WorkflowInput) string {
+	if input.Tools == nil {
+		return "[]"
+	}
+	return actorJSON(input.Tools.Names(), "[]")
+}
+
+func actorBudgetJSON(input WorkflowInput) string {
+	return actorJSON(map[string]any{
+		"max_iterations":  input.Config.MaxIterations,
+		"max_actor_depth": 1,
+	}, "{}")
+}
+
+func actorSubtaskSummaries(subtasks []subtask) []map[string]any {
+	out := make([]map[string]any, 0, len(subtasks))
+	for _, st := range subtasks {
+		out = append(out, map[string]any{
+			"id":    st.ID,
+			"title": actorPreview(st.Title),
+		})
+	}
+	return out
+}
+
+func actorResultStatus(result subtaskResult) string {
+	if result.err != nil {
+		return agentic.ActorStatusFailed
+	}
+	return agentic.ActorStatusSucceeded
+}
+
+func subtaskResultSummary(result subtaskResult) string {
+	if result.err != nil {
+		return result.err.Error()
+	}
+	if result.result == nil {
+		return ""
+	}
+	return extractSummary(result.result.Messages)
 }
 
 // teeSink forwards each event to two sinks.

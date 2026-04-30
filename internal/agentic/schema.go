@@ -81,6 +81,16 @@ func InitSchema(db *sql.DB) error {
 			created_at INTEGER NOT NULL,
 			updated_at INTEGER NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS actor_handoffs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			task_id INTEGER NOT NULL REFERENCES agentic_tasks(id) ON DELETE CASCADE,
+			from_actor_id INTEGER NOT NULL REFERENCES agent_actors(id) ON DELETE CASCADE,
+			to_actor_id INTEGER NOT NULL REFERENCES agent_actors(id) ON DELETE CASCADE,
+			handoff_type TEXT NOT NULL,
+			payload_json TEXT NOT NULL DEFAULT '{}',
+			status TEXT NOT NULL,
+			created_at INTEGER NOT NULL
+		)`,
 		`CREATE TABLE IF NOT EXISTS policy_decisions (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			task_id INTEGER NOT NULL REFERENCES agentic_tasks(id) ON DELETE CASCADE,
@@ -155,6 +165,9 @@ func InitSchema(db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_agentic_tasks_goal ON agentic_tasks(goal_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_agentic_tasks_signal ON agentic_tasks(signal_id)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_agentic_tasks_queue_task_id ON agentic_tasks(queue_task_id) WHERE queue_task_id IS NOT NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_actor_handoffs_task ON actor_handoffs(task_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_actor_handoffs_from ON actor_handoffs(from_actor_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_actor_handoffs_to ON actor_handoffs(to_actor_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_policy_decisions_task ON policy_decisions(task_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_tool_action_receipts_task ON tool_action_receipts(task_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_verification_runs_task ON verification_runs(task_id)`,

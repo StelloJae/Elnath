@@ -59,6 +59,16 @@ const (
 	FollowupStatusSkipped    = "skipped"
 	FollowupStatusFailed     = "failed"
 	FollowupStatusCanceled   = "canceled"
+
+	ActorStatusCreated   = "created"
+	ActorStatusRunning   = "running"
+	ActorStatusSucceeded = "succeeded"
+	ActorStatusFailed    = "failed"
+	ActorStatusCanceled  = "canceled"
+
+	ActorRolePlanner     = "planner"
+	ActorRoleExecutor    = "executor"
+	ActorRoleSynthesizer = "synthesizer"
 )
 
 type StandingGoal struct {
@@ -144,6 +154,17 @@ type AgentActor struct {
 	Status            string
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
+}
+
+type ActorHandoff struct {
+	ID          int64
+	TaskID      int64
+	FromActorID int64
+	ToActorID   int64
+	HandoffType string
+	PayloadJSON string
+	Status      string
+	CreatedAt   time.Time
 }
 
 type PolicyDecisionRecord struct {

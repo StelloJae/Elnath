@@ -749,6 +749,153 @@ func (s *Store) GetAgentActor(ctx context.Context, id int64) (*AgentActor, error
 	return &actor, nil
 }
 
+func (s *Store) UpdateAgentActor(ctx context.Context, actor AgentActor) (*AgentActor, error) {
+	if actor.ID == 0 {
+		return nil, fmt.Errorf("agentic: update agent actor: missing id")
+	}
+	existing, err := s.GetAgentActor(ctx, actor.ID)
+	if err != nil {
+		return nil, err
+	}
+	if actor.TaskID == 0 {
+		actor.TaskID = existing.TaskID
+	}
+	if actor.Role == "" {
+		actor.Role = existing.Role
+	}
+	if actor.StateJSON == "" {
+		actor.StateJSON = existing.StateJSON
+	}
+	if actor.InboxJSON == "" {
+		actor.InboxJSON = existing.InboxJSON
+	}
+	if actor.OutboxJSON == "" {
+		actor.OutboxJSON = existing.OutboxJSON
+	}
+	if actor.ToolAllowlistJSON == "" {
+		actor.ToolAllowlistJSON = existing.ToolAllowlistJSON
+	}
+	if actor.BudgetJSON == "" {
+		actor.BudgetJSON = existing.BudgetJSON
+	}
+	if actor.Status == "" {
+		actor.Status = existing.Status
+	}
+	actor.UpdatedAt = nowTime()
+	if timeMillis(actor.UpdatedAt) <= timeMillis(existing.UpdatedAt) {
+		actor.UpdatedAt = existing.UpdatedAt.Add(time.Millisecond)
+	}
+	_, err = s.db.ExecContext(ctx, `
+		UPDATE agent_actors
+		SET task_id = ?, role = ?, state_json = ?, inbox_json = ?, outbox_json = ?, tool_allowlist_json = ?, budget_json = ?, status = ?, updated_at = ?
+		WHERE id = ?
+	`, actor.TaskID, actor.Role, actor.StateJSON, actor.InboxJSON, actor.OutboxJSON, actor.ToolAllowlistJSON, actor.BudgetJSON, actor.Status, timeMillis(actor.UpdatedAt), actor.ID)
+	if err != nil {
+		return nil, err
+	}
+	return s.GetAgentActor(ctx, actor.ID)
+}
+
+func (s *Store) ListAgentActorsByTask(ctx context.Context, taskID int64) ([]AgentActor, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, task_id, role, state_json, inbox_json, outbox_json, tool_allowlist_json, budget_json, status, created_at, updated_at
+		FROM agent_actors
+		WHERE task_id = ?
+		ORDER BY id
+	`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var actors []AgentActor
+	for rows.Next() {
+		var actor AgentActor
+		var createdAt, updatedAt int64
+		if err := rows.Scan(&actor.ID, &actor.TaskID, &actor.Role, &actor.StateJSON, &actor.InboxJSON, &actor.OutboxJSON, &actor.ToolAllowlistJSON, &actor.BudgetJSON, &actor.Status, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+		actor.CreatedAt = millisTime(createdAt)
+		actor.UpdatedAt = millisTime(updatedAt)
+		actors = append(actors, actor)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return actors, nil
+}
+
+func (s *Store) CreateActorHandoff(ctx context.Context, handoff ActorHandoff) (*ActorHandoff, error) {
+	if handoff.CreatedAt.IsZero() {
+		handoff.CreatedAt = nowTime()
+	}
+	res, err := s.db.ExecContext(ctx, `
+		INSERT INTO actor_handoffs(task_id, from_actor_id, to_actor_id, handoff_type, payload_json, status, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, handoff.TaskID, handoff.FromActorID, handoff.ToActorID, handoff.HandoffType, handoff.PayloadJSON, handoff.Status, timeMillis(handoff.CreatedAt))
+	if err != nil {
+		return nil, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+	return s.getActorHandoff(ctx, id)
+}
+
+func (s *Store) ListActorHandoffsByTask(ctx context.Context, taskID int64) ([]ActorHandoff, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, task_id, from_actor_id, to_actor_id, handoff_type, payload_json, status, created_at
+		FROM actor_handoffs
+		WHERE task_id = ?
+		ORDER BY id
+	`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return scanActorHandoffs(rows)
+}
+
+func (s *Store) getActorHandoff(ctx context.Context, id int64) (*ActorHandoff, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, task_id, from_actor_id, to_actor_id, handoff_type, payload_json, status, created_at
+		FROM actor_handoffs
+		WHERE id = ?
+	`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	handoffs, err := scanActorHandoffs(rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(handoffs) == 0 {
+		return nil, sql.ErrNoRows
+	}
+	return &handoffs[0], nil
+}
+
+func scanActorHandoffs(rows *sql.Rows) ([]ActorHandoff, error) {
+	var handoffs []ActorHandoff
+	for rows.Next() {
+		var handoff ActorHandoff
+		var createdAt int64
+		if err := rows.Scan(&handoff.ID, &handoff.TaskID, &handoff.FromActorID, &handoff.ToActorID, &handoff.HandoffType, &handoff.PayloadJSON, &handoff.Status, &createdAt); err != nil {
+			return nil, err
+		}
+		handoff.CreatedAt = millisTime(createdAt)
+		handoffs = append(handoffs, handoff)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return handoffs, nil
+}
+
 func (s *Store) CreatePolicyDecision(ctx context.Context, decision PolicyDecisionRecord) (*PolicyDecisionRecord, error) {
 	if decision.CreatedAt.IsZero() {
 		decision.CreatedAt = nowTime()

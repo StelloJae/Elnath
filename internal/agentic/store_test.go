@@ -81,6 +81,7 @@ func TestAgenticSchema_TablesExist(t *testing.T) {
 		"agentic_tasks",
 		"task_edges",
 		"agent_actors",
+		"actor_handoffs",
 		"policy_decisions",
 		"tool_action_receipts",
 		"verification_runs",
@@ -113,6 +114,9 @@ func TestAgenticSchema_RoadmapColumnsExist(t *testing.T) {
 		},
 		"agent_actors": {
 			"id", "task_id", "role", "state_json", "inbox_json", "outbox_json", "tool_allowlist_json", "budget_json", "status", "created_at", "updated_at",
+		},
+		"actor_handoffs": {
+			"id", "task_id", "from_actor_id", "to_actor_id", "handoff_type", "payload_json", "status", "created_at",
 		},
 		"policy_decisions": {
 			"id", "task_id", "actor_id", "action_kind", "tool_name", "risk_level", "decision", "reason", "policy_version", "created_at",
@@ -820,6 +824,123 @@ func TestAgenticStore_InsertReadAgentActor(t *testing.T) {
 	}
 }
 
+func TestActorStore_ListAndUpdateActorLifecycle(t *testing.T) {
+	ctx := context.Background()
+	_, store := newTestStore(t)
+	task := createTestTask(t, ctx, store)
+
+	planner, err := store.CreateAgentActor(ctx, AgentActor{
+		TaskID:            task.ID,
+		Role:              ActorRolePlanner,
+		StateJSON:         `{"phase":"created"}`,
+		InboxJSON:         `[{"kind":"task"}]`,
+		OutboxJSON:        `[]`,
+		ToolAllowlistJSON: `["read"]`,
+		BudgetJSON:        `{"max_iterations":10}`,
+		Status:            ActorStatusCreated,
+	})
+	if err != nil {
+		t.Fatalf("CreateAgentActor planner: %v", err)
+	}
+	if _, err := store.CreateAgentActor(ctx, AgentActor{
+		TaskID:            task.ID,
+		Role:              ActorRoleExecutor,
+		StateJSON:         `{}`,
+		InboxJSON:         `[]`,
+		OutboxJSON:        `[]`,
+		ToolAllowlistJSON: `["read"]`,
+		BudgetJSON:        `{"max_iterations":5}`,
+		Status:            ActorStatusCreated,
+	}); err != nil {
+		t.Fatalf("CreateAgentActor executor: %v", err)
+	}
+
+	running, err := store.UpdateAgentActor(ctx, AgentActor{
+		ID:                planner.ID,
+		TaskID:            task.ID,
+		Role:              ActorRolePlanner,
+		StateJSON:         `{"phase":"planning"}`,
+		InboxJSON:         `[{"kind":"task"}]`,
+		OutboxJSON:        `[]`,
+		ToolAllowlistJSON: `["read"]`,
+		BudgetJSON:        `{"max_iterations":10}`,
+		Status:            ActorStatusRunning,
+	})
+	if err != nil {
+		t.Fatalf("UpdateAgentActor running: %v", err)
+	}
+	if running.Status != ActorStatusRunning || running.StateJSON != `{"phase":"planning"}` {
+		t.Fatalf("unexpected running actor: %+v", running)
+	}
+
+	done, err := store.UpdateAgentActor(ctx, AgentActor{
+		ID:                planner.ID,
+		TaskID:            task.ID,
+		Role:              ActorRolePlanner,
+		StateJSON:         `{"phase":"planned"}`,
+		InboxJSON:         `[{"kind":"task"}]`,
+		OutboxJSON:        `[{"kind":"subtask","count":2}]`,
+		ToolAllowlistJSON: `["read"]`,
+		BudgetJSON:        `{"max_iterations":10}`,
+		Status:            ActorStatusSucceeded,
+	})
+	if err != nil {
+		t.Fatalf("UpdateAgentActor succeeded: %v", err)
+	}
+	if !done.UpdatedAt.After(planner.UpdatedAt) {
+		t.Fatalf("updated timestamp did not advance: before=%s after=%s", planner.UpdatedAt, done.UpdatedAt)
+	}
+
+	actors, err := store.ListAgentActorsByTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListAgentActorsByTask: %v", err)
+	}
+	if len(actors) != 2 {
+		t.Fatalf("actors = %+v, want 2", actors)
+	}
+	if actors[0].Role != ActorRolePlanner || actors[0].Status != ActorStatusSucceeded {
+		t.Fatalf("first actor = %+v, want succeeded planner", actors[0])
+	}
+	if actors[1].Role != ActorRoleExecutor {
+		t.Fatalf("second actor = %+v, want executor", actors[1])
+	}
+}
+
+func TestActorStore_CreateAndListHandoffs(t *testing.T) {
+	ctx := context.Background()
+	_, store := newTestStore(t)
+	task := createTestTask(t, ctx, store)
+	planner := createTestActorWithRole(t, ctx, store, task.ID, ActorRolePlanner)
+	executor := createTestActorWithRole(t, ctx, store, task.ID, ActorRoleExecutor)
+
+	handoff, err := store.CreateActorHandoff(ctx, ActorHandoff{
+		TaskID:      task.ID,
+		FromActorID: planner.ID,
+		ToActorID:   executor.ID,
+		HandoffType: "planner_to_executor",
+		PayloadJSON: `{"subtask_id":1,"title":"Inspect"}`,
+		Status:      ActorStatusCreated,
+	})
+	if err != nil {
+		t.Fatalf("CreateActorHandoff: %v", err)
+	}
+	if handoff.ID == 0 || handoff.CreatedAt.IsZero() {
+		t.Fatalf("unexpected handoff: %+v", handoff)
+	}
+
+	handoffs, err := store.ListActorHandoffsByTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListActorHandoffsByTask: %v", err)
+	}
+	if len(handoffs) != 1 {
+		t.Fatalf("handoffs = %+v, want 1", handoffs)
+	}
+	got := handoffs[0]
+	if got.FromActorID != planner.ID || got.ToActorID != executor.ID || got.HandoffType != "planner_to_executor" || got.PayloadJSON == "" {
+		t.Fatalf("unexpected handoff: %+v", got)
+	}
+}
+
 func TestAgenticStore_InsertReadPolicyDecision(t *testing.T) {
 	ctx := context.Background()
 	_, store := newTestStore(t)
@@ -1265,15 +1386,20 @@ func createTestPolicyDecision(t *testing.T, ctx context.Context, store *Store, t
 
 func createTestActor(t *testing.T, ctx context.Context, store *Store, taskID int64) *AgentActor {
 	t.Helper()
+	return createTestActorWithRole(t, ctx, store, taskID, "executor")
+}
+
+func createTestActorWithRole(t *testing.T, ctx context.Context, store *Store, taskID int64, role string) *AgentActor {
+	t.Helper()
 	actor, err := store.CreateAgentActor(ctx, AgentActor{
 		TaskID:            taskID,
-		Role:              "executor",
+		Role:              role,
 		StateJSON:         `{}`,
 		InboxJSON:         `[]`,
 		OutboxJSON:        `[]`,
 		ToolAllowlistJSON: `[]`,
 		BudgetJSON:        `{}`,
-		Status:            "ready",
+		Status:            ActorStatusCreated,
 	})
 	if err != nil {
 		t.Fatalf("CreateAgentActor: %v", err)

@@ -14,6 +14,7 @@ import (
 	"github.com/stello/elnath/internal/agent"
 	"github.com/stello/elnath/internal/agent/reflection"
 	"github.com/stello/elnath/internal/agentic"
+	agenticactors "github.com/stello/elnath/internal/agentic/actors"
 	agenticmemory "github.com/stello/elnath/internal/agentic/memory"
 	agenticverification "github.com/stello/elnath/internal/agentic/verification"
 	"github.com/stello/elnath/internal/audit"
@@ -935,6 +936,10 @@ func (rt *executionRuntime) runTask(
 	if wf.Name() == "ralph" && rt.agenticStore != nil && hasAgenticTask {
 		input.AgenticTaskID = agenticTaskID
 		input.VerificationRecorder = agenticverification.NewRecorder(rt.agenticStore)
+	}
+	if wf.Name() == "team" && rt.agenticStore != nil && hasAgenticTask {
+		input.AgenticTaskID = agenticTaskID
+		input.ActorRecorder = agenticactors.NewRecorder(rt.agenticStore)
 	}
 	if wf.Name() == "research" && rt.wikiIdx != nil && rt.wikiStore != nil {
 		input.Extra = &orchestrator.ResearchDeps{
