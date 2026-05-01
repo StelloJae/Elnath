@@ -31,6 +31,7 @@ type agenticCommandFixture struct {
 	approval   *daemon.ApprovalRequest
 	receipt    *agentic.ToolActionReceipt
 	verifier   *agentic.VerificationRun
+	gate       *agentic.CompletionGate
 	memory     *agentic.MemoryUpdate
 	followup   *agentic.Followup
 	planner    *agentic.AgentActor
@@ -245,6 +246,19 @@ func newAgenticCommandFixture(t *testing.T) *agenticCommandFixture {
 	if err != nil {
 		t.Fatalf("verification: %v", err)
 	}
+	gate, err := store.CreateCompletionGate(ctx, agentic.CompletionGate{
+		TaskID:             task.ID,
+		QueueTaskID:        queueTaskID,
+		VerificationRunID:  verifier.ID,
+		Status:             agentic.CompletionGateStatusBlocked,
+		Reason:             "verification failed bounded reason",
+		ReceiptSummaryJSON: `{"started":0,"failed":1}`,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	})
+	if err != nil {
+		t.Fatalf("completion gate: %v", err)
+	}
 	memory, err := store.CreateMemoryUpdate(ctx, agentic.MemoryUpdate{
 		TaskID:            task.ID,
 		ReceiptID:         receipt.ID,
@@ -286,6 +300,7 @@ func newAgenticCommandFixture(t *testing.T) *agenticCommandFixture {
 		approval:  approval,
 		receipt:   receipt,
 		verifier:  verifier,
+		gate:      gate,
 		memory:    memory,
 		followup:  followup,
 		planner:   planner,
@@ -335,6 +350,7 @@ func TestAgenticCommand_StatusSummarizesLedgerCounts(t *testing.T) {
 		"tasks: proposed=1",
 		"approvals: pending=1",
 		"receipts: failed=1",
+		"completion_gates: blocked=1",
 		"verification: failed=1",
 		"memory: blocked=1",
 		"followups: pending=1 due=1",
@@ -367,6 +383,40 @@ func TestAgenticCommand_StatusReportsAttentionItems(t *testing.T) {
 	}
 }
 
+func TestAgenticCommand_CompletionGateViewsHandleMissingTable(t *testing.T) {
+	fx := newAgenticCommandFixture(t)
+	if _, err := fx.db.Main.Exec(`DROP TABLE completion_gates`); err != nil {
+		t.Fatalf("drop completion_gates: %v", err)
+	}
+
+	statusOut, _ := captureOutput(t, func() {
+		if err := cmdAgentic(context.Background(), []string{"status"}); err != nil {
+			t.Fatalf("cmdAgentic status with missing completion_gates: %v", err)
+		}
+	})
+	if !strings.Contains(statusOut, "Agentic Control Plane") {
+		t.Fatalf("status output = %q, want agentic status", statusOut)
+	}
+
+	taskOut, _ := captureOutput(t, func() {
+		if err := cmdAgentic(context.Background(), []string{"task", fmt.Sprint(fx.task.ID)}); err != nil {
+			t.Fatalf("cmdAgentic task with missing completion_gates: %v", err)
+		}
+	})
+	if !strings.Contains(taskOut, "completion_gates: none") {
+		t.Fatalf("task output = %q, want missing completion gates rendered as none", taskOut)
+	}
+
+	lineageOut, _ := captureOutput(t, func() {
+		if err := cmdAgentic(context.Background(), []string{"lineage", fmt.Sprint(fx.task.ID)}); err != nil {
+			t.Fatalf("cmdAgentic lineage with missing completion_gates: %v", err)
+		}
+	})
+	if !strings.Contains(lineageOut, "Completion gates\n  none") {
+		t.Fatalf("lineage output = %q, want missing completion gates section rendered as none", lineageOut)
+	}
+}
+
 func TestAgenticCommand_TaskShowsCoreTaskLinks(t *testing.T) {
 	fx := newAgenticCommandFixture(t)
 	stdout, _ := captureOutput(t, func() {
@@ -387,6 +437,7 @@ func TestAgenticCommand_TaskShowsCoreTaskLinks(t *testing.T) {
 		"memory: blocked=1",
 		"followups: pending=1 due=1",
 		"actors: executor=1 planner=1",
+		"completion_gates: blocked=1",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("task output = %q, want %q", stdout, want)
@@ -422,6 +473,8 @@ func TestAgenticCommand_LineageShowsGoalSignalTaskActorPolicyApprovalReceiptVeri
 		fmt.Sprintf("#%d pending tool=bash risk=high", fx.approval.ID),
 		"Receipts",
 		fmt.Sprintf("#%d failed tool=bash", fx.receipt.ID),
+		"Completion gates",
+		fmt.Sprintf("#%d blocked verifier=#%d reason=verification failed bounded reason", fx.gate.ID, fx.verifier.ID),
 		"Verification",
 		fmt.Sprintf("#%d failed", fx.verifier.ID),
 		"Memory",
@@ -464,6 +517,7 @@ func TestAgenticCommand_LineageHandlesMissingOptionalSections(t *testing.T) {
 		"Policy decisions\n  none",
 		"Approvals\n  none",
 		"Receipts\n  none",
+		"Completion gates\n  none",
 		"Verification\n  none",
 		"Memory\n  none",
 		"Followups\n  none",
@@ -495,6 +549,7 @@ func TestAgenticCommand_JSONOutputStable(t *testing.T) {
 		Policies     []any `json:"policy_decisions"`
 		Approvals    []any `json:"approvals"`
 		Receipts     []any `json:"receipts"`
+		Gates        []any `json:"completion_gates"`
 		Verification []any `json:"verification_runs"`
 		Memory       []any `json:"memory_updates"`
 		Followups    []any `json:"followups"`
@@ -508,7 +563,7 @@ func TestAgenticCommand_JSONOutputStable(t *testing.T) {
 	if view.Task.ID != fx.task.ID || view.Task.Status != agentic.TaskStatusProposed {
 		t.Fatalf("json task = %+v, want id/status", view.Task)
 	}
-	if len(view.Actors) != 2 || len(view.Policies) != 1 || len(view.Receipts) != 1 || len(view.Followups) != 1 {
+	if len(view.Actors) != 2 || len(view.Policies) != 1 || len(view.Receipts) != 1 || len(view.Gates) != 1 || len(view.Followups) != 1 {
 		t.Fatalf("json view missing sections: %+v", view)
 	}
 	assertNoRawSecrets(t, stdout, fx.rawSecrets)
@@ -633,6 +688,7 @@ func agenticSideEffectTables() []string {
 		"policy_decisions",
 		"approval_requests",
 		"tool_action_receipts",
+		"completion_gates",
 		"verification_runs",
 		"memory_updates",
 		"followups",

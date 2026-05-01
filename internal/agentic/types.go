@@ -42,6 +42,10 @@ const (
 	ReceiptStatusApprovalRequired = "approval_required"
 	ReceiptStatusDenied           = "denied"
 
+	CompletionGateStatusPassed  = "passed"
+	CompletionGateStatusBlocked = "blocked"
+	CompletionGateStatusFailed  = "failed"
+
 	VerificationVerdictPassed       = "passed"
 	VerificationVerdictFailed       = "failed"
 	VerificationVerdictInconclusive = "inconclusive"
@@ -210,6 +214,18 @@ type VerificationRun struct {
 	Verdict          string
 	Reason           string
 	CreatedAt        time.Time
+}
+
+type CompletionGate struct {
+	ID                 int64
+	TaskID             int64
+	QueueTaskID        int64
+	VerificationRunID  int64
+	Status             string
+	Reason             string
+	ReceiptSummaryJSON string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 type MemoryUpdate struct {

@@ -861,6 +861,17 @@ func agenticEnforcementConfigMode(cfg *config.Config) string {
 	return mode
 }
 
+func agenticCompletionGateConfigMode(cfg *config.Config) string {
+	if cfg == nil {
+		return config.AgenticCompletionGateModeObserve
+	}
+	mode := strings.ToLower(strings.TrimSpace(cfg.Agentic.CompletionGate.Mode))
+	if mode == "" {
+		return config.AgenticCompletionGateModeObserve
+	}
+	return mode
+}
+
 func (rt *executionRuntime) runTask(
 	ctx context.Context,
 	sess *agent.Session,

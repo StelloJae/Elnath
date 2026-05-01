@@ -985,6 +985,40 @@ func (s *Store) GetToolActionReceipt(ctx context.Context, id int64) (*ToolAction
 	return &receipt, nil
 }
 
+func (s *Store) ListToolActionReceiptsByTask(ctx context.Context, taskID int64) ([]ToolActionReceipt, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, task_id, actor_id, policy_decision_id, approval_request_id, tool_name, tool_call_id, input_hash, output_hash, raw_output_hash, visible_output_hash, output_summary, status, failure_reason, hook_provenance_json, reversible, started_at, completed_at
+		FROM tool_action_receipts
+		WHERE task_id = ?
+		ORDER BY id
+	`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var receipts []ToolActionReceipt
+	for rows.Next() {
+		var receipt ToolActionReceipt
+		var actorID, decisionID, completedAt sql.NullInt64
+		var reversible int
+		var startedAt int64
+		if err := rows.Scan(&receipt.ID, &receipt.TaskID, &actorID, &decisionID, &receipt.ApprovalRequestID, &receipt.ToolName, &receipt.ToolCallID, &receipt.InputHash, &receipt.OutputHash, &receipt.RawOutputHash, &receipt.VisibleOutputHash, &receipt.OutputSummary, &receipt.Status, &receipt.FailureReason, &receipt.HookProvenanceJSON, &reversible, &startedAt, &completedAt); err != nil {
+			return nil, err
+		}
+		receipt.ActorID = intFromNull(actorID)
+		receipt.PolicyDecisionID = intFromNull(decisionID)
+		receipt.Reversible = reversible != 0
+		receipt.StartedAt = millisTime(startedAt)
+		receipt.CompletedAt = nullTimeFromMillis(completedAt)
+		receipts = append(receipts, receipt)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return receipts, nil
+}
+
 func (s *Store) FindReusableApprovalRequestID(ctx context.Context, taskID, actorID int64, toolName, inputHash string) (string, error) {
 	var approvalRequestID string
 	err := s.db.QueryRowContext(ctx, `
@@ -1069,6 +1103,81 @@ func (s *Store) ListVerificationRunsByTask(ctx context.Context, taskID int64) ([
 		return nil, err
 	}
 	return runs, nil
+}
+
+func (s *Store) CreateCompletionGate(ctx context.Context, gate CompletionGate) (*CompletionGate, error) {
+	now := nowTime()
+	if gate.CreatedAt.IsZero() {
+		gate.CreatedAt = now
+	}
+	if gate.UpdatedAt.IsZero() {
+		gate.UpdatedAt = gate.CreatedAt
+	}
+	if gate.ReceiptSummaryJSON == "" {
+		gate.ReceiptSummaryJSON = "{}"
+	}
+	res, err := s.db.ExecContext(ctx, `
+		INSERT INTO completion_gates(task_id, queue_task_id, verification_run_id, status, reason, receipt_summary_json, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`, gate.TaskID, nullableInt(gate.QueueTaskID), nullableInt(gate.VerificationRunID), gate.Status, gate.Reason, gate.ReceiptSummaryJSON, timeMillis(gate.CreatedAt), timeMillis(gate.UpdatedAt))
+	if err != nil {
+		return nil, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+	return s.GetCompletionGate(ctx, id)
+}
+
+func (s *Store) GetCompletionGate(ctx context.Context, id int64) (*CompletionGate, error) {
+	var gate CompletionGate
+	var queueTaskID, verificationRunID sql.NullInt64
+	var createdAt, updatedAt int64
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, task_id, queue_task_id, verification_run_id, status, reason, receipt_summary_json, created_at, updated_at
+		FROM completion_gates WHERE id = ?
+	`, id).Scan(&gate.ID, &gate.TaskID, &queueTaskID, &verificationRunID, &gate.Status, &gate.Reason, &gate.ReceiptSummaryJSON, &createdAt, &updatedAt)
+	if err != nil {
+		return nil, err
+	}
+	gate.QueueTaskID = intFromNull(queueTaskID)
+	gate.VerificationRunID = intFromNull(verificationRunID)
+	gate.CreatedAt = millisTime(createdAt)
+	gate.UpdatedAt = millisTime(updatedAt)
+	return &gate, nil
+}
+
+func (s *Store) ListCompletionGatesByTask(ctx context.Context, taskID int64) ([]CompletionGate, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, task_id, queue_task_id, verification_run_id, status, reason, receipt_summary_json, created_at, updated_at
+		FROM completion_gates
+		WHERE task_id = ?
+		ORDER BY id
+	`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var gates []CompletionGate
+	for rows.Next() {
+		var gate CompletionGate
+		var queueTaskID, verificationRunID sql.NullInt64
+		var createdAt, updatedAt int64
+		if err := rows.Scan(&gate.ID, &gate.TaskID, &queueTaskID, &verificationRunID, &gate.Status, &gate.Reason, &gate.ReceiptSummaryJSON, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+		gate.QueueTaskID = intFromNull(queueTaskID)
+		gate.VerificationRunID = intFromNull(verificationRunID)
+		gate.CreatedAt = millisTime(createdAt)
+		gate.UpdatedAt = millisTime(updatedAt)
+		gates = append(gates, gate)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return gates, nil
 }
 
 func (s *Store) CreateMemoryUpdate(ctx context.Context, update MemoryUpdate) (*MemoryUpdate, error) {

@@ -130,13 +130,21 @@ type FaultInjectionConfig struct {
 const (
 	AgenticEnforcementModeObserve = "observe"
 	AgenticEnforcementModeGateway = "gateway"
+
+	AgenticCompletionGateModeObserve      = "observe"
+	AgenticCompletionGateModeVerification = "verification"
 )
 
 type AgenticConfig struct {
-	Enforcement AgenticEnforcementConfig `yaml:"enforcement"`
+	Enforcement    AgenticEnforcementConfig    `yaml:"enforcement"`
+	CompletionGate AgenticCompletionGateConfig `yaml:"completion_gate"`
 }
 
 type AgenticEnforcementConfig struct {
+	Mode string `yaml:"mode"`
+}
+
+type AgenticCompletionGateConfig struct {
 	Mode string `yaml:"mode"`
 }
 
@@ -326,6 +334,11 @@ func validate(cfg *Config) error {
 	case "", AgenticEnforcementModeObserve, AgenticEnforcementModeGateway:
 	default:
 		return fmt.Errorf("unsupported agentic.enforcement.mode: %q (supported: observe, gateway)", cfg.Agentic.Enforcement.Mode)
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.Agentic.CompletionGate.Mode)) {
+	case "", AgenticCompletionGateModeObserve, AgenticCompletionGateModeVerification:
+	default:
+		return fmt.Errorf("unsupported agentic.completion_gate.mode: %q (supported: observe, verification)", cfg.Agentic.CompletionGate.Mode)
 	}
 
 	return nil

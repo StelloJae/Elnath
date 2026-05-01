@@ -133,6 +133,17 @@ func InitSchema(db *sql.DB) error {
 			reason TEXT NOT NULL DEFAULT '',
 			created_at INTEGER NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS completion_gates (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			task_id INTEGER NOT NULL REFERENCES agentic_tasks(id) ON DELETE CASCADE,
+			queue_task_id INTEGER,
+			verification_run_id INTEGER REFERENCES verification_runs(id) ON DELETE SET NULL,
+			status TEXT NOT NULL,
+			reason TEXT NOT NULL DEFAULT '',
+			receipt_summary_json TEXT NOT NULL DEFAULT '{}',
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		)`,
 		`CREATE TABLE IF NOT EXISTS memory_updates (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			task_id INTEGER NOT NULL REFERENCES agentic_tasks(id) ON DELETE CASCADE,
@@ -171,6 +182,8 @@ func InitSchema(db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_policy_decisions_task ON policy_decisions(task_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_tool_action_receipts_task ON tool_action_receipts(task_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_verification_runs_task ON verification_runs(task_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_completion_gates_task ON completion_gates(task_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_completion_gates_queue_task ON completion_gates(queue_task_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_memory_updates_task ON memory_updates(task_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_followups_goal ON followups(goal_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_followups_due ON followups(status, trigger_at)`,

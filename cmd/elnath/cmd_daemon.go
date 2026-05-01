@@ -16,6 +16,7 @@ import (
 	"github.com/stello/elnath/internal/agent"
 	"github.com/stello/elnath/internal/agent/reflection"
 	"github.com/stello/elnath/internal/agentic"
+	agenticcompletion "github.com/stello/elnath/internal/agentic/completion"
 	agenticruntime "github.com/stello/elnath/internal/agentic/runtime"
 	agenticsignals "github.com/stello/elnath/internal/agentic/signals"
 	"github.com/stello/elnath/internal/ambient"
@@ -187,6 +188,7 @@ func cmdDaemonStart(ctx context.Context) error {
 
 	d := daemon.New(queue, cfg.Daemon.SocketPath, cfg.Daemon.MaxWorkers, rt.newDaemonTaskRunner(), app.Logger)
 	d.WithTaskEnvelope(agenticruntime.NewDaemonEnvelope(agenticStore))
+	d.WithCompletionGate(agenticcompletion.NewGate(agenticStore, agenticCompletionGateConfigMode(cfg)))
 	d.WithSubmitSignalBridge(signalBridge)
 	d.WithFaultGuardConfig(fault.GuardConfig{Enabled: cfg.FaultInjection.Enabled})
 	d.MarkFaultGuardChecked()
