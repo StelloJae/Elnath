@@ -336,9 +336,10 @@ func (d *Daemon) handleSubmit(ctx context.Context, conn net.Conn, req IPCRequest
 		principal = d.fallbackPrincipal
 	}
 	idemKey := identity.KeyFor(principal, EncodeTaskPayload(TaskPayload{
-		Type:      parsed.Type,
-		Prompt:    parsed.Prompt,
-		SessionID: parsed.SessionID,
+		Type:               parsed.Type,
+		Prompt:             parsed.Prompt,
+		SessionID:          parsed.SessionID,
+		AgenticEnforcement: parsed.AgenticEnforcement,
 	}))
 
 	id, existed, err := d.queue.Enqueue(ctx, payload, idemKey)

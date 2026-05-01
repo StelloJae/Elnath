@@ -15,7 +15,10 @@ import (
 	"github.com/stello/elnath/internal/agent/reflection"
 	"github.com/stello/elnath/internal/agentic"
 	agenticactors "github.com/stello/elnath/internal/agentic/actors"
+	agenticapprovals "github.com/stello/elnath/internal/agentic/approvals"
 	agenticmemory "github.com/stello/elnath/internal/agentic/memory"
+	agenticpolicy "github.com/stello/elnath/internal/agentic/policy"
+	agentictools "github.com/stello/elnath/internal/agentic/tools"
 	agenticverification "github.com/stello/elnath/internal/agentic/verification"
 	"github.com/stello/elnath/internal/audit"
 	"github.com/stello/elnath/internal/config"
@@ -224,6 +227,21 @@ type executionRuntime struct {
 	reflectModel       string
 	reflectMaxTurns    int
 	reflectTimeout     time.Duration
+}
+
+type agenticRuntimeEnforcementKey struct{}
+
+func withAgenticRuntimeEnforcement(ctx context.Context, mode string) context.Context {
+	mode = strings.TrimSpace(mode)
+	if mode == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, agenticRuntimeEnforcementKey{}, mode)
+}
+
+func agenticRuntimeEnforcementFromContext(ctx context.Context) (string, bool) {
+	mode, ok := ctx.Value(agenticRuntimeEnforcementKey{}).(string)
+	return strings.TrimSpace(mode), ok && strings.TrimSpace(mode) != ""
 }
 
 type compressionHookContextWindow struct {
@@ -781,6 +799,68 @@ func (rt *executionRuntime) learningDeps() *orchestrator.LearningDeps {
 	return deps
 }
 
+func (rt *executionRuntime) configureAgenticToolGateway(
+	ctx context.Context,
+	cfg orchestrator.WorkflowConfig,
+	requestedMode string,
+	taskID int64,
+	hasTaskID bool,
+) (context.Context, orchestrator.WorkflowConfig, error) {
+	requestedMode = strings.ToLower(strings.TrimSpace(requestedMode))
+	if requestedMode == "" {
+		return ctx, cfg, nil
+	}
+	if requestedMode != config.AgenticEnforcementModeGateway {
+		return ctx, cfg, fmt.Errorf("unsupported agentic enforcement mode %q", requestedMode)
+	}
+	if !agenticGatewayConfigPermitted(rt.app.Config) {
+		return ctx, cfg, fmt.Errorf("agentic gateway enforcement requested but config maximum is %q", agenticEnforcementConfigMode(rt.app.Config))
+	}
+	if !hasTaskID || taskID == 0 {
+		return ctx, cfg, fmt.Errorf("agentic gateway enforcement requested but agentic task id is required")
+	}
+	exec, err := rt.newAgenticGatewayExecutor(cfg.ToolExecutor)
+	if err != nil {
+		return ctx, cfg, err
+	}
+	cfg.ToolExecutor = exec
+	ctx = agentictools.WithContext(ctx, agentictools.Context{TaskID: taskID})
+	return ctx, cfg, nil
+}
+
+func (rt *executionRuntime) newAgenticGatewayExecutor(base tools.Executor) (tools.Executor, error) {
+	if rt == nil || rt.db == nil || rt.db.Main == nil || rt.agenticStore == nil {
+		return nil, fmt.Errorf("agentic gateway enforcement requested but agentic runtime store is not configured")
+	}
+	if base == nil {
+		base = rt.reg
+	}
+	if base == nil {
+		return nil, fmt.Errorf("agentic gateway enforcement requested but base tool executor is not configured")
+	}
+	approvalStore, err := daemon.NewApprovalStore(rt.db.Main)
+	if err != nil {
+		return nil, fmt.Errorf("agentic gateway approval store: %w", err)
+	}
+	approvalBridge := agenticapprovals.NewBridge(rt.db.Main, rt.agenticStore, approvalStore)
+	return agentictools.NewGateway(base, rt.agenticStore, agenticpolicy.NewEvaluator(), approvalBridge), nil
+}
+
+func agenticGatewayConfigPermitted(cfg *config.Config) bool {
+	return agenticEnforcementConfigMode(cfg) == config.AgenticEnforcementModeGateway
+}
+
+func agenticEnforcementConfigMode(cfg *config.Config) string {
+	if cfg == nil {
+		return config.AgenticEnforcementModeObserve
+	}
+	mode := strings.ToLower(strings.TrimSpace(cfg.Agentic.Enforcement.Mode))
+	if mode == "" {
+		return config.AgenticEnforcementModeObserve
+	}
+	return mode
+}
+
 func (rt *executionRuntime) runTask(
 	ctx context.Context,
 	sess *agent.Session,
@@ -917,6 +997,13 @@ func (rt *executionRuntime) runTask(
 	cfg.ReflectionEnqueuer = rt.buildReflectionEnqueuer(sess, userInput)
 
 	agenticTaskID, hasAgenticTask := daemon.AgenticTaskIDFromContext(ctx)
+	if mode, ok := agenticRuntimeEnforcementFromContext(ctx); ok {
+		var err error
+		ctx, cfg, err = rt.configureAgenticToolGateway(ctx, cfg, mode, agenticTaskID, hasAgenticTask)
+		if err != nil {
+			return nil, "", err
+		}
+	}
 	input := orchestrator.WorkflowInput{
 		Message:  userInput,
 		Messages: promptMessages,
@@ -1482,6 +1569,11 @@ func (rt *executionRuntime) newDaemonTaskRunner() daemon.AgentTaskRunner {
 		if userInput == "" {
 			return daemon.TaskResult{}, fmt.Errorf("daemon task payload is empty")
 		}
+		preparedCtx, prepErr := rt.prepareDaemonAgenticEnforcement(ctx, taskPayload)
+		if prepErr != nil {
+			return daemon.TaskResult{}, prepErr
+		}
+		ctx = preparedCtx
 		if taskPayload.Type == daemon.TaskTypeSkillPromote {
 			if rt.skillCreator == nil || rt.wikiStore == nil {
 				return daemon.TaskResult{}, fmt.Errorf("skill promotion: creator or wiki store not configured")
@@ -1545,6 +1637,24 @@ func (rt *executionRuntime) newDaemonTaskRunner() daemon.AgentTaskRunner {
 			SessionID: sess.ID,
 		}, nil
 	}
+}
+
+func (rt *executionRuntime) prepareDaemonAgenticEnforcement(ctx context.Context, payload daemon.TaskPayload) (context.Context, error) {
+	mode := strings.ToLower(strings.TrimSpace(payload.AgenticEnforcement))
+	if mode == "" {
+		return ctx, nil
+	}
+	if mode != config.AgenticEnforcementModeGateway {
+		return ctx, fmt.Errorf("unsupported agentic enforcement mode %q", mode)
+	}
+	if !agenticGatewayConfigPermitted(rt.app.Config) {
+		return ctx, fmt.Errorf("agentic gateway enforcement requested but config maximum is %q", agenticEnforcementConfigMode(rt.app.Config))
+	}
+	taskID, ok := daemon.AgenticTaskIDFromContext(ctx)
+	if !ok || taskID == 0 {
+		return ctx, fmt.Errorf("agentic gateway enforcement requested but agentic task id is required")
+	}
+	return withAgenticRuntimeEnforcement(ctx, mode), nil
 }
 
 // daemonProgressFromSink converts an event.Sink into a daemon.ProgressEvent

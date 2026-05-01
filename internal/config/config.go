@@ -34,6 +34,7 @@ type Config struct {
 	Principal      PrincipalConfig      `yaml:"principal"`
 	Daemon         DaemonConfig         `yaml:"daemon"`
 	FaultInjection FaultInjectionConfig `yaml:"fault_injection"`
+	Agentic        AgenticConfig        `yaml:"agentic"`
 	Telegram       TelegramConfig       `yaml:"telegram"`
 	Research       ResearchConfig       `yaml:"research"`
 	LLMExtraction  LLMExtractionConfig  `yaml:"llm_extraction"`
@@ -124,6 +125,19 @@ type DaemonConfig struct {
 type FaultInjectionConfig struct {
 	Enabled   bool   `yaml:"enabled"`
 	OutputDir string `yaml:"output_dir"`
+}
+
+const (
+	AgenticEnforcementModeObserve = "observe"
+	AgenticEnforcementModeGateway = "gateway"
+)
+
+type AgenticConfig struct {
+	Enforcement AgenticEnforcementConfig `yaml:"enforcement"`
+}
+
+type AgenticEnforcementConfig struct {
+	Mode string `yaml:"mode"`
 }
 
 type TelegramConfig struct {
@@ -307,6 +321,11 @@ func validate(cfg *Config) error {
 		if cfg.Telegram.ChatID == "" {
 			return fmt.Errorf("telegram.chat_id is required when telegram.enabled=true")
 		}
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.Agentic.Enforcement.Mode)) {
+	case "", AgenticEnforcementModeObserve, AgenticEnforcementModeGateway:
+	default:
+		return fmt.Errorf("unsupported agentic.enforcement.mode: %q (supported: observe, gateway)", cfg.Agentic.Enforcement.Mode)
 	}
 
 	return nil

@@ -1178,6 +1178,62 @@ func TestDaemonSubmitDoesNotDeduplicateAcrossTaskTypes(t *testing.T) {
 	pollTaskStatus(t, q, extractTaskID(t, second), StatusDone, 5*time.Second)
 }
 
+func TestDaemonSubmitDoesNotDeduplicateAcrossAgenticEnforcementModes(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+
+	release := make(chan struct{})
+	agentRunner := func(_ context.Context, _ string, _ event.Sink) (TaskResult, error) {
+		<-release
+		return TaskResult{Result: "agent result", Summary: "agent result"}, nil
+	}
+
+	socketPath := filepath.Join("/tmp", "elnath-enforcement-dedup-"+strconv.FormatInt(time.Now().UnixNano(), 10)+".sock")
+	startDaemon(t, q, socketPath, agentRunner, 1)
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+
+	principal := identity.Principal{UserID: "42", ProjectID: "proj-1", Surface: "telegram"}
+	legacyPayload := EncodeTaskPayload(TaskPayload{Prompt: "same prompt", Surface: "telegram", Principal: principal})
+	first := sendIPC(t, socketPath, IPCRequest{Command: "submit", Payload: mustMarshalString(t, legacyPayload)})
+	if !first.OK {
+		t.Fatalf("first submit: %s", first.Err)
+	}
+	if extractExisted(t, first) {
+		t.Fatal("first submit should not report deduplication")
+	}
+	firstID := extractTaskID(t, first)
+
+	gatewayPayload := EncodeTaskPayload(TaskPayload{
+		Prompt:             "same prompt",
+		Surface:            "telegram",
+		Principal:          principal,
+		AgenticEnforcement: "gateway",
+	})
+	second := sendIPC(t, socketPath, IPCRequest{Command: "submit", Payload: mustMarshalString(t, gatewayPayload)})
+	if !second.OK {
+		t.Fatalf("second submit: %s", second.Err)
+	}
+	if extractExisted(t, second) {
+		t.Fatal("gateway opt-in submit should not deduplicate against legacy task")
+	}
+	if secondID := extractTaskID(t, second); secondID == firstID {
+		t.Fatalf("second task id = %d, want different from %d", secondID, firstID)
+	}
+
+	close(release)
+	pollTaskStatus(t, q, firstID, StatusDone, 5*time.Second)
+	pollTaskStatus(t, q, extractTaskID(t, second), StatusDone, 5*time.Second)
+}
+
 func TestDaemonSubmitDoesNotDeduplicateAcrossSessions(t *testing.T) {
 	db := openTestDB(t)
 	q, err := NewQueue(db)

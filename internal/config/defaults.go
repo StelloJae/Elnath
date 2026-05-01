@@ -39,6 +39,9 @@ func DefaultConfig() *Config {
 			WorkspaceRetention: "immediate",
 		},
 		FaultInjection: FaultInjectionConfig{Enabled: false},
+		Agentic: AgenticConfig{
+			Enforcement: AgenticEnforcementConfig{Mode: AgenticEnforcementModeObserve},
+		},
 		Research: ResearchConfig{
 			MaxRounds:  5,
 			CostCapUSD: 5.0,
