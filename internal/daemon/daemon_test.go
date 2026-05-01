@@ -96,6 +96,72 @@ type recordingSubmitSignalBridge struct {
 	calls   int
 }
 
+type safeLogBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *safeLogBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *safeLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+type recordingCompletionGate struct {
+	validateErr error
+	evaluateErr error
+	decision    CompletionGateDecision
+
+	mu            sync.Mutex
+	validated     []int64
+	evaluated     []int64
+	agenticTaskID []int64
+}
+
+type closingDBCompletionGate struct {
+	db *sql.DB
+}
+
+func (g closingDBCompletionGate) Validate(context.Context, Task, int64) error {
+	return nil
+}
+
+func (g closingDBCompletionGate) Evaluate(context.Context, Task, int64) (CompletionGateDecision, error) {
+	_ = g.db.Close()
+	return CompletionGateDecision{Passed: true, Status: "passed", Reason: "verification passed"}, nil
+}
+
+func (g *recordingCompletionGate) Validate(_ context.Context, task Task, agenticTaskID int64) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.validated = append(g.validated, task.ID)
+	g.agenticTaskID = append(g.agenticTaskID, agenticTaskID)
+	return g.validateErr
+}
+
+func (g *recordingCompletionGate) Evaluate(_ context.Context, task Task, agenticTaskID int64) (CompletionGateDecision, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.evaluated = append(g.evaluated, task.ID)
+	g.agenticTaskID = append(g.agenticTaskID, agenticTaskID)
+	if g.evaluateErr != nil {
+		return CompletionGateDecision{}, g.evaluateErr
+	}
+	return g.decision, nil
+}
+
+func (g *recordingCompletionGate) snapshot() (validated, evaluated, agenticTaskIDs []int64) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([]int64(nil), g.validated...), append([]int64(nil), g.evaluated...), append([]int64(nil), g.agenticTaskID...)
+}
+
 func (b *recordingSubmitSignalBridge) RecordManualSubmitSignal(_ context.Context, payload string, taskID int64, existed bool) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -425,6 +491,281 @@ func TestDaemonTaskEnvelopePassesAgenticTaskIDToRunner(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("runner did not observe agentic task id")
+	}
+}
+
+func TestCompletionGate_DefaultLegacyDaemonTaskMarksDoneUnchanged(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+	envelope := &recordingTaskEnvelope{}
+	gate := &recordingCompletionGate{decision: CompletionGateDecision{Passed: false, Status: "blocked", Reason: "should not run"}}
+	socketPath := shortDaemonSocketPath("elnath-completion-gate-legacy")
+	d := New(q, socketPath, 1, mockTaskRunner{text: "legacy done"}.run, nil)
+	d.WithTaskEnvelope(envelope)
+	d.WithCompletionGate(gate)
+	startDaemonInstance(t, d, socketPath)
+
+	resp := sendIPC(t, socketPath, IPCRequest{
+		Command: "submit",
+		Payload: mustMarshalString(t, "legacy task"),
+	})
+	if !resp.OK {
+		t.Fatalf("submit: not OK: %s", resp.Err)
+	}
+	taskID := extractTaskID(t, resp)
+	task := pollTaskStatus(t, q, taskID, StatusDone, 5*time.Second)
+	if task.Result != "legacy done" {
+		t.Fatalf("task result = %q, want legacy done", task.Result)
+	}
+	_, evaluated, _ := gate.snapshot()
+	if len(evaluated) != 0 {
+		t.Fatalf("legacy task evaluated completion gate: %v", evaluated)
+	}
+}
+
+func TestCompletionGate_ExplicitGateRequiresPassedVerification(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+	envelope := &recordingTaskEnvelope{}
+	gate := &recordingCompletionGate{decision: CompletionGateDecision{
+		Passed:            true,
+		Status:            "passed",
+		Reason:            "verification passed",
+		VerificationRunID: 7,
+	}}
+	socketPath := shortDaemonSocketPath("elnath-completion-gate-pass")
+	d := New(q, socketPath, 1, mockTaskRunner{text: "verified done"}.run, nil)
+	d.WithTaskEnvelope(envelope)
+	d.WithCompletionGate(gate)
+	startDaemonInstance(t, d, socketPath)
+
+	resp := sendIPC(t, socketPath, IPCRequest{
+		Command: "submit",
+		Payload: mustMarshalString(t, EncodeTaskPayload(TaskPayload{
+			Prompt:                "gated task",
+			AgenticCompletionGate: "verification",
+		})),
+	})
+	if !resp.OK {
+		t.Fatalf("submit: not OK: %s", resp.Err)
+	}
+	taskID := extractTaskID(t, resp)
+	task := pollTaskStatus(t, q, taskID, StatusDone, 5*time.Second)
+	if task.Result != "verified done" {
+		t.Fatalf("task result = %q, want verified done", task.Result)
+	}
+	validated, evaluated, agenticIDs := gate.snapshot()
+	if !sameIDs(validated, []int64{taskID}) || !sameIDs(evaluated, []int64{taskID}) || !sameIDs(agenticIDs, []int64{taskID, taskID}) {
+		t.Fatalf("gate validated=%v evaluated=%v agenticIDs=%v, want task id %d", validated, evaluated, agenticIDs, taskID)
+	}
+}
+
+func TestCompletionGate_BlocksWithoutVerification(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+	envelope := &recordingTaskEnvelope{}
+	gate := &recordingCompletionGate{decision: CompletionGateDecision{
+		Passed: false,
+		Status: "blocked",
+		Reason: "missing verifier run",
+	}}
+	socketPath := shortDaemonSocketPath("elnath-completion-gate-block")
+	d := New(q, socketPath, 1, mockTaskRunner{text: "runner succeeded but gate blocks"}.run, nil)
+	d.WithTaskEnvelope(envelope)
+	d.WithCompletionGate(gate)
+	startDaemonInstance(t, d, socketPath)
+
+	resp := sendIPC(t, socketPath, IPCRequest{
+		Command: "submit",
+		Payload: mustMarshalString(t, EncodeTaskPayload(TaskPayload{
+			Prompt:                "gated task",
+			AgenticCompletionGate: "verification",
+		})),
+	})
+	if !resp.OK {
+		t.Fatalf("submit: not OK: %s", resp.Err)
+	}
+	taskID := extractTaskID(t, resp)
+	task := pollTaskStatus(t, q, taskID, StatusFailed, 5*time.Second)
+	if !strings.Contains(task.Result, "completion gate blocked: missing verifier run") {
+		t.Fatalf("task result = %q, want completion gate block reason", task.Result)
+	}
+	_, succeeded, failed := envelope.snapshot()
+	if len(succeeded) != 0 || !sameIDs(failed, []int64{taskID}) {
+		t.Fatalf("envelope succeeded=%v failed=%v, want failed task %d", succeeded, failed, taskID)
+	}
+}
+
+func TestCompletionGate_ConfigObserveRejectsGateRequest(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+	var runnerCalled atomic.Bool
+	gate := &recordingCompletionGate{validateErr: errors.New("completion gate requested but config maximum is observe")}
+	socketPath := shortDaemonSocketPath("elnath-completion-gate-observe")
+	d := New(q, socketPath, 1, func(context.Context, string, event.Sink) (TaskResult, error) {
+		runnerCalled.Store(true)
+		return TaskResult{Result: "should not run"}, nil
+	}, nil)
+	d.WithTaskEnvelope(&recordingTaskEnvelope{})
+	d.WithCompletionGate(gate)
+	startDaemonInstance(t, d, socketPath)
+
+	resp := sendIPC(t, socketPath, IPCRequest{
+		Command: "submit",
+		Payload: mustMarshalString(t, EncodeTaskPayload(TaskPayload{
+			Prompt:                "gated task",
+			AgenticCompletionGate: "verification",
+		})),
+	})
+	if !resp.OK {
+		t.Fatalf("submit: not OK: %s", resp.Err)
+	}
+	task := pollTaskStatus(t, q, extractTaskID(t, resp), StatusFailed, 5*time.Second)
+	if runnerCalled.Load() {
+		t.Fatal("runner called despite config rejecting completion gate")
+	}
+	if !strings.Contains(task.Result, "config maximum is observe") {
+		t.Fatalf("task result = %q, want config rejection reason", task.Result)
+	}
+}
+
+func TestCompletionGate_GateLedgerInsertFailurePreventsMarkDone(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+	gate := &recordingCompletionGate{evaluateErr: errors.New("completion gate ledger: disk full")}
+	socketPath := shortDaemonSocketPath("elnath-completion-gate-ledger-fail")
+	d := New(q, socketPath, 1, mockTaskRunner{text: "runner succeeded"}.run, nil)
+	d.WithTaskEnvelope(&recordingTaskEnvelope{})
+	d.WithCompletionGate(gate)
+	startDaemonInstance(t, d, socketPath)
+
+	resp := sendIPC(t, socketPath, IPCRequest{
+		Command: "submit",
+		Payload: mustMarshalString(t, EncodeTaskPayload(TaskPayload{
+			Prompt:                "gated task",
+			AgenticCompletionGate: "verification",
+		})),
+	})
+	if !resp.OK {
+		t.Fatalf("submit: not OK: %s", resp.Err)
+	}
+	task := pollTaskStatus(t, q, extractTaskID(t, resp), StatusFailed, 5*time.Second)
+	if !strings.Contains(task.Result, "completion gate ledger: disk full") {
+		t.Fatalf("task result = %q, want ledger failure", task.Result)
+	}
+}
+
+func TestCompletionGate_MarkDoneFailureAfterGatePassObservable(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+	var logs safeLogBuffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	socketPath := shortDaemonSocketPath("elnath-completion-gate-markdone-fail")
+	d := New(q, socketPath, 1, mockTaskRunner{text: "runner succeeded"}.run, logger)
+	d.WithTaskEnvelope(&recordingTaskEnvelope{})
+	d.WithCompletionGate(closingDBCompletionGate{db: db})
+	startDaemonInstance(t, d, socketPath)
+
+	resp := sendIPC(t, socketPath, IPCRequest{
+		Command: "submit",
+		Payload: mustMarshalString(t, EncodeTaskPayload(TaskPayload{
+			Prompt:                "gated task",
+			AgenticCompletionGate: "verification",
+		})),
+	})
+	if !resp.OK {
+		t.Fatalf("submit: not OK: %s", resp.Err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(logs.String(), "worker: mark done") {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("logs missing mark done failure:\n%s", logs.String())
+}
+
+func TestCompletionGate_MissingAgenticTaskIDFailsClosed(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+	var runnerCalled atomic.Bool
+	socketPath := shortDaemonSocketPath("elnath-completion-gate-missing-task")
+	d := New(q, socketPath, 1, func(context.Context, string, event.Sink) (TaskResult, error) {
+		runnerCalled.Store(true)
+		return TaskResult{Result: "should not run"}, nil
+	}, nil)
+	d.WithCompletionGate(&recordingCompletionGate{decision: CompletionGateDecision{Passed: true, Status: "passed"}})
+	startDaemonInstance(t, d, socketPath)
+
+	resp := sendIPC(t, socketPath, IPCRequest{
+		Command: "submit",
+		Payload: mustMarshalString(t, EncodeTaskPayload(TaskPayload{
+			Prompt:                "gated task",
+			AgenticCompletionGate: "verification",
+		})),
+	})
+	if !resp.OK {
+		t.Fatalf("submit: not OK: %s", resp.Err)
+	}
+	task := pollTaskStatus(t, q, extractTaskID(t, resp), StatusFailed, 5*time.Second)
+	if runnerCalled.Load() {
+		t.Fatal("runner called despite missing agentic task id")
+	}
+	if !strings.Contains(task.Result, "agentic task id is required") {
+		t.Fatalf("task result = %q, want missing agentic task id", task.Result)
+	}
+}
+
+func TestCompletionGate_DoesNotEnqueueProposedTasksOrWakeFollowups(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+	d := New(q, shortDaemonSocketPath("elnath-completion-gate-no-enqueue"), 1, mockTaskRunner{text: "verified done"}.run, nil)
+	d.WithTaskEnvelope(&recordingTaskEnvelope{})
+	d.WithCompletionGate(&recordingCompletionGate{decision: CompletionGateDecision{Passed: true, Status: "passed"}})
+	startDaemonInstance(t, d, d.socketPath)
+
+	resp := sendIPC(t, d.socketPath, IPCRequest{
+		Command: "submit",
+		Payload: mustMarshalString(t, EncodeTaskPayload(TaskPayload{
+			Prompt:                "gated task",
+			AgenticCompletionGate: "verification",
+		})),
+	})
+	if !resp.OK {
+		t.Fatalf("submit: not OK: %s", resp.Err)
+	}
+	pollTaskStatus(t, q, extractTaskID(t, resp), StatusDone, 5*time.Second)
+	tasks, err := q.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("queue tasks = %d, want only original task", len(tasks))
 	}
 }
 
@@ -1232,6 +1573,123 @@ func TestDaemonSubmitDoesNotDeduplicateAcrossAgenticEnforcementModes(t *testing.
 	close(release)
 	pollTaskStatus(t, q, firstID, StatusDone, 5*time.Second)
 	pollTaskStatus(t, q, extractTaskID(t, second), StatusDone, 5*time.Second)
+}
+
+func TestDaemonSubmitDoesNotDeduplicateAcrossAgenticCompletionGateModes(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+
+	release := make(chan struct{})
+	agentRunner := func(_ context.Context, _ string, _ event.Sink) (TaskResult, error) {
+		<-release
+		return TaskResult{Result: "agent result", Summary: "agent result"}, nil
+	}
+
+	socketPath := filepath.Join("/tmp", "elnath-completion-dedup-"+strconv.FormatInt(time.Now().UnixNano(), 10)+".sock")
+	d := New(q, socketPath, 1, agentRunner, nil)
+	d.WithTaskEnvelope(&recordingTaskEnvelope{})
+	d.WithCompletionGate(&recordingCompletionGate{decision: CompletionGateDecision{Passed: true, Status: "passed"}})
+	startDaemonInstance(t, d, socketPath)
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+
+	principal := identity.Principal{UserID: "42", ProjectID: "proj-1", Surface: "telegram"}
+	legacyPayload := EncodeTaskPayload(TaskPayload{Prompt: "same prompt", Surface: "telegram", Principal: principal})
+	first := sendIPC(t, socketPath, IPCRequest{Command: "submit", Payload: mustMarshalString(t, legacyPayload)})
+	if !first.OK {
+		t.Fatalf("first submit: %s", first.Err)
+	}
+	if extractExisted(t, first) {
+		t.Fatal("first submit should not report deduplication")
+	}
+	firstID := extractTaskID(t, first)
+
+	gatedPayload := EncodeTaskPayload(TaskPayload{
+		Prompt:                "same prompt",
+		Surface:               "telegram",
+		Principal:             principal,
+		AgenticCompletionGate: "verification",
+	})
+	second := sendIPC(t, socketPath, IPCRequest{Command: "submit", Payload: mustMarshalString(t, gatedPayload)})
+	if !second.OK {
+		t.Fatalf("second submit: %s", second.Err)
+	}
+	if extractExisted(t, second) {
+		t.Fatal("completion-gated submit should not deduplicate against legacy task")
+	}
+	if secondID := extractTaskID(t, second); secondID == firstID {
+		t.Fatalf("second task id = %d, want different from %d", secondID, firstID)
+	}
+
+	close(release)
+	pollTaskStatus(t, q, firstID, StatusDone, 5*time.Second)
+	pollTaskStatus(t, q, extractTaskID(t, second), StatusDone, 5*time.Second)
+}
+
+func TestDaemonSubmitDeduplicatesEquivalentAgenticCompletionGateCasing(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+
+	release := make(chan struct{})
+	agentRunner := func(_ context.Context, _ string, _ event.Sink) (TaskResult, error) {
+		<-release
+		return TaskResult{Result: "agent result", Summary: "agent result"}, nil
+	}
+
+	socketPath := filepath.Join("/tmp", "elnath-completion-case-dedup-"+strconv.FormatInt(time.Now().UnixNano(), 10)+".sock")
+	d := New(q, socketPath, 1, agentRunner, nil)
+	d.WithTaskEnvelope(&recordingTaskEnvelope{})
+	d.WithCompletionGate(&recordingCompletionGate{decision: CompletionGateDecision{Passed: true, Status: "passed"}})
+	startDaemonInstance(t, d, socketPath)
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+
+	principal := identity.Principal{UserID: "42", ProjectID: "proj-1", Surface: "telegram"}
+	firstPayload := EncodeTaskPayload(TaskPayload{
+		Prompt:                "same prompt",
+		Surface:               "telegram",
+		Principal:             principal,
+		AgenticCompletionGate: "verification",
+	})
+	first := sendIPC(t, socketPath, IPCRequest{Command: "submit", Payload: mustMarshalString(t, firstPayload)})
+	if !first.OK {
+		t.Fatalf("first submit: %s", first.Err)
+	}
+	if extractExisted(t, first) {
+		t.Fatal("first submit should not report deduplication")
+	}
+	firstID := extractTaskID(t, first)
+
+	secondPayload := `{"prompt":"same prompt","surface":"telegram","principal":{"user_id":"42","project_id":"proj-1","surface":"telegram"},"agentic_completion_gate":" VERIFICATION "}`
+	second := sendIPC(t, socketPath, IPCRequest{Command: "submit", Payload: mustMarshalString(t, secondPayload)})
+	if !second.OK {
+		t.Fatalf("second submit: %s", second.Err)
+	}
+	if !extractExisted(t, second) {
+		t.Fatal("equivalent completion gate casing should report deduplication")
+	}
+	if secondID := extractTaskID(t, second); secondID != firstID {
+		t.Fatalf("second task id = %d, want deduped id %d", secondID, firstID)
+	}
+
+	close(release)
+	pollTaskStatus(t, q, firstID, StatusDone, 5*time.Second)
 }
 
 func TestDaemonSubmitDoesNotDeduplicateAcrossSessions(t *testing.T) {

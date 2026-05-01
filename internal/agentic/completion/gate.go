@@ -1,0 +1,179 @@
+package completion
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/stello/elnath/internal/agentic"
+	"github.com/stello/elnath/internal/daemon"
+)
+
+const (
+	ModeObserve      = "observe"
+	ModeVerification = "verification"
+)
+
+var (
+	ErrNilStore      = errors.New("completion gate: nil store")
+	ErrMissingTaskID = errors.New("completion gate: agentic task id is required")
+)
+
+type Store interface {
+	CreateCompletionGate(context.Context, agentic.CompletionGate) (*agentic.CompletionGate, error)
+	ListVerificationRunsByTask(context.Context, int64) ([]agentic.VerificationRun, error)
+	ListToolActionReceiptsByTask(context.Context, int64) ([]agentic.ToolActionReceipt, error)
+}
+
+type Gate struct {
+	store Store
+	mode  string
+	now   func() time.Time
+}
+
+func NewGate(store Store, mode string) *Gate {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "" {
+		mode = ModeObserve
+	}
+	return &Gate{store: store, mode: mode, now: func() time.Time { return time.Now().UTC() }}
+}
+
+func (g *Gate) Validate(_ context.Context, task daemon.Task, agenticTaskID int64) error {
+	requested := requestedGate(task)
+	if requested == "" {
+		return nil
+	}
+	if requested != ModeVerification {
+		return fmt.Errorf("unsupported agentic completion gate mode %q", requested)
+	}
+	if g == nil || g.store == nil {
+		return ErrNilStore
+	}
+	if g.mode != ModeVerification {
+		return fmt.Errorf("completion gate requested but config maximum is %q", g.mode)
+	}
+	if agenticTaskID == 0 {
+		return ErrMissingTaskID
+	}
+	return nil
+}
+
+func (g *Gate) Evaluate(ctx context.Context, task daemon.Task, agenticTaskID int64) (daemon.CompletionGateDecision, error) {
+	if err := g.Validate(ctx, task, agenticTaskID); err != nil {
+		return daemon.CompletionGateDecision{}, err
+	}
+	if requestedGate(task) == "" {
+		return daemon.CompletionGateDecision{Passed: true, Status: agentic.CompletionGateStatusPassed, Reason: "completion gate not requested"}, nil
+	}
+
+	run, verifierReason, err := g.latestRelevantVerification(ctx, task, agenticTaskID)
+	if err != nil {
+		return daemon.CompletionGateDecision{}, fmt.Errorf("completion gate verifier lookup: %w", err)
+	}
+	receipts, err := g.store.ListToolActionReceiptsByTask(ctx, agenticTaskID)
+	if err != nil {
+		return daemon.CompletionGateDecision{}, fmt.Errorf("completion gate receipt lookup: %w", err)
+	}
+	summary := receiptSummary(receipts)
+	summaryJSON := encodeReceiptSummary(summary)
+
+	if verifierReason != "" {
+		return g.record(ctx, task, agenticTaskID, verificationID(run), agentic.CompletionGateStatusBlocked, verifierReason, summaryJSON)
+	}
+	if started := summary[agentic.ReceiptStatusStarted]; started > 0 {
+		return g.record(ctx, task, agenticTaskID, run.ID, agentic.CompletionGateStatusBlocked, fmt.Sprintf("non-terminal receipt started=%d", started), summaryJSON)
+	}
+	return g.record(ctx, task, agenticTaskID, run.ID, agentic.CompletionGateStatusPassed, "verification passed", summaryJSON)
+}
+
+func (g *Gate) latestRelevantVerification(ctx context.Context, task daemon.Task, taskID int64) (*agentic.VerificationRun, string, error) {
+	runs, err := g.store.ListVerificationRunsByTask(ctx, taskID)
+	if err != nil {
+		return nil, "", err
+	}
+	if len(runs) == 0 {
+		return nil, "missing verifier run", nil
+	}
+	var latestAny *agentic.VerificationRun
+	var latestRelevant *agentic.VerificationRun
+	for i := range runs {
+		run := runs[i]
+		if latestAny == nil || run.ID > latestAny.ID {
+			latestAny = &run
+		}
+		if !task.StartedAt.IsZero() && run.CreatedAt.Before(task.StartedAt) {
+			continue
+		}
+		if latestRelevant == nil || run.ID > latestRelevant.ID {
+			latestRelevant = &run
+		}
+	}
+	if latestRelevant == nil {
+		return latestAny, "stale verifier run", nil
+	}
+	if latestRelevant.Verdict != agentic.VerificationVerdictPassed {
+		return latestRelevant, "verifier " + latestRelevant.Verdict, nil
+	}
+	return latestRelevant, "", nil
+}
+
+func (g *Gate) record(ctx context.Context, task daemon.Task, taskID, runID int64, status, reason, summaryJSON string) (daemon.CompletionGateDecision, error) {
+	now := g.now()
+	gate, err := g.store.CreateCompletionGate(ctx, agentic.CompletionGate{
+		TaskID:             taskID,
+		QueueTaskID:        task.ID,
+		VerificationRunID:  runID,
+		Status:             status,
+		Reason:             reason,
+		ReceiptSummaryJSON: summaryJSON,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	})
+	if err != nil {
+		return daemon.CompletionGateDecision{}, fmt.Errorf("completion gate ledger: %w", err)
+	}
+	return daemon.CompletionGateDecision{
+		Passed:            status == agentic.CompletionGateStatusPassed,
+		Status:            status,
+		Reason:            reason,
+		VerificationRunID: runID,
+		GateID:            gate.ID,
+	}, nil
+}
+
+func requestedGate(task daemon.Task) string {
+	return strings.ToLower(strings.TrimSpace(daemon.ParseTaskPayload(task.Payload).AgenticCompletionGate))
+}
+
+func receiptSummary(receipts []agentic.ToolActionReceipt) map[string]int {
+	summary := map[string]int{
+		agentic.ReceiptStatusStarted:          0,
+		agentic.ReceiptStatusSucceeded:        0,
+		agentic.ReceiptStatusFailed:           0,
+		agentic.ReceiptStatusDenied:           0,
+		agentic.ReceiptStatusApprovalRequired: 0,
+	}
+	for _, receipt := range receipts {
+		summary[receipt.Status]++
+	}
+	return summary
+}
+
+func encodeReceiptSummary(summary map[string]int) string {
+	data, err := json.Marshal(summary)
+	if err != nil {
+		return "{}"
+	}
+	return string(data)
+}
+
+func verificationID(run *agentic.VerificationRun) int64 {
+	if run == nil {
+		return 0
+	}
+	return run.ID
+}

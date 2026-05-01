@@ -76,6 +76,19 @@ type SubmitSignalBridge interface {
 	RecordManualSubmitSignal(ctx context.Context, payload string, queueTaskID int64, existed bool) error
 }
 
+type CompletionGateDecision struct {
+	Passed            bool
+	Status            string
+	Reason            string
+	VerificationRunID int64
+	GateID            int64
+}
+
+type CompletionGate interface {
+	Validate(ctx context.Context, task Task, agenticTaskID int64) error
+	Evaluate(ctx context.Context, task Task, agenticTaskID int64) (CompletionGateDecision, error)
+}
+
 // Daemon runs background task processing with Unix domain socket IPC.
 type Daemon struct {
 	queue             *Queue
@@ -92,6 +105,7 @@ type Daemon struct {
 	watchdogInterval  time.Duration
 	progressObserver  ProgressObserver
 	taskEnvelope      TaskEnvelope
+	completionGate    CompletionGate
 	submitSignal      SubmitSignalBridge
 	scheduler         Scheduler
 	faultInjector     fault.Injector
@@ -160,6 +174,10 @@ func (d *Daemon) WithProgressObserver(obs ProgressObserver) {
 
 func (d *Daemon) WithTaskEnvelope(envelope TaskEnvelope) {
 	d.taskEnvelope = envelope
+}
+
+func (d *Daemon) WithCompletionGate(gate CompletionGate) {
+	d.completionGate = gate
 }
 
 func (d *Daemon) WithSubmitSignalBridge(bridge SubmitSignalBridge) {
@@ -336,10 +354,11 @@ func (d *Daemon) handleSubmit(ctx context.Context, conn net.Conn, req IPCRequest
 		principal = d.fallbackPrincipal
 	}
 	idemKey := identity.KeyFor(principal, EncodeTaskPayload(TaskPayload{
-		Type:               parsed.Type,
-		Prompt:             parsed.Prompt,
-		SessionID:          parsed.SessionID,
-		AgenticEnforcement: parsed.AgenticEnforcement,
+		Type:                  parsed.Type,
+		Prompt:                parsed.Prompt,
+		SessionID:             parsed.SessionID,
+		AgenticEnforcement:    parsed.AgenticEnforcement,
+		AgenticCompletionGate: parsed.AgenticCompletionGate,
 	}))
 
 	id, existed, err := d.queue.Enqueue(ctx, payload, idemKey)
@@ -436,7 +455,8 @@ func (d *Daemon) worker(ctx context.Context, id int) {
 			sleepCtx(ctx, time.Second)
 			continue
 		}
-		principal := resolveTaskLogPrincipal(ParseTaskPayload(task.Payload), d.fallbackPrincipal)
+		payload := ParseTaskPayload(task.Payload)
+		principal := resolveTaskLogPrincipal(payload, d.fallbackPrincipal)
 
 		d.logger.Info("worker: processing task",
 			"worker_id", id,
@@ -463,6 +483,24 @@ func (d *Daemon) worker(ctx context.Context, id int) {
 		runCtx := ctx
 		if envelopeRun != nil {
 			runCtx = WithAgenticTaskID(runCtx, envelopeRun.AgenticTaskID())
+		}
+		if payload.AgenticCompletionGate != "" {
+			agenticTaskID := int64(0)
+			if envelopeRun != nil {
+				agenticTaskID = envelopeRun.AgenticTaskID()
+			}
+			if agenticTaskID == 0 {
+				d.failCompletionGate(ctx, task, envelopeRun, "agentic task id is required")
+				continue
+			}
+			if d.completionGate == nil {
+				d.failCompletionGate(ctx, task, envelopeRun, "completion gate requested but completion gate is not configured")
+				continue
+			}
+			if gateErr := d.completionGate.Validate(ctx, *task, agenticTaskID); gateErr != nil {
+				d.failCompletionGate(ctx, task, envelopeRun, gateErr.Error())
+				continue
+			}
 		}
 		result, err := d.runTaskSafely(runCtx, task)
 		if err != nil {
@@ -497,6 +535,25 @@ func (d *Daemon) worker(ctx context.Context, id int) {
 			"principal_project_id", principal.ProjectID,
 			"principal_surface", principal.Surface,
 		)
+		if payload.AgenticCompletionGate != "" {
+			agenticTaskID := int64(0)
+			if envelopeRun != nil {
+				agenticTaskID = envelopeRun.AgenticTaskID()
+			}
+			decision, gateErr := d.completionGate.Evaluate(ctx, *task, agenticTaskID)
+			if gateErr != nil {
+				d.failCompletionGate(ctx, task, envelopeRun, gateErr.Error())
+				continue
+			}
+			if !decision.Passed {
+				reason := decision.Reason
+				if reason == "" {
+					reason = "completion gate blocked"
+				}
+				d.failCompletionGate(ctx, task, envelopeRun, reason)
+				continue
+			}
+		}
 		if markErr := d.queue.MarkDone(ctx, task.ID, result.Result, result.Summary); markErr != nil {
 			d.logger.Error("worker: mark done", "task_id", task.ID, "error", markErr)
 		} else if envelopeRun != nil {
@@ -511,6 +568,24 @@ func (d *Daemon) worker(ctx context.Context, id int) {
 		}
 		d.deliver(ctx, task.ID)
 	}
+}
+
+func (d *Daemon) failCompletionGate(ctx context.Context, task *Task, envelopeRun TaskEnvelopeRun, reason string) {
+	message := "completion gate blocked: " + reason
+	d.logger.Error("worker: completion gate blocked", "task_id", task.ID, "error", reason)
+	if markErr := d.queue.MarkFailed(ctx, task.ID, message); markErr != nil {
+		d.logger.Error("worker: completion gate mark failed", "task_id", task.ID, "error", markErr)
+	} else if envelopeRun != nil {
+		if envelopeErr := envelopeRun.Fail(ctx); envelopeErr != nil {
+			d.logger.Error("worker: task envelope fail update",
+				"task_id", task.ID,
+				"agentic_task_id", envelopeRun.AgenticTaskID(),
+				"degraded_observability", true,
+				"error", envelopeErr,
+			)
+		}
+	}
+	d.deliver(ctx, task.ID)
 }
 
 func (d *Daemon) runTaskSafely(ctx context.Context, task *Task) (result TaskResult, err error) {

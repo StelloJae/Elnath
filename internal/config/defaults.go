@@ -40,7 +40,8 @@ func DefaultConfig() *Config {
 		},
 		FaultInjection: FaultInjectionConfig{Enabled: false},
 		Agentic: AgenticConfig{
-			Enforcement: AgenticEnforcementConfig{Mode: AgenticEnforcementModeObserve},
+			Enforcement:    AgenticEnforcementConfig{Mode: AgenticEnforcementModeObserve},
+			CompletionGate: AgenticCompletionGateConfig{Mode: AgenticCompletionGateModeObserve},
 		},
 		Research: ResearchConfig{
 			MaxRounds:  5,

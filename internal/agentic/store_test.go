@@ -85,6 +85,7 @@ func TestAgenticSchema_TablesExist(t *testing.T) {
 		"policy_decisions",
 		"tool_action_receipts",
 		"verification_runs",
+		"completion_gates",
 		"memory_updates",
 		"followups",
 	} {
@@ -128,6 +129,9 @@ func TestAgenticSchema_RoadmapColumnsExist(t *testing.T) {
 		},
 		"verification_runs": {
 			"id", "task_id", "verifier_actor_id", "criteria_json", "evidence_refs_json", "verdict", "reason", "created_at",
+		},
+		"completion_gates": {
+			"id", "task_id", "queue_task_id", "verification_run_id", "status", "reason", "receipt_summary_json", "created_at", "updated_at",
 		},
 		"memory_updates": {
 			"id", "task_id", "receipt_id", "verification_run_id", "target", "operation", "payload_hash", "status", "source", "reason", "created_at", "applied_at",
@@ -1055,6 +1059,64 @@ func TestAgenticStore_InsertReadVerificationRun(t *testing.T) {
 	}
 	if got.TaskID != task.ID || got.Verdict != VerificationVerdictPass || got.CriteriaJSON == "" || got.CreatedAt.IsZero() {
 		t.Fatalf("unexpected verification run: %+v", got)
+	}
+}
+
+func TestAgenticStore_InsertReadCompletionGate(t *testing.T) {
+	ctx := context.Background()
+	_, store := newTestStore(t)
+	task := createTestTask(t, ctx, store)
+	run := createTestVerificationRun(t, ctx, store, task.ID)
+
+	gate, err := store.CreateCompletionGate(ctx, CompletionGate{
+		TaskID:             task.ID,
+		QueueTaskID:        42,
+		VerificationRunID:  run.ID,
+		Status:             CompletionGateStatusPassed,
+		Reason:             "verification passed",
+		ReceiptSummaryJSON: `{"started":0}`,
+	})
+	if err != nil {
+		t.Fatalf("CreateCompletionGate: %v", err)
+	}
+
+	got, err := store.GetCompletionGate(ctx, gate.ID)
+	if err != nil {
+		t.Fatalf("GetCompletionGate: %v", err)
+	}
+	if got.TaskID != task.ID || got.QueueTaskID != 42 || got.VerificationRunID != run.ID || got.Status != CompletionGateStatusPassed {
+		t.Fatalf("unexpected completion gate: %+v", got)
+	}
+	if got.CreatedAt.IsZero() || got.UpdatedAt.IsZero() {
+		t.Fatalf("completion gate timestamps not set: %+v", got)
+	}
+}
+
+func TestAgenticStore_ListCompletionGatesByTask(t *testing.T) {
+	ctx := context.Background()
+	_, store := newTestStore(t)
+	task := createTestTask(t, ctx, store)
+	other := createTestTask(t, ctx, store)
+
+	for _, req := range []CompletionGate{
+		{TaskID: task.ID, QueueTaskID: 10, Status: CompletionGateStatusBlocked, Reason: "missing verifier", ReceiptSummaryJSON: `{}`},
+		{TaskID: task.ID, QueueTaskID: 11, Status: CompletionGateStatusPassed, Reason: "passed", ReceiptSummaryJSON: `{}`},
+		{TaskID: other.ID, QueueTaskID: 12, Status: CompletionGateStatusBlocked, Reason: "other", ReceiptSummaryJSON: `{}`},
+	} {
+		if _, err := store.CreateCompletionGate(ctx, req); err != nil {
+			t.Fatalf("CreateCompletionGate: %v", err)
+		}
+	}
+
+	got, err := store.ListCompletionGatesByTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListCompletionGatesByTask: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("completion gates = %+v, want two for task", got)
+	}
+	if got[0].QueueTaskID != 10 || got[1].QueueTaskID != 11 {
+		t.Fatalf("completion gates ordered unexpectedly: %+v", got)
 	}
 }
 

@@ -27,6 +27,10 @@ type TaskPayload struct {
 	// AgenticEnforcement is an explicit opt-in boundary for future agentic
 	// runtime enforcement. Empty means legacy pass-through behavior.
 	AgenticEnforcement string `json:"agentic_enforcement,omitempty"`
+
+	// AgenticCompletionGate is an explicit opt-in boundary for verifier-gated
+	// completion. Empty means legacy completion behavior.
+	AgenticCompletionGate string `json:"agentic_completion_gate,omitempty"`
 }
 
 func ParseTaskPayload(raw string) TaskPayload {
@@ -38,7 +42,7 @@ func ParseTaskPayload(raw string) TaskPayload {
 	var payload TaskPayload
 	if strings.HasPrefix(raw, "{") && json.Unmarshal([]byte(raw), &payload) == nil {
 		payload = normalizeTaskPayload(payload)
-		if payload.Prompt != "" || payload.Type != TaskTypeAgent || payload.SessionID != "" || payload.Surface != "" || !payload.Principal.IsZero() || payload.AgenticEnforcement != "" {
+		if payload.Prompt != "" || payload.Type != TaskTypeAgent || payload.SessionID != "" || payload.Surface != "" || !payload.Principal.IsZero() || payload.AgenticEnforcement != "" || payload.AgenticCompletionGate != "" {
 			return payload
 		}
 	}
@@ -48,7 +52,7 @@ func ParseTaskPayload(raw string) TaskPayload {
 
 func EncodeTaskPayload(payload TaskPayload) string {
 	payload = normalizeTaskPayload(payload)
-	if payload.Type == TaskTypeAgent && payload.SessionID == "" && payload.Surface == "" && payload.Principal.IsZero() && payload.AgenticEnforcement == "" {
+	if payload.Type == TaskTypeAgent && payload.SessionID == "" && payload.Surface == "" && payload.Principal.IsZero() && payload.AgenticEnforcement == "" && payload.AgenticCompletionGate == "" {
 		return payload.Prompt
 	}
 	data, err := json.Marshal(payload)
@@ -62,7 +66,8 @@ func normalizeTaskPayload(payload TaskPayload) TaskPayload {
 	payload.Prompt = strings.TrimSpace(payload.Prompt)
 	payload.SessionID = strings.TrimSpace(payload.SessionID)
 	payload.Surface = strings.TrimSpace(payload.Surface)
-	payload.AgenticEnforcement = strings.TrimSpace(payload.AgenticEnforcement)
+	payload.AgenticEnforcement = strings.ToLower(strings.TrimSpace(payload.AgenticEnforcement))
+	payload.AgenticCompletionGate = strings.ToLower(strings.TrimSpace(payload.AgenticCompletionGate))
 	payload.Principal = identity.NewPrincipal(identity.PrincipalSource{
 		UserID:          payload.Principal.UserID,
 		CanonicalUserID: payload.Principal.CanonicalUserID,

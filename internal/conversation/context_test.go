@@ -3,6 +3,7 @@ package conversation
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -694,6 +695,9 @@ func TestCheckMemoryPressure_UnderLimit(t *testing.T) {
 // is set below the test process's real allocation. The Go test harness alone
 // allocates more than 1 MiB, so a 1 MiB budget reliably triggers.
 func TestCheckMemoryPressure_OverLimit(t *testing.T) {
+	alloc := forceMemoryPressureTestAlloc()
+	defer runtime.KeepAlive(alloc)
+
 	if !CheckMemoryPressure(1) {
 		t.Errorf("CheckMemoryPressure(1) = false, want true (1 MiB budget below runtime alloc)")
 	}
@@ -717,6 +721,8 @@ func TestCheckMemoryPressure_Disabled(t *testing.T) {
 // OOM during summarization of a runaway history.
 func TestCompressMessages_MemoryPressure_SkipsLLMGoesToSnip(t *testing.T) {
 	cw := NewContextWindow()
+	alloc := forceMemoryPressureTestAlloc()
+	defer runtime.KeepAlive(alloc)
 
 	provider := &mockProvider{
 		chatFn: func(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
@@ -742,4 +748,12 @@ func TestCompressMessages_MemoryPressure_SkipsLLMGoesToSnip(t *testing.T) {
 	if strings.TrimSpace(result[0].Text()) == "" {
 		t.Errorf("first message has empty content, expected snip fallback to preserve real message")
 	}
+}
+
+func forceMemoryPressureTestAlloc() []byte {
+	alloc := make([]byte, 2*1024*1024)
+	for i := range alloc {
+		alloc[i] = byte(i)
+	}
+	return alloc
 }

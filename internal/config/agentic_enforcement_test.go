@@ -13,6 +13,9 @@ func TestAgenticEnforcementConfig_DefaultsToObservePassThrough(t *testing.T) {
 	if got := cfg.Agentic.Enforcement.Mode; got != AgenticEnforcementModeObserve {
 		t.Fatalf("agentic.enforcement.mode = %q, want %q", got, AgenticEnforcementModeObserve)
 	}
+	if got := cfg.Agentic.CompletionGate.Mode; got != AgenticCompletionGateModeObserve {
+		t.Fatalf("agentic.completion_gate.mode = %q, want %q", got, AgenticCompletionGateModeObserve)
+	}
 }
 
 func TestAgenticEnforcementConfig_LoadGatewayMode(t *testing.T) {
@@ -30,6 +33,8 @@ permission:
 agentic:
   enforcement:
     mode: gateway
+  completion_gate:
+    mode: verification
 `), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
@@ -40,6 +45,9 @@ agentic:
 	}
 	if got := cfg.Agentic.Enforcement.Mode; got != AgenticEnforcementModeGateway {
 		t.Fatalf("agentic.enforcement.mode = %q, want %q", got, AgenticEnforcementModeGateway)
+	}
+	if got := cfg.Agentic.CompletionGate.Mode; got != AgenticCompletionGateModeVerification {
+		t.Fatalf("agentic.completion_gate.mode = %q, want %q", got, AgenticCompletionGateModeVerification)
 	}
 }
 
@@ -66,5 +74,32 @@ func TestAgenticEnforcementConfig_RejectsUnknownMode(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "agentic.enforcement.mode") {
 		t.Fatalf("validate error = %q, want agentic.enforcement.mode", err.Error())
+	}
+}
+
+func TestAgenticCompletionGateConfig_RejectsUnknownMode(t *testing.T) {
+	dir := t.TempDir()
+	wikiDir := filepath.Join(dir, "wiki")
+	if err := os.MkdirAll(wikiDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	cfg := &Config{
+		DataDir: filepath.Join(dir, "data"),
+		WikiDir: wikiDir,
+		Permission: PermissionConfig{
+			Mode: "default",
+		},
+		Agentic: AgenticConfig{
+			Enforcement:    AgenticEnforcementConfig{Mode: AgenticEnforcementModeObserve},
+			CompletionGate: AgenticCompletionGateConfig{Mode: "global"},
+		},
+	}
+
+	err := validate(cfg)
+	if err == nil {
+		t.Fatal("validate error = nil, want unsupported completion gate mode")
+	}
+	if !strings.Contains(err.Error(), "agentic.completion_gate.mode") {
+		t.Fatalf("validate error = %q, want agentic.completion_gate.mode", err.Error())
 	}
 }

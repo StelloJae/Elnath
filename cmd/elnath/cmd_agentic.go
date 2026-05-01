@@ -48,6 +48,7 @@ type agenticTaskView struct {
 	Approval           *agenticApprovalInfo     `json:"approval,omitempty"`
 	Policy             *agenticPolicyInfo       `json:"policy,omitempty"`
 	LatestVerification *agenticVerificationInfo `json:"latest_verification,omitempty"`
+	CompletionCounts   map[string]int           `json:"completion_gate_counts"`
 	MemoryCounts       map[string]int           `json:"memory_counts"`
 	FollowupCounts     map[string]int           `json:"followup_counts"`
 	DueFollowups       int                      `json:"due_followups"`
@@ -65,6 +66,7 @@ type agenticLineageView struct {
 	PolicyDecisions  []agenticPolicyInfo       `json:"policy_decisions"`
 	Approvals        []agenticApprovalInfo     `json:"approvals"`
 	Receipts         []agenticReceiptInfo      `json:"receipts"`
+	CompletionGates  []agenticCompletionInfo   `json:"completion_gates"`
 	VerificationRuns []agenticVerificationInfo `json:"verification_runs"`
 	MemoryUpdates    []agenticMemoryInfo       `json:"memory_updates"`
 	Followups        []agenticFollowupInfo     `json:"followups"`
@@ -153,6 +155,15 @@ type agenticReceiptInfo struct {
 	ToolName          string `json:"tool_name"`
 	Status            string `json:"status"`
 	ToolCallID        string `json:"tool_call_id,omitempty"`
+}
+
+type agenticCompletionInfo struct {
+	ID                 int64  `json:"id"`
+	QueueTaskID        int64  `json:"queue_task_id,omitempty"`
+	VerificationRunID  int64  `json:"verification_run_id,omitempty"`
+	Status             string `json:"status"`
+	Reason             string `json:"reason,omitempty"`
+	ReceiptSummaryJSON string `json:"receipt_summary_json,omitempty"`
 }
 
 type agenticVerificationInfo struct {
@@ -328,20 +339,32 @@ func parseAgenticIDArgs(args []string, usage string) (int64, bool, error) {
 func (c *agenticCLI) status(ctx context.Context) (*agenticStatusView, error) {
 	counts := map[string]map[string]int{}
 	specs := map[string]struct {
-		table  string
-		column string
+		table    string
+		column   string
+		optional bool
 	}{
-		"goals":        {"standing_goals", "status"},
-		"signals":      {"goal_signals", "status"},
-		"tasks":        {"agentic_tasks", "status"},
-		"approvals":    {"approval_requests", "decision"},
-		"receipts":     {"tool_action_receipts", "status"},
-		"verification": {"verification_runs", "verdict"},
-		"memory":       {"memory_updates", "status"},
-		"followups":    {"followups", "status"},
-		"actors":       {"agent_actors", "status"},
+		"goals":            {"standing_goals", "status", false},
+		"signals":          {"goal_signals", "status", false},
+		"tasks":            {"agentic_tasks", "status", false},
+		"approvals":        {"approval_requests", "decision", false},
+		"receipts":         {"tool_action_receipts", "status", false},
+		"completion_gates": {"completion_gates", "status", true},
+		"verification":     {"verification_runs", "verdict", false},
+		"memory":           {"memory_updates", "status", false},
+		"followups":        {"followups", "status", false},
+		"actors":           {"agent_actors", "status", false},
 	}
 	for key, spec := range specs {
+		if spec.optional {
+			exists, err := c.tableExists(ctx, spec.table)
+			if err != nil {
+				return nil, err
+			}
+			if !exists {
+				counts[key] = map[string]int{}
+				continue
+			}
+		}
 		values, err := c.countBy(ctx, spec.table, spec.column, "")
 		if err != nil {
 			return nil, err
@@ -374,6 +397,7 @@ func (c *agenticCLI) task(ctx context.Context, id int64) (*agenticTaskView, erro
 		return nil, err
 	}
 	memoryCounts := countMemory(lineage.MemoryUpdates)
+	completionCounts := countCompletionGates(lineage.CompletionGates)
 	followupCounts, due := countFollowups(lineage.Followups)
 	actorCounts := countActors(lineage.Actors)
 	var approval *agenticApprovalInfo
@@ -397,6 +421,7 @@ func (c *agenticCLI) task(ctx context.Context, id int64) (*agenticTaskView, erro
 		Approval:           approval,
 		Policy:             policy,
 		LatestVerification: latest,
+		CompletionCounts:   completionCounts,
 		MemoryCounts:       memoryCounts,
 		FollowupCounts:     followupCounts,
 		DueFollowups:       due,
@@ -474,6 +499,20 @@ func (c *agenticCLI) lineage(ctx context.Context, id int64) (*agenticLineageView
 		return nil, err
 	}
 	view.Receipts = receipts
+	gates, err := c.completionGates(ctx, task.ID)
+	if err != nil {
+		return nil, err
+	}
+	for _, gate := range gates {
+		view.CompletionGates = append(view.CompletionGates, agenticCompletionInfo{
+			ID:                 gate.ID,
+			QueueTaskID:        gate.QueueTaskID,
+			VerificationRunID:  gate.VerificationRunID,
+			Status:             gate.Status,
+			Reason:             bounded(gate.Reason, 120),
+			ReceiptSummaryJSON: bounded(gate.ReceiptSummaryJSON, 120),
+		})
+	}
 	runs, err := c.store.ListVerificationRunsByTask(ctx, task.ID)
 	if err != nil {
 		return nil, err
@@ -504,6 +543,29 @@ func (c *agenticCLI) lineage(ctx context.Context, id int64) (*agenticLineageView
 	}
 	view.Followups = followups
 	return view, nil
+}
+
+func (c *agenticCLI) tableExists(ctx context.Context, table string) (bool, error) {
+	var name string
+	err := c.db.QueryRowContext(ctx, `SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?`, table).Scan(&name)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("agentic: inspect table %s: %w", table, err)
+	}
+	return true, nil
+}
+
+func (c *agenticCLI) completionGates(ctx context.Context, taskID int64) ([]agentic.CompletionGate, error) {
+	exists, err := c.tableExists(ctx, "completion_gates")
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, nil
+	}
+	return c.store.ListCompletionGatesByTask(ctx, taskID)
 }
 
 func taskInfo(task agentic.AgenticTask) agenticTaskInfo {
@@ -715,7 +777,7 @@ func renderAgenticStatus(view *agenticStatusView) string {
 	var b strings.Builder
 	fmt.Fprintln(&b, "Agentic Control Plane")
 	fmt.Fprintf(&b, "  autonomy_enabled: %t\n", view.AutonomyEnabled)
-	for _, key := range []string{"goals", "signals", "tasks", "approvals", "receipts", "verification", "memory", "followups", "actors"} {
+	for _, key := range []string{"goals", "signals", "tasks", "approvals", "receipts", "completion_gates", "verification", "memory", "followups", "actors"} {
 		line := formatCounts(view.Counts[key])
 		if key == "followups" {
 			line = strings.TrimSpace(line + fmt.Sprintf(" due=%d", view.DueFollowups))
@@ -781,6 +843,7 @@ func renderAgenticTask(view *agenticTaskView) string {
 	} else {
 		fmt.Fprintln(&b, "  latest verification: none")
 	}
+	fmt.Fprintf(&b, "  completion_gates: %s\n", noneIfEmpty(formatCounts(view.CompletionCounts)))
 	fmt.Fprintf(&b, "  memory: %s\n", noneIfEmpty(formatCounts(view.MemoryCounts)))
 	followups := formatCounts(view.FollowupCounts)
 	if view.DueFollowups > 0 {
@@ -854,6 +917,14 @@ func renderAgenticLineage(view *agenticLineageView) string {
 			fmt.Fprintf(&b, "  #%d %s tool=%s approval=%s\n", receipt.ID, receipt.Status, receipt.ToolName, noneIfEmpty(receipt.ApprovalRequestID))
 		}
 	}
+	fmt.Fprintln(&b, "\nCompletion gates")
+	if len(view.CompletionGates) == 0 {
+		fmt.Fprintln(&b, "  none")
+	} else {
+		for _, gate := range view.CompletionGates {
+			fmt.Fprintf(&b, "  #%d %s verifier=%s reason=%s\n", gate.ID, gate.Status, hashIDOrNone(gate.VerificationRunID), noneIfEmpty(gate.Reason))
+		}
+	}
 	fmt.Fprintln(&b, "\nVerification")
 	if len(view.VerificationRuns) == 0 {
 		fmt.Fprintln(&b, "  none")
@@ -905,6 +976,14 @@ func countMemory(updates []agenticMemoryInfo) map[string]int {
 	return out
 }
 
+func countCompletionGates(gates []agenticCompletionInfo) map[string]int {
+	out := map[string]int{}
+	for _, gate := range gates {
+		out[gate.Status]++
+	}
+	return out
+}
+
 func countFollowups(followups []agenticFollowupInfo) (map[string]int, int) {
 	out := map[string]int{}
 	var due int
@@ -937,6 +1016,13 @@ func intOrNone(value int64) string {
 		return "none"
 	}
 	return strconv.FormatInt(value, 10)
+}
+
+func hashIDOrNone(value int64) string {
+	if value == 0 {
+		return "none"
+	}
+	return "#" + strconv.FormatInt(value, 10)
 }
 
 func bounded(value string, max int) string {
