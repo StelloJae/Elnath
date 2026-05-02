@@ -12,11 +12,11 @@ The central implementation principle is:
 
 Elnath already has a strong execution substrate: agent loop, tool registry, daemon queue, workflow router, fixed workflows, planner/subagent execution, verification loop, research loop, static scheduling, approval store, audit trail, outcomes, and wiki memory.
 
-As of 2026-05-02, the durable agentic foundation is implemented through PR11, the first read-only operator visibility lane is shipped, selected daemon-backed agentic workflows can explicitly opt into ToolGateway enforcement, and explicitly gated daemon-backed agentic tasks can require verification before `Queue.MarkDone`: `internal/agentic/{schema,store,types,test}.go` exists, runtime startup initializes the agentic schema, daemon queue tasks are linked to durable `agentic_tasks` envelopes, scheduler/ambient/manual submit surfaces can record observe-only `goal_signals`, explicit triage can convert or link signals into `agentic_tasks` without execution, a standalone policy evaluator can persist durable `policy_decisions`, provenance-aware approval requests can link agentic tasks, policy decisions, actor/action/risk/reason metadata, explicit agentic tool calls can pass through a context-gated ToolGateway that records policy decisions and tool action receipts, `agentic.enforcement.mode=gateway` plus explicit `agentic_enforcement=gateway` task metadata can route selected daemon-backed task execution through that gateway, `agentic.completion_gate.mode=verification` plus explicit `agentic_completion_gate=verification` task metadata can require a latest relevant passed verifier run before completion, Ralph verifier runs can be persisted with criteria/evidence refs when explicit agentic verification context is configured, explicit agentic memory writes are gated by latest verification status, verified outcomes can create non-executing followups that later create deduped signals plus proposed agentic tasks, TeamWorkflow planner/executor/synthesizer roles now produce durable actor and handoff provenance, and `elnath agentic status/task/lineage` can inspect that ledger in read-only mode. The roadmap now starts from that foundation instead of treating it as future work.
+As of 2026-05-02, the durable agentic foundation is implemented through PR11, the first read-only operator visibility lane is shipped, selected daemon-backed agentic workflows can explicitly opt into ToolGateway enforcement, explicitly gated daemon-backed agentic tasks can require verification before `Queue.MarkDone`, and operators can explicitly enqueue proposed agentic tasks into daemon queue work through a CLI-only approval path: `internal/agentic/{schema,store,types,test}.go` exists, runtime startup initializes the agentic schema, daemon queue tasks are linked to durable `agentic_tasks` envelopes, scheduler/ambient/manual submit surfaces can record observe-only `goal_signals`, explicit triage can convert or link signals into `agentic_tasks` without execution, a standalone policy evaluator can persist durable `policy_decisions`, provenance-aware approval requests can link agentic tasks, policy decisions, actor/action/risk/reason metadata, explicit agentic tool calls can pass through a context-gated ToolGateway that records policy decisions and tool action receipts, `agentic.enforcement.mode=gateway` plus explicit `agentic_enforcement=gateway` task metadata can route selected daemon-backed task execution through that gateway, `agentic.completion_gate.mode=verification` plus explicit `agentic_completion_gate=verification` task metadata can require a latest relevant passed verifier run before completion, `elnath agentic enqueue <task-id>` can create a durable `task_enqueue_decisions` record and one linked daemon queue row for eligible proposed tasks, Ralph verifier runs can be persisted with criteria/evidence refs when explicit agentic verification context is configured, explicit agentic memory writes are gated by latest verification status, verified outcomes can create non-executing followups that later create deduped signals plus proposed agentic tasks, TeamWorkflow planner/executor/synthesizer roles now produce durable actor and handoff provenance, and `elnath agentic status/task/lineage` can inspect that ledger in read-only mode. The roadmap now starts from that foundation instead of treating it as future work.
 
 Hermes Agent moved from the v0.8/v0.9 baseline to v0.10/v0.11 and an active post-v0.11 `main` branch. The Elnath takeaway is not to copy Hermes wholesale. The useful deltas are: ToolGateway-style execution routing, hardline-vs-approval policy separation, plugin/hook lifecycle points, webhook/cron signal hardening, bounded delegation, receipt-backed tool results, and verification-gated memory.
 
-The next roadmap step is not "more workflows" or immediate global autonomy enforcement. The PR1-PR11 control-plane foundation, first operator lineage CLI, explicit ToolGateway opt-in boundary, and explicit verifier-gated completion boundary are shipped; the next dependency-ready step is a post-verifier-gated-completion readiness and next-boundary review while preserving the same broader runtime target:
+The next roadmap step is not "more workflows" or immediate global autonomy enforcement. The PR1-PR11 control-plane foundation, first operator lineage CLI, explicit ToolGateway opt-in boundary, explicit verifier-gated completion boundary, and CLI-only approved proposed-task enqueue bridge are shipped; the next dependency-ready step is a post-approved-proposed-task-enqueue readiness and next-boundary review while preserving the same broader runtime target:
 
 ```text
 standing goal
@@ -35,7 +35,7 @@ standing goal
 
 ## 2. Current Agentic Readiness: 95/100
 
-Elnath is currently a strong workflow runner and tool-using agent platform with a durable agentic control-plane schema, observe-only daemon task envelope linkage, an observe-only signal ledger bridge, explicit signal-to-agentic-task triage, standalone autonomy policy decision records, provenance-aware approval request storage/bridge foundations, a context-gated ToolGateway for explicit agentic tool calls, explicit runtime opt-in for selected daemon-backed ToolGateway enforcement, explicit verifier-gated completion for selected daemon-backed agentic tasks, durable verifier-run persistence for explicit agentic verification context, verification-gated trusted memory writes for explicit agentic memory context, a non-executing follow-up scheduler foundation for verified outcomes, durable TeamWorkflow planner/executor/synthesizer actor provenance, and read-only operator CLI visibility for status/task/lineage inspection. The 95/100 score is the pre-refresh score for durable control-plane, operator visibility, and explicit opt-in boundary readiness, not for full unattended autonomous operation. Elnath is not yet a complete standing-goal-driven autonomous system because triaged and follow-up proposed tasks are not automatically enqueued or executed, the gateway is not globally enabled for legacy tool execution, verifier-gated completion is explicit opt-in rather than global/default behavior, followups do not wake agent runs, and actors record provenance rather than driving execution.
+Elnath is currently a strong workflow runner and tool-using agent platform with a durable agentic control-plane schema, observe-only daemon task envelope linkage, an observe-only signal ledger bridge, explicit signal-to-agentic-task triage, standalone autonomy policy decision records, provenance-aware approval request storage/bridge foundations, a context-gated ToolGateway for explicit agentic tool calls, explicit runtime opt-in for selected daemon-backed ToolGateway enforcement, explicit verifier-gated completion for selected daemon-backed agentic tasks, CLI-only approved proposed-task enqueue, durable verifier-run persistence for explicit agentic verification context, verification-gated trusted memory writes for explicit agentic memory context, a non-executing follow-up scheduler foundation for verified outcomes, durable TeamWorkflow planner/executor/synthesizer actor provenance, and read-only operator CLI visibility for status/task/lineage inspection. The 95/100 score is the pre-refresh score for durable control-plane, operator visibility, and explicit opt-in boundary readiness, not for full unattended autonomous operation. Elnath is not yet a complete standing-goal-driven autonomous system because proposed-task enqueue requires explicit CLI operator action, the gateway is not globally enabled for legacy tool execution, verifier-gated completion is explicit opt-in rather than global/default behavior, followups do not wake agent runs, and actors record provenance rather than driving execution.
 
 Implemented foundations:
 
@@ -70,6 +70,7 @@ Implemented foundations:
 | Agentic tool context | `internal/tools/agentic_context.go` | Carries task, actor, and tool-call identity plus result finalization hooks for explicit agentic tool calls. |
 | Agentic verifier runs | `internal/agentic/verification/recorder.go` | Persists Ralph verifier criteria, evidence refs, verdict, and redacted reason when explicit agentic verification context is configured. |
 | Agentic completion gate | `internal/agentic/completion/gate.go` | Gates explicitly opted-in daemon-backed task completion on latest relevant passed verifier run before `Queue.MarkDone`. |
+| Agentic proposed-task enqueue | `internal/agentic/enqueue/`, `cmd/elnath/cmd_agentic.go` | Lets operators explicitly enqueue eligible proposed tasks into daemon queue work with durable enqueue decisions and one-task-one-queue linkage. |
 | Agentic memory gate | `internal/agentic/memory/` | Gates explicit agentic learning/wiki memory writes on latest passed verification, with memory_updates ledger records for applied, blocked, and failed outcomes. |
 | Agentic follow-up scheduler | `internal/agentic/followup/` | Records verified outcome followups and processes due followups into deduped signals plus proposed tasks without daemon queue enqueue or agent wake. |
 | Agentic actor provenance | `internal/agentic/actors/` and `internal/orchestrator/team.go` | Records durable planner/executor/synthesizer actor lifecycle and handoffs for explicit agentic TeamWorkflow contexts without actor-driven execution. |
@@ -122,10 +123,10 @@ Still missing as runtime behavior:
 - Broader receipt enforcement before task completion. PR56 blocks non-terminal `started` receipts only for explicitly gated tasks and leaves failed/denied/approval-required receipt acceptability to verifier judgment.
 - Broader/default verification gate before `Queue.MarkDone`. PR56 gates only tasks where config permits completion gating, task metadata requests `agentic_completion_gate=verification`, and an agentic task ID exists.
 - Broader/global memory gate wiring beyond explicit agentic context.
-- Executing follow-up wake/enqueue loop beyond the non-executing PR10 foundation.
+- Automatic follow-up wake/enqueue loop beyond the non-executing PR10 foundation and CLI-only proposed-task enqueue bridge.
 - Broader durable actor runtime for verifier/critic/memory/scheduler roles and actor-driven scheduling.
 
-Non-claims after PR1, PR2, PR3, PR4, PR5, PR6, PR7, PR8, PR9, PR10, PR11, the operator CLI, the explicit ToolGateway opt-in lane, and the explicit verifier-gated completion lane:
+Non-claims after PR1, PR2, PR3, PR4, PR5, PR6, PR7, PR8, PR9, PR10, PR11, the operator CLI, the explicit ToolGateway opt-in lane, the explicit verifier-gated completion lane, and the CLI-only approved proposed-task enqueue lane:
 
 - No autonomous runtime behavior is enabled.
 - Operator status/task/lineage CLI is read-only; it does not mutate agentic or daemon records.
@@ -138,8 +139,10 @@ Non-claims after PR1, PR2, PR3, PR4, PR5, PR6, PR7, PR8, PR9, PR10, PR11, the op
 - Verifier runs can be persisted when explicit agentic verification context is configured, and explicitly gated tasks can require the latest relevant verifier run to pass before `Queue.MarkDone`.
 - Verifier-gated completion is not global: non-gated daemon tasks, all-agentic-envelope tasks, proposed tasks, and legacy task paths are not gated by default.
 - Blocked explicit completion gates use the existing queue failed state with a structured gate-blocked reason; there is no new queue `blocked` state.
+- Proposed tasks can become daemon queue work only through explicit `elnath agentic enqueue <task-id>` operator action; there is no automatic proposed-task enqueue.
+- Enqueued proposed tasks default to observe/pass-through runtime mode; ToolGateway and completion-gate modes still require explicit flags plus config permission.
 - Memory writes are gated only for explicit agentic memory context; legacy non-agentic learning/wiki behavior and explicit user memory remain compatible.
-- Followups can create deduped signals and proposed tasks, but they do not enqueue daemon queue work, wake agent runs, or change `Queue.MarkDone`.
+- Followups can create deduped signals and proposed tasks, but they do not directly enqueue daemon queue work, wake agent runs, or change `Queue.MarkDone`.
 - Actor records and handoffs are durable provenance only; actors do not enqueue daemon work, call tools, or drive autonomous execution.
 
 ## 5. Target Architecture
@@ -209,6 +212,7 @@ policy_decisions(id, task_id, actor_id, action_kind, tool_name, risk_level, deci
 tool_action_receipts(id, task_id, actor_id, policy_decision_id, approval_request_id, tool_name, input_hash, output_hash, output_summary, status, reversible, started_at, completed_at, tool_call_id, raw_output_hash, visible_output_hash, failure_reason, hook_provenance_json)
 verification_runs(id, task_id, verifier_actor_id, criteria_json, evidence_refs_json, verdict, reason, created_at)
 completion_gates(id, task_id, queue_task_id, verification_run_id, status, reason, receipt_summary_json, created_at, updated_at)
+task_enqueue_decisions(id, task_id, queue_task_id, operator_id, decision, reason, requested_enforcement, requested_completion_gate, status, failure_reason, created_at, updated_at)
 memory_updates(id, task_id, receipt_id, verification_run_id, target, operation, payload_hash, status, source, reason, created_at, applied_at)
 followups(id, task_id, goal_id, trigger_at, reason, status, created_task_id, dedupe_key, failure_reason, processed_at, wake_agent, created_at)
 ```
@@ -580,21 +584,44 @@ Status: shipped durable TeamWorkflow actor provenance; do not expand into actor-
 - Agentic capability: Completion authority can now be enforced for selected agentic daemon tasks without introducing a global verifier gate.
 - Non-goal: This does not enable a global verifier gate, all-daemon-task gate, all-agentic-envelope gate, new queue blocked state, proposed-task enqueue, followup wake, approval wait/resume, or global autonomous runtime behavior.
 
-#### Next: `docs/review(agentic): post-verifier-gated-completion readiness and next-boundary review`
+#### Completed: `docs/review(agentic): post-verifier-gated-completion readiness and next-boundary review`
 
 - Purpose: Re-score readiness after explicit verifier-gated completion shipped and choose the next autonomy boundary without jumping directly into proposed-task enqueue, follow-up wake, or broader runtime authority.
 - Current related files: `docs/roadmap.md`, `.omc/research/agentic-verifier-gated-completion-plan-2026-05-01.md`, `cmd/elnath/runtime.go`, `internal/config/config.go`, `internal/daemon/daemon.go`, `internal/daemon/task_payload.go`, `internal/agentic/completion/gate.go`, `cmd/elnath/cmd_agentic.go`.
-- Files to modify: documentation and research artifacts only unless the review finds a small correctness bug that must be split into a separate PR.
+- Files modified: `.omc/research/agentic-post-verifier-gated-completion-readiness-review-2026-05-02.md`.
 - Core review: Compare approved proposed-task enqueue, follow-up wake, approval wait/resume UX, Telegram/operator UX for blocked completion, and benchmark/canary evidence lanes against the newly shipped explicit verifier-gated completion boundary.
 - Dependency: PR1 through PR11, read-only operator CLI, explicit ToolGateway opt-in, and explicit verifier-gated completion shipped.
 - Completion criteria: The project can name the next implementation lane with explicit opt-in mechanism, failure semantics, legacy preservation rules, and forbidden claims.
+- Result: Recommended a CLI-only approved proposed-task enqueue lane with a dedicated enqueue decision ledger, not automatic enqueue or follow-up wake.
 
-Post-verifier-gated-completion candidate list, not yet approved for implementation:
+#### Completed: `feat(agentic): enqueue approved proposed tasks`
 
-- `feat(runtime): enqueue approved proposed tasks`
-- `feat(followup): add explicit follow-up wake path`
-- `feat(approvals): add approval wait/resume UX`
-- `feat(telegram): add read-only agentic operator view`
+- Purpose: Let an operator explicitly enqueue an eligible proposed `agentic_task` into daemon queue work without enabling automatic autonomous enqueue.
+- Current related files: `cmd/elnath/cmd_agentic.go`, `internal/agentic/enqueue/`, `internal/agentic/schema.go`, `internal/agentic/store.go`, `internal/daemon/queue.go`.
+- Files modified: `cmd/elnath/cmd_agentic.go`, `cmd/elnath/cmd_agentic_test.go`, `internal/agentic/schema.go`, `internal/agentic/store.go`, `internal/agentic/store_test.go`, `internal/agentic/types.go`, `internal/daemon/queue.go`, `internal/daemon/queue_test.go`.
+- Files added: `internal/agentic/enqueue/enqueue.go`, `internal/agentic/enqueue/enqueue_test.go`.
+- Core implementation: Add `elnath agentic enqueue <task-id>`, durable `task_enqueue_decisions`, proposed-task eligibility checks, transactional enqueue decision plus daemon queue row plus `agentic_tasks.queue_task_id` linkage, idempotent one-task-one-queue behavior, runtime mode flags for explicit gateway/completion-gate requests, and operator status/task/lineage visibility.
+- Dependency: PR4 proposed tasks, PR10 followup-created proposed tasks, read-only operator CLI, explicit ToolGateway opt-in, explicit verifier-gated completion.
+- Completion criteria: Eligible proposed tasks can become daemon queue work only through explicit CLI operator action; default runtime mode remains observe/pass-through; gateway and completion-gate modes require explicit flags and config permission.
+- Test criteria: Explicit operator action tests, proposed-task eligibility tests, one-queue-row/idempotency tests, transactional linkage tests, config-mode rejection tests, followup non-enqueue tests, legacy daemon submit regression tests, no side-effect tests, `make test`, `go vet`, and sandbox CI.
+- Agentic capability: The system now has a controlled human-operated bridge from proposed agentic tasks to executable daemon work.
+- Non-goal: This does not enable automatic enqueue, followup wake, Telegram action surfaces, approval wait/resume UX, Queue.MarkDone changes, ToolGateway behavior changes, or global autonomous runtime behavior.
+
+#### Next: `docs/review(agentic): post-approved-proposed-task-enqueue readiness and next-boundary review`
+
+- Purpose: Re-score readiness after CLI-only approved proposed-task enqueue shipped and choose the next boundary before adding follow-up wake, approval wait/resume UX, Telegram enqueue UX, standing-goal autonomy bounds, or canary evidence lanes.
+- Current related files: `docs/roadmap.md`, `.omc/research/agentic-approved-proposed-task-enqueue-plan-2026-05-02.md`, `cmd/elnath/cmd_agentic.go`, `internal/agentic/enqueue/`, `internal/daemon/queue.go`.
+- Files to modify: documentation and research artifacts only unless the review finds a small correctness bug that must be split into a separate PR.
+- Core review: Compare follow-up wake planning, approval wait/resume UX planning, Telegram/operator enqueue UX, standing-goal autonomy bounds, and benchmark/canary evidence lanes against the newly shipped explicit enqueue bridge.
+- Dependency: PR1 through PR11, read-only operator CLI, explicit ToolGateway opt-in, explicit verifier-gated completion, and CLI-only approved proposed-task enqueue shipped.
+- Completion criteria: The project can name the next implementation lane with explicit opt-in mechanism, loop bounds, failure semantics, legacy preservation rules, and forbidden claims.
+
+Post-approved-proposed-task-enqueue candidate list, not yet approved for implementation:
+
+- `docs/review(agentic): follow-up wake planning`
+- `docs/review(agentic): approval wait/resume UX planning`
+- `feat(telegram): add operator enqueue UX`
+- `docs/review(agentic): standing-goal autonomy bounds`
 - `evidence(benchmark): run current canary restoration lane`
 
 ## 12. Risks and Guardrails
@@ -616,12 +643,12 @@ MVP acceptance:
 
 - One standing goal can be registered and inspected.
 - A scheduler/ambient/manual event creates a deduped `goal_signals` record.
-- A signal can create an `agentic_tasks` record linked to a daemon queue task.
+- A signal can create a proposed `agentic_tasks` record, and an operator can explicitly enqueue an eligible proposed task into one daemon queue task.
 - Read-only tool calls can execute with receipts.
 - Mutating tool calls require approval unless an explicit policy permits them.
 - Required verifier pass is recorded before agentic task completion.
 - Trusted agentic memory/outcome writes record provenance to verification/receipt IDs.
-- One-shot follow-up can create a future bounded task.
+- One-shot follow-up can create a future bounded proposed task without directly enqueueing or waking an agent.
 
 Ultimate acceptance:
 
@@ -651,14 +678,14 @@ Next-task selection:
 Default current next step:
 
 ```text
-post-verifier-gated-completion readiness and next-boundary review
+post-approved-proposed-task-enqueue readiness and next-boundary review
 ```
 
 Autonomy rules for Codex/Elnath work:
 
 - Documentation-only updates may proceed when they keep this roadmap accurate.
 - Read-only inspection and focused tests may proceed without asking.
-- Code edits should not start a new feature lane until the post-verifier-gated-completion readiness and next-boundary review is complete.
+- Code edits should not start a new feature lane until the post-approved-proposed-task-enqueue readiness and next-boundary review is complete.
 - Mutating runtime behavior should start observe-only, then become enforceable in a later PR.
 - External actions, destructive commands, credential changes, publishing, GitHub writes, or broad autonomous execution require explicit user approval.
 - Memory/wiki updates are allowed only when explicitly requested or when a verified memory-update gate exists.
