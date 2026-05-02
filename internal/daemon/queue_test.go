@@ -90,6 +90,36 @@ func TestNewQueue(t *testing.T) {
 	}
 }
 
+func TestNewQueueNoRecoverDoesNotRecoverUnrelatedRunningTasks(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueueNoRecover(db)
+	if err != nil {
+		t.Fatalf("NewQueueNoRecover: %v", err)
+	}
+	ctx := context.Background()
+	id, _, err := q.Enqueue(ctx, "stale task", "stale-key")
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if _, err := q.Next(ctx); err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	staleUpdated := time.Now().Add(-defaultStaleTimeout - time.Minute).UnixMilli()
+	if _, err := db.Exec(`UPDATE task_queue SET updated_at = ? WHERE id = ?`, staleUpdated, id); err != nil {
+		t.Fatalf("mark stale: %v", err)
+	}
+	if _, err := NewQueueNoRecover(db); err != nil {
+		t.Fatalf("NewQueueNoRecover second: %v", err)
+	}
+	task, err := q.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if task.Status != StatusRunning {
+		t.Fatalf("status after NewQueueNoRecover = %s, want running", task.Status)
+	}
+}
+
 func TestEnqueue(t *testing.T) {
 	db := openTestDB(t)
 	q, err := NewQueue(db)

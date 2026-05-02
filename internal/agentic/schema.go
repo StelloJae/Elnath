@@ -144,6 +144,20 @@ func InitSchema(db *sql.DB) error {
 			created_at INTEGER NOT NULL,
 			updated_at INTEGER NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS task_enqueue_decisions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			task_id INTEGER NOT NULL REFERENCES agentic_tasks(id) ON DELETE CASCADE,
+			queue_task_id INTEGER,
+			operator_id TEXT NOT NULL DEFAULT '',
+			decision TEXT NOT NULL,
+			reason TEXT NOT NULL DEFAULT '',
+			requested_enforcement TEXT NOT NULL DEFAULT '',
+			requested_completion_gate TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL,
+			failure_reason TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		)`,
 		`CREATE TABLE IF NOT EXISTS memory_updates (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			task_id INTEGER NOT NULL REFERENCES agentic_tasks(id) ON DELETE CASCADE,
@@ -184,6 +198,8 @@ func InitSchema(db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_verification_runs_task ON verification_runs(task_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_completion_gates_task ON completion_gates(task_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_completion_gates_queue_task ON completion_gates(queue_task_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_task_enqueue_decisions_task ON task_enqueue_decisions(task_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_task_enqueue_decisions_queue_task ON task_enqueue_decisions(queue_task_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_memory_updates_task ON memory_updates(task_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_followups_goal ON followups(goal_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_followups_due ON followups(status, trigger_at)`,
@@ -227,6 +243,42 @@ func InitSchema(db *sql.DB) error {
 	}
 	if err := ensureFollowupIndexes(db); err != nil {
 		return err
+	}
+	if err := ensureTaskEnqueueDecisionIndexes(db); err != nil {
+		return err
+	}
+	return nil
+}
+
+func ensureTaskEnqueueDecisionIndexes(db *sql.DB) error {
+	if _, err := db.Exec(`
+		WITH ranked AS (
+			SELECT id,
+			       ROW_NUMBER() OVER (
+			           PARTITION BY task_id
+			           ORDER BY CASE WHEN status = 'enqueued' THEN 0 ELSE 1 END, id DESC
+			       ) AS rn
+			FROM task_enqueue_decisions
+			WHERE status IN ('pending','enqueued')
+		)
+		UPDATE task_enqueue_decisions
+		SET status = 'failed',
+		    failure_reason = CASE
+		        WHEN failure_reason = '' THEN 'superseded duplicate active enqueue decision'
+		        ELSE failure_reason
+		    END
+		WHERE id IN (SELECT id FROM ranked WHERE rn > 1)
+	`); err != nil {
+		return fmt.Errorf("agentic: reconcile task enqueue decisions: %w", err)
+	}
+	stmts := []string{
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_task_enqueue_decisions_task_enqueued ON task_enqueue_decisions(task_id) WHERE status = 'enqueued'`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_task_enqueue_decisions_task_active ON task_enqueue_decisions(task_id) WHERE status IN ('pending','enqueued')`,
+	}
+	for _, stmt := range stmts {
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("agentic: ensure task enqueue indexes: %w", err)
+		}
 	}
 	return nil
 }

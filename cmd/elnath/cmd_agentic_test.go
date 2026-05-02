@@ -335,6 +335,269 @@ func TestAgenticCommand_ReadOnlyDBRejectsWrites(t *testing.T) {
 	}
 }
 
+func TestProposedTaskEnqueue_DefaultProposedTaskDoesNotEnqueue(t *testing.T) {
+	fx := newAgenticCommandFixture(t)
+	task := createStandaloneProposedTask(t, fx)
+	before := countQueueRows(t, fx.db.Main)
+
+	if _, err := fx.store.GetAgenticTask(context.Background(), task.ID); err != nil {
+		t.Fatalf("GetAgenticTask: %v", err)
+	}
+
+	afterTask, err := fx.store.GetAgenticTask(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("GetAgenticTask after no action: %v", err)
+	}
+	if afterTask.QueueTaskID != 0 || afterTask.Status != agentic.TaskStatusProposed {
+		t.Fatalf("task changed without explicit enqueue: %+v", afterTask)
+	}
+	if after := countQueueRows(t, fx.db.Main); after != before {
+		t.Fatalf("queue rows changed without explicit enqueue: before=%d after=%d", before, after)
+	}
+}
+
+func TestProposedTaskEnqueue_CreatesOneDaemonQueueTask(t *testing.T) {
+	fx := newAgenticCommandFixture(t)
+	task := createStandaloneProposedTask(t, fx)
+	before := countQueueRows(t, fx.db.Main)
+
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdAgentic(context.Background(), []string{"enqueue", fmt.Sprint(task.ID), "--reason", "operator approved"}); err != nil {
+			t.Fatalf("cmdAgentic enqueue: %v", err)
+		}
+	})
+	if !strings.Contains(stdout, "enqueued agentic task") {
+		t.Fatalf("enqueue output = %q, want success summary", stdout)
+	}
+
+	updated, err := fx.store.GetAgenticTask(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("GetAgenticTask: %v", err)
+	}
+	if updated.QueueTaskID == 0 || updated.Status != agentic.TaskStatusPending {
+		t.Fatalf("updated task = %+v, want queue link and pending status", updated)
+	}
+	if after := countQueueRows(t, fx.db.Main); after != before+1 {
+		t.Fatalf("queue rows = %d, want %d", after, before+1)
+	}
+	queued, err := fx.queue.Get(context.Background(), updated.QueueTaskID)
+	if err != nil {
+		t.Fatalf("queue get: %v", err)
+	}
+	payload := daemon.ParseTaskPayload(queued.Payload)
+	if payload.Prompt != task.Prompt {
+		t.Fatalf("queue payload prompt = %q, want %q", payload.Prompt, task.Prompt)
+	}
+	if payload.AgenticEnforcement != "" || payload.AgenticCompletionGate != "" {
+		t.Fatalf("default runtime modes = enforcement %q completion %q, want observe defaults", payload.AgenticEnforcement, payload.AgenticCompletionGate)
+	}
+}
+
+func TestProposedTaskEnqueue_JSONOutputStable(t *testing.T) {
+	fx := newAgenticCommandFixture(t)
+	task := createStandaloneProposedTask(t, fx)
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdAgentic(context.Background(), []string{"enqueue", fmt.Sprint(task.ID), "--reason", "json operator approval", "--json"}); err != nil {
+			t.Fatalf("cmdAgentic enqueue json: %v", err)
+		}
+	})
+	var view struct {
+		AutonomyEnabled bool  `json:"autonomy_enabled"`
+		TaskID          int64 `json:"task_id"`
+		QueueTaskID     int64 `json:"queue_task_id"`
+		Existed         bool  `json:"existed"`
+		Decision        struct {
+			Decision string `json:"decision"`
+			Status   string `json:"status"`
+			Reason   string `json:"reason"`
+		} `json:"decision"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &view); err != nil {
+		t.Fatalf("enqueue JSON = %q, unmarshal: %v", stdout, err)
+	}
+	if view.AutonomyEnabled || view.TaskID != task.ID || view.QueueTaskID == 0 || view.Existed {
+		t.Fatalf("enqueue JSON view = %+v", view)
+	}
+	if view.Decision.Decision != agentic.TaskEnqueueDecisionApproved || view.Decision.Status != agentic.TaskEnqueueStatusEnqueued || view.Decision.Reason != "json operator approval" {
+		t.Fatalf("enqueue JSON decision = %+v", view.Decision)
+	}
+}
+
+func TestProposedTaskEnqueue_RerunIsIdempotent(t *testing.T) {
+	fx := newAgenticCommandFixture(t)
+	task := createStandaloneProposedTask(t, fx)
+	if err := cmdAgentic(context.Background(), []string{"enqueue", fmt.Sprint(task.ID), "--reason", "first"}); err != nil {
+		t.Fatalf("first enqueue: %v", err)
+	}
+	first, err := fx.store.GetAgenticTask(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("GetAgenticTask first: %v", err)
+	}
+	before := countQueueRows(t, fx.db.Main)
+
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdAgentic(context.Background(), []string{"enqueue", fmt.Sprint(task.ID), "--reason", "second"}); err != nil {
+			t.Fatalf("second enqueue: %v", err)
+		}
+	})
+	if !strings.Contains(stdout, "already enqueued") {
+		t.Fatalf("second enqueue output = %q, want already enqueued", stdout)
+	}
+	second, err := fx.store.GetAgenticTask(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("GetAgenticTask second: %v", err)
+	}
+	if second.QueueTaskID != first.QueueTaskID {
+		t.Fatalf("queue task changed on rerun: first=%d second=%d", first.QueueTaskID, second.QueueTaskID)
+	}
+	if after := countQueueRows(t, fx.db.Main); after != before {
+		t.Fatalf("queue rows changed on rerun: before=%d after=%d", before, after)
+	}
+}
+
+func TestProposedTaskEnqueue_RejectsNonProposedTask(t *testing.T) {
+	fx := newAgenticCommandFixture(t)
+	task := createStandaloneProposedTask(t, fx)
+	if _, err := fx.store.UpdateAgenticTaskStatus(context.Background(), task.ID, agentic.TaskStatusFailed); err != nil {
+		t.Fatalf("UpdateAgenticTaskStatus: %v", err)
+	}
+	err := cmdAgentic(context.Background(), []string{"enqueue", fmt.Sprint(task.ID)})
+	if err == nil || !strings.Contains(err.Error(), "not eligible") {
+		t.Fatalf("enqueue failed task err = %v, want not eligible", err)
+	}
+}
+
+func TestProposedTaskEnqueue_RejectsAlreadyQueueBackedTask(t *testing.T) {
+	fx := newAgenticCommandFixture(t)
+	err := cmdAgentic(context.Background(), []string{"enqueue", fmt.Sprint(fx.task.ID)})
+	if err == nil || !strings.Contains(err.Error(), "already linked to queue task") {
+		t.Fatalf("enqueue queue-backed task err = %v, want already linked rejection", err)
+	}
+}
+
+func TestProposedTaskEnqueue_CarriesRequestedGatewayAndCompletionGateOnlyWhenExplicit(t *testing.T) {
+	fx := newAgenticCommandFixture(t)
+	enableAgenticModes(t, fx.cfgPath)
+	task := createStandaloneProposedTask(t, fx)
+	if err := cmdAgentic(context.Background(), []string{"enqueue", fmt.Sprint(task.ID), "--agentic-enforcement", "gateway", "--completion-gate", "verification"}); err != nil {
+		t.Fatalf("enqueue with explicit modes: %v", err)
+	}
+	updated, err := fx.store.GetAgenticTask(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("GetAgenticTask: %v", err)
+	}
+	queued, err := fx.queue.Get(context.Background(), updated.QueueTaskID)
+	if err != nil {
+		t.Fatalf("queue get: %v", err)
+	}
+	payload := daemon.ParseTaskPayload(queued.Payload)
+	if payload.AgenticEnforcement != config.AgenticEnforcementModeGateway || payload.AgenticCompletionGate != config.AgenticCompletionGateModeVerification {
+		t.Fatalf("payload modes = enforcement %q completion %q", payload.AgenticEnforcement, payload.AgenticCompletionGate)
+	}
+}
+
+func TestProposedTaskEnqueue_ConfigObserveRejectsGatewayOrCompletionRequest(t *testing.T) {
+	fx := newAgenticCommandFixture(t)
+	task := createStandaloneProposedTask(t, fx)
+	err := cmdAgentic(context.Background(), []string{"enqueue", fmt.Sprint(task.ID), "--agentic-enforcement", "gateway"})
+	if err == nil || !strings.Contains(err.Error(), "config") {
+		t.Fatalf("gateway request with observe config err = %v, want config rejection", err)
+	}
+	err = cmdAgentic(context.Background(), []string{"enqueue", fmt.Sprint(task.ID), "--completion-gate", "verification"})
+	if err == nil || !strings.Contains(err.Error(), "config") {
+		t.Fatalf("completion request with observe config err = %v, want config rejection", err)
+	}
+}
+
+func TestProposedTaskEnqueue_DoesNotCreateToolReceiptsVerificationMemoryOrFollowups(t *testing.T) {
+	fx := newAgenticCommandFixture(t)
+	task := createStandaloneProposedTask(t, fx)
+	before := map[string]int{
+		"policy_decisions":     countRows(t, fx.db.Main, "policy_decisions"),
+		"approval_requests":    countRows(t, fx.db.Main, "approval_requests"),
+		"tool_action_receipts": countRows(t, fx.db.Main, "tool_action_receipts"),
+		"verification_runs":    countRows(t, fx.db.Main, "verification_runs"),
+		"memory_updates":       countRows(t, fx.db.Main, "memory_updates"),
+		"followups":            countRows(t, fx.db.Main, "followups"),
+	}
+	if err := cmdAgentic(context.Background(), []string{"enqueue", fmt.Sprint(task.ID)}); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	for table, want := range before {
+		if got := countRows(t, fx.db.Main, table); got != want {
+			t.Fatalf("%s rows = %d, want %d", table, got, want)
+		}
+	}
+}
+
+func TestAgenticOperatorLineage_ShowsProposedTaskEnqueueState(t *testing.T) {
+	fx := newAgenticCommandFixture(t)
+	task := createStandaloneProposedTask(t, fx)
+	if err := cmdAgentic(context.Background(), []string{"enqueue", fmt.Sprint(task.ID), "--reason", "bounded operator continuation"}); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdAgentic(context.Background(), []string{"lineage", fmt.Sprint(task.ID)}); err != nil {
+			t.Fatalf("lineage: %v", err)
+		}
+	})
+	for _, want := range []string{
+		"Enqueue",
+		"approved",
+		"enqueued",
+		"bounded operator continuation",
+		"queue_task_id:",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("lineage output = %q, want %q", stdout, want)
+		}
+	}
+}
+
+func createStandaloneProposedTask(t *testing.T, fx *agenticCommandFixture) *agentic.AgenticTask {
+	t.Helper()
+	task, err := fx.store.CreateAgenticTask(context.Background(), agentic.AgenticTask{
+		GoalID:             fx.goal.ID,
+		Title:              "Standalone proposed task",
+		Prompt:             "Review the proposed task and execute bounded work.",
+		Status:             agentic.TaskStatusProposed,
+		Priority:           1,
+		RiskLevel:          agentic.RiskLevelLow,
+		AutonomyDecision:   agentic.PolicyDecisionObserve,
+		VerificationStatus: agentic.VerificationStatusPending,
+	})
+	if err != nil {
+		t.Fatalf("CreateAgenticTask: %v", err)
+	}
+	return task
+}
+
+func countQueueRows(t *testing.T, db *sql.DB) int {
+	t.Helper()
+	return countRows(t, db, "task_queue")
+}
+
+func countRows(t *testing.T, db *sql.DB, table string) int {
+	t.Helper()
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&count); err != nil {
+		t.Fatalf("count %s: %v", table, err)
+	}
+	return count
+}
+
+func enableAgenticModes(t *testing.T, cfgPath string) {
+	t.Helper()
+	f, err := os.OpenFile(cfgPath, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("open config: %v", err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString("\nagentic:\n  enforcement:\n    mode: gateway\n  completion_gate:\n    mode: verification\n"); err != nil {
+		t.Fatalf("append config: %v", err)
+	}
+}
+
 func TestAgenticCommand_StatusSummarizesLedgerCounts(t *testing.T) {
 	fx := newAgenticCommandFixture(t)
 	stdout, _ := captureOutput(t, func() {
@@ -689,6 +952,7 @@ func agenticSideEffectTables() []string {
 		"approval_requests",
 		"tool_action_receipts",
 		"completion_gates",
+		"task_enqueue_decisions",
 		"verification_runs",
 		"memory_updates",
 		"followups",
