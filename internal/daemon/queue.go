@@ -114,6 +114,17 @@ type Queue struct {
 // NewQueue creates the task_queue table if it does not exist and
 // recovers any tasks left in 'running' state from a previous crash.
 func NewQueue(db *sql.DB) (*Queue, error) {
+	return newQueue(db, true)
+}
+
+// NewQueueNoRecover initializes queue schema without recovering stale running
+// tasks. Use this for narrow operator commands that need to enqueue one task
+// without mutating unrelated daemon queue state.
+func NewQueueNoRecover(db *sql.DB) (*Queue, error) {
+	return newQueue(db, false)
+}
+
+func newQueue(db *sql.DB, recoverStale bool) (*Queue, error) {
 	if _, err := db.Exec(createQueueTable); err != nil {
 		return nil, fmt.Errorf("queue: init schema: %w", err)
 	}
@@ -135,8 +146,10 @@ func NewQueue(db *sql.DB) (*Queue, error) {
 		return nil, fmt.Errorf("queue: create idempotency index: %w", err)
 	}
 
-	if _, err := q.RecoverStale(context.Background(), defaultStaleTimeout, defaultMaxRecoveries); err != nil {
-		return nil, fmt.Errorf("queue: recover stale: %w", err)
+	if recoverStale {
+		if _, err := q.RecoverStale(context.Background(), defaultStaleTimeout, defaultMaxRecoveries); err != nil {
+			return nil, fmt.Errorf("queue: recover stale: %w", err)
+		}
 	}
 
 	return q, nil
@@ -144,11 +157,23 @@ func NewQueue(db *sql.DB) (*Queue, error) {
 
 // Enqueue inserts a new pending task and returns its ID.
 func (q *Queue) Enqueue(ctx context.Context, payload string, idemKey string) (int64, bool, error) {
+	return q.enqueue(ctx, nil, payload, idemKey)
+}
+
+// EnqueueTx inserts a pending task using the caller's transaction.
+func (q *Queue) EnqueueTx(ctx context.Context, tx *sql.Tx, payload string, idemKey string) (int64, bool, error) {
+	if tx == nil {
+		return 0, false, fmt.Errorf("queue: enqueue tx: nil transaction")
+	}
+	return q.enqueue(ctx, tx, payload, idemKey)
+}
+
+func (q *Queue) enqueue(ctx context.Context, tx *sql.Tx, payload string, idemKey string) (int64, bool, error) {
 	now := time.Now().UnixMilli()
 	idemKey = strings.TrimSpace(idemKey)
 	if idemKey != "" {
 		cutoff := now - idempotencyWindow.Milliseconds()
-		existingID, err := q.lookupActiveTaskID(ctx, idemKey, cutoff)
+		existingID, err := q.lookupActiveTaskID(ctx, tx, idemKey, cutoff)
 		if err != nil {
 			return 0, false, fmt.Errorf("queue: enqueue dedup lookup: %w", err)
 		}
@@ -157,10 +182,10 @@ func (q *Queue) Enqueue(ctx context.Context, payload string, idemKey string) (in
 		}
 	}
 
-	res, err := q.insertTask(ctx, payload, idemKey, now)
+	res, err := q.insertTask(ctx, tx, payload, idemKey, now)
 	if err != nil {
 		if idemKey != "" && isUniqueViolation(err) {
-			existingID, lookupErr := q.lookupActiveTaskIDAny(ctx, idemKey)
+			existingID, lookupErr := q.lookupActiveTaskIDAny(ctx, tx, idemKey)
 			if lookupErr != nil {
 				return 0, false, fmt.Errorf("queue: enqueue unique lookup: %w", lookupErr)
 			}
@@ -651,17 +676,21 @@ func (q *Queue) ensureColumns(ctx context.Context) error {
 	return nil
 }
 
-func (q *Queue) lookupActiveTaskID(ctx context.Context, idemKey string, cutoff int64) (int64, error) {
+func (q *Queue) lookupActiveTaskID(ctx context.Context, tx *sql.Tx, idemKey string, cutoff int64) (int64, error) {
 	var existingID int64
-	err := q.db.QueryRowContext(ctx, `
+	query := `
 		SELECT id FROM task_queue
 		WHERE idempotency_key = ?
 		  AND status IN ('pending','running')
 		  AND created_at >= ?
 		ORDER BY created_at DESC
-		LIMIT 1`,
-		idemKey, cutoff,
-	).Scan(&existingID)
+		LIMIT 1`
+	var err error
+	if tx != nil {
+		err = tx.QueryRowContext(ctx, query, idemKey, cutoff).Scan(&existingID)
+	} else {
+		err = q.db.QueryRowContext(ctx, query, idemKey, cutoff).Scan(&existingID)
+	}
 	if err == sql.ErrNoRows {
 		return 0, nil
 	}
@@ -671,16 +700,20 @@ func (q *Queue) lookupActiveTaskID(ctx context.Context, idemKey string, cutoff i
 	return existingID, nil
 }
 
-func (q *Queue) lookupActiveTaskIDAny(ctx context.Context, idemKey string) (int64, error) {
+func (q *Queue) lookupActiveTaskIDAny(ctx context.Context, tx *sql.Tx, idemKey string) (int64, error) {
 	var existingID int64
-	err := q.db.QueryRowContext(ctx, `
+	query := `
 		SELECT id FROM task_queue
 		WHERE idempotency_key = ?
 		  AND status IN ('pending','running')
 		ORDER BY created_at DESC
-		LIMIT 1`,
-		idemKey,
-	).Scan(&existingID)
+		LIMIT 1`
+	var err error
+	if tx != nil {
+		err = tx.QueryRowContext(ctx, query, idemKey).Scan(&existingID)
+	} else {
+		err = q.db.QueryRowContext(ctx, query, idemKey).Scan(&existingID)
+	}
 	if err == sql.ErrNoRows {
 		return 0, nil
 	}
@@ -690,18 +723,21 @@ func (q *Queue) lookupActiveTaskIDAny(ctx context.Context, idemKey string) (int6
 	return existingID, nil
 }
 
-func (q *Queue) insertTask(ctx context.Context, payload, idemKey string, now int64) (sql.Result, error) {
+func (q *Queue) insertTask(ctx context.Context, tx *sql.Tx, payload, idemKey string, now int64) (sql.Result, error) {
 	sessionID := ParseTaskPayload(payload).SessionID
 	var (
 		res sql.Result
 		err error
 	)
 	for attempt := 0; attempt < 5; attempt++ {
-		res, err = q.db.ExecContext(ctx, `
+		query := `
 			INSERT INTO task_queue (payload, idempotency_key, session_id, status, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?)`,
-			payload, idemKey, sessionID, string(StatusPending), now, now,
-		)
+			VALUES (?, ?, ?, ?, ?, ?)`
+		if tx != nil {
+			res, err = tx.ExecContext(ctx, query, payload, idemKey, sessionID, string(StatusPending), now, now)
+		} else {
+			res, err = q.db.ExecContext(ctx, query, payload, idemKey, sessionID, string(StatusPending), now, now)
+		}
 		if !isBusyError(err) {
 			return res, err
 		}

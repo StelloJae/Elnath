@@ -1180,6 +1180,225 @@ func (s *Store) ListCompletionGatesByTask(ctx context.Context, taskID int64) ([]
 	return gates, nil
 }
 
+func (s *Store) CreateTaskEnqueueDecision(ctx context.Context, decision TaskEnqueueDecision) (*TaskEnqueueDecision, error) {
+	now := nowTime()
+	if decision.CreatedAt.IsZero() {
+		decision.CreatedAt = now
+	}
+	if decision.UpdatedAt.IsZero() {
+		decision.UpdatedAt = decision.CreatedAt
+	}
+	if decision.Decision == "" {
+		decision.Decision = TaskEnqueueDecisionApproved
+	}
+	if decision.Status == "" {
+		decision.Status = TaskEnqueueStatusPending
+	}
+	res, err := s.db.ExecContext(ctx, `
+		INSERT INTO task_enqueue_decisions(task_id, queue_task_id, operator_id, decision, reason, requested_enforcement, requested_completion_gate, status, failure_reason, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, decision.TaskID, nullableInt(decision.QueueTaskID), decision.OperatorID, decision.Decision, decision.Reason, decision.RequestedEnforcement, decision.RequestedCompletionGate, decision.Status, decision.FailureReason, timeMillis(decision.CreatedAt), timeMillis(decision.UpdatedAt))
+	if err != nil {
+		return nil, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+	return s.GetTaskEnqueueDecision(ctx, id)
+}
+
+func (s *Store) GetTaskEnqueueDecision(ctx context.Context, id int64) (*TaskEnqueueDecision, error) {
+	return scanTaskEnqueueDecision(s.db.QueryRowContext(ctx, `
+		SELECT id, task_id, queue_task_id, operator_id, decision, reason, requested_enforcement, requested_completion_gate, status, failure_reason, created_at, updated_at
+		FROM task_enqueue_decisions WHERE id = ?
+	`, id))
+}
+
+func (s *Store) ListTaskEnqueueDecisionsByTask(ctx context.Context, taskID int64) ([]TaskEnqueueDecision, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, task_id, queue_task_id, operator_id, decision, reason, requested_enforcement, requested_completion_gate, status, failure_reason, created_at, updated_at
+		FROM task_enqueue_decisions
+		WHERE task_id = ?
+		ORDER BY id
+	`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var decisions []TaskEnqueueDecision
+	for rows.Next() {
+		decision, err := scanTaskEnqueueDecision(rows)
+		if err != nil {
+			return nil, err
+		}
+		decisions = append(decisions, *decision)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return decisions, nil
+}
+
+func (s *Store) MarkTaskEnqueueDecisionEnqueued(ctx context.Context, decisionID, taskID, queueTaskID int64) (*TaskEnqueueDecision, *AgenticTask, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	now := timeMillis(nowTime())
+	res, err := tx.ExecContext(ctx, `
+		UPDATE task_enqueue_decisions
+		SET queue_task_id = ?, status = ?, updated_at = MAX(?, updated_at + 1)
+		WHERE id = ? AND task_id = ?
+	`, queueTaskID, TaskEnqueueStatusEnqueued, now, decisionID, taskID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, nil, sql.ErrNoRows
+	}
+	res, err = tx.ExecContext(ctx, `
+		UPDATE agentic_tasks
+		SET queue_task_id = ?, status = ?, updated_at = MAX(?, updated_at + 1)
+		WHERE id = ? AND queue_task_id IS NULL
+	`, queueTaskID, TaskStatusPending, now, taskID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		task, getErr := getAgenticTaskTx(ctx, tx, taskID)
+		if getErr != nil {
+			return nil, nil, getErr
+		}
+		if task.QueueTaskID != queueTaskID {
+			return nil, nil, fmt.Errorf("agentic: task %d is already linked to queue task %d", taskID, task.QueueTaskID)
+		}
+	}
+	decision, err := getTaskEnqueueDecisionTx(ctx, tx, decisionID)
+	if err != nil {
+		return nil, nil, err
+	}
+	task, err := getAgenticTaskTx(ctx, tx, taskID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, nil, err
+	}
+	return decision, task, nil
+}
+
+func (s *Store) MarkTaskEnqueueDecisionFailed(ctx context.Context, decisionID int64, reason string) (*TaskEnqueueDecision, error) {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE task_enqueue_decisions
+		SET status = ?, failure_reason = ?, updated_at = MAX(?, updated_at + 1)
+		WHERE id = ?
+	`, TaskEnqueueStatusFailed, reason, timeMillis(nowTime()), decisionID)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, sql.ErrNoRows
+	}
+	return s.GetTaskEnqueueDecision(ctx, decisionID)
+}
+
+type QueueTxEnqueuer interface {
+	EnqueueTx(ctx context.Context, tx *sql.Tx, payload string, idemKey string) (int64, bool, error)
+}
+
+func (s *Store) EnqueueProposedTask(ctx context.Context, taskID int64, decision TaskEnqueueDecision, queue QueueTxEnqueuer, payload, idemKey string) (*TaskEnqueueDecision, *AgenticTask, int64, bool, error) {
+	if queue == nil {
+		return nil, nil, 0, false, fmt.Errorf("agentic: queue enqueuer is required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, nil, 0, false, err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	task, err := getAgenticTaskTx(ctx, tx, taskID)
+	if err != nil {
+		return nil, nil, 0, false, err
+	}
+	if task.QueueTaskID != 0 {
+		return nil, nil, 0, false, fmt.Errorf("agentic: task %d is already linked to queue task %d", taskID, task.QueueTaskID)
+	}
+	if task.Status != TaskStatusProposed {
+		return nil, nil, 0, false, fmt.Errorf("agentic: task %d is not proposed: %s", taskID, task.Status)
+	}
+
+	now := nowTime()
+	if decision.Decision == "" {
+		decision.Decision = TaskEnqueueDecisionApproved
+	}
+	if decision.Status == "" {
+		decision.Status = TaskEnqueueStatusPending
+	}
+	res, err := tx.ExecContext(ctx, `
+		INSERT INTO task_enqueue_decisions(task_id, queue_task_id, operator_id, decision, reason, requested_enforcement, requested_completion_gate, status, failure_reason, created_at, updated_at)
+		VALUES (?, NULL, ?, ?, ?, ?, ?, ?, '', ?, ?)
+	`, taskID, decision.OperatorID, decision.Decision, decision.Reason, decision.RequestedEnforcement, decision.RequestedCompletionGate, decision.Status, timeMillis(now), timeMillis(now))
+	if err != nil {
+		return nil, nil, 0, false, err
+	}
+	decisionID, err := res.LastInsertId()
+	if err != nil {
+		return nil, nil, 0, false, err
+	}
+
+	queueTaskID, existed, err := queue.EnqueueTx(ctx, tx, payload, idemKey)
+	if err != nil {
+		reason := err.Error()
+		_, updateErr := tx.ExecContext(ctx, `
+			UPDATE task_enqueue_decisions
+			SET status = ?, failure_reason = ?, updated_at = MAX(?, updated_at + 1)
+			WHERE id = ?
+		`, TaskEnqueueStatusFailed, reason, timeMillis(nowTime()), decisionID)
+		if updateErr != nil {
+			return nil, nil, 0, false, fmt.Errorf("agentic: mark enqueue decision failed: %w", updateErr)
+		}
+		if commitErr := tx.Commit(); commitErr != nil {
+			return nil, nil, 0, false, commitErr
+		}
+		return nil, nil, 0, false, err
+	}
+
+	nowMs := timeMillis(nowTime())
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE task_enqueue_decisions
+		SET queue_task_id = ?, status = ?, updated_at = MAX(?, updated_at + 1)
+		WHERE id = ? AND task_id = ?
+	`, queueTaskID, TaskEnqueueStatusEnqueued, nowMs, decisionID, taskID); err != nil {
+		return nil, nil, 0, false, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE agentic_tasks
+		SET queue_task_id = ?, status = ?, updated_at = MAX(?, updated_at + 1)
+		WHERE id = ? AND queue_task_id IS NULL
+	`, queueTaskID, TaskStatusPending, nowMs, taskID); err != nil {
+		return nil, nil, 0, false, err
+	}
+	updatedDecision, err := getTaskEnqueueDecisionTx(ctx, tx, decisionID)
+	if err != nil {
+		return nil, nil, 0, false, err
+	}
+	updatedTask, err := getAgenticTaskTx(ctx, tx, taskID)
+	if err != nil {
+		return nil, nil, 0, false, err
+	}
+	if updatedTask.QueueTaskID != queueTaskID {
+		return nil, nil, 0, false, fmt.Errorf("agentic: task %d queue link mismatch after enqueue", taskID)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, nil, 0, false, err
+	}
+	return updatedDecision, updatedTask, queueTaskID, existed, nil
+}
+
 func (s *Store) CreateMemoryUpdate(ctx context.Context, update MemoryUpdate) (*MemoryUpdate, error) {
 	if update.CreatedAt.IsZero() {
 		update.CreatedAt = nowTime()
@@ -1506,6 +1725,26 @@ func (s *Store) updateFollowupStatus(ctx context.Context, id int64, status, reas
 		return nil, err
 	}
 	return s.GetFollowup(ctx, id)
+}
+
+func getTaskEnqueueDecisionTx(ctx context.Context, tx *sql.Tx, id int64) (*TaskEnqueueDecision, error) {
+	return scanTaskEnqueueDecision(tx.QueryRowContext(ctx, `
+		SELECT id, task_id, queue_task_id, operator_id, decision, reason, requested_enforcement, requested_completion_gate, status, failure_reason, created_at, updated_at
+		FROM task_enqueue_decisions WHERE id = ?
+	`, id))
+}
+
+func scanTaskEnqueueDecision(scanner rowScanner) (*TaskEnqueueDecision, error) {
+	var decision TaskEnqueueDecision
+	var queueTaskID sql.NullInt64
+	var createdAt, updatedAt int64
+	if err := scanner.Scan(&decision.ID, &decision.TaskID, &queueTaskID, &decision.OperatorID, &decision.Decision, &decision.Reason, &decision.RequestedEnforcement, &decision.RequestedCompletionGate, &decision.Status, &decision.FailureReason, &createdAt, &updatedAt); err != nil {
+		return nil, err
+	}
+	decision.QueueTaskID = intFromNull(queueTaskID)
+	decision.CreatedAt = millisTime(createdAt)
+	decision.UpdatedAt = millisTime(updatedAt)
+	return &decision, nil
 }
 
 func scanFollowup(scanner rowScanner) (*Followup, error) {

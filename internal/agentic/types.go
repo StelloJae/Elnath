@@ -46,6 +46,15 @@ const (
 	CompletionGateStatusBlocked = "blocked"
 	CompletionGateStatusFailed  = "failed"
 
+	TaskEnqueueDecisionApproved = "approved"
+	TaskEnqueueDecisionDenied   = "denied"
+	TaskEnqueueDecisionCanceled = "canceled"
+
+	TaskEnqueueStatusPending  = "pending"
+	TaskEnqueueStatusEnqueued = "enqueued"
+	TaskEnqueueStatusFailed   = "failed"
+	TaskEnqueueStatusCanceled = "canceled"
+
 	VerificationVerdictPassed       = "passed"
 	VerificationVerdictFailed       = "failed"
 	VerificationVerdictInconclusive = "inconclusive"
@@ -226,6 +235,21 @@ type CompletionGate struct {
 	ReceiptSummaryJSON string
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
+}
+
+type TaskEnqueueDecision struct {
+	ID                      int64
+	TaskID                  int64
+	QueueTaskID             int64
+	OperatorID              string
+	Decision                string
+	Reason                  string
+	RequestedEnforcement    string
+	RequestedCompletionGate string
+	Status                  string
+	FailureReason           string
+	CreatedAt               time.Time
+	UpdatedAt               time.Time
 }
 
 type MemoryUpdate struct {

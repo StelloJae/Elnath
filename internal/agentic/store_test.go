@@ -86,6 +86,7 @@ func TestAgenticSchema_TablesExist(t *testing.T) {
 		"tool_action_receipts",
 		"verification_runs",
 		"completion_gates",
+		"task_enqueue_decisions",
 		"memory_updates",
 		"followups",
 	} {
@@ -133,6 +134,9 @@ func TestAgenticSchema_RoadmapColumnsExist(t *testing.T) {
 		"completion_gates": {
 			"id", "task_id", "queue_task_id", "verification_run_id", "status", "reason", "receipt_summary_json", "created_at", "updated_at",
 		},
+		"task_enqueue_decisions": {
+			"id", "task_id", "queue_task_id", "operator_id", "decision", "reason", "requested_enforcement", "requested_completion_gate", "status", "failure_reason", "created_at", "updated_at",
+		},
 		"memory_updates": {
 			"id", "task_id", "receipt_id", "verification_run_id", "target", "operation", "payload_hash", "status", "source", "reason", "created_at", "applied_at",
 		},
@@ -147,6 +151,145 @@ func TestAgenticSchema_RoadmapColumnsExist(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestAgenticStore_CreateListTaskEnqueueDecision(t *testing.T) {
+	ctx := context.Background()
+	_, store := newTestStore(t)
+	task, err := store.CreateAgenticTask(ctx, AgenticTask{
+		Title:              "Proposed enqueue",
+		Prompt:             "review and enqueue",
+		Status:             TaskStatusProposed,
+		RiskLevel:          RiskLevelLow,
+		AutonomyDecision:   PolicyDecisionObserve,
+		VerificationStatus: VerificationStatusPending,
+	})
+	if err != nil {
+		t.Fatalf("CreateAgenticTask: %v", err)
+	}
+
+	decision, err := store.CreateTaskEnqueueDecision(ctx, TaskEnqueueDecision{
+		TaskID:                  task.ID,
+		OperatorID:              "operator:stello",
+		Decision:                TaskEnqueueDecisionApproved,
+		Reason:                  "operator approved bounded work",
+		RequestedEnforcement:    "gateway",
+		RequestedCompletionGate: "verification",
+		Status:                  TaskEnqueueStatusPending,
+	})
+	if err != nil {
+		t.Fatalf("CreateTaskEnqueueDecision: %v", err)
+	}
+	if decision.ID == 0 || decision.TaskID != task.ID || decision.OperatorID != "operator:stello" || decision.Decision != TaskEnqueueDecisionApproved || decision.Status != TaskEnqueueStatusPending {
+		t.Fatalf("unexpected enqueue decision: %+v", decision)
+	}
+
+	got, err := store.ListTaskEnqueueDecisionsByTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListTaskEnqueueDecisionsByTask: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != decision.ID || got[0].RequestedEnforcement != "gateway" || got[0].RequestedCompletionGate != "verification" {
+		t.Fatalf("decisions = %+v, want created decision", got)
+	}
+}
+
+func TestAgenticStore_MarkTaskEnqueueDecisionEnqueuedLinksTask(t *testing.T) {
+	ctx := context.Background()
+	_, store := newTestStore(t)
+	task, err := store.CreateAgenticTask(ctx, AgenticTask{
+		Title:              "Proposed enqueue",
+		Prompt:             "review and enqueue",
+		Status:             TaskStatusProposed,
+		RiskLevel:          RiskLevelLow,
+		AutonomyDecision:   PolicyDecisionObserve,
+		VerificationStatus: VerificationStatusPending,
+	})
+	if err != nil {
+		t.Fatalf("CreateAgenticTask: %v", err)
+	}
+	decision, err := store.CreateTaskEnqueueDecision(ctx, TaskEnqueueDecision{
+		TaskID:   task.ID,
+		Decision: TaskEnqueueDecisionApproved,
+		Status:   TaskEnqueueStatusPending,
+	})
+	if err != nil {
+		t.Fatalf("CreateTaskEnqueueDecision: %v", err)
+	}
+
+	updatedDecision, updatedTask, err := store.MarkTaskEnqueueDecisionEnqueued(ctx, decision.ID, task.ID, 77)
+	if err != nil {
+		t.Fatalf("MarkTaskEnqueueDecisionEnqueued: %v", err)
+	}
+	if updatedDecision.QueueTaskID != 77 || updatedDecision.Status != TaskEnqueueStatusEnqueued {
+		t.Fatalf("updated decision = %+v, want enqueued queue id", updatedDecision)
+	}
+	if updatedTask.QueueTaskID != 77 || updatedTask.Status != TaskStatusPending {
+		t.Fatalf("updated task = %+v, want queue link and pending status", updatedTask)
+	}
+}
+
+func TestAgenticSchema_ReconcilesDuplicateActiveTaskEnqueueDecisionsBeforeUniqueIndex(t *testing.T) {
+	db := openTestDB(t)
+	if _, err := db.Exec(`
+		CREATE TABLE agentic_tasks (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			goal_id INTEGER,
+			signal_id INTEGER,
+			parent_id INTEGER,
+			queue_task_id INTEGER,
+			title TEXT NOT NULL,
+			prompt TEXT NOT NULL,
+			status TEXT NOT NULL,
+			priority INTEGER NOT NULL DEFAULT 0,
+			risk_level TEXT NOT NULL,
+			autonomy_decision TEXT NOT NULL,
+			approval_request_id TEXT NOT NULL DEFAULT '',
+			verification_status TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			due_at INTEGER
+		);
+		CREATE TABLE task_enqueue_decisions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			task_id INTEGER NOT NULL,
+			queue_task_id INTEGER,
+			operator_id TEXT NOT NULL DEFAULT '',
+			decision TEXT NOT NULL,
+			reason TEXT NOT NULL DEFAULT '',
+			requested_enforcement TEXT NOT NULL DEFAULT '',
+			requested_completion_gate TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL,
+			failure_reason TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		);
+		INSERT INTO agentic_tasks(id, title, prompt, status, risk_level, autonomy_decision, verification_status, created_at, updated_at)
+		VALUES (1, 'dirty task', 'prompt', 'proposed', 'low', 'observe', 'pending', 1, 1);
+		INSERT INTO task_enqueue_decisions(task_id, operator_id, decision, status, created_at, updated_at)
+		VALUES
+			(1, 'cli', 'approved', 'pending', 1, 1),
+			(1, 'cli', 'approved', 'pending', 2, 2),
+			(1, 'cli', 'approved', 'enqueued', 3, 3);
+	`); err != nil {
+		t.Fatalf("seed legacy duplicate enqueue decisions: %v", err)
+	}
+	if err := InitSchema(db); err != nil {
+		t.Fatalf("InitSchema: %v", err)
+	}
+	var active int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM task_enqueue_decisions WHERE task_id = 1 AND status IN ('pending','enqueued')`).Scan(&active); err != nil {
+		t.Fatalf("count active decisions: %v", err)
+	}
+	if active != 1 {
+		t.Fatalf("active decisions = %d, want 1", active)
+	}
+	var failed int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM task_enqueue_decisions WHERE task_id = 1 AND status = 'failed' AND failure_reason <> ''`).Scan(&failed); err != nil {
+		t.Fatalf("count failed decisions: %v", err)
+	}
+	if failed != 2 {
+		t.Fatalf("failed duplicate decisions = %d, want 2", failed)
 	}
 }
 
