@@ -199,6 +199,50 @@ func TestValidateBackwardCompatRegressionTriggeredAbsent(t *testing.T) {
 	}
 }
 
+func TestBenchmarkScorecardBackwardCompatibility(t *testing.T) {
+	path := writeScorecardFile(t, `{
+  "version":"v1",
+  "system":"elnath",
+  "results":[
+    {"task_id":"GO-BF-001","track":"bugfix","language":"go","success":false,"intervention_count":0,"intervention_needed":false,"verification_passed":false,"failure_family":"verification_failed","duration_seconds":1}
+  ]
+}`)
+
+	scorecard, err := LoadScorecard(path)
+	if err != nil {
+		t.Fatalf("LoadScorecard: %v", err)
+	}
+	if err := scorecard.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	result := scorecard.Results[0]
+	if len(result.ChangedFiles) != 0 || result.EditIntentDetected || result.FinalIncompleteDetected || result.TraceSummary != "" {
+		t.Fatalf("old scorecard should default trace fields to zero values: %+v", result)
+	}
+}
+
+func TestBenchmarkRules_AcceptsNewFailureFamilies(t *testing.T) {
+	scorecard := &Scorecard{
+		Version: "v1",
+		System:  "elnath",
+		Results: []RunResult{
+			{TaskID: "GO-BF-002", Track: TrackBugfix, Language: LanguageGo, FailureFamily: "no_change_planning_failure", DurationSeconds: 1},
+			{TaskID: "GO-BF-001", Track: TrackBugfix, Language: LanguageGo, VerificationPassed: true, FailureFamily: "incomplete_patch", DurationSeconds: 1},
+		},
+	}
+
+	if err := scorecard.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	summary := scorecard.Summary()
+	if summary.FailureFamilies["no_change_planning_failure"] != 1 {
+		t.Fatalf("no_change_planning_failure count = %d, want 1", summary.FailureFamilies["no_change_planning_failure"])
+	}
+	if summary.FailureFamilies["incomplete_patch"] != 1 {
+		t.Fatalf("incomplete_patch count = %d, want 1", summary.FailureFamilies["incomplete_patch"])
+	}
+}
+
 func TestScorecardValidateAllowsResearchTrack(t *testing.T) {
 	scorecard := &Scorecard{
 		Version: "v1",

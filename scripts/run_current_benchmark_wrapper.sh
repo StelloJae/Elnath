@@ -121,6 +121,99 @@ print(json.dumps(sys.argv[1]))
 PY
 }
 
+benchmark_changed_files() {
+  if [[ ! -d "$WORKTREE/.git" ]]; then
+    return 0
+  fi
+  (
+    cd "$WORKTREE"
+    git status --porcelain | awk '
+      {
+        path = substr($0, 4)
+        if (path ~ /^\.omx\// || path ~ /^\.codex\//) next
+        print path
+      }
+    '
+  )
+}
+
+changed_files_json() {
+  benchmark_changed_files | python3 -c 'import json, sys; print(json.dumps([line.strip() for line in sys.stdin if line.strip()]))'
+}
+
+changed_file_count() {
+  benchmark_changed_files | awk 'NF { count++ } END { print count + 0 }'
+}
+
+combined_agent_log_tail() {
+  for log_path in "$RUN_LOG" "$RECOVERY_LOG"; do
+    if [[ -s "$log_path" ]]; then
+      tail -120 "$log_path"
+    fi
+  done
+}
+
+latest_agent_log_tail() {
+  if [[ -s "$RECOVERY_LOG" ]]; then
+    tail -120 "$RECOVERY_LOG"
+    return 0
+  fi
+  if [[ -s "$RUN_LOG" ]]; then
+    tail -120 "$RUN_LOG"
+  fi
+}
+
+detect_edit_intent() {
+  combined_agent_log_tail | python3 -c '
+import re
+import sys
+text = sys.stdin.read().lower()
+patterns = [
+    r"\b(i am|i'\''m|i will|will|going to|now)\s+(patch|edit|modify|change|implement|add|update)\b",
+    r"\b(patching|editing|modifying|implementing|adding|updating)\b",
+    r"\b(writ(e|ing)|wrote)\s+(code|tests?|files?|changes?|a\s+patch|the\s+patch|implementation)\b",
+    r"\b(modified|changed|updated|edited)\s+files?\b",
+    r"\bapply(ing)?\s+(the\s+)?patch\b",
+]
+sys.exit(0 if any(re.search(pattern, text) for pattern in patterns) else 1)
+'
+}
+
+detect_final_incomplete() {
+  latest_agent_log_tail | python3 -c '
+import re
+import sys
+text = sys.stdin.read().lower()
+patterns = [
+    r"\b(i|we)\s+(did not|didn'\''t|could not|couldn'\''t|cannot|can'\''t)\s+(complete|finish)\b",
+    r"\b(i|we)\s+(cannot|can'\''t)\s+honestly\s+claim\s+completion\b",
+    r"\bnot\s+complete(d)?\s+(the\s+)?(task|requested\s+work|implementation|work)\b",
+    r"\bincomplete\s+(patch|implementation|task|work)\b",
+    r"\bpartial implementation\b",
+    r"\bmissing regression test\b",
+    r"\bcannot honestly claim completion\b",
+    r"\bcan'\''t honestly claim completion\b",
+    r"\bunable to complete\b",
+    r"\bunfinished\b",
+    r"\bunresolved task scope\b",
+]
+sys.exit(0 if any(re.search(pattern, text) for pattern in patterns) else 1)
+'
+}
+
+trace_summary_text() {
+  local recovery_attempted="$1"
+  local changed_count="$2"
+  local edit_intent="$3"
+  local final_incomplete="$4"
+  local verification_configured=false
+  if [[ -n "${VERIFICATION_CMD:-}" ]]; then
+    verification_configured=true
+  fi
+  local summary="changed_files=${changed_count}; edit_intent_detected=${edit_intent}; final_incomplete_detected=${final_incomplete}; recovery_attempted=${recovery_attempted}; verification_configured=${verification_configured}"
+  printf '%s' "${summary:0:500}"
+}
+
 write_result() {
   local success="$1"
   local verification_passed="$2"
@@ -128,8 +221,21 @@ write_result() {
   local recovery_attempted="$4"
   local recovery_succeeded="$5"
   local notes="$6"
-  local duration
+  local duration changed_files edit_intent final_incomplete changed_count trace_summary
   duration=$(( $(date +%s) - START_TS ))
+  changed_files="$(changed_files_json)"
+  changed_count="$(changed_file_count)"
+  if detect_edit_intent; then
+    edit_intent=true
+  else
+    edit_intent=false
+  fi
+  if detect_final_incomplete; then
+    final_incomplete=true
+  else
+    final_incomplete=false
+  fi
+  trace_summary="$(trace_summary_text "$recovery_attempted" "$changed_count" "$edit_intent" "$final_incomplete")"
   cat > "$TASK_OUTPUT" <<EOF
 {
   "task_id": $(json_escape "$TASK_ID"),
@@ -144,7 +250,11 @@ write_result() {
   "recovery_attempted": $recovery_attempted,
   "recovery_succeeded": $recovery_succeeded,
   "duration_seconds": $duration,
-  "notes": $(json_escape "$notes")
+  "notes": $(json_escape "$notes"),
+  "changed_files": $changed_files,
+  "edit_intent_detected": $edit_intent,
+  "final_incomplete_detected": $final_incomplete,
+  "trace_summary": $(json_escape "$trace_summary")
 }
 EOF
 }
@@ -338,14 +448,7 @@ PY
 }
 
 working_tree_changes() {
-  cd "$WORKTREE"
-  git status --porcelain | awk '
-    {
-      path = substr($0, 4)
-      if (path ~ /^\.omx\// || path ~ /^\.codex\//) next
-      print path
-    }
-  '
+  benchmark_changed_files
 }
 
 benchmark_specific_verification_command() {
@@ -662,6 +765,11 @@ if [[ "$HAS_CHANGES" == "false" ]]; then
   fi
 fi
 
+if [[ "$HAS_CHANGES" == "false" ]] && detect_edit_intent; then
+  write_result false false "no_change_planning_failure" "$RECOVERY_ATTEMPTED" false "task completed without a working-tree diff after edit intent"
+  exit 0
+fi
+
 if [[ "$HAS_CHANGES" == "false" && "$RUN_EXIT" -ne 0 ]]; then
   if [[ "$RUN_EXIT" -eq 124 || "$RECOVERY_EXIT" -eq 124 ]]; then
     write_result false false "execution_timeout" "$RECOVERY_ATTEMPTED" false "Elnath run timed out before producing a working-tree diff"
@@ -690,6 +798,10 @@ if [[ -z "$VERIFY_CMD" ]]; then
 fi
 
 if run_verification_command "$VERIFY_LOG"; then
+  if detect_final_incomplete; then
+    write_result false true "incomplete_patch" "$RECOVERY_ATTEMPTED" false "verification passed, but final response self-reported incomplete work"
+    exit 0
+  fi
   if [[ "$RUN_EXIT" -eq 124 ]]; then
     write_result true true "" true true "Elnath timed out, but produced a diff that passes repo-native verification"
   else
@@ -719,12 +831,25 @@ if ! run_elnath "$RECOVERY_PROMPT" "$RECOVERY_LOG" "$RECOVERY_TIMEOUT"; then
 fi
 
 if run_verification_command "$VERIFY_RETRY_LOG"; then
+  if detect_final_incomplete; then
+    write_result false true "incomplete_patch" true false "verification passed after recovery, but final response self-reported incomplete work"
+    exit 0
+  fi
   write_result true true "" true true "verification passed after one recovery attempt"
   exit 0
 fi
 
 if [[ "$RECOVERY_EXIT" -eq 124 ]]; then
+  if detect_final_incomplete; then
+    write_result false false "incomplete_patch" true false "recovery attempt self-reported incomplete work and verification still fails"
+    exit 0
+  fi
   write_result false false "verification_failed" true false "recovery attempt timed out and verification still fails"
+  exit 0
+fi
+
+if detect_final_incomplete; then
+  write_result false false "incomplete_patch" true false "final response self-reported incomplete work and verification still fails"
   exit 0
 fi
 
