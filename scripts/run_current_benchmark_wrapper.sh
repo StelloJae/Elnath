@@ -681,8 +681,11 @@ Vitest-specific guidance:
 - \`rpc().onTaskUpdate\` for this path should keep the packed reporter payload shape (\`[task.id, result, task.meta]\`) rather than forwarding live mutable task objects.
 - For retry telemetry, prefer cloning/snapshotting the per-task \`result\` payload before sending it to RPC so later mutations do not overwrite the retry-visible \`retryCount\` / \`state: 'run'\` snapshot.
 - In the regression test, assert the reporter-visible retry packs themselves (for example via \`packs.find(([taskId]) => taskId === id)\`) and confirm the retry snapshots carry incrementing \`retryCount\` values while the retry event is still in the \`run\` state.
+- The \`reported-tasks\` fixture contains multiple retry/repeat/failure cases. Do not assert the global \`test-retried\` event list or global event order.
+- Instead, isolate the target retried test by task id/name, then assert that target task's retry telemetry includes \`retryCount\` 1 and 2 while \`state\` is \`run\`.
+- The regression should tolerate valid extra retry/fail events from other tests, but it must fail if the target task's retry telemetry is missing.
 - Do **not** weaken the regression to a final-state-only assertion, a completion-only assertion, or a generic “run passes” assertion; the benchmark requires proof that the retry-event snapshot itself is preserved at \`test-retried\` time.
-- A strong pattern here is: capture retry-event packs inside reporter \`onTaskUpdate(packs, taskEvents)\`, filter \`taskEvents\` for \`test-retried\`, then record the matching packed result's \`retryCount\` and \`state\` for exact equality against the expected retry sequence.
+- A strong pattern here is: capture retry-event packs inside reporter \`onTaskUpdate(packs, taskEvents)\`, filter \`taskEvents\` for \`test-retried\`, group matching packed results by \`taskId\`, map the target \`taskId\` back to the intended test name, then assert the isolated target's retry snapshots.
 - For this task, prefer a worker-only CLI assertion over OTEL/browser matrix coverage; use reporter-visible task updates / reported entities before inventing new OpenTelemetry fixtures.
 - Avoid \`test/cli/test/open-telemetry.test.ts\` and browser-oriented fixtures unless worker retry telemetry truly cannot be verified through reported tasks.
 - Do not replace the narrow worker-only regression with a broad browser/open-telemetry matrix test."

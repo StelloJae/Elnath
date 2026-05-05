@@ -223,7 +223,7 @@ benchmark_specific_verification_command() {
     return 0
   fi
   if [[ "$TASK_REPO" == *"vitest-dev/vitest"* && "$TASK_PROMPT" == *"retry telemetry"* ]]; then
-    echo "npx pnpm build && npx pnpm -C test/cli exec vitest --run test/worker-retry-telemetry.test.ts"
+    echo "npx pnpm -C packages/vitest build && npx pnpm -C test/cli exec vitest --run test/worker-retry-telemetry.test.ts"
     return 0
   fi
   if [[ "$TASK_REPO" == *"nestjs/nest"* && "$TASK_PROMPT" == *"cancellation tracing"* ]]; then
