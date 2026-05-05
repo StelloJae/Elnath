@@ -47,6 +47,9 @@ create_vitest_fixture() {
     "$repo_dir/packages/runner" \
     "$repo_dir/packages/pretty-format" \
     "$repo_dir/packages/snapshot" \
+    "$repo_dir/packages/spy" \
+    "$repo_dir/packages/expect" \
+    "$repo_dir/packages/mocker" \
     "$repo_dir/test/cli/test"
   cat >"$repo_dir/pnpm-lock.yaml" <<'EOF'
 lockfileVersion: '9.0'
@@ -65,6 +68,15 @@ EOF
 EOF
   cat >"$repo_dir/packages/snapshot/package.json" <<'EOF'
 {"name":"@vitest/snapshot","private":true}
+EOF
+  cat >"$repo_dir/packages/spy/package.json" <<'EOF'
+{"name":"@vitest/spy","private":true}
+EOF
+  cat >"$repo_dir/packages/expect/package.json" <<'EOF'
+{"name":"@vitest/expect","private":true}
+EOF
+  cat >"$repo_dir/packages/mocker/package.json" <<'EOF'
+{"name":"@vitest/mocker","private":true}
 EOF
   cat >"$repo_dir/test/cli/package.json" <<'EOF'
 {"name":"@vitest/test-cli","private":true}
@@ -98,6 +110,7 @@ run_prepare() {
     echo 'set -euo pipefail'
     printf 'WORKTREE=%q\n' "$repo_dir"
     printf 'VERIFY_CMD=%q\n' "npx pnpm -C packages/vitest build && npx pnpm -C test/cli exec vitest --run test/worker-retry-telemetry.test.ts"
+    printf 'VERIFICATION_CMD=%q\n' "npx pnpm -C packages/vitest build && npx pnpm -C test/cli exec vitest --run test/worker-retry-telemetry.test.ts"
     printf 'FAKE_NPX_LOG=%q\n' "$npx_log"
     printf 'PATH=%q\n' "$TMP_DIR/bin:$PATH"
     echo 'export FAKE_NPX_LOG PATH'
@@ -110,15 +123,26 @@ run_prepare() {
 }
 
 FIXTURE_REPO="$TMP_DIR/vitest-fixture"
-NPX_LOG="$TMP_DIR/npx.log"
+CURRENT_NPX_LOG="$TMP_DIR/current-npx.log"
+BASELINE_NPX_LOG="$TMP_DIR/baseline-npx.log"
 create_vitest_fixture "$FIXTURE_REPO"
 create_fake_npx "$TMP_DIR/bin"
 
-run_prepare "$REPO_ROOT/scripts/run_current_benchmark_wrapper.sh" "$FIXTURE_REPO" "$NPX_LOG"
+assert_vitest_prep_log() {
+  local log_path="$1"
+  grep -Fxq 'pnpm -C packages/pretty-format build' "$log_path"
+  grep -Fxq 'pnpm -C packages/utils build' "$log_path"
+  grep -Fxq 'pnpm -C packages/spy build' "$log_path"
+  grep -Fxq 'pnpm -C packages/expect build' "$log_path"
+  grep -Fxq 'pnpm -C packages/runner build' "$log_path"
+  grep -Fxq 'pnpm -C packages/snapshot build' "$log_path"
+  grep -Fxq 'pnpm -C packages/mocker build' "$log_path"
+}
 
-grep -Fxq 'pnpm -C packages/utils build' "$NPX_LOG"
-grep -Fxq 'pnpm -C packages/runner build' "$NPX_LOG"
-grep -Fxq 'pnpm -C packages/pretty-format build' "$NPX_LOG"
-grep -Fxq 'pnpm -C packages/snapshot build' "$NPX_LOG"
+run_prepare "$REPO_ROOT/scripts/run_current_benchmark_wrapper.sh" "$FIXTURE_REPO" "$CURRENT_NPX_LOG"
+assert_vitest_prep_log "$CURRENT_NPX_LOG"
+
+run_prepare "$REPO_ROOT/scripts/run_baseline_benchmark_wrapper.sh" "$FIXTURE_REPO" "$BASELINE_NPX_LOG"
+assert_vitest_prep_log "$BASELINE_NPX_LOG"
 
 echo "PASS: vitest retry telemetry verification prepares workspace package dist"

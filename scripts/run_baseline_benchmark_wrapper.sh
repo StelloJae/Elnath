@@ -307,6 +307,11 @@ pick_final_verification_command() {
 
 maybe_prepare_verification() {
   if [[ "${VERIFICATION_CMD:-}" == *"packages/vitest build"* ]]; then
+    for pkg in packages/pretty-format packages/utils packages/spy packages/expect packages/runner packages/snapshot packages/mocker; do
+      if [[ -f "$pkg/package.json" ]] && command -v npx >/dev/null 2>&1; then
+        npx pnpm -C "$pkg" build >/dev/null 2>&1
+      fi
+    done
     return 0
   fi
   if [[ -f pnpm-lock.yaml ]] && command -v npx >/dev/null 2>&1; then
