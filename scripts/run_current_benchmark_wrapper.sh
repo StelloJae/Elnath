@@ -541,18 +541,11 @@ pick_final_verification_command() {
 
 maybe_prepare_verification() {
   if [[ "${VERIFY_CMD:-}" == *"packages/vitest build"* ]]; then
-    if [[ -f packages/pretty-format/package.json ]] && command -v npx >/dev/null 2>&1; then
-      npx pnpm -C packages/pretty-format build >/dev/null 2>&1
-    fi
-    if [[ -f packages/utils/package.json ]] && command -v npx >/dev/null 2>&1; then
-      npx pnpm -C packages/utils build >/dev/null 2>&1
-    fi
-    if [[ -f packages/runner/package.json ]] && command -v npx >/dev/null 2>&1; then
-      npx pnpm -C packages/runner build >/dev/null 2>&1
-    fi
-    if [[ -f packages/snapshot/package.json ]] && command -v npx >/dev/null 2>&1; then
-      npx pnpm -C packages/snapshot build >/dev/null 2>&1
-    fi
+    for pkg in packages/pretty-format packages/utils packages/spy packages/expect packages/runner packages/snapshot packages/mocker; do
+      if [[ -f "$pkg/package.json" ]] && command -v npx >/dev/null 2>&1; then
+        npx pnpm -C "$pkg" build >/dev/null 2>&1
+      fi
+    done
     return 0
   fi
   if [[ -f pnpm-lock.yaml ]] && command -v npx >/dev/null 2>&1; then
