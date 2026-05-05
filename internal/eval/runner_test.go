@@ -133,3 +133,83 @@ EOF
 		t.Fatalf("partial scorecard missing results: %s", text)
 	}
 }
+
+func TestRunBaselinePlanPreservesRunResultTraceFields(t *testing.T) {
+	dir := t.TempDir()
+	corpusPath := filepath.Join(dir, "corpus.json")
+	if err := os.WriteFile(corpusPath, []byte(`{
+  "version":"v1",
+  "tasks":[
+    {"id":"GO-BF-002","title":"task 1","track":"bugfix","language":"go","repo_class":"cli_dev_tool","benchmark_family":"month3_canary","prompt":"fix it","repo":"https://github.com/example/repo","repo_ref":"deadbeef","acceptance_criteria":["tests pass"]}
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write corpus: %v", err)
+	}
+
+	wrapperPath := filepath.Join(dir, "wrapper.sh")
+	wrapper := `#!/bin/sh
+out="$1"
+cat > "$out" <<'EOF'
+{
+  "task_id":"GO-BF-002",
+  "track":"bugfix",
+  "language":"go",
+  "success":false,
+  "intervention_count":0,
+  "intervention_needed":false,
+  "verification_passed":false,
+  "failure_family":"no_change_planning_failure",
+  "duration_seconds":1,
+  "changed_files":["internal/daemon/runner.go"],
+  "edit_intent_detected":true,
+  "final_incomplete_detected":true,
+  "trace_summary":"changed_files=1; edit_intent_detected=true; final_incomplete_detected=true"
+}
+EOF
+`
+	if err := os.WriteFile(wrapperPath, []byte(wrapper), 0o755); err != nil {
+		t.Fatalf("write wrapper: %v", err)
+	}
+	t.Setenv("CURRENT_BIN", wrapperPath)
+
+	scorecardPath := filepath.Join(dir, "current-scorecard.json")
+	plan := &BaselineRunPlan{
+		Version:         "v1",
+		System:          "elnath-current",
+		Baseline:        "elnath-current",
+		CorpusPath:      corpusPath,
+		CommandTemplate: `"$CURRENT_BIN" {{task_output}}`,
+		OutputPath:      scorecardPath,
+		RepeatedRuns:    1,
+		RequiredEnv:     []string{"CURRENT_BIN"},
+	}
+
+	scorecard, err := RunBaselinePlan(plan)
+	if err != nil {
+		t.Fatalf("RunBaselinePlan: %v", err)
+	}
+	if len(scorecard.Results) != 1 {
+		t.Fatalf("len(results) = %d, want 1", len(scorecard.Results))
+	}
+	result := scorecard.Results[0]
+	if got, want := result.ChangedFiles, []string{"internal/daemon/runner.go"}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("ChangedFiles = %#v, want %#v", got, want)
+	}
+	if !result.EditIntentDetected {
+		t.Fatal("EditIntentDetected = false, want true")
+	}
+	if !result.FinalIncompleteDetected {
+		t.Fatal("FinalIncompleteDetected = false, want true")
+	}
+	if result.TraceSummary == "" || strings.Contains(result.TraceSummary, "RAW_TOOL_OUTPUT") {
+		t.Fatalf("TraceSummary = %q, want bounded redacted summary", result.TraceSummary)
+	}
+	data, err := os.ReadFile(scorecardPath)
+	if err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	text := string(data)
+	if !strings.Contains(text, `"changed_files"`) || !strings.Contains(text, `"edit_intent_detected": true`) || !strings.Contains(text, `"final_incomplete_detected": true`) {
+		t.Fatalf("scorecard missing trace fields: %s", text)
+	}
+}
