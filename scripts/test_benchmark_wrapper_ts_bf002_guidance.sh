@@ -49,6 +49,23 @@ if missing:
 if "Benchmark TS-BF-002 cancellation tracing guidance:" in baseline_text:
     raise SystemExit("baseline wrapper should not rewrite the baseline task prompt with TS-BF-002 guidance")
 
+if "packages/common/module-utils/configurable-module.builder.ts" not in current_guidance:
+    raise SystemExit("TS-BF-002 guidance should name the module-utils production seam")
+if "packages/common/test/module-utils/configurable-module.builder.spec.ts" not in current_guidance:
+    raise SystemExit("TS-BF-002 guidance should name the focused module-utils spec seam")
+
+no_change_prompt = current_guidance
+required_no_change_recovery = [
+    "packages/common/module-utils/configurable-module.builder.ts",
+    "packages/common/test/module-utils/configurable-module.builder.spec.ts",
+    "provideInjectionTokensFrom",
+    "no_change_planning_failure",
+    "Do not treat import/module-resolution churn as semantic progress",
+]
+missing_no_change = [snippet for snippet in required_no_change_recovery if snippet not in no_change_prompt]
+if missing_no_change:
+    raise SystemExit("current wrapper missing TS-BF-002 no-change recovery guidance: " + ", ".join(missing_no_change))
+
 guard_start = current_text.index("is_ts_bf002_nestjs_task()")
 guard_end = current_text.index("ts_bf002_missing_focused_regression()", guard_start)
 guard_body = current_text[guard_start:guard_end]
@@ -88,6 +105,12 @@ set -euo pipefail
 mkdir -p \
   packages/common/module-utils/interfaces \
   packages/common/test/module-utils
+if [[ "${FAKE_MANY_UNTRACKED:-}" == "1" ]]; then
+  mkdir -p aaa-generated
+  for i in $(seq -w 1 120); do
+    printf 'generated %s\n' "$i" > "aaa-generated/file-$i.txt"
+  done
+fi
 if [[ "${FAKE_ADJACENT_REGRESSION:-}" == "1" ]]; then
   cat > packages/common/module-utils/interfaces/configurable-module-async-options.interface.ts <<'TS'
 export interface ConfigurableModuleAsyncOptions {
@@ -170,6 +193,36 @@ assert data["changed_files"], data
 summary = data.get("trace_summary", "")
 assert len(summary) <= 500, data
 assert "Cannot find module '/repo" not in summary, data
+PY
+
+OUT_MANY="$TMP_DIR/ts-bf002-many-untracked-result.json"
+
+FAKE_MANY_UNTRACKED=1 \
+ELNATH_BIN="$TMP_DIR/fake-elnath.sh" \
+ELNATH_TIMEOUT=30 \
+ELNATH_BENCHMARK_PERMISSION_MODE=bypass \
+HOME="$TMP_DIR/host-home" \
+"$CURRENT_WRAPPER" \
+  "$OUT_MANY" \
+  "TS-BF-002" \
+  "brownfield_feature" \
+  "typescript" \
+  "Extend an existing TypeScript async task flow to emit explicit cancellation tracing without changing success-path semantics." \
+  "file://$SOURCE_REPO" \
+  "" \
+  "service_backend" \
+  "month2_canary"
+
+python3 - <<'PY' "$OUT_MANY"
+import json
+import sys
+
+data = json.load(open(sys.argv[1]))
+assert data["success"] is False, data
+assert data["verification_passed"] is False, data
+assert data["failure_family"] == "incomplete_patch", data
+assert len(data["changed_files"]) <= 100, data
+assert "packages/common/test/module-utils/configurable-module.builder.spec.ts" not in data["changed_files"], data
 PY
 
 OUT_ADJACENT="$TMP_DIR/ts-bf002-adjacent-result.json"
