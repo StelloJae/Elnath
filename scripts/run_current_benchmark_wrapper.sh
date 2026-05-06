@@ -359,6 +359,9 @@ ts_bf001_recovery_guidance() {
 TS-BF-001 recovery guard:
 - If verification says `No test files found`, create `test/cli/test/worker-retry-telemetry.test.ts`.
 - The regression must isolate the target retried test by task id/name.
+- resolve the target retried test id from Vitest state or reported entities, for example `ctx.state.getTestModules()`, then filter retry packs with exact equality like `taskId === targetTaskId`.
+- For the reported-tasks fixture, target the intended leaf retry case named `flaky test 1`. Do not target generic retry titles such as `retries a test`.
+- Do not filter packed task ids with filename or test-title substring checks such as `includes('1_first.test.ts')` or `endsWith('...retry #3')`.
 - Do not assert the global `test-retried` event list or broad global retry stream.
 - Keep the narrow worker-only verification command unchanged.
 EOF
@@ -389,6 +392,22 @@ ts_bf001_broad_retry_assertion_failure() {
   local test_path="$WORKTREE/test/cli/test/worker-retry-telemetry.test.ts"
   [[ -f "$test_path" ]] || return 1
   grep -Eq 'global.*test-retried|test-retried.*event list|toEqual\(\[\[1, .run.], \[2, .run.]]\)' "$test_path"
+}
+
+ts_bf001_packed_id_substring_matching() {
+  is_ts_bf001_vitest_task || return 1
+  local test_path="$WORKTREE/test/cli/test/worker-retry-telemetry.test.ts"
+  [[ -f "$test_path" ]] || return 1
+  grep -Eq "\.(includes|endsWith|startsWith|indexOf|match|search)[[:space:]]*\(" "$test_path" \
+    && grep -Eq "1_first\.test\.ts|first test|retry #[0-9]" "$test_path"
+}
+
+ts_bf001_generic_retry_title_target() {
+  is_ts_bf001_vitest_task || return 1
+  local test_path="$WORKTREE/test/cli/test/worker-retry-telemetry.test.ts"
+  [[ -f "$test_path" ]] || return 1
+  grep -Eq "\.(find|filter)[[:space:]]*\(" "$test_path" \
+    && grep -Eq "['\"]retries a test['\"]" "$test_path"
 }
 
 ts_bf002_missing_focused_regression() {
@@ -938,6 +957,9 @@ Vitest-specific guidance:
 - In the regression test, assert the reporter-visible retry packs themselves (for example via \`packs.find(([taskId]) => taskId === id)\`) and confirm the retry snapshots carry incrementing \`retryCount\` values while the retry event is still in the \`run\` state.
 - The \`reported-tasks\` fixture contains multiple retry/repeat/failure cases. Do not assert the global \`test-retried\` event list or global event order.
 - Instead, isolate the target retried test by task id/name, then assert that target task's retry telemetry includes \`retryCount\` 1 and 2 while \`state\` is \`run\`.
+- resolve the target retried test id from Vitest state or reported entities, for example \`ctx.state.getTestModules()\`, then filter retry packs using exact task id equality such as \`taskId === targetTaskId\`.
+- For the reported-tasks fixture, target the intended leaf retry case named \`flaky test 1\`. Do not target generic retry titles such as \`retries a test\`.
+- Do not filter packed task ids with filename or test-title substring checks such as \`includes('1_first.test.ts')\` or \`endsWith('...retry #3')\`; packed ids are not a stable filename/title assertion surface.
 - The regression should tolerate valid extra retry/fail events from other tests, but it must fail if the target task's retry telemetry is missing.
 - Do **not** weaken the regression to a final-state-only assertion, a completion-only assertion, or a generic “run passes” assertion; the benchmark requires proof that the retry-event snapshot itself is preserved at \`test-retried\` time.
 - A strong pattern here is: capture retry-event packs inside reporter \`onTaskUpdate(packs, taskEvents)\`, filter \`taskEvents\` for \`test-retried\`, group matching packed results by \`taskId\`, map the target \`taskId\` back to the intended test name, then assert the isolated target's retry snapshots.
@@ -1138,6 +1160,16 @@ fi
 
 if ts_bf001_broad_retry_assertion_failure; then
   write_result false false "incomplete_patch" true false "TS-BF-001 focused retry telemetry regression still asserts a broad/global retry stream"
+  exit 0
+fi
+
+if ts_bf001_packed_id_substring_matching; then
+  write_result false false "incomplete_patch" true false "TS-BF-001 focused retry telemetry regression used brittle packed-id substring matching"
+  exit 0
+fi
+
+if ts_bf001_generic_retry_title_target; then
+  write_result false false "incomplete_patch" true false "TS-BF-001 focused retry telemetry regression selected a generic retry title instead of the intended target task"
   exit 0
 fi
 
