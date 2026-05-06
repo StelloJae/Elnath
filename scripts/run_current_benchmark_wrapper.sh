@@ -214,6 +214,80 @@ trace_summary_text() {
   printf '%s' "${summary:0:500}"
 }
 
+prepare_debug_artifacts() {
+  DEBUG_DIFF_PATH=""
+  DEBUG_STATUS_PATH=""
+  if [[ "${ELNATH_BENCHMARK_KEEP_TMP:-}" != "1" || ! -d "$WORKTREE/.git" ]]; then
+    return 0
+  fi
+  DEBUG_DIFF_PATH="$TMP_DIR/diff.patch"
+  DEBUG_STATUS_PATH="$TMP_DIR/worktree-status.txt"
+  (cd "$WORKTREE" && git diff) > "$DEBUG_DIFF_PATH" 2>/dev/null || true
+  (cd "$WORKTREE" && git status --short) > "$DEBUG_STATUS_PATH" 2>/dev/null || true
+}
+
+debug_path_if_available() {
+  local path="$1"
+  if [[ -n "$path" && -e "$path" ]]; then
+    printf '%s' "$path"
+  fi
+}
+
+debug_evidence_json() {
+  if [[ "${ELNATH_BENCHMARK_KEEP_TMP:-}" != "1" ]]; then
+    return 0
+  fi
+  local run_log_path recovery_log_path verify_log_path verify_retry_log_path diff_path status_path sidecar_path public_sidecar_path
+  run_log_path="$(debug_path_if_available "$RUN_LOG")"
+  recovery_log_path="$(debug_path_if_available "$RECOVERY_LOG")"
+  verify_log_path="$(debug_path_if_available "$VERIFY_LOG")"
+  verify_retry_log_path="$(debug_path_if_available "$VERIFY_RETRY_LOG")"
+  diff_path="$(debug_path_if_available "${DEBUG_DIFF_PATH:-}")"
+  status_path="$(debug_path_if_available "${DEBUG_STATUS_PATH:-}")"
+  sidecar_path="${ELNATH_BENCHMARK_DEBUG_EVIDENCE_PATH:-${TASK_OUTPUT}.debug-evidence.json}"
+  public_sidecar_path="${ELNATH_BENCHMARK_DEBUG_EVIDENCE_PUBLIC_PATH:-$(basename "$sidecar_path")}"
+  mkdir -p "$(dirname "$sidecar_path")"
+  python3 - <<'PY' \
+    "$sidecar_path" \
+    "$public_sidecar_path" \
+    "$TMP_DIR" \
+    "${ELNATH_BENCHMARK_WRAPPER_STDOUT_PATH:-}" \
+    "${ELNATH_BENCHMARK_WRAPPER_STDERR_PATH:-}" \
+    "$run_log_path" \
+    "$recovery_log_path" \
+    "$verify_log_path" \
+    "$verify_retry_log_path" \
+    "$diff_path" \
+    "$status_path"
+import json, os, sys
+sidecar_path = sys.argv[1]
+public_sidecar_path = sys.argv[2]
+keys = [
+    "retained_temp_root",
+    "wrapper_stdout_path",
+    "wrapper_stderr_path",
+    "run_log_path",
+    "recovery_log_path",
+    "verification_log_path",
+    "verification_retry_log_path",
+    "diff_path",
+    "worktree_status_path",
+]
+obj = {}
+for key, value in zip(keys, sys.argv[3:]):
+    if not value:
+        continue
+    if key != "retained_temp_root" and not os.path.exists(value):
+        continue
+    obj[key] = value
+if obj:
+    with open(sidecar_path, "w", encoding="utf-8") as fh:
+        json.dump(obj, fh, indent=2, sort_keys=True)
+        fh.write("\n")
+    print(',\n  "debug_evidence": ' + json.dumps({"sidecar_path": public_sidecar_path}, sort_keys=True))
+PY
+}
+
 is_ts_bf002_nestjs_task() {
   [[ "$TASK_ID" == "TS-BF-002" ]]
 }
@@ -273,8 +347,9 @@ write_result() {
   local recovery_attempted="$4"
   local recovery_succeeded="$5"
   local notes="$6"
-  local duration changed_files edit_intent final_incomplete changed_count trace_summary
+  local duration changed_files edit_intent final_incomplete changed_count trace_summary debug_evidence
   duration=$(( $(date +%s) - START_TS ))
+  prepare_debug_artifacts
   changed_files="$(changed_files_json)"
   changed_count="$(changed_file_count)"
   if detect_edit_intent; then
@@ -288,6 +363,7 @@ write_result() {
     final_incomplete=false
   fi
   trace_summary="$(trace_summary_text "$recovery_attempted" "$changed_count" "$edit_intent" "$final_incomplete")"
+  debug_evidence="$(debug_evidence_json)"
   cat > "$TASK_OUTPUT" <<EOF
 {
   "task_id": $(json_escape "$TASK_ID"),
@@ -306,7 +382,7 @@ write_result() {
   "changed_files": $changed_files,
   "edit_intent_detected": $edit_intent,
   "final_incomplete_detected": $final_incomplete,
-  "trace_summary": $(json_escape "$trace_summary")
+  "trace_summary": $(json_escape "$trace_summary")$debug_evidence
 }
 EOF
 }

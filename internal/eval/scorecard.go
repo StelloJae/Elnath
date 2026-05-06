@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 )
 
 // LoadScorecard reads and validates a scorecard file.
@@ -60,6 +61,30 @@ func (s *Scorecard) Validate() error {
 		if result.DurationSeconds < 0 {
 			return fmt.Errorf("validate scorecard: result %q has negative duration_seconds", result.TaskID)
 		}
+		if err := validateScorecardDebugEvidence(result.TaskID, result.DebugEvidence); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateScorecardDebugEvidence(taskID string, evidence *DebugEvidence) error {
+	if evidence == nil {
+		return nil
+	}
+	if evidence.SidecarPath != "" && filepath.IsAbs(evidence.SidecarPath) {
+		return fmt.Errorf("validate scorecard: result %q debug_evidence sidecar_path must be relative", taskID)
+	}
+	if evidence.RetainedTempRoot != "" ||
+		evidence.WrapperStdoutPath != "" ||
+		evidence.WrapperStderrPath != "" ||
+		evidence.RunLogPath != "" ||
+		evidence.RecoveryLogPath != "" ||
+		evidence.VerificationLogPath != "" ||
+		evidence.VerificationRetryLogPath != "" ||
+		evidence.DiffPath != "" ||
+		evidence.WorktreeStatusPath != "" {
+		return fmt.Errorf("validate scorecard: result %q debug_evidence must store retained artifact paths in sidecar", taskID)
 	}
 	return nil
 }
