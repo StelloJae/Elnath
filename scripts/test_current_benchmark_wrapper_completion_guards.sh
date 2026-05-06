@@ -124,7 +124,7 @@ import sys
 path = sys.argv[1]
 code = sys.argv[2]
 data = json.load(open(path))
-ns = {"data": data}
+ns = {"data": data, "path": path}
 exec(code, ns, ns)
 PY
 }
@@ -180,6 +180,29 @@ assert data["success"] is True, data
 assert data["verification_passed"] is True, data
 assert data["failure_family"] == "", data
 assert data["final_incomplete_detected"] is False, data
+assert "README.md" in data["changed_files"], data
+'
+
+mkdir -p "$TMP_DIR/retained-tmp"
+ELNATH_BENCHMARK_KEEP_TMP=1 \
+ELNATH_BENCHMARK_WRAPPER_STDOUT_PATH="$TMP_DIR/complete-with-retained.stdout" \
+ELNATH_BENCHMARK_WRAPPER_STDERR_PATH="$TMP_DIR/complete-with-retained.stderr" \
+TMPDIR="$TMP_DIR/retained-tmp" \
+run_wrapper_case complete_with_diff "$TMP_DIR/complete-with-retained.json" "$SOURCE_REPO"
+assert_json_case "$TMP_DIR/complete-with-retained.json" '
+import json
+from pathlib import Path
+assert data["success"] is True, data
+pointer = data.get("debug_evidence")
+assert pointer and pointer.get("sidecar_path"), data
+assert not Path(pointer["sidecar_path"]).is_absolute(), data
+evidence = json.loads((Path(path).parent / pointer["sidecar_path"]).read_text())
+assert evidence.get("retained_temp_root"), data
+assert "wrapper_stdout_path" not in evidence, evidence
+assert "wrapper_stderr_path" not in evidence, evidence
+for key in ("run_log_path", "verification_log_path", "diff_path", "worktree_status_path"):
+    path = evidence.get(key)
+    assert path and Path(path).exists(), (key, data)
 assert "README.md" in data["changed_files"], data
 '
 

@@ -59,26 +59,43 @@ type Corpus struct {
 
 // RunResult is the outcome of one benchmark task execution.
 type RunResult struct {
-	Run                     int      `json:"run,omitempty"`
-	TaskID                  string   `json:"task_id"`
-	Track                   Track    `json:"track"`
-	Language                Language `json:"language"`
-	Success                 bool     `json:"success"`
-	InterventionCount       int      `json:"intervention_count"`
-	InterventionNeeded      bool     `json:"intervention_needed"`
-	InterventionClass       string   `json:"intervention_class,omitempty"`
-	VerificationCommand     string   `json:"verification_command,omitempty"`
-	VerificationPassed      bool     `json:"verification_passed,omitempty"`
-	FailureFamily           string   `json:"failure_family,omitempty"`
-	RecoveryAttempted       bool     `json:"recovery_attempted,omitempty"`
-	RecoverySucceeded       bool     `json:"recovery_succeeded,omitempty"`
-	DurationSeconds         float64  `json:"duration_seconds"`
-	Notes                   string   `json:"notes,omitempty"`
-	RegressionTriggered     bool     `json:"regression_triggered,omitempty"`
-	ChangedFiles            []string `json:"changed_files,omitempty"`
-	EditIntentDetected      bool     `json:"edit_intent_detected,omitempty"`
-	FinalIncompleteDetected bool     `json:"final_incomplete_detected,omitempty"`
-	TraceSummary            string   `json:"trace_summary,omitempty"`
+	Run                     int            `json:"run,omitempty"`
+	TaskID                  string         `json:"task_id"`
+	Track                   Track          `json:"track"`
+	Language                Language       `json:"language"`
+	Success                 bool           `json:"success"`
+	InterventionCount       int            `json:"intervention_count"`
+	InterventionNeeded      bool           `json:"intervention_needed"`
+	InterventionClass       string         `json:"intervention_class,omitempty"`
+	VerificationCommand     string         `json:"verification_command,omitempty"`
+	VerificationPassed      bool           `json:"verification_passed,omitempty"`
+	FailureFamily           string         `json:"failure_family,omitempty"`
+	RecoveryAttempted       bool           `json:"recovery_attempted,omitempty"`
+	RecoverySucceeded       bool           `json:"recovery_succeeded,omitempty"`
+	DurationSeconds         float64        `json:"duration_seconds"`
+	Notes                   string         `json:"notes,omitempty"`
+	RegressionTriggered     bool           `json:"regression_triggered,omitempty"`
+	ChangedFiles            []string       `json:"changed_files,omitempty"`
+	EditIntentDetected      bool           `json:"edit_intent_detected,omitempty"`
+	FinalIncompleteDetected bool           `json:"final_incomplete_detected,omitempty"`
+	TraceSummary            string         `json:"trace_summary,omitempty"`
+	DebugEvidence           *DebugEvidence `json:"debug_evidence,omitempty"`
+}
+
+// DebugEvidence contains bounded pointers to retained benchmark artifacts.
+// It intentionally stores paths and short metadata, not raw transcripts or
+// full tool output bodies.
+type DebugEvidence struct {
+	SidecarPath              string `json:"sidecar_path,omitempty"`
+	RetainedTempRoot         string `json:"retained_temp_root,omitempty"`
+	WrapperStdoutPath        string `json:"wrapper_stdout_path,omitempty"`
+	WrapperStderrPath        string `json:"wrapper_stderr_path,omitempty"`
+	RunLogPath               string `json:"run_log_path,omitempty"`
+	RecoveryLogPath          string `json:"recovery_log_path,omitempty"`
+	VerificationLogPath      string `json:"verification_log_path,omitempty"`
+	VerificationRetryLogPath string `json:"verification_retry_log_path,omitempty"`
+	DiffPath                 string `json:"diff_path,omitempty"`
+	WorktreeStatusPath       string `json:"worktree_status_path,omitempty"`
 }
 
 // Scorecard is a versioned result bundle for one evaluated system/baseline.

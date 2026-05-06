@@ -216,8 +216,48 @@ func TestBenchmarkScorecardBackwardCompatibility(t *testing.T) {
 		t.Fatalf("Validate: %v", err)
 	}
 	result := scorecard.Results[0]
-	if len(result.ChangedFiles) != 0 || result.EditIntentDetected || result.FinalIncompleteDetected || result.TraceSummary != "" {
+	if len(result.ChangedFiles) != 0 || result.EditIntentDetected || result.FinalIncompleteDetected || result.TraceSummary != "" || result.DebugEvidence != nil {
 		t.Fatalf("old scorecard should default trace fields to zero values: %+v", result)
+	}
+}
+
+func TestBenchmarkScorecardRejectsInlineDebugEvidencePaths(t *testing.T) {
+	scorecard := &Scorecard{
+		Version: "v1",
+		System:  "elnath",
+		Results: []RunResult{{
+			TaskID:          "TS-BF-001",
+			Track:           TrackBugfix,
+			Language:        LanguageTypeScript,
+			DurationSeconds: 1,
+			DebugEvidence: &DebugEvidence{
+				RetainedTempRoot: "/tmp/elnath-current-benchmark.secret",
+			},
+		}},
+	}
+
+	if err := scorecard.Validate(); err == nil {
+		t.Fatal("Validate succeeded with inline retained debug path")
+	}
+}
+
+func TestBenchmarkScorecardAcceptsRelativeDebugEvidenceSidecar(t *testing.T) {
+	scorecard := &Scorecard{
+		Version: "v1",
+		System:  "elnath",
+		Results: []RunResult{{
+			TaskID:          "TS-BF-001",
+			Track:           TrackBugfix,
+			Language:        LanguageTypeScript,
+			DurationSeconds: 1,
+			DebugEvidence: &DebugEvidence{
+				SidecarPath: "scorecard.debug/TS-BF-001-run-1.debug-evidence.json",
+			},
+		}},
+	}
+
+	if err := scorecard.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
 	}
 }
 
