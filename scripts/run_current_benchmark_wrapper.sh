@@ -189,6 +189,7 @@ import re
 import sys
 text = sys.stdin.read().lower()
 patterns = [
+    r"(?m)^\s*incomplete\s*:",
     r"\b(i|we)\s+(did not|didn'\''t|could not|couldn'\''t|cannot|can'\''t)\s+(complete|finish)\b",
     r"\b(i|we)\s+(cannot|can'\''t)\s+honestly\s+claim\s+completion\b",
     r"\bnot\s+complete(d)?\s+(the\s+)?(task|requested\s+work|implementation|work)\b",
@@ -200,6 +201,26 @@ patterns = [
     r"\bunable to complete\b",
     r"\bunfinished\b",
     r"\bunresolved task scope\b",
+]
+sys.exit(0 if any(re.search(pattern, text) for pattern in patterns) else 1)
+'
+}
+
+detect_failed_recovery_incomplete_admission() {
+  latest_agent_log_tail | python3 -c '
+import re
+import sys
+text = sys.stdin.read().lower()
+patterns = [
+    r"(?m)^\s*incomplete\s*:",
+    r"\bremaining\s+(issue|problem|blocker)\b",
+    r"\bstill\s+fail(s|ing)\s+because\b",
+    r"\bverification\s+still\s+fail(s|ing)\b",
+    r"\boverall\s+verification\s+failed\b",
+    r"\bnot\s+fixed\b",
+    r"\bcould\s+not\s+resolve\b",
+    r"\bno\s+retry\s+was\s+possible\b",
+    r"\btarget[-\s]+identification\s+(problem|issue)\s+remains\b",
 ]
 sys.exit(0 if any(re.search(pattern, text) for pattern in patterns) else 1)
 '
@@ -318,6 +339,19 @@ TypeScript canary recovery checklist:
 EOF
 }
 
+recovery_completion_checklist() {
+  cat <<'EOF'
+
+Recovery completion checklist:
+- The patch must compile cleanly before the final answer.
+- All introduced imports, variables, types, and helper functions must be used or removed; no unused imports or unused variables may remain.
+- Do not claim completion after only changing the error class or making partial symptom fixes.
+- The verification command must pass before claiming completion.
+- If verification still fails, explicitly say the work is incomplete and identify the remaining blocker.
+- When task acceptance requires tests, do not finish without a focused regression or equivalent verification surface.
+EOF
+}
+
 ts_bf001_recovery_guidance() {
   is_ts_bf001_vitest_task || return 0
   cat <<'EOF'
@@ -405,6 +439,33 @@ ts_bf002_incomplete_patch_after_failed_recovery() {
   return 1
 }
 
+compile_error_incomplete_patch_after_failed_recovery() {
+  [[ -n "$(working_tree_changes)" ]] || return 1
+  local logs
+  logs=""
+  if [[ -f "$VERIFY_RETRY_LOG" ]]; then
+    logs+="$(tail -120 "$VERIFY_RETRY_LOG")"$'\n'
+  fi
+  if [[ -f "$VERIFY_LOG" ]]; then
+    logs+="$(tail -120 "$VERIFY_LOG")"$'\n'
+  fi
+  python3 -c '
+import re
+import sys
+
+text = sys.stdin.read()
+patterns = [
+    r"imported and not used",
+    r"declared and not used",
+    r"undefined:",
+    r"not enough arguments in call",
+    r"too many arguments in call",
+    r"cannot use .* as .* value",
+]
+sys.exit(0 if any(re.search(pattern, text) for pattern in patterns) else 1)
+' <<<"$logs"
+}
+
 write_result() {
   local success="$1"
   local verification_passed="$2"
@@ -412,6 +473,7 @@ write_result() {
   local recovery_attempted="$4"
   local recovery_succeeded="$5"
   local notes="$6"
+  local force_final_incomplete="${7:-false}"
   local duration changed_files edit_intent final_incomplete changed_count trace_summary debug_evidence
   duration=$(( $(date +%s) - START_TS ))
   prepare_debug_artifacts
@@ -422,7 +484,7 @@ write_result() {
   else
     edit_intent=false
   fi
-  if detect_final_incomplete; then
+  if [[ "$force_final_incomplete" == "true" ]] || detect_final_incomplete; then
     final_incomplete=true
   else
     final_incomplete=false
@@ -955,6 +1017,7 @@ if [[ "$HAS_CHANGES" == "false" ]]; then
     "$BENCHMARK_PROMPT" \
     "Your first attempt ended without producing any code changes. You must inspect the repository, modify files, and create the smallest correct patch that satisfies the task. Your final answer must explicitly list modified files and state whether '${VERIFY_CMD}' passed."
   NO_CHANGE_PROMPT+="$(typescript_recovery_checklist)"
+  NO_CHANGE_PROMPT+="$(recovery_completion_checklist)"
   NO_CHANGE_PROMPT+="$(ts_bf001_recovery_guidance)"
   NO_CHANGE_PROMPT+="$(ts_bf002_no_change_recovery_guidance)"
   RECOVERY_TIMEOUT=$(( ELNATH_TIMEOUT / 2 ))
@@ -1025,6 +1088,7 @@ printf -v RECOVERY_PROMPT '%s\n\n%s\n\nVerification output (last 50 lines):\n```
   "$VERIFY_OUTPUT" \
   "Fix the EXACT errors shown above. Do NOT re-run the verification command before making code changes. Read the error messages, identify which files and lines need editing, make the fixes, THEN run '${VERIFY_CMD}'. If errors mention 'not enough arguments' or 'too many arguments', grep for the function name to find all remaining call sites and fix them. Your final answer must explicitly list modified files and state whether '${VERIFY_CMD}' passed."
 RECOVERY_PROMPT+="$(typescript_recovery_checklist)"
+RECOVERY_PROMPT+="$(recovery_completion_checklist)"
 RECOVERY_PROMPT+="$(ts_bf001_recovery_guidance)"
 if is_ts_bf002_nestjs_task; then
   RECOVERY_PROMPT+="
@@ -1054,16 +1118,16 @@ if run_verification_command "$VERIFY_RETRY_LOG"; then
 fi
 
 if [[ "$RECOVERY_EXIT" -eq 124 ]]; then
-  if detect_final_incomplete; then
-    write_result false false "incomplete_patch" true false "recovery attempt self-reported incomplete work and verification still fails"
+  if detect_final_incomplete || detect_failed_recovery_incomplete_admission; then
+    write_result false false "incomplete_patch" true false "recovery attempt self-reported incomplete work and verification still fails" true
     exit 0
   fi
   write_result false false "verification_failed" true false "recovery attempt timed out and verification still fails"
   exit 0
 fi
 
-if detect_final_incomplete; then
-  write_result false false "incomplete_patch" true false "final response self-reported incomplete work and verification still fails"
+if detect_final_incomplete || detect_failed_recovery_incomplete_admission; then
+  write_result false false "incomplete_patch" true false "final response self-reported incomplete work and verification still fails" true
   exit 0
 fi
 
@@ -1079,6 +1143,11 @@ fi
 
 if ts_bf002_incomplete_patch_after_failed_recovery; then
   write_result false false "incomplete_patch" true false "TS-BF-002 recovery changed imports/public options without a focused cancellation regression"
+  exit 0
+fi
+
+if compile_error_incomplete_patch_after_failed_recovery; then
+  write_result false false "incomplete_patch" true false "recovery left compile-time evidence of incomplete patch wiring"
   exit 0
 fi
 
