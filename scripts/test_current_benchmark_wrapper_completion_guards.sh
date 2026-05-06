@@ -84,6 +84,17 @@ PY
     echo "Modified files: README.md"
     echo "Verification: go test ./... passed."
     ;;
+  many_untracked_files)
+    python3 - <<'PY'
+from pathlib import Path
+root = Path("generated")
+root.mkdir(exist_ok=True)
+for i in range(1, 121):
+    (root / f"file-{i:03d}.txt").write_text(f"generated {i}\n")
+PY
+    echo "Modified files: generated/*"
+    echo "Verification: go test ./... passed."
+    ;;
   *)
     echo "unknown FAKE_SCENARIO=${FAKE_SCENARIO}" >&2
     exit 2
@@ -212,6 +223,15 @@ summary = data["trace_summary"]
 assert len(summary) <= 500, data
 assert "SECRET_TOKEN" not in summary, data
 assert "x" * 100 not in summary, data
+'
+
+run_wrapper_case many_untracked_files "$TMP_DIR/many-untracked-files.json" "$SOURCE_REPO"
+assert_json_case "$TMP_DIR/many-untracked-files.json" '
+assert data["success"] is True, data
+assert data["verification_passed"] is True, data
+assert len(data["changed_files"]) <= 100, data
+assert "generated/file-001.txt" in data["changed_files"], data
+assert "generated/file-120.txt" not in data["changed_files"], data
 '
 
 echo "PASS: current benchmark wrapper completion guards classify no-change/incomplete runs"

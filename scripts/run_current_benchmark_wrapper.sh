@@ -121,13 +121,13 @@ print(json.dumps(sys.argv[1]))
 PY
 }
 
-benchmark_changed_files() {
+benchmark_changed_files_all() {
   if [[ ! -d "$WORKTREE/.git" ]]; then
     return 0
   fi
   (
     cd "$WORKTREE"
-    git status --porcelain | awk '
+    git status --porcelain --untracked-files=all | awk '
       {
         path = substr($0, 4)
         if (path ~ /^\.omx\// || path ~ /^\.codex\//) next
@@ -137,12 +137,16 @@ benchmark_changed_files() {
   )
 }
 
+benchmark_changed_files() {
+  benchmark_changed_files_all | awk 'NF { if (++count <= 100) print }'
+}
+
 changed_files_json() {
   benchmark_changed_files | python3 -c 'import json, sys; print(json.dumps([line.strip() for line in sys.stdin if line.strip()]))'
 }
 
 changed_file_count() {
-  benchmark_changed_files | awk 'NF { count++ } END { print count + 0 }'
+  benchmark_changed_files_all | awk 'NF { count++ } END { print count + 0 }'
 }
 
 combined_agent_log_tail() {
@@ -292,6 +296,67 @@ is_ts_bf002_nestjs_task() {
   [[ "$TASK_ID" == "TS-BF-002" ]]
 }
 
+is_ts_bf001_vitest_task() {
+  [[ "$TASK_ID" == "TS-BF-001" ]]
+}
+
+is_typescript_canary_task() {
+  [[ "$TASK_LANGUAGE" == "typescript" ]] && {
+    is_ts_bf001_vitest_task || is_ts_bf002_nestjs_task
+  }
+}
+
+typescript_recovery_checklist() {
+  is_typescript_canary_task || return 0
+  cat <<'EOF'
+
+TypeScript canary recovery checklist:
+- Leave a production/runtime diff when the task asks for behavior change; do not stop after exploratory findings.
+- Add or keep a focused regression test in the expected task-specific area.
+- Run the exact benchmark verification command before the final answer.
+- Do not treat import mechanics, module-resolution churn, or test-only scaffolding as semantic completion.
+EOF
+}
+
+ts_bf001_recovery_guidance() {
+  is_ts_bf001_vitest_task || return 0
+  cat <<'EOF'
+
+TS-BF-001 recovery guard:
+- If verification says `No test files found`, create `test/cli/test/worker-retry-telemetry.test.ts`.
+- The regression must isolate the target retried test by task id/name.
+- Do not assert the global `test-retried` event list or broad global retry stream.
+- Keep the narrow worker-only verification command unchanged.
+EOF
+}
+
+ts_bf002_no_change_recovery_guidance() {
+  is_ts_bf002_nestjs_task || return 0
+  cat <<'EOF'
+
+TS-BF-002 no-change recovery guard:
+- Make the smallest production change in `packages/common/module-utils/configurable-module.builder.ts`.
+- Add or update the focused regression in `packages/common/test/module-utils/configurable-module.builder.spec.ts`.
+- Preserve public async-options fields such as `provideInjectionTokensFrom`; do not replace public option fields.
+- Do not treat import/module-resolution churn as semantic progress.
+- If recovery still leaves no diff after edit intent, the benchmark will classify the run as `no_change_planning_failure`.
+EOF
+}
+
+ts_bf001_missing_focused_regression() {
+  is_ts_bf001_vitest_task || return 1
+  local test_path="$WORKTREE/test/cli/test/worker-retry-telemetry.test.ts"
+  [[ ! -f "$test_path" ]] || return 1
+  benchmark_changed_files_all | grep -Eq '^(packages/runner/src/run\.ts|packages/vitest/src/runtime/(runners/index|worker)\.ts|packages/vitest/src/runtime/workers/.*\.ts)$'
+}
+
+ts_bf001_broad_retry_assertion_failure() {
+  is_ts_bf001_vitest_task || return 1
+  local test_path="$WORKTREE/test/cli/test/worker-retry-telemetry.test.ts"
+  [[ -f "$test_path" ]] || return 1
+  grep -Eq 'global.*test-retried|test-retried.*event list|toEqual\(\[\[1, .run.], \[2, .run.]]\)' "$test_path"
+}
+
 ts_bf002_missing_focused_regression() {
   local spec_dir="$WORKTREE/packages/common/test/module-utils"
   local spec_path
@@ -326,7 +391,7 @@ ts_bf002_import_churn_after_recovery() {
   if ! grep -Eq 'ERR_(UNSUPPORTED_DIR_IMPORT|MODULE_NOT_FOUND)|Cannot find module|Directory import' <<<"$logs"; then
     return 1
   fi
-  benchmark_changed_files | grep -Eq 'packages/common/test/module-utils/configurable-module\.builder\.spec\.ts|packages/common/module-utils/interfaces/configurable-module-async-options\.interface\.ts'
+  benchmark_changed_files_all | grep -Eq 'packages/common/test/module-utils/configurable-module\.builder\.spec\.ts|packages/common/module-utils/interfaces/configurable-module-async-options\.interface\.ts'
 }
 
 ts_bf002_incomplete_patch_after_failed_recovery() {
@@ -576,7 +641,7 @@ PY
 }
 
 working_tree_changes() {
-  benchmark_changed_files
+  benchmark_changed_files_all
 }
 
 benchmark_specific_verification_command() {
@@ -584,11 +649,11 @@ benchmark_specific_verification_command() {
     echo "go test -p 1 ./... -count=1"
     return 0
   fi
-  if [[ "$TASK_REPO" == *"vitest-dev/vitest"* && "$TASK_PROMPT" == *"retry telemetry"* ]]; then
+  if is_ts_bf001_vitest_task || [[ "$TASK_REPO" == *"vitest-dev/vitest"* && "$TASK_PROMPT" == *"retry telemetry"* ]]; then
     echo "npx pnpm -C packages/vitest build && npx pnpm -C test/cli exec vitest --run test/worker-retry-telemetry.test.ts"
     return 0
   fi
-  if [[ "$TASK_REPO" == *"nestjs/nest"* && "$TASK_PROMPT" == *"cancellation tracing"* ]]; then
+  if is_ts_bf002_nestjs_task || [[ "$TASK_REPO" == *"nestjs/nest"* && "$TASK_PROMPT" == *"cancellation tracing"* ]]; then
     echo "./node_modules/.bin/mocha packages/common/test/module-utils/configurable-module.builder.spec.ts --require ts-node/register --require tsconfig-paths/register --require node_modules/reflect-metadata/Reflect.js --require hooks/mocha-init-hook.ts"
     return 0
   fi
@@ -889,6 +954,9 @@ if [[ "$HAS_CHANGES" == "false" ]]; then
   printf -v NO_CHANGE_PROMPT '%s\n\n%s' \
     "$BENCHMARK_PROMPT" \
     "Your first attempt ended without producing any code changes. You must inspect the repository, modify files, and create the smallest correct patch that satisfies the task. Your final answer must explicitly list modified files and state whether '${VERIFY_CMD}' passed."
+  NO_CHANGE_PROMPT+="$(typescript_recovery_checklist)"
+  NO_CHANGE_PROMPT+="$(ts_bf001_recovery_guidance)"
+  NO_CHANGE_PROMPT+="$(ts_bf002_no_change_recovery_guidance)"
   RECOVERY_TIMEOUT=$(( ELNATH_TIMEOUT / 2 ))
   if ! run_elnath "$NO_CHANGE_PROMPT" "$RECOVERY_LOG" "$RECOVERY_TIMEOUT"; then
     RECOVERY_EXIT=$?
@@ -956,6 +1024,8 @@ printf -v RECOVERY_PROMPT '%s\n\n%s\n\nVerification output (last 50 lines):\n```
   "The repo-native verification command '${VERIFY_CMD}' failed after your first attempt." \
   "$VERIFY_OUTPUT" \
   "Fix the EXACT errors shown above. Do NOT re-run the verification command before making code changes. Read the error messages, identify which files and lines need editing, make the fixes, THEN run '${VERIFY_CMD}'. If errors mention 'not enough arguments' or 'too many arguments', grep for the function name to find all remaining call sites and fix them. Your final answer must explicitly list modified files and state whether '${VERIFY_CMD}' passed."
+RECOVERY_PROMPT+="$(typescript_recovery_checklist)"
+RECOVERY_PROMPT+="$(ts_bf001_recovery_guidance)"
 if is_ts_bf002_nestjs_task; then
   RECOVERY_PROMPT+="
 
@@ -994,6 +1064,16 @@ fi
 
 if detect_final_incomplete; then
   write_result false false "incomplete_patch" true false "final response self-reported incomplete work and verification still fails"
+  exit 0
+fi
+
+if ts_bf001_missing_focused_regression; then
+  write_result false false "incomplete_patch" true false "TS-BF-001 changed retry telemetry seams without the focused worker retry telemetry regression"
+  exit 0
+fi
+
+if ts_bf001_broad_retry_assertion_failure; then
+  write_result false false "incomplete_patch" true false "TS-BF-001 focused retry telemetry regression still asserts a broad/global retry stream"
   exit 0
 fi
 
