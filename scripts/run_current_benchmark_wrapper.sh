@@ -214,6 +214,58 @@ trace_summary_text() {
   printf '%s' "${summary:0:500}"
 }
 
+is_ts_bf002_nestjs_task() {
+  [[ "$TASK_ID" == "TS-BF-002" ]]
+}
+
+ts_bf002_missing_focused_regression() {
+  local spec_dir="$WORKTREE/packages/common/test/module-utils"
+  local spec_path
+  if [[ ! -d "$spec_dir" ]]; then
+    return 0
+  fi
+  while IFS= read -r spec_path; do
+    if grep -Eiq 'cancell|AbortError|CanceledError|CancelledError' "$spec_path"; then
+      return 1
+    fi
+  done < <(find "$spec_dir" -maxdepth 1 -type f -name '*.spec.ts' -print)
+  return 0
+}
+
+ts_bf002_public_async_option_regression() {
+  local interface_path="$WORKTREE/packages/common/module-utils/interfaces/configurable-module-async-options.interface.ts"
+  if [[ ! -f "$interface_path" ]]; then
+    return 1
+  fi
+  grep -q 'onCancellation' "$interface_path" && ! grep -q 'provideInjectionTokensFrom' "$interface_path"
+}
+
+ts_bf002_import_churn_after_recovery() {
+  local logs
+  logs=""
+  if [[ -f "$VERIFY_LOG" ]]; then
+    logs+="$(tail -80 "$VERIFY_LOG")"$'\n'
+  fi
+  if [[ -f "$VERIFY_RETRY_LOG" ]]; then
+    logs+="$(tail -80 "$VERIFY_RETRY_LOG")"$'\n'
+  fi
+  if ! grep -Eq 'ERR_(UNSUPPORTED_DIR_IMPORT|MODULE_NOT_FOUND)|Cannot find module|Directory import' <<<"$logs"; then
+    return 1
+  fi
+  benchmark_changed_files | grep -Eq 'packages/common/test/module-utils/configurable-module\.builder\.spec\.ts|packages/common/module-utils/interfaces/configurable-module-async-options\.interface\.ts'
+}
+
+ts_bf002_incomplete_patch_after_failed_recovery() {
+  is_ts_bf002_nestjs_task || return 1
+  if ts_bf002_public_async_option_regression; then
+    return 0
+  fi
+  if ts_bf002_import_churn_after_recovery && ts_bf002_missing_focused_regression; then
+    return 0
+  fi
+  return 1
+}
+
 write_result() {
   local success="$1"
   local verification_passed="$2"
@@ -698,7 +750,16 @@ NestJS-specific guidance:
 - Prefer the async configurable-module path hinted by the repo, especially \`packages/common/module-utils/configurable-module.builder.ts\` and \`packages/common/module-utils/interfaces/configurable-module-async-options.interface.ts\`, before exploring microservices code.
 - The goal is explicit cancellation tracing in async-options/module-utils flow without changing success-path behavior; do not drift into unrelated microservice client cancellation logic unless the hinted async-options path clearly cannot support the requirement.
 - Prefer the narrow unit regression in \`packages/common/test/module-utils/configurable-module.builder.spec.ts\` or an adjacent common-module-utils spec over broader integration suites that need external services.
-- Avoid GraphQL/Mongoose/TypeORM integration suites unless your patch truly requires them; start with the shared common module-utils seam."
+- Avoid GraphQL/Mongoose/TypeORM integration suites unless your patch truly requires them; start with the shared common module-utils seam.
+- Benchmark TS-BF-002 cancellation tracing guidance:
+  - Preserve existing public async-options fields such as \`provideInjectionTokensFrom\`; do not remove or replace them while adding cancellation tracing.
+  - Do not replace public option fields with unrelated new fields just to expose cancellation tracing.
+  - Add a focused cancellation tracing regression test in \`packages/common/test/module-utils/configurable-module.builder.spec.ts\` or an adjacent common module-utils spec.
+  - The regression should prove the cancellation/error tracing path and preserve success-path behavior.
+  - Avoid import-style rewrites unless verification output proves they are necessary.
+  - Preserve the existing TypeScript/ESM import style in \`configurable-module.builder.spec.ts\`; do not replace the file's top-level imports with bare CommonJS \`require(...)\`.
+  - If a direct runtime import is needed to avoid a directory import error, use a minimal \`createRequire(import.meta.url)\` bridge for that one runtime import while keeping type imports type-only.
+  - Do not finish if the semantic cancellation regression test is missing, even if import or module-resolution mechanics were changed."
 fi
 if [[ "$TASK_REPO" == *"vercel/next.js"* && "$TASK_PROMPT" == *"file-watcher regression"* ]]; then
   BENCHMARK_PROMPT+="
@@ -819,6 +880,17 @@ printf -v RECOVERY_PROMPT '%s\n\n%s\n\nVerification output (last 50 lines):\n```
   "The repo-native verification command '${VERIFY_CMD}' failed after your first attempt." \
   "$VERIFY_OUTPUT" \
   "Fix the EXACT errors shown above. Do NOT re-run the verification command before making code changes. Read the error messages, identify which files and lines need editing, make the fixes, THEN run '${VERIFY_CMD}'. If errors mention 'not enough arguments' or 'too many arguments', grep for the function name to find all remaining call sites and fix them. Your final answer must explicitly list modified files and state whether '${VERIFY_CMD}' passed."
+if is_ts_bf002_nestjs_task; then
+  RECOVERY_PROMPT+="
+
+TS-BF-002 recovery guard:
+- Keep the semantic cancellation tracing regression test intact while fixing verification errors.
+- Do not treat import/module-resolution churn as progress if the cancellation tracing regression is still missing.
+- Preserve the existing TypeScript/ESM import style in \`configurable-module.builder.spec.ts\`; do not convert the spec to bare CommonJS \`require(...)\`.
+- If avoiding a directory import error requires a runtime import adjustment, use a minimal \`createRequire(import.meta.url)\` bridge for that one runtime import and keep type imports type-only.
+- Preserve existing public async-options fields such as \`provideInjectionTokensFrom\`; do not replace public fields with \`onCancellation\` or any unrelated new option.
+- If you must change imports, keep the change minimal and verify with the same narrow Mocha command."
+fi
 RECOVERY_ATTEMPTED=true
 RECOVERY_EXIT=0
 RECOVERY_TIMEOUT=$(( ELNATH_TIMEOUT / 2 ))
@@ -846,6 +918,11 @@ fi
 
 if detect_final_incomplete; then
   write_result false false "incomplete_patch" true false "final response self-reported incomplete work and verification still fails"
+  exit 0
+fi
+
+if ts_bf002_incomplete_patch_after_failed_recovery; then
+  write_result false false "incomplete_patch" true false "TS-BF-002 recovery changed imports/public options without a focused cancellation regression"
   exit 0
 fi
 
