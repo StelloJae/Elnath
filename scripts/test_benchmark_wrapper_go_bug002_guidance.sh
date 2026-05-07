@@ -24,6 +24,8 @@ required = [
     "Do not assert `v.configFile` is empty after `ReadInConfig()`",
     "avoid unrelated logger/test-helper machinery such as `slog`",
     "If verification first fails on a test compile error, recovery must still fix semantic regression assertions",
+    "After any compile-error fix, rerun the exact verification command",
+    "Do not stop after only fixing compile errors",
 ]
 missing = [snippet for snippet in required if snippet not in current]
 if missing:
