@@ -5,6 +5,20 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/elnath-current-recovery-reliability.XXXXXX")"
 
+python3 - <<'PY' "$REPO_ROOT/scripts/run_current_benchmark_wrapper.sh"
+from pathlib import Path
+import sys
+
+text = Path(sys.argv[1]).read_text()
+required = [
+    "ELNATH_VERIFY_TIMEOUT",
+    "verification command timed out after",
+]
+missing = [snippet for snippet in required if snippet not in text]
+if missing:
+    raise SystemExit("current wrapper missing bounded verification timeout support: " + ", ".join(missing))
+PY
+
 cleanup() {
   rm -rf "$TMP_DIR"
 }
@@ -46,7 +60,7 @@ create_fake_elnath() {
 set -euo pipefail
 
 prompt="${*: -1}"
-count_file=".fake-elnath-count"
+count_file="${FAKE_COUNT_FILE:-.fake-elnath-count}"
 count=0
 if [[ -f "$count_file" ]]; then
   count="$(cat "$count_file")"
@@ -105,6 +119,53 @@ GO
     printf '\npatched by fake elnath\n' >> README.md
     echo "I found an unresolved import in the first pass, then fixed it."
     echo "Modified files: README.md"
+    echo "Verification: go test ./... passed."
+    ;;
+  verified_incomplete_then_recovered)
+    if [[ "$count" -eq 1 ]]; then
+      cat > main.go <<'GO'
+package recovery
+
+func Answer() int { return 42 }
+GO
+      echo "Modified files: main.go"
+      echo "Verification: go test ./... passed."
+      echo "Incomplete: production patch passes verification, but the focused regression is still missing."
+    else
+      cat > regression_test.go <<'GO'
+package recovery
+
+import "testing"
+
+func TestRecoveredRegressionSurface(t *testing.T) {
+	if Answer() != 42 {
+		t.Fatal("unexpected answer")
+	}
+}
+GO
+      echo "Modified files: main.go, regression_test.go"
+      echo "Verification: go test ./... passed."
+    fi
+    ;;
+  added_missing_regression_then_passed)
+    cat > main.go <<'GO'
+package recovery
+
+func Answer() int { return 42 }
+GO
+    cat > regression_test.go <<'GO'
+package recovery
+
+import "testing"
+
+func TestAddedRegression(t *testing.T) {
+	if Answer() != 42 {
+		t.Fatal("unexpected answer")
+	}
+}
+GO
+    echo "I added the missing regression test."
+    echo "Modified files: main.go, regression_test.go"
     echo "Verification: go test ./... passed."
     ;;
   unused_import)
@@ -182,6 +243,7 @@ run_wrapper_case() {
   local output_path="$2"
   local source_repo="$3"
   FAKE_SCENARIO="$scenario" \
+  FAKE_COUNT_FILE="$TMP_DIR/fake-count-$scenario" \
   ELNATH_BIN="$TMP_DIR/fake-elnath.sh" \
   ELNATH_TIMEOUT=30 \
   ELNATH_BENCHMARK_PERMISSION_MODE=bypass \
@@ -248,6 +310,26 @@ assert data["success"] is True, data
 assert data["verification_passed"] is True, data
 assert data["failure_family"] == "", data
 assert data["final_incomplete_detected"] is False, data
+'
+
+run_wrapper_case verified_incomplete_then_recovered "$TMP_DIR/verified-incomplete-then-recovered.json" "$SOURCE_REPO"
+assert_json_case "$TMP_DIR/verified-incomplete-then-recovered.json" '
+assert data["success"] is True, data
+assert data["verification_passed"] is True, data
+assert data["failure_family"] == "", data
+assert data["recovery_attempted"] is True, data
+assert data["recovery_succeeded"] is True, data
+assert data["final_incomplete_detected"] is False, data
+assert "regression_test.go" in data["changed_files"], data
+'
+
+run_wrapper_case added_missing_regression_then_passed "$TMP_DIR/added-missing-regression-then-passed.json" "$SOURCE_REPO"
+assert_json_case "$TMP_DIR/added-missing-regression-then-passed.json" '
+assert data["success"] is True, data
+assert data["verification_passed"] is True, data
+assert data["failure_family"] == "", data
+assert data["final_incomplete_detected"] is False, data
+assert "regression_test.go" in data["changed_files"], data
 '
 
 run_wrapper_case unused_import "$TMP_DIR/unused-import.json" "$SOURCE_REPO"

@@ -5,6 +5,48 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/elnath-current-wrapper-guards.XXXXXX")"
 
+python3 - <<'PY' "$REPO_ROOT/scripts/run_current_benchmark_wrapper.sh"
+from pathlib import Path
+import sys
+
+text = Path(sys.argv[1]).read_text().replace("\\`", "`")
+required = [
+    "GO-BF-001 request-id logging guidance:",
+    "`logger.go`",
+    "Do not modify `gin.go` or the `Default()` middleware chain",
+    "`TestCreateDefaultRouter` expects only the existing default logger/recovery handlers",
+    "GO-BF-002 graceful shutdown guidance:",
+    "`caddy.go`",
+    "`unsyncedStop(ctx Context)`",
+    "structured Zap progress logs around each app `Stop()` call",
+    "`zap.String(\"app\", name)`",
+    "Do not finish with no diff",
+    "`go test -p 1 ./... -count=1`",
+    "GO-BUG-001 timeout propagation guidance:",
+    "`command_run.go`",
+    "preserve the parent deadline when a `Before` hook returns a replacement context",
+    "Do not stop after diagnosing the context propagation path",
+    "If recovery starts from no diff, make the smallest concrete patch in `command_run.go`",
+    "Viper-specific guidance:",
+    "`WatchConfig()`",
+    "Add a focused regression test under the existing `TestWatchFile` test group",
+    "Do not finish with only `viper.go` changed",
+    "GO-BUG-002 no-change recovery guard:",
+    "set `v.configFile = filename` immediately before `ReadInConfig()`",
+    "If an exact-context patch misses due to spacing or indentation",
+    "`rg -n \"realConfigFile = currentConfigFile|ReadInConfig\" viper.go`",
+    "append a focused subtest under `TestWatchFile`",
+    "If the `viper_test.go` insertion anchor misses",
+    "`rg -n \"func TestWatchFile|OnConfigChange|WatchConfig\" viper_test.go`",
+    "Use a bounded wait",
+    "Do not add a bare `wg.Wait()`",
+    "A `viper.go`-only diff is incomplete",
+]
+missing = [snippet for snippet in required if snippet not in text]
+if missing:
+    raise SystemExit("current wrapper missing GO-BF-002 guidance: " + ", ".join(missing))
+PY
+
 cleanup() {
   rm -rf "$TMP_DIR"
 }
@@ -44,9 +86,17 @@ EOF
 
 create_fake_elnath() {
   local bin_path="$1"
-  cat >"$bin_path" <<'EOF'
+cat >"$bin_path" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+count_file="${FAKE_COUNT_FILE:-.fake-elnath-count}"
+count=0
+if [[ -f "$count_file" ]]; then
+  count="$(cat "$count_file")"
+fi
+count=$((count + 1))
+printf '%s' "$count" > "$count_file"
+
 case "${FAKE_SCENARIO:?}" in
   intent_no_diff)
     echo "I am patching the graceful shutdown behavior now."
@@ -64,6 +114,13 @@ case "${FAKE_SCENARIO:?}" in
     printf '\npatched by fake elnath\n' >> README.md
     echo "I changed README.md, but I did not complete the requested runtime fix."
     echo "Missing regression test, cannot honestly claim completion."
+    ;;
+  regression_not_added_with_diff)
+    printf '\npatched by fake elnath\n' >> README.md
+    echo "Modified files: README.md"
+    echo "Verification: go test ./... passed."
+    echo "I attempted to add the focused regression test, but the insertion anchor did not match."
+    echo "The focused regression test was not added."
     ;;
   complete_with_diff)
     printf '\npatched by fake elnath\n' >> README.md
@@ -95,6 +152,60 @@ PY
     echo "Modified files: generated/*"
     echo "Verification: go test ./... passed."
     ;;
+  go_bug002_viper_only)
+    cat > viper.go <<'GO'
+package benchmark
+
+func WatchConfig() {}
+GO
+    echo "Modified files: viper.go"
+    echo "Verification: go test ./... passed."
+    ;;
+  go_bug002_unbounded_wait_test)
+    cat > viper.go <<'GO'
+package benchmark
+
+func WatchConfig() {}
+GO
+    cat > viper_test.go <<'GO'
+package benchmark
+
+import (
+	"sync"
+	"testing"
+)
+
+func TestWatchFile(t *testing.T) {
+	var wg sync.WaitGroup
+	wg.Wait()
+}
+GO
+    echo "Modified files: viper.go, viper_test.go"
+    echo "Verification: go test ./... passed."
+    ;;
+  go_bug002_viper_only_then_test)
+    if [[ "$count" -eq 1 ]]; then
+      cat > viper.go <<'GO'
+package benchmark
+
+func WatchConfig() {}
+GO
+      echo "Modified files: viper.go"
+      echo "Verification: go test ./... passed."
+    else
+      cat > viper_test.go <<'GO'
+package benchmark
+
+import "testing"
+
+func TestWatchFile(t *testing.T) {
+	t.Helper()
+}
+GO
+      echo "Modified files: viper.go, viper_test.go"
+      echo "Verification: go test ./... passed."
+    fi
+    ;;
   *)
     echo "unknown FAKE_SCENARIO=${FAKE_SCENARIO}" >&2
     exit 2
@@ -108,14 +219,16 @@ run_wrapper_case() {
   local scenario="$1"
   local output_path="$2"
   local source_repo="$3"
+  local task_id="${4:-GO-BF-002}"
   FAKE_SCENARIO="$scenario" \
+  FAKE_COUNT_FILE="$TMP_DIR/fake-count-$scenario" \
   ELNATH_BIN="$TMP_DIR/fake-elnath.sh" \
   ELNATH_TIMEOUT=30 \
   ELNATH_BENCHMARK_PERMISSION_MODE=bypass \
   HOME="$TMP_DIR/host-home" \
   "$REPO_ROOT/scripts/run_current_benchmark_wrapper.sh" \
     "$output_path" \
-    "GO-BF-002" \
+    "$task_id" \
     "bugfix" \
     "go" \
     "Fix the benchmark fixture and verify it." \
@@ -169,6 +282,15 @@ assert data["edit_intent_detected"] is False, data
 
 run_wrapper_case incomplete_with_diff "$TMP_DIR/incomplete-with-diff.json" "$SOURCE_REPO"
 assert_json_case "$TMP_DIR/incomplete-with-diff.json" '
+assert data["success"] is False, data
+assert data["verification_passed"] is True, data
+assert data["failure_family"] == "incomplete_patch", data
+assert data["final_incomplete_detected"] is True, data
+assert "README.md" in data["changed_files"], data
+'
+
+run_wrapper_case regression_not_added_with_diff "$TMP_DIR/regression-not-added-with-diff.json" "$SOURCE_REPO"
+assert_json_case "$TMP_DIR/regression-not-added-with-diff.json" '
 assert data["success"] is False, data
 assert data["verification_passed"] is True, data
 assert data["failure_family"] == "incomplete_patch", data
@@ -232,6 +354,33 @@ assert data["verification_passed"] is True, data
 assert len(data["changed_files"]) <= 100, data
 assert "generated/file-001.txt" in data["changed_files"], data
 assert "generated/file-120.txt" not in data["changed_files"], data
+'
+
+run_wrapper_case go_bug002_viper_only "$TMP_DIR/go-bug002-viper-only.json" "$SOURCE_REPO" "GO-BUG-002"
+assert_json_case "$TMP_DIR/go-bug002-viper-only.json" '
+assert data["success"] is False, data
+assert data["verification_passed"] is True, data
+assert data["failure_family"] == "incomplete_patch", data
+assert "viper.go" in data["changed_files"], data
+'
+
+run_wrapper_case go_bug002_unbounded_wait_test "$TMP_DIR/go-bug002-unbounded-wait-test.json" "$SOURCE_REPO" "GO-BUG-002"
+assert_json_case "$TMP_DIR/go-bug002-unbounded-wait-test.json" '
+assert data["success"] is False, data
+assert data["verification_passed"] is True, data
+assert data["failure_family"] == "incomplete_patch", data
+assert "viper.go" in data["changed_files"], data
+assert "viper_test.go" in data["changed_files"], data
+'
+
+run_wrapper_case go_bug002_viper_only_then_test "$TMP_DIR/go-bug002-viper-only-then-test.json" "$SOURCE_REPO" "GO-BUG-002"
+assert_json_case "$TMP_DIR/go-bug002-viper-only-then-test.json" '
+assert data["success"] is True, data
+assert data["verification_passed"] is True, data
+assert data["failure_family"] == "", data
+assert data["recovery_attempted"] is True, data
+assert "viper.go" in data["changed_files"], data
+assert "viper_test.go" in data["changed_files"], data
 '
 
 echo "PASS: current benchmark wrapper completion guards classify no-change/incomplete runs"

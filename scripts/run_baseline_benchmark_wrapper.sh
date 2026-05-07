@@ -11,6 +11,7 @@ Usage:
 Environment:
   BASELINE_TASK_CMD_TEMPLATE   Shell command template used to execute the external baseline
   BASELINE_TIMEOUT             Optional timeout seconds for each baseline run (default: 180)
+  BASELINE_VERIFY_TIMEOUT      Optional timeout seconds for verification commands (default: BASELINE_TIMEOUT)
 
 Available placeholders inside BASELINE_TASK_CMD_TEMPLATE:
   {{task_id}}
@@ -57,6 +58,7 @@ fi
 START_TS="$(date +%s)"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/elnath-baseline-benchmark.XXXXXX")"
 BASELINE_TIMEOUT="${BASELINE_TIMEOUT:-180}"
+BASELINE_VERIFY_TIMEOUT="${BASELINE_VERIFY_TIMEOUT:-$BASELINE_TIMEOUT}"
 cleanup() {
   if [[ "${ELNATH_BENCHMARK_KEEP_TMP:-}" == "1" ]]; then
     echo "Keeping benchmark temp dir: $TMP_DIR" >&2
@@ -323,7 +325,41 @@ run_verification_command() {
   (
     cd "$WORKTREE"
     maybe_prepare_verification
-    bash -lc "$VERIFICATION_CMD" >"$VERIFY_LOG" 2>&1
+    python3 - <<'PY' "$BASELINE_VERIFY_TIMEOUT" "$VERIFY_LOG" "$VERIFICATION_CMD"
+import os
+import signal
+import subprocess
+import sys
+
+timeout = int(sys.argv[1])
+log_path = sys.argv[2]
+command = sys.argv[3]
+
+with open(log_path, "wb") as f:
+    proc = subprocess.Popen(
+        ["bash", "-lc", command],
+        stdout=f,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    try:
+        sys.exit(proc.wait(timeout=timeout))
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            proc.wait()
+        f.write(f"\nverification command timed out after {timeout}s\n".encode())
+        sys.exit(124)
+PY
   )
 }
 
@@ -438,6 +474,7 @@ if [[ -z "$VERIFICATION_CMD" ]]; then
   exit 0
 fi
 
+VERIFY_EXIT=0
 if run_verification_command; then
   if [[ "$BASELINE_EXIT" -eq 124 ]]; then
     write_result true true "" "baseline command timed out, but the produced diff passes repo-native verification"
@@ -445,6 +482,12 @@ if run_verification_command; then
     write_result true true "" "baseline command and repo-native verification both succeeded"
   fi
   exit 0
+else
+  VERIFY_EXIT=$?
 fi
 
-write_result false false "verification_failed" "baseline command ran but repo-native verification failed"
+if [[ "$VERIFY_EXIT" -eq 124 ]]; then
+  write_result false false "verification_failed" "baseline command ran but repo-native verification timed out"
+else
+  write_result false false "verification_failed" "baseline command ran but repo-native verification failed"
+fi

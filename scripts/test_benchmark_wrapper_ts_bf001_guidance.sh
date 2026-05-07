@@ -41,9 +41,27 @@ required_current_guidance = [
     "resolve the target retried test id from Vitest state or reported entities",
     "ctx.state.getTestModules()",
     "taskId === targetTaskId",
-    "flaky test 1",
+    "filter retry events by `taskId === targetTaskId`",
+    "Do not collect packs from `events.some(event => event[1] === 'test-retried')`",
+    "retries a test with success",
     "Do not target generic retry titles such as `retries a test`",
+    "Do not modify `test/cli/fixtures/reported-tasks/1_first.test.ts`",
+    "Do not modify `test/cli/test/reported-tasks.test.ts`",
     "Do not filter packed task ids with filename or test-title substring checks",
+    "packed reporter payload shape",
+    "Do not rely on reporter delivery order",
+    "sort the isolated target retry snapshots by `retryCount`",
+    "the `task` callback argument is a task object, not an array of packs",
+    "In `resolveTestRunner`, `testRunner.onTaskUpdate` receives a live task object",
+    "build a one-entry packed payload like `[[task.id, result, task.meta]]`",
+    "Do not call `task.map`",
+    "Do not import `TaskResultPack` to make `task.map` compile",
+    "Do not make `packages/runner/src/run.ts` the primary fix",
+    "FIRST create `test/cli/test/worker-retry-telemetry.test.ts`",
+    "Do not spend the recovery turn re-inspecting callback types until the focused test file exists",
+    "Create the focused test file first, then adjust runtime code only if the assertion shows retry snapshots are missing",
+    "runtime-only diff is incomplete",
+    "Do not finish with only `packages/vitest/src/runtime/runners/index.ts` changed",
     "target task's retry telemetry is missing",
     "valid extra retry/fail events from other tests",
 ]
@@ -58,6 +76,8 @@ recovery_guidance = current_guidance
 required_recovery_guidance = [
     "test/cli/test/worker-retry-telemetry.test.ts",
     "No test files found",
+    "FIRST create `test/cli/test/worker-retry-telemetry.test.ts`",
+    "Do not spend the recovery turn re-inspecting callback types until the focused test file exists",
     "isolate the target retried test by task id/name",
     "Do not assert the global `test-retried` event list",
 ]
@@ -70,6 +90,13 @@ no_change_end = current_text.index("RECOVERY_TIMEOUT", no_change_start)
 no_change_block = current_text[no_change_start:no_change_end]
 if 'NO_CHANGE_PROMPT+="$(ts_bf001_recovery_guidance)"' not in no_change_block:
     raise SystemExit("TS-BF-001 no-change recovery path is missing focused retry telemetry guidance")
+
+if "task_recovery_timeout()" not in current_text:
+    raise SystemExit("current wrapper is missing task-specific recovery timeout helper")
+if "if is_ts_bf001_vitest_task || is_ts_bf002_nestjs_task; then" not in current_text or 'printf \'%s\\n\' "$ELNATH_TIMEOUT"' not in current_text:
+    raise SystemExit("TS-BF-001 recovery should use the full ELNATH_TIMEOUT budget")
+if "RECOVERY_TIMEOUT=$(task_recovery_timeout)" not in current_text:
+    raise SystemExit("recovery paths should use task-specific recovery timeout")
 
 for corpus in (
     "benchmarks/month3-canary-corpus.v1.json",
@@ -195,6 +222,234 @@ TS
     echo "Modified files: packages/vitest/src/runtime/runners/index.ts, test/cli/test/worker-retry-telemetry.test.ts"
     echo "Verification: test guesses target task from destructured packed id filename/title substrings."
     ;;
+  reported_tasks_fixture_mutation)
+    mkdir -p test/cli/fixtures/reported-tasks packages/vitest/src/runtime/runners test/cli/test
+    cat > packages/vitest/src/runtime/runners/index.ts <<'TS'
+export const clonedRetryResult = true
+TS
+    cat > test/cli/fixtures/reported-tasks/1_first.test.ts <<'TS'
+import { expect, it } from 'vitest'
+
+let flakyCounter = 0
+it('flaky test 1', { retry: 5 }, () => {
+  expect(flakyCounter++).toBe(2)
+})
+TS
+    cat > test/cli/test/worker-retry-telemetry.test.ts <<'TS'
+import { expect, test } from 'vitest'
+
+test('retry telemetry uses a manufactured fixture target', () => {
+  const targetTaskName = 'flaky test 1'
+  expect(targetTaskName).toBe('flaky test 1')
+})
+TS
+    echo "Modified files: packages/vitest/src/runtime/runners/index.ts, test/cli/fixtures/reported-tasks/1_first.test.ts, test/cli/test/worker-retry-telemetry.test.ts"
+    echo "Verification: generated test mutates the reported-tasks fixture to manufacture a target retry case."
+    ;;
+  reported_tasks_test_mutation)
+    mkdir -p packages/vitest/src/runtime/runners test/cli/test
+    cat > packages/vitest/src/runtime/runners/index.ts <<'TS'
+export const clonedRetryResult = true
+TS
+    cat > test/cli/test/reported-tasks.test.ts <<'TS'
+import { expect, it } from 'vitest'
+
+it('asserts retry telemetry in the broad reported tasks suite', () => {
+  expect(true).toBe(true)
+})
+TS
+    echo "Modified files: packages/vitest/src/runtime/runners/index.ts, test/cli/test/reported-tasks.test.ts"
+    echo "Verification: generated regression edits the broad reported-tasks test instead of the focused worker retry telemetry test."
+    ;;
+  flaky_test_1_target)
+    cat > packages/vitest/src/runtime/runners/index.ts <<'TS'
+export const clonedRetryResult = true
+TS
+    cat > test/cli/test/worker-retry-telemetry.test.ts <<'TS'
+import { expect, test } from 'vitest'
+
+test('retry telemetry targets an overfit fixture name', () => {
+  const ctx = {
+    state: {
+      getTestModules() {
+        return [{
+          children: {
+            allTests() {
+              return [{ name: 'flaky test 1', id: 'target-task-id' }]
+            },
+          },
+        }]
+      },
+    },
+  }
+  const targetTaskId = ctx.state.getTestModules()
+    .flatMap(module => module.children.allTests())
+    .find(test => test.name === 'flaky test 1')
+    .id
+  expect(targetTaskId).toBe('target-task-id')
+})
+TS
+    echo "Modified files: packages/vitest/src/runtime/runners/index.ts, test/cli/test/worker-retry-telemetry.test.ts"
+    echo "Verification: generated test targets the stale flaky test 1 name."
+    ;;
+  wrong_runtime_pack_shape)
+    cat > packages/vitest/src/runtime/runners/index.ts <<'TS'
+export function emitTask(task, events, rpc) {
+  const taskSnapshots = task.map(([id, result, meta]) => [
+    id,
+    result ? { ...result, errors: result.errors?.slice() } : result,
+    meta,
+  ])
+  return rpc().onTaskUpdate(taskSnapshots, events)
+}
+TS
+    cat > test/cli/test/worker-retry-telemetry.test.ts <<'TS'
+import { expect, test } from 'vitest'
+
+test('retry telemetry resolves target id from runtime state', () => {
+  const targetTaskId = 'target-task-id'
+  const retryPacks = [
+    ['target-task-id', { retryCount: 1, state: 'run' }],
+    ['target-task-id', { retryCount: 2, state: 'run' }],
+  ]
+  const targetRetryResults = retryPacks
+    .filter(([taskId]) => taskId === targetTaskId)
+    .map(([, result]) => result)
+  expect(targetRetryResults).toEqual([
+    { retryCount: 1, state: 'run' },
+    { retryCount: 2, state: 'run' },
+  ])
+})
+TS
+    echo "Modified files: packages/vitest/src/runtime/runners/index.ts, test/cli/test/worker-retry-telemetry.test.ts"
+    echo "Verification: runtime patch maps task as though it were already packed task results."
+    ;;
+  direct_task_map_runtime_pack_shape)
+    cat > packages/vitest/src/runtime/runners/index.ts <<'TS'
+export function emitTask(task, events, rpc) {
+  return rpc().onTaskUpdate(task.map(([id, result, meta]) => [
+    id,
+    result ? { ...result } : result,
+    meta,
+  ]), events)
+}
+TS
+    cat > test/cli/test/worker-retry-telemetry.test.ts <<'TS'
+import { expect, test } from 'vitest'
+
+test('retry telemetry resolves target id from runtime state', () => {
+  const targetTaskId = 'target-task-id'
+  const retryPacks = [
+    ['target-task-id', { retryCount: 1, state: 'run' }],
+    ['target-task-id', { retryCount: 2, state: 'run' }],
+  ]
+  const targetRetryResults = retryPacks
+    .filter(([taskId]) => taskId === targetTaskId)
+    .map(([, result]) => result)
+    .sort((a, b) => (a?.retryCount ?? 0) - (b?.retryCount ?? 0))
+  expect(targetRetryResults).toEqual([
+    { retryCount: 1, state: 'run' },
+    { retryCount: 2, state: 'run' },
+  ])
+})
+TS
+    echo "Modified files: packages/vitest/src/runtime/runners/index.ts, test/cli/test/worker-retry-telemetry.test.ts"
+    echo "Verification: runtime patch passes task.map directly to rpc().onTaskUpdate."
+    ;;
+  multiline_task_map_runtime_pack_shape)
+    cat > packages/vitest/src/runtime/runners/index.ts <<'TS'
+import type { TaskResultPack } from '@vitest/runner'
+
+export function emitTask(task, events, rpc, originalOnTaskUpdate, testRunner) {
+  const taskPacks = task.map<TaskResultPack>(([id, result, meta]) => [
+    id,
+    result ? { ...structuredClone(result) } : result,
+    meta,
+  ])
+  const p = rpc().onTaskUpdate(taskPacks, events)
+  originalOnTaskUpdate?.call(testRunner, taskPacks, events)
+  return p
+}
+TS
+    cat > test/cli/test/worker-retry-telemetry.test.ts <<'TS'
+import { expect, test } from 'vitest'
+
+test('retry telemetry resolves target id from runtime state', () => {
+  const targetTaskId = 'target-task-id'
+  const retryPacks = [
+    ['target-task-id', { retryCount: 1, state: 'run' }],
+    ['target-task-id', { retryCount: 2, state: 'run' }],
+  ]
+  const targetRetryResults = retryPacks
+    .filter(([taskId]) => taskId === targetTaskId)
+    .map(([, result]) => result)
+  expect(targetRetryResults).toEqual([
+    { retryCount: 1, state: 'run' },
+    { retryCount: 2, state: 'run' },
+  ])
+})
+TS
+    echo "Modified files: packages/vitest/src/runtime/runners/index.ts, test/cli/test/worker-retry-telemetry.test.ts"
+    echo "Verification: runtime patch imports TaskResultPack and maps the callback task over multiple lines."
+    ;;
+  order_sensitive_retry_snapshot_assertion)
+    cat > packages/vitest/src/runtime/runners/index.ts <<'TS'
+export const clonedRetryResult = true
+TS
+    cat > test/cli/test/worker-retry-telemetry.test.ts <<'TS'
+import { expect, test } from 'vitest'
+
+test('retry telemetry resolves target id from runtime state but assumes reporter order', () => {
+  const targetTaskId = 'target-task-id'
+  const retryPacks = [
+    ['target-task-id', { retryCount: 2, state: 'run' }],
+    ['target-task-id', { retryCount: 1, state: 'run' }],
+  ]
+  const targetRetrySnapshots = retryPacks
+    .filter(([taskId]) => taskId === targetTaskId)
+    .map(([, result]) => ({ retryCount: result?.retryCount, state: result?.state }))
+  expect(targetRetrySnapshots).toEqual([
+    { retryCount: 1, state: 'run' },
+    { retryCount: 2, state: 'run' },
+  ])
+})
+TS
+    echo "Modified files: packages/vitest/src/runtime/runners/index.ts, test/cli/test/worker-retry-telemetry.test.ts"
+    echo "Verification: focused test assumes reporter delivery order instead of sorting retry snapshots."
+    ;;
+  unscoped_retry_event_capture)
+    cat > packages/vitest/src/runtime/runners/index.ts <<'TS'
+export const clonedRetryResult = true
+TS
+    cat > test/cli/test/worker-retry-telemetry.test.ts <<'TS'
+import { expect, test } from 'vitest'
+
+test('retry telemetry resolves target id from runtime state but captures global retry events', () => {
+  const targetTaskId = 'target-task-id'
+  const retryPacks: Array<[string, { retryCount: number; state: string }]> = []
+  const events: Array<[string, string]> = [['other-task-id', 'test-retried']]
+  const packs: Array<[string, { retryCount: number; state: string }]> = [
+    ['target-task-id', { retryCount: 0, state: 'run' }],
+    ['target-task-id', { retryCount: 1, state: 'run' }],
+    ['target-task-id', { retryCount: 2, state: 'run' }],
+  ]
+
+  if (events.some(event => event[1] === 'test-retried')) {
+    retryPacks.push(...packs)
+  }
+
+  const targetRetrySnapshots = retryPacks
+    .filter(([taskId]) => taskId === targetTaskId)
+    .map(([, result]) => result)
+    .filter(result => result.state === 'run')
+    .sort((a, b) => a.retryCount - b.retryCount)
+
+  expect(targetRetrySnapshots.map(result => result.retryCount)).toEqual([1, 2])
+})
+TS
+    echo "Modified files: packages/vitest/src/runtime/runners/index.ts, test/cli/test/worker-retry-telemetry.test.ts"
+    echo "Verification: focused test captures packs from any test-retried event instead of the target task event."
+    ;;
   focused_retry_events_variable)
     cat > packages/vitest/src/runtime/runners/index.ts <<'TS'
 export const clonedRetryResult = true
@@ -230,7 +485,7 @@ test('retry telemetry resolves target id from runtime state', () => {
         return [{
           children: {
             allTests() {
-              return [{ name: 'flaky test 1', id: 'target-task-id' }]
+              return [{ name: 'retries a test with success', id: 'target-task-id' }]
             },
           },
         }]
@@ -239,7 +494,7 @@ test('retry telemetry resolves target id from runtime state', () => {
   }
   const targetTaskId = ctx.state.getTestModules()
     .flatMap(module => module.children.allTests())
-    .find(test => test.name === 'flaky test 1')
+    .find(test => test.name === 'retries a test with success')
     .id
   const retryPacks = [
     ['target-task-id', { retryCount: 1, state: 'run' }],
@@ -249,6 +504,7 @@ test('retry telemetry resolves target id from runtime state', () => {
   const targetRetryResults = retryPacks
     .filter(([taskId]) => taskId === targetTaskId)
     .map(([, result]) => result)
+    .sort((a, b) => (a?.retryCount ?? 0) - (b?.retryCount ?? 0))
   expect(targetRetryResults).toEqual([
     { retryCount: 1, state: 'run' },
     { retryCount: 2, state: 'run' },
@@ -274,6 +530,7 @@ test('retry telemetry resolves the wrong generic retry title', () => {
             allTests() {
               return [
                 { name: 'flaky test 1', id: 'target-task-id' },
+                { name: 'retries a test with success', id: 'target-task-id' },
                 { name: 'retries a test', id: 'generic-retry-title' },
               ]
             },
@@ -319,6 +576,7 @@ test('retry telemetry resolves generic retry title with destructuring', () => {
             allTests() {
               return [
                 { name: 'flaky test 1', id: 'target-task-id' },
+                { name: 'retries a test with success', id: 'target-task-id' },
                 { name: 'retries a test', id: 'generic-retry-title' },
               ]
             },
@@ -442,6 +700,94 @@ PY
 
 run_wrapper_case packed_id_substring_matching_destructured "$TMP_DIR/ts-bf001-packed-id-substring-destructured.json"
 python3 - <<'PY' "$TMP_DIR/ts-bf001-packed-id-substring-destructured.json"
+import json
+import sys
+data = json.load(open(sys.argv[1]))
+assert data["success"] is False, data
+assert data["verification_passed"] is False, data
+assert data["failure_family"] == "incomplete_patch", data
+assert "test/cli/test/worker-retry-telemetry.test.ts" in data["changed_files"], data
+PY
+
+run_wrapper_case reported_tasks_fixture_mutation "$TMP_DIR/ts-bf001-reported-tasks-fixture-mutation.json"
+python3 - <<'PY' "$TMP_DIR/ts-bf001-reported-tasks-fixture-mutation.json"
+import json
+import sys
+data = json.load(open(sys.argv[1]))
+assert data["success"] is False, data
+assert data["verification_passed"] is False, data
+assert data["failure_family"] == "incomplete_patch", data
+assert "test/cli/fixtures/reported-tasks/1_first.test.ts" in data["changed_files"], data
+PY
+
+run_wrapper_case reported_tasks_test_mutation "$TMP_DIR/ts-bf001-reported-tasks-test-mutation.json"
+python3 - <<'PY' "$TMP_DIR/ts-bf001-reported-tasks-test-mutation.json"
+import json
+import sys
+data = json.load(open(sys.argv[1]))
+assert data["success"] is False, data
+assert data["verification_passed"] is False, data
+assert data["failure_family"] == "incomplete_patch", data
+assert "test/cli/test/reported-tasks.test.ts" in data["changed_files"], data
+PY
+
+run_wrapper_case flaky_test_1_target "$TMP_DIR/ts-bf001-flaky-test-1-target.json"
+python3 - <<'PY' "$TMP_DIR/ts-bf001-flaky-test-1-target.json"
+import json
+import sys
+data = json.load(open(sys.argv[1]))
+assert data["success"] is False, data
+assert data["verification_passed"] is False, data
+assert data["failure_family"] == "incomplete_patch", data
+assert "test/cli/test/worker-retry-telemetry.test.ts" in data["changed_files"], data
+PY
+
+run_wrapper_case wrong_runtime_pack_shape "$TMP_DIR/ts-bf001-wrong-runtime-pack-shape.json"
+python3 - <<'PY' "$TMP_DIR/ts-bf001-wrong-runtime-pack-shape.json"
+import json
+import sys
+data = json.load(open(sys.argv[1]))
+assert data["success"] is False, data
+assert data["verification_passed"] is False, data
+assert data["failure_family"] == "incomplete_patch", data
+assert "packages/vitest/src/runtime/runners/index.ts" in data["changed_files"], data
+PY
+
+run_wrapper_case direct_task_map_runtime_pack_shape "$TMP_DIR/ts-bf001-direct-task-map-runtime-pack-shape.json"
+python3 - <<'PY' "$TMP_DIR/ts-bf001-direct-task-map-runtime-pack-shape.json"
+import json
+import sys
+data = json.load(open(sys.argv[1]))
+assert data["success"] is False, data
+assert data["verification_passed"] is False, data
+assert data["failure_family"] == "incomplete_patch", data
+assert "packages/vitest/src/runtime/runners/index.ts" in data["changed_files"], data
+PY
+
+run_wrapper_case multiline_task_map_runtime_pack_shape "$TMP_DIR/ts-bf001-multiline-task-map-runtime-pack-shape.json"
+python3 - <<'PY' "$TMP_DIR/ts-bf001-multiline-task-map-runtime-pack-shape.json"
+import json
+import sys
+data = json.load(open(sys.argv[1]))
+assert data["success"] is False, data
+assert data["verification_passed"] is False, data
+assert data["failure_family"] == "incomplete_patch", data
+assert "packages/vitest/src/runtime/runners/index.ts" in data["changed_files"], data
+PY
+
+run_wrapper_case order_sensitive_retry_snapshot_assertion "$TMP_DIR/ts-bf001-order-sensitive-retry-snapshot-assertion.json"
+python3 - <<'PY' "$TMP_DIR/ts-bf001-order-sensitive-retry-snapshot-assertion.json"
+import json
+import sys
+data = json.load(open(sys.argv[1]))
+assert data["success"] is False, data
+assert data["verification_passed"] is False, data
+assert data["failure_family"] == "incomplete_patch", data
+assert "test/cli/test/worker-retry-telemetry.test.ts" in data["changed_files"], data
+PY
+
+run_wrapper_case unscoped_retry_event_capture "$TMP_DIR/ts-bf001-unscoped-retry-event-capture.json"
+python3 - <<'PY' "$TMP_DIR/ts-bf001-unscoped-retry-event-capture.json"
 import json
 import sys
 data = json.load(open(sys.argv[1]))
