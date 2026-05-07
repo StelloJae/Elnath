@@ -53,6 +53,10 @@ if "packages/common/module-utils/configurable-module.builder.ts" not in current_
     raise SystemExit("TS-BF-002 guidance should name the module-utils production seam")
 if "packages/common/test/module-utils/configurable-module.builder.spec.ts" not in current_guidance:
     raise SystemExit("TS-BF-002 guidance should name the focused module-utils spec seam")
+if "if is_ts_bf001_vitest_task || is_ts_bf002_nestjs_task; then" not in current_text:
+    raise SystemExit("TS-BF-002 recovery should use the full ELNATH_TIMEOUT budget")
+if "RECOVERY_TIMEOUT=$(task_recovery_timeout)" not in current_text:
+    raise SystemExit("recovery paths should use task-specific recovery timeout")
 
 no_change_prompt = current_guidance
 required_no_change_recovery = [
