@@ -1,6 +1,6 @@
 # Elnath Roadmap
 
-Updated: 2026-05-02
+Updated: 2026-05-07
 
 This is the tracked roadmap for Elnath. It consolidates the existing 6-month roadmap direction with the new **Agentic Runtime Control Plane** workstream.
 
@@ -16,7 +16,7 @@ As of 2026-05-02, the durable agentic foundation is implemented through PR11, th
 
 Hermes Agent moved from the v0.8/v0.9 baseline to v0.10/v0.11 and an active post-v0.11 `main` branch. The Elnath takeaway is not to copy Hermes wholesale. The useful deltas are: ToolGateway-style execution routing, hardline-vs-approval policy separation, plugin/hook lifecycle points, webhook/cron signal hardening, bounded delegation, receipt-backed tool results, and verification-gated memory.
 
-The next roadmap step is not "more workflows" or immediate global autonomy enforcement. The PR1-PR11 control-plane foundation, first operator lineage CLI, explicit ToolGateway opt-in boundary, explicit verifier-gated completion boundary, and CLI-only approved proposed-task enqueue bridge are shipped; the next dependency-ready step is a post-approved-proposed-task-enqueue readiness and next-boundary review while preserving the same broader runtime target:
+The next roadmap step is not "more workflows" or immediate global autonomy enforcement. The PR1-PR11 control-plane foundation, first operator lineage CLI, explicit ToolGateway opt-in boundary, explicit verifier-gated completion boundary, CLI-only approved proposed-task enqueue bridge, and PR #68 benchmark/canary evidence repair lane are shipped; the next dependency-ready step is a post-benchmark-evidence roadmap review while preserving the same broader runtime target:
 
 ```text
 standing goal
@@ -36,6 +36,14 @@ standing goal
 ## 2. Current Agentic Readiness: 95/100
 
 Elnath is currently a strong workflow runner and tool-using agent platform with a durable agentic control-plane schema, observe-only daemon task envelope linkage, an observe-only signal ledger bridge, explicit signal-to-agentic-task triage, standalone autonomy policy decision records, provenance-aware approval request storage/bridge foundations, a context-gated ToolGateway for explicit agentic tool calls, explicit runtime opt-in for selected daemon-backed ToolGateway enforcement, explicit verifier-gated completion for selected daemon-backed agentic tasks, CLI-only approved proposed-task enqueue, durable verifier-run persistence for explicit agentic verification context, verification-gated trusted memory writes for explicit agentic memory context, a non-executing follow-up scheduler foundation for verified outcomes, durable TeamWorkflow planner/executor/synthesizer actor provenance, and read-only operator CLI visibility for status/task/lineage inspection. The 95/100 score is the pre-refresh score for durable control-plane, operator visibility, and explicit opt-in boundary readiness, not for full unattended autonomous operation. Elnath is not yet a complete standing-goal-driven autonomous system because proposed-task enqueue requires explicit CLI operator action, the gateway is not globally enabled for legacy tool execution, verifier-gated completion is explicit opt-in rather than global/default behavior, followups do not wake agent runs, and actors record provenance rather than driving execution.
+
+Benchmark/canary evidence refresh:
+
+- PR #68 merged at `97f3af23e2419090125a4e8f0f43cb9a4d7351f9` and shipped benchmark-mode recovery reliability, guidance, classification, and timeout hardening.
+- Fresh Month 3/current canary evidence exists at `benchmarks/results/month3-canary-current-rerun-local-guidance-v3-20260507/current-scorecard.json` with 4/4 success+verified, so the Month 3/current canary capability is restored for Elnath current.
+- Expanded public corpus repeat evidence exists at `benchmarks/results/public-repeat2-current-local-guidance-v6-20260507/current-scorecard.json` and `benchmarks/results/public-repeat2-codex-cli-baseline-v2-20260507/baseline-scorecard.json`: Elnath current scored 14/14, local Codex CLI baseline scored 12/14, and Codex-only wins were 0.
+- Narrow TS-BF-001 differential stress evidence exists at `benchmarks/results/ts-bf001-differential-stress-current-20260507/current-scorecard.json` and `benchmarks/results/ts-bf001-differential-stress-codex-cli-20260507/baseline-scorecard.json`: Elnath current scored 10/10 and local Codex CLI baseline scored 0/10.
+- Claim boundary: Codex CLI local baseline is not Claude Code; do not claim Claude Code superiority, broad public benchmark superiority, or general superiority over all coding agents. The expanded public strict Elnath-only win count was 2/14, not half of the broad corpus.
 
 Implemented foundations:
 
@@ -607,22 +615,35 @@ Status: shipped durable TeamWorkflow actor provenance; do not expand into actor-
 - Agentic capability: The system now has a controlled human-operated bridge from proposed agentic tasks to executable daemon work.
 - Non-goal: This does not enable automatic enqueue, followup wake, Telegram action surfaces, approval wait/resume UX, Queue.MarkDone changes, ToolGateway behavior changes, or global autonomous runtime behavior.
 
-#### Next: `docs/review(agentic): post-approved-proposed-task-enqueue readiness and next-boundary review`
+#### Completed: `evidence(benchmark): refresh current canary and Codex CLI bounded comparison`
 
-- Purpose: Re-score readiness after CLI-only approved proposed-task enqueue shipped and choose the next boundary before adding follow-up wake, approval wait/resume UX, Telegram enqueue UX, standing-goal autonomy bounds, or canary evidence lanes.
-- Current related files: `docs/roadmap.md`, `.omc/research/agentic-approved-proposed-task-enqueue-plan-2026-05-02.md`, `cmd/elnath/cmd_agentic.go`, `internal/agentic/enqueue/`, `internal/daemon/queue.go`.
+- Purpose: Re-establish current coding-health evidence before adding stronger autonomy or new runtime features.
+- Current related files: `scripts/run_current_benchmark_wrapper.sh`, `scripts/run_baseline_benchmark_wrapper.sh`, `benchmarks/month3-canary-corpus.v1.json`, `benchmarks/public-corpus.v1.json`, `.omc/research/expanded-current-vs-codex-cli-evidence-2026-05-07.md`, `.omc/research/pr68-expanded-current-vs-codex-cli-closure-2026-05-07.md`.
+- Core implementation: PR #68 hardened benchmark-mode recovery reliability, guidance, classification, current/baseline verification timeout behavior, and TS/Go canary completion guards.
+- Completion criteria: Current Month 3 canary has fresh 4/4 evidence, expanded public corpus repeat has Elnath current 14/14 vs local Codex CLI 12/14 evidence, and TS-BF-001 differential stress has Elnath current 10/10 vs local Codex CLI 0/10 evidence.
+- Claim boundary: This is Codex CLI local baseline evidence, not Claude Code evidence. It supports bounded local differential claims only; it does not prove Claude Code superiority or broad public benchmark superiority.
+- Next implication: Do not open a new runtime/autonomy feature lane until post-benchmark-evidence roadmap review reconciles repeat-confirmation, Claude Code recapture, v8/25-task corpus planning, and agentic runtime candidates.
+
+#### Next: `docs/review(agentic): post-benchmark-evidence roadmap review`
+
+- Purpose: Re-score readiness after PR #68 benchmark/canary evidence refresh and choose the next boundary before adding follow-up wake, approval wait/resume UX, Telegram enqueue UX, standing-goal autonomy bounds, Hermes-style continuity/runtime work, or OpenClaw/OpenCode-style critique/evaluation harness work.
+- Current related files: `docs/roadmap.md`, `.omc/research/pr68-expanded-current-vs-codex-cli-closure-2026-05-07.md`, `.omc/research/expanded-current-vs-codex-cli-evidence-2026-05-07.md`, `benchmarks/results/public-repeat2-current-local-guidance-v6-20260507/current-scorecard.json`, `benchmarks/results/public-repeat2-codex-cli-baseline-v2-20260507/baseline-scorecard.json`, `benchmarks/results/ts-bf001-differential-stress-current-20260507/current-scorecard.json`, `benchmarks/results/ts-bf001-differential-stress-codex-cli-20260507/baseline-scorecard.json`.
 - Files to modify: documentation and research artifacts only unless the review finds a small correctness bug that must be split into a separate PR.
-- Core review: Compare follow-up wake planning, approval wait/resume UX planning, Telegram/operator enqueue UX, standing-goal autonomy bounds, and benchmark/canary evidence lanes against the newly shipped explicit enqueue bridge.
-- Dependency: PR1 through PR11, read-only operator CLI, explicit ToolGateway opt-in, explicit verifier-gated completion, and CLI-only approved proposed-task enqueue shipped.
-- Completion criteria: The project can name the next implementation lane with explicit opt-in mechanism, loop bounds, failure semantics, legacy preservation rules, and forbidden claims.
+- Core review: Compare repeat expanded public current-vs-Codex confirmation, Claude Code baseline recapture when access is available, v8/25-task corpus planning, Hermes-style continuity/runtime, OpenClaw/OpenCode-style critique/evaluation harness, approval wait/resume UX, followup wake planning, Telegram/operator enqueue UX, and standing-goal autonomy bounds.
+- Dependency: PR1 through PR11, read-only operator CLI, explicit ToolGateway opt-in, explicit verifier-gated completion, CLI-only approved proposed-task enqueue, and PR #68 benchmark/canary evidence refresh shipped.
+- Completion criteria: The project can name the next implementation or evidence lane with explicit allowed claims, forbidden claims, repeat/variance requirements, opt-in mechanism if runtime behavior is touched, loop bounds, failure semantics, and legacy preservation rules.
 
-Post-approved-proposed-task-enqueue candidate list, not yet approved for implementation:
+Post-benchmark-evidence candidate list, not yet approved for implementation:
 
+- `evidence(benchmark): repeat expanded public current vs Codex CLI confirmation`
+- `evidence(benchmark): recapture Claude Code baseline when access is available`
+- `docs(benchmark): plan v8 / 25-task corpus`
 - `docs/review(agentic): follow-up wake planning`
 - `docs/review(agentic): approval wait/resume UX planning`
 - `feat(telegram): add operator enqueue UX`
 - `docs/review(agentic): standing-goal autonomy bounds`
-- `evidence(benchmark): run current canary restoration lane`
+- `docs/review(runtime): Hermes-style continuity/runtime lane`
+- `docs/review(eval): OpenClaw/OpenCode-style critique/evaluation harness lane`
 
 ## 12. Risks and Guardrails
 
@@ -678,14 +699,14 @@ Next-task selection:
 Default current next step:
 
 ```text
-post-approved-proposed-task-enqueue readiness and next-boundary review
+post-benchmark-evidence roadmap review
 ```
 
 Autonomy rules for Codex/Elnath work:
 
 - Documentation-only updates may proceed when they keep this roadmap accurate.
 - Read-only inspection and focused tests may proceed without asking.
-- Code edits should not start a new feature lane until the post-approved-proposed-task-enqueue readiness and next-boundary review is complete.
+- Code edits should not start a new feature lane until the post-benchmark-evidence roadmap review is complete.
 - Mutating runtime behavior should start observe-only, then become enforceable in a later PR.
 - External actions, destructive commands, credential changes, publishing, GitHub writes, or broad autonomous execution require explicit user approval.
 - Memory/wiki updates are allowed only when explicitly requested or when a verified memory-update gate exists.
