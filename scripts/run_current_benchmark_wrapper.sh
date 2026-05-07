@@ -452,9 +452,14 @@ GO-BUG-002 no-change recovery guard:
 - If recovery starts from no diff, make the concrete watcher patch: set `v.configFile = filename` immediately before `ReadInConfig()` in the fsnotify reload callback.
 - If an exact-context patch misses due to spacing or indentation, re-anchor with `rg -n "realConfigFile = currentConfigFile|ReadInConfig" viper.go`, inspect the surrounding lines, and patch the observed block by line context instead of stopping.
 - Add or append a focused subtest under `TestWatchFile` in `viper_test.go` proving a changed config file is re-read after the watcher event.
+- Use existing `TestWatchFile` helper patterns when possible, or a direct `SetConfigFile(configFile)` setup when it cleanly exercises the watcher path.
+- The regression should verify observable reload behavior through `v.GetString("foo")` changing after watcher notification.
+- Do not assert `v.configFile` is empty after `ReadInConfig()`; existing config loading may cache the resolved file path.
 - If the `viper_test.go` insertion anchor misses, re-anchor with `rg -n "func TestWatchFile|OnConfigChange|WatchConfig" viper_test.go`, inspect the surrounding test block, and append the focused subtest by observed line context.
 - Use a bounded wait for the watcher callback, such as `select` with `time.After` or `require.Eventually`; do not let a missing fsnotify event block the test forever.
 - Do not add a bare `wg.Wait()` in new watcher regression coverage. If you use a `WaitGroup`, wrap it in a goroutine and a timeout/select so the test fails instead of hanging.
+- Avoid unrelated logger/test-helper machinery such as `slog` unless existing patterns require it.
+- If verification first fails on a test compile error, recovery must still fix semantic regression assertions after the compile error and rerun `go test ./...`.
 - Do not finish with only findings or only `viper.go` changed; this task needs `viper.go` plus focused regression evidence.
 - A `viper.go`-only diff is incomplete even when `go test ./...` passes.
 - Run `go test ./...` before the final answer.
@@ -480,6 +485,87 @@ go_bug002_unbounded_wait_regression() {
   else
     grep -Eq 'wg\.Wait[[:space:]]*\(' "$WORKTREE/viper_test.go" || return 1
   fi
+}
+
+go_bug002_brittle_internal_state_assertion() {
+  is_go_bug002_viper_task || return 1
+  local test_path="$WORKTREE/viper_test.go"
+  [[ -f "$test_path" ]] || return 1
+  python3 - "$WORKTREE" "$test_path" <<'PY'
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+worktree = Path(sys.argv[1])
+test_path = Path(sys.argv[2])
+read_config = re.compile(r"\bReadInConfig\s*\(")
+empty_assert = re.compile(r"\b(?:require|assert)\.Empty\s*\([^)]*\bv\.configFile\b")
+equal_empty_assert = re.compile(
+    r"\b(?:require|assert)\.Equal\s*\([^)]*(?:"
+    r"(?:\"\"|'')\s*,\s*v\.configFile\b|"
+    r"\bv\.configFile\s*,\s*(?:\"\"|'')"
+    r")"
+)
+
+def clean(line: str) -> str:
+    stripped = line.lstrip()
+    if stripped.startswith("//"):
+        return ""
+    return line.split("//", 1)[0]
+
+def is_brittle(line: str) -> bool:
+    line = clean(line)
+    return bool(empty_assert.search(line) or equal_empty_assert.search(line))
+
+def hunk_is_brittle(lines) -> bool:
+    added_brittle = any(prefix == "+" and is_brittle(text) for prefix, text in lines)
+    has_read_config = any(
+        prefix in {" ", "+"} and read_config.search(clean(text))
+        for prefix, text in lines
+    )
+    return added_brittle and has_read_config
+
+tracked = subprocess.run(
+    ["git", "-C", str(worktree), "ls-files", "--error-unmatch", "viper_test.go"],
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.DEVNULL,
+)
+
+if tracked.returncode != 0:
+    text = test_path.read_text()
+    lines = [("+", line) for line in text.splitlines()]
+    sys.exit(0 if hunk_is_brittle(lines) else 1)
+
+diff = subprocess.run(
+    ["git", "-C", str(worktree), "diff", "-U20", "--", "viper_test.go"],
+    text=True,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.DEVNULL,
+)
+
+hunk = []
+in_hunk = False
+for raw in diff.stdout.splitlines():
+    if raw.startswith("@@"):
+        if hunk_is_brittle(hunk):
+            sys.exit(0)
+        hunk = []
+        in_hunk = True
+        continue
+    if not in_hunk:
+        continue
+    if raw.startswith("+++") or raw.startswith("---"):
+        continue
+    if raw.startswith("+"):
+        hunk.append(("+", raw[1:]))
+    elif raw.startswith(" "):
+        hunk.append((" ", raw[1:]))
+    elif raw.startswith("-"):
+        hunk.append(("-", raw[1:]))
+
+sys.exit(0 if hunk_is_brittle(hunk) else 1)
+PY
 }
 
 ts_bf001_missing_focused_regression() {
@@ -730,6 +816,10 @@ write_passed_verification_task_specific_failure() {
     write_result false true "incomplete_patch" "$recovery_attempted" false "$prefix, but GO-BUG-002 added an unbounded watcher wait that can hang verification"
     return 0
   fi
+  if go_bug002_brittle_internal_state_assertion; then
+    write_result false true "incomplete_patch" "$recovery_attempted" false "$prefix, but GO-BUG-002 regression asserts brittle internal configFile state after ReadInConfig"
+    return 0
+  fi
   return 1
 }
 
@@ -740,6 +830,10 @@ task_specific_completion_failure_reason() {
   fi
   if go_bug002_unbounded_wait_regression; then
     echo "GO-BUG-002 added an unbounded watcher wait that can hang verification."
+    return 0
+  fi
+  if go_bug002_brittle_internal_state_assertion; then
+    echo "GO-BUG-002 regression asserts brittle internal configFile state after ReadInConfig instead of observable reload behavior."
     return 0
   fi
   return 1
@@ -787,6 +881,10 @@ recover_passed_task_specific_failure() {
   fi
   if go_bug002_missing_focused_regression || go_bug002_unbounded_wait_regression; then
     write_result false false "incomplete_patch" true false "task-specific recovery still lacks safe focused regression evidence"
+    exit 0
+  fi
+  if go_bug002_brittle_internal_state_assertion; then
+    write_result false false "incomplete_patch" true false "task-specific recovery still asserts brittle internal configFile state"
     exit 0
   fi
   if compile_error_incomplete_patch_after_failed_recovery; then
@@ -1304,6 +1402,10 @@ Viper-specific guidance:
 - Do NOT modify \`SetConfigFile()\`, \`getConfigFile()\`, or error types in \`errors.go\` — these are stable public APIs. Changing them to fix a reload bug will break existing tests like \`TestReadConfigWithSetConfigFile\` and \`TestWrongFileNotFound\`. If you feel the need to change them, you are chasing the wrong root cause.
 - A correct config reload fix is typically 1-3 lines in the watcher callback. If your fix touches more than \`viper.go\` + \`viper_test.go\`, reconsider.
 - Add a focused regression test under the existing \`TestWatchFile\` test group to prove the reload works after a config file change.
+- Use existing \`TestWatchFile\` helper patterns when possible, or a direct \`SetConfigFile(configFile)\` setup when it cleanly exercises the watcher path.
+- The regression should verify observable reload behavior through \`v.GetString("foo")\` changing after watcher notification.
+- Do not assert \`v.configFile\` is empty after \`ReadInConfig()\`; existing config loading may cache the resolved file path.
+- Use a bounded watcher wait and avoid unrelated logger/test-helper machinery such as \`slog\` unless existing patterns require it.
 - Do not finish with only \`viper.go\` changed; this task needs the focused \`viper_test.go\` regression as completion evidence."
 fi
 
@@ -1569,6 +1671,11 @@ fi
 
 if go_bug002_unbounded_wait_regression; then
   write_result false false "incomplete_patch" true false "GO-BUG-002 added an unbounded watcher wait that can hang verification"
+  exit 0
+fi
+
+if go_bug002_brittle_internal_state_assertion; then
+  write_result false false "incomplete_patch" true false "GO-BUG-002 regression asserts brittle internal configFile state after ReadInConfig"
   exit 0
 fi
 
