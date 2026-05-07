@@ -110,6 +110,44 @@ GO
       echo "I fixed the first issue, but verification is still failing because the target identification problem remains."
     fi
     ;;
+  budget_stop_after_recovery)
+    if [[ "$count" -eq 1 ]]; then
+      cat > main.go <<'GO'
+package recovery
+
+func Answer() int { return 0 }
+GO
+      echo "Modified files: main.go"
+      echo "Verification: go test ./... failed."
+    else
+      echo "Incomplete due to budget stop."
+      echo "The regression test still needs adjustment before final verification can honestly pass."
+    fi
+    ;;
+  did_not_rerun_go_test_after_last_edit)
+    if [[ "$count" -eq 1 ]]; then
+      cat > main.go <<'GO'
+package recovery
+
+func Answer() int { return 0 }
+GO
+      echo "Modified files: main.go"
+      echo "Verification: go test ./... failed."
+    else
+      echo "I changed the final assertion, but I did not rerun go test ./... after the last edit."
+    fi
+    ;;
+  successful_after_prior_budget_stop)
+    cat > main.go <<'GO'
+package recovery
+
+func Answer() int { return 42 }
+GO
+    printf '\nverified after prior budget stop\n' >> README.md
+    echo "Earlier I had an Incomplete due to budget stop note, but this final patch is verified now."
+    echo "Modified files: README.md"
+    echo "Verification: go test ./... passed."
+    ;;
   fixed_after_unresolved)
     cat > main.go <<'GO'
 package recovery
@@ -250,7 +288,7 @@ run_wrapper_case() {
   HOME="$TMP_DIR/host-home" \
   "$REPO_ROOT/scripts/run_current_benchmark_wrapper.sh" \
     "$output_path" \
-    "GO-BF-002" \
+    "${4:-GO-BF-002}" \
     "bugfix" \
     "go" \
     "Extend an existing Go worker service so graceful shutdown emits structured progress logging and does not regress existing worker behavior." \
@@ -302,6 +340,32 @@ assert_json_case "$TMP_DIR/remaining-target-issue.json" '
 assert data["success"] is False, data
 assert data["failure_family"] == "incomplete_patch", data
 assert data["final_incomplete_detected"] is True, data
+'
+
+run_wrapper_case budget_stop_after_recovery "$TMP_DIR/budget-stop-after-recovery.json" "$SOURCE_REPO" "GO-BUG-002"
+assert_json_case "$TMP_DIR/budget-stop-after-recovery.json" '
+assert data["success"] is False, data
+assert data["verification_passed"] is False, data
+assert data["failure_family"] == "incomplete_patch", data
+assert data["final_incomplete_detected"] is True, data
+summary = data["trace_summary"]
+assert "Incomplete due to budget stop" not in summary, data
+'
+
+run_wrapper_case did_not_rerun_go_test_after_last_edit "$TMP_DIR/did-not-rerun-go-test.json" "$SOURCE_REPO" "GO-BUG-002"
+assert_json_case "$TMP_DIR/did-not-rerun-go-test.json" '
+assert data["success"] is False, data
+assert data["verification_passed"] is False, data
+assert data["failure_family"] == "incomplete_patch", data
+assert data["final_incomplete_detected"] is True, data
+'
+
+run_wrapper_case successful_after_prior_budget_stop "$TMP_DIR/successful-after-prior-budget-stop.json" "$SOURCE_REPO" "GO-BUG-002"
+assert_json_case "$TMP_DIR/successful-after-prior-budget-stop.json" '
+assert data["success"] is True, data
+assert data["verification_passed"] is True, data
+assert data["failure_family"] == "", data
+assert data["final_incomplete_detected"] is False, data
 '
 
 run_wrapper_case fixed_after_unresolved "$TMP_DIR/fixed-after-unresolved.json" "$SOURCE_REPO"

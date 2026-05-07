@@ -222,6 +222,11 @@ patterns = [
     r"\bstill\s+fail(s|ing)\s+because\b",
     r"\bverification\s+still\s+fail(s|ing)\b",
     r"\boverall\s+verification\s+failed\b",
+    r"\bincomplete\s+due\s+to\s+budget\s+stop\b",
+    r"\bdid\s+not\s+rerun\s+go\s+test\b",
+    r"\bdid\s+not\s+rerun\s+verification\b",
+    r"\blast\s+edit\s+was\s+not\s+verified\b",
+    r"\bverification\s+was\s+not\s+rerun\s+after\b",
     r"\bnot\s+fixed\b",
     r"\bcould\s+not\s+resolve\b",
     r"\bno\s+retry\s+was\s+possible\b",
@@ -460,6 +465,8 @@ GO-BUG-002 no-change recovery guard:
 - Do not add a bare `wg.Wait()` in new watcher regression coverage. If you use a `WaitGroup`, wrap it in a goroutine and a timeout/select so the test fails instead of hanging.
 - Avoid unrelated logger/test-helper machinery such as `slog` unless existing patterns require it.
 - If verification first fails on a test compile error, recovery must still fix semantic regression assertions after the compile error and rerun `go test ./...`.
+- After any compile-error fix, rerun the exact verification command before the final answer.
+- Do not stop after only fixing compile errors; the observable WatchConfig reload regression must pass too.
 - Do not finish with only findings or only `viper.go` changed; this task needs `viper.go` plus focused regression evidence.
 - A `viper.go`-only diff is incomplete even when `go test ./...` passes.
 - Run `go test ./...` before the final answer.
