@@ -218,16 +218,13 @@ func handleHTTPConnect(
 	}
 
 	// Tunnel: dial upstream, write 200, splice both ways. The dial
-	// target is the pinned IP literal collected during policy
-	// evaluation — closing the policy-time vs dial-time race within
-	// this single connection decision. Original hostname is preserved
+	// target is the pinned IP literal collected during policy evaluation
+	// for this single connection decision. Original hostname is preserved
 	// in Decision.Host, the CONNECT request line, the Host header, and
 	// any inner TLS SNI bytes (which the proxy splices opaquely).
 	//
-	// DNS rebinding is still not fully defended. Sustained DNS hijack
-	// or malicious DNS responses at policy-resolution time remain in
-	// scope as a caveat. If hostile DNS is in scope, enforce egress at
-	// a lower layer.
+	// DNS rebinding is not fully defended. If hostile DNS is in scope,
+	// use lower-layer controls.
 	dialer := &net.Dialer{Timeout: connectIOTimeout}
 	upstream, err := dialWithFallback(ctx, dialer, "tcp", host, port, pinnedIPs, resolver, sink)
 	if err != nil {

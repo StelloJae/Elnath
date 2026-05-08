@@ -93,11 +93,33 @@ When a host is blocked, prefer the narrowest fix:
 
 ## DNS Posture
 
-v42-3 resolve-pin hardening resolves once during policy evaluation and dials the pinned IP literal for that connection. This closes the policy-time versus dial-time race within a single connection decision.
+v42-3 resolve-pin hardening resolves once during policy evaluation and dials the pinned IP literal for that connection. This gives each accepted connection a single policy-evaluated upstream target, but it is not a hostile-DNS defense.
 
-DNS rebinding is still not fully defended. Sustained DNS hijack or malicious DNS responses at policy-resolution time remain in scope. If hostile DNS is in scope, enforce egress at a lower layer.
+DNS rebinding is not fully defended. If hostile DNS is in scope, use lower-layer controls.
 
-Lower-layer controls include firewall rules, VPC policy, corporate proxy enforcement, endpoint policy, or equivalent OS/network controls. Elnath does not ship an internal DNS proxy in this phase, and hostile-resolver resistance remains outside the local sandbox claim.
+Lower-layer controls include firewall rules, VPC policy, corporate proxy enforcement, endpoint policy, or equivalent OS/network controls. Elnath does not ship DNS proxying in this phase, and hostile-resolver resistance remains outside the local sandbox claim.
+
+## Proxy Compatibility Matrix
+
+Elnath keeps both HTTP CONNECT and SOCKS5 listeners because common development tools do not share one reliable proxy interface.
+
+| Tool | `HTTP_PROXY` / `HTTPS_PROXY` | `ALL_PROXY=socks5h://` | Practical implication |
+| --- | --- | --- | --- |
+| `git` | Supported for HTTP(S) remotes through Git/curl proxy configuration. | Supported indirectly through libcurl-backed configurations; exact SOCKS behavior is build-dependent. | Keep HTTP CONNECT as the primary Git path; SOCKS5 remains useful but should not be the only path. |
+| `curl` | Supported. | Supported when curl is built with SOCKS support. | Useful for validating both listener types. |
+| `wget` | Supported for HTTP/HTTPS proxy workflows. | Not a reliable default across Wget workflows. | HTTP CONNECT support is needed. |
+| `go mod` | Supported through Go's `net/http` proxy-from-environment path for HTTP(S) module downloads. | Not documented as a first-class Go module proxy environment path. | HTTP(S) proxy support is required for Go module fetching. |
+| `npm` | Supported through npm proxy / https-proxy config and HTTP(S) proxy environment handling. | Not a documented primary npm proxy path. | HTTP(S) proxy support is the stable Node package workflow. |
+| `pip` | Supported through `--proxy`, config, and HTTP(S) proxy environment variables. | SOCKS support is dependency/configuration dependent rather than the baseline path. | HTTP(S) proxy support is the safer Python package workflow. |
+| `cargo` | Supported through Cargo HTTP proxy configuration and HTTP(S) proxy environment variables. | SOCKS behavior is not documented as the baseline Cargo path. | HTTP(S) proxy support is required for Rust package workflows. |
+
+Conclusion: dual HTTP CONNECT plus SOCKS5 remains justified. SOCKS-only is not enough for the target workflow set.
+
+## Linux Bridge Evidence Note
+
+The current repository includes Linux bridge spike and production bridge surfaces, but the latest residual audit ran on `darwin/arm64` without `bwrap`. That audit could inspect the code and test names, but it could not freshly prove the Linux bridge bind/connect/teardown lifecycle.
+
+Fresh Linux bridge lifecycle evidence remains an optional follow-up when a Linux host or CI environment with `bwrap` is available. Until then, do not describe the Linux bridge lifecycle as freshly proven by the macOS audit.
 
 ## Claim Grammar
 
@@ -112,14 +134,14 @@ Allowed claims:
 
 Mandatory caveat:
 
-> DNS rebinding is still not fully defended. Sustained DNS hijack or malicious DNS responses at policy-resolution time remain in scope. If hostile DNS is in scope, enforce egress at a lower layer.
+> DNS rebinding is not fully defended. If hostile DNS is in scope, use lower-layer controls.
 
 Do not claim:
 
-- DNS rebinding is completely defended.
+- DNS rebinding is fully defended.
 - Allowlists are inherently safe against hostile DNS.
-- An internal DNS proxy is available.
-- Hostile DNS is handled inside Elnath.
+- Elnath ships DNS proxying.
+- Elnath defends hostile DNS inside the local proxy.
 - This is a complete egress-security boundary.
 - Starter entries are installed automatically.
 - Sandbox network defaults are applied without explicit config.
