@@ -87,7 +87,7 @@ func NewCurrentRunPlan(corpusPath string) BaselineRunPlan {
 		System:            "elnath-current",
 		Baseline:          "self",
 		CorpusPath:        corpusPath,
-		CommandTemplate:   "\"$CURRENT_BIN\" {{task_output}} {{task_id}} {{task_track}} {{task_language}} {{task_prompt}} {{task_repo}} {{task_repo_ref}} {{task_repo_class}} {{task_benchmark_family}}",
+		CommandTemplate:   "\"$CURRENT_BIN\" {{task_output}} {{task_id}} {{task_track}} {{task_language}} {{task_prompt}} {{task_repo}} {{task_repo_ref}} {{task_repo_class}} {{task_benchmark_family}} {{task_verification_command}}",
 		OutputPath:        "benchmarks/results/current-scorecard.v1.json",
 		Context:           "benchmark",
 		RuntimePolicy:     "",

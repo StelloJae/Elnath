@@ -40,6 +40,9 @@ func TestCurrentRunPlan(t *testing.T) {
 	if plan.RuntimePolicy != "" {
 		t.Fatalf("expected empty runtime policy placeholder, got %q", plan.RuntimePolicy)
 	}
+	if !strings.Contains(plan.CommandTemplate, "{{task_verification_command}}") {
+		t.Fatalf("current plan command template must pass task verification command: %s", plan.CommandTemplate)
+	}
 	if len(plan.RequiredEnv) == 0 || plan.RequiredEnv[0] != "CURRENT_BIN" {
 		t.Fatalf("unexpected required env: %+v", plan.RequiredEnv)
 	}
