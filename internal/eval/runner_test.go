@@ -216,6 +216,135 @@ EOF
 	}
 }
 
+func TestRunPlanExposesTaskVerificationCommandEnv(t *testing.T) {
+	dir := t.TempDir()
+	corpusPath := filepath.Join(dir, "corpus.json")
+	if err := os.WriteFile(corpusPath, []byte(`{
+  "version":"v1",
+  "tasks":[
+    {
+      "id":"V8-MIX-BF-001",
+      "title":"task",
+      "track":"brownfield_feature",
+      "language":"go",
+      "repo_class":"service_backend",
+      "benchmark_family":"v8_public_first_freeze",
+      "prompt":"fix it",
+      "repo":"https://github.com/example/repo",
+      "repo_ref":"deadbeef",
+      "verification_command":"cd kyaml && go test ./...",
+      "acceptance_criteria":["tests pass"]
+    }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write corpus: %v", err)
+	}
+
+	wrapperPath := filepath.Join(dir, "wrapper.sh")
+	wrapper := `#!/bin/sh
+out="$1"
+cat > "$out" <<EOF
+{
+  "task_id":"V8-MIX-BF-001",
+  "track":"brownfield_feature",
+  "language":"go",
+  "success":true,
+  "intervention_count":0,
+  "intervention_needed":false,
+  "verification_command":"$ELNATH_BENCHMARK_TASK_VERIFICATION_COMMAND",
+  "verification_passed":true,
+  "duration_seconds":1
+}
+EOF
+`
+	if err := os.WriteFile(wrapperPath, []byte(wrapper), 0o755); err != nil {
+		t.Fatalf("write wrapper: %v", err)
+	}
+	t.Setenv("CURRENT_BIN", wrapperPath)
+
+	scorecard, err := RunBaselinePlan(&BaselineRunPlan{
+		Version:         "v1",
+		System:          "elnath-current",
+		Baseline:        "self",
+		CorpusPath:      corpusPath,
+		CommandTemplate: `"$CURRENT_BIN" {{task_output}} {{task_id}}`,
+		OutputPath:      filepath.Join(dir, "scorecard.json"),
+		RepeatedRuns:    1,
+		RequiredEnv:     []string{"CURRENT_BIN"},
+	})
+	if err != nil {
+		t.Fatalf("RunBaselinePlan: %v", err)
+	}
+	if got, want := scorecard.Results[0].VerificationCommand, "cd kyaml && go test ./..."; got != want {
+		t.Fatalf("VerificationCommand from wrapper env = %q, want %q", got, want)
+	}
+}
+
+func TestRunPlanRendersTaskVerificationCommandPlaceholder(t *testing.T) {
+	dir := t.TempDir()
+	corpusPath := filepath.Join(dir, "corpus.json")
+	if err := os.WriteFile(corpusPath, []byte(`{
+  "version":"v1",
+  "tasks":[
+    {
+      "id":"V8-PY-BUG-001",
+      "title":"task",
+      "track":"bugfix",
+      "language":"python",
+      "repo_class":"service_backend",
+      "benchmark_family":"v8_public_first_freeze",
+      "prompt":"fix it",
+      "repo":"https://github.com/example/repo",
+      "repo_ref":"deadbeef",
+      "verification_command":"python -m pytest tests/test_requests.py",
+      "acceptance_criteria":["tests pass"]
+    }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write corpus: %v", err)
+	}
+
+	wrapperPath := filepath.Join(dir, "wrapper.sh")
+	wrapper := `#!/bin/sh
+out="$1"
+verification_command="$3"
+cat > "$out" <<EOF
+{
+  "task_id":"V8-PY-BUG-001",
+  "track":"bugfix",
+  "language":"python",
+  "success":true,
+  "intervention_count":0,
+  "intervention_needed":false,
+  "verification_command":"$verification_command",
+  "verification_passed":true,
+  "duration_seconds":1
+}
+EOF
+`
+	if err := os.WriteFile(wrapperPath, []byte(wrapper), 0o755); err != nil {
+		t.Fatalf("write wrapper: %v", err)
+	}
+	t.Setenv("CURRENT_BIN", wrapperPath)
+
+	scorecard, err := RunBaselinePlan(&BaselineRunPlan{
+		Version:         "v1",
+		System:          "elnath-current",
+		Baseline:        "self",
+		CorpusPath:      corpusPath,
+		CommandTemplate: `"$CURRENT_BIN" {{task_output}} {{task_id}} {{task_verification_command}}`,
+		OutputPath:      filepath.Join(dir, "scorecard.json"),
+		RepeatedRuns:    1,
+		RequiredEnv:     []string{"CURRENT_BIN"},
+	})
+	if err != nil {
+		t.Fatalf("RunBaselinePlan: %v", err)
+	}
+	if got, want := scorecard.Results[0].VerificationCommand, "python -m pytest tests/test_requests.py"; got != want {
+		t.Fatalf("rendered verification command = %q, want %q", got, want)
+	}
+}
+
 func TestEvalRunCurrent_KeepTmpRecordsPerTaskTempRoot(t *testing.T) {
 	dir := t.TempDir()
 	retainedRoot := filepath.Join(dir, "elnath-current-benchmark.unit")

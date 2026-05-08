@@ -60,21 +60,25 @@ func RunBaselinePlan(plan *BaselineRunPlan) (*Scorecard, error) {
 		for _, task := range corpus.Tasks {
 			taskOutput := filepath.Join(tempDir, fmt.Sprintf("%s-run-%d.json", task.ID, run))
 			command := renderCommandTemplate(plan.CommandTemplate, map[string]string{
-				"corpus_path":           plan.CorpusPath,
-				"task_id":               task.ID,
-				"task_title":            task.Title,
-				"task_prompt":           task.Prompt,
-				"task_repo":             task.Repo,
-				"task_repo_ref":         task.RepoRef,
-				"task_source_url":       task.SourceURL,
-				"task_track":            string(task.Track),
-				"task_language":         string(task.Language),
-				"task_repo_class":       task.RepoClass,
-				"task_benchmark_family": task.BenchmarkFamily,
-				"task_output":           taskOutput,
+				"corpus_path":               plan.CorpusPath,
+				"task_id":                   task.ID,
+				"task_title":                task.Title,
+				"task_prompt":               task.Prompt,
+				"task_repo":                 task.Repo,
+				"task_repo_ref":             task.RepoRef,
+				"task_source_url":           task.SourceURL,
+				"task_verification_command": task.VerificationCommand,
+				"task_track":                string(task.Track),
+				"task_language":             string(task.Language),
+				"task_repo_class":           task.RepoClass,
+				"task_benchmark_family":     task.BenchmarkFamily,
+				"task_output":               taskOutput,
 			})
 
 			cmd := exec.Command("bash", "-lc", command)
+			cmd.Env = append(os.Environ(),
+				"ELNATH_BENCHMARK_TASK_VERIFICATION_COMMAND="+task.VerificationCommand,
+			)
 			var stdoutPath, stderrPath, sidecarPath, publicSidecarPath string
 			if keepTmp {
 				base := filepath.Join(debugDir, fmt.Sprintf("%s-run-%d", safeArtifactName(task.ID), run))
@@ -82,7 +86,7 @@ func RunBaselinePlan(plan *BaselineRunPlan) (*Scorecard, error) {
 				stderrPath = base + ".wrapper.stderr"
 				sidecarPath = base + ".debug-evidence.json"
 				publicSidecarPath = relativeToOutputDir(plan.OutputPath, sidecarPath)
-				cmd.Env = append(os.Environ(),
+				cmd.Env = append(cmd.Env,
 					"ELNATH_BENCHMARK_WRAPPER_STDOUT_PATH="+stdoutPath,
 					"ELNATH_BENCHMARK_WRAPPER_STDERR_PATH="+stderrPath,
 					"ELNATH_BENCHMARK_DEBUG_EVIDENCE_PATH="+sidecarPath,

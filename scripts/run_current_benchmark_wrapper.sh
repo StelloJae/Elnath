@@ -6,7 +6,7 @@ if [[ $# -lt 9 ]]; then
 Usage:
   scripts/run_current_benchmark_wrapper.sh \
     <task-output.json> <task-id> <task-track> <task-language> \
-    <task-prompt> <task-repo> <task-repo-ref> <task-repo-class> <task-benchmark-family>
+    <task-prompt> <task-repo> <task-repo-ref> <task-repo-class> <task-benchmark-family> [task-verification-command]
 
 Environment:
   ELNATH_BIN       Path to the Elnath binary (default: ./elnath at repo root)
@@ -36,6 +36,7 @@ TASK_REPO="$6"
 TASK_REPO_REF="$7"
 TASK_REPO_CLASS="$8"
 TASK_BENCHMARK_FAMILY="$9"
+TASK_VERIFICATION_COMMAND="${10:-${ELNATH_BENCHMARK_TASK_VERIFICATION_COMMAND:-}}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -1137,6 +1138,10 @@ PY
 }
 
 pick_verification_command() {
+  if [[ -n "${TASK_VERIFICATION_COMMAND:-}" ]]; then
+    normalize_task_verification_command "$TASK_VERIFICATION_COMMAND"
+    return 0
+  fi
   if [[ -f go.mod ]] && command -v go >/dev/null 2>&1; then
     echo "go test ./..."
     return 0
@@ -1185,6 +1190,21 @@ PY
 
 working_tree_changes() {
   benchmark_changed_files_all
+}
+
+python_command_usable() {
+  command -v python >/dev/null 2>&1 && python - <<'PY' >/dev/null 2>&1
+print("ok")
+PY
+}
+
+normalize_task_verification_command() {
+  local cmd="$1"
+  if [[ "$cmd" == python\ * ]] && command -v python3 >/dev/null 2>&1 && ! python_command_usable; then
+    echo "python3 ${cmd#python }"
+    return 0
+  fi
+  echo "$cmd"
 }
 
 benchmark_specific_verification_command() {
@@ -1356,7 +1376,7 @@ PY
   )
 }
 
-if [[ "$TASK_LANGUAGE" == "typescript" ]]; then
+if [[ "$TASK_LANGUAGE" == "typescript" || "$TASK_LANGUAGE" == "javascript" ]]; then
   if ! (
     cd "$WORKTREE"
     export HOME="$BENCHMARK_HOME_DIR"
