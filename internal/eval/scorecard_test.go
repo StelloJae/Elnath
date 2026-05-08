@@ -59,7 +59,7 @@ func TestScorecardValidateErrors(t *testing.T) {
 		{name: "missing system", scorecard: Scorecard{Version: "v1", Results: []RunResult{{TaskID: "A", Track: TrackBugfix, Language: LanguageGo}}}},
 		{name: "missing task id", scorecard: Scorecard{Version: "v1", System: "elnath", Results: []RunResult{{Track: TrackBugfix, Language: LanguageGo}}}},
 		{name: "invalid track", scorecard: Scorecard{Version: "v1", System: "elnath", Results: []RunResult{{TaskID: "A", Track: "oops", Language: LanguageGo}}}},
-		{name: "invalid language", scorecard: Scorecard{Version: "v1", System: "elnath", Results: []RunResult{{TaskID: "A", Track: TrackBugfix, Language: "python"}}}},
+		{name: "invalid language", scorecard: Scorecard{Version: "v1", System: "elnath", Results: []RunResult{{TaskID: "A", Track: TrackBugfix, Language: "ruby"}}}},
 		{name: "negative intervention count", scorecard: Scorecard{Version: "v1", System: "elnath", Results: []RunResult{{TaskID: "A", Track: TrackBugfix, Language: LanguageGo, InterventionCount: -1}}}},
 		{name: "missing intervention class", scorecard: Scorecard{Version: "v1", System: "elnath", Results: []RunResult{{TaskID: "A", Track: TrackBugfix, Language: LanguageGo, InterventionNeeded: true}}}},
 		{name: "recovery succeeded without attempt", scorecard: Scorecard{Version: "v1", System: "elnath", Results: []RunResult{{TaskID: "A", Track: TrackBugfix, Language: LanguageGo, RecoverySucceeded: true}}}},

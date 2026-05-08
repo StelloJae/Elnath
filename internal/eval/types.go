@@ -16,22 +16,25 @@ type Language string
 const (
 	LanguageGo         Language = "go"
 	LanguageTypeScript Language = "typescript"
+	LanguageJavaScript Language = "javascript"
+	LanguagePython     Language = "python"
 )
 
 // Task is a single benchmark task in the public corpus.
 type Task struct {
-	ID                 string   `json:"id"`
-	Title              string   `json:"title"`
-	Track              Track    `json:"track"`
-	Language           Language `json:"language"`
-	RepoClass          string   `json:"repo_class,omitempty"`
-	BenchmarkFamily    string   `json:"benchmark_family,omitempty"`
-	Holdout            bool     `json:"holdout,omitempty"`
-	Prompt             string   `json:"prompt"`
-	Repo               string   `json:"repo,omitempty"`
-	RepoRef            string   `json:"repo_ref,omitempty"`
-	SourceURL          string   `json:"source_url,omitempty"`
-	AcceptanceCriteria []string `json:"acceptance_criteria,omitempty"`
+	ID                  string   `json:"id"`
+	Title               string   `json:"title"`
+	Track               Track    `json:"track"`
+	Language            Language `json:"language"`
+	RepoClass           string   `json:"repo_class,omitempty"`
+	BenchmarkFamily     string   `json:"benchmark_family,omitempty"`
+	Holdout             bool     `json:"holdout,omitempty"`
+	Prompt              string   `json:"prompt"`
+	Repo                string   `json:"repo,omitempty"`
+	RepoRef             string   `json:"repo_ref,omitempty"`
+	SourceURL           string   `json:"source_url,omitempty"`
+	VerificationCommand string   `json:"verification_command,omitempty"`
+	AcceptanceCriteria  []string `json:"acceptance_criteria,omitempty"`
 	// Intent is the user-intent category for v2 self-improvement benchmarks
 	// (e.g. "question", "complex_task", "bugfix"). Used by the v2 harness to
 	// aggregate outcomes by intent for advisor preference learning.

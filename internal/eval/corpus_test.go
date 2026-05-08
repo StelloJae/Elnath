@@ -3,6 +3,7 @@ package eval
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -57,7 +58,7 @@ func TestCorpusValidateErrors(t *testing.T) {
 		},
 		{
 			name:   "invalid language",
-			corpus: Corpus{Version: "v1", Tasks: []Task{{ID: "A", Title: "task", Track: TrackBugfix, Language: "python", RepoClass: "cli_dev_tool", BenchmarkFamily: "brownfield_primary", Prompt: "do", Repo: "https://github.com/example/repo", RepoRef: "deadbeef", AcceptanceCriteria: []string{"tests pass"}}}},
+			corpus: Corpus{Version: "v1", Tasks: []Task{{ID: "A", Title: "task", Track: TrackBugfix, Language: "ruby", RepoClass: "cli_dev_tool", BenchmarkFamily: "brownfield_primary", Prompt: "do", Repo: "https://github.com/example/repo", RepoRef: "deadbeef", AcceptanceCriteria: []string{"tests pass"}}}},
 		},
 		{
 			name:   "missing repo class",
@@ -252,6 +253,80 @@ func TestCorpusValidateV1RegressionPublicCorpus(t *testing.T) {
 	}
 	if len(corpus.Tasks) == 0 {
 		t.Fatal("public corpus has zero tasks; test setup broken")
+	}
+}
+
+func TestLoadV8PublicCorpus(t *testing.T) {
+	corpus, err := LoadCorpus("../../benchmarks/public-corpus-v8-25.v1.json")
+	if err != nil {
+		t.Fatalf("LoadCorpus(public-corpus-v8-25.v1.json) = %v", err)
+	}
+	if corpus.Version != "v1" {
+		t.Fatalf("v8 public corpus version = %q, want v1", corpus.Version)
+	}
+	if len(corpus.Tasks) != 25 {
+		t.Fatalf("v8 public corpus tasks = %d, want 25", len(corpus.Tasks))
+	}
+
+	requiredAnchors := map[string]bool{
+		"GO-BF-001":  false,
+		"TS-BF-001":  false,
+		"GO-BF-002":  false,
+		"TS-BF-002":  false,
+		"GO-BUG-001": false,
+		"TS-BUG-001": false,
+		"GO-BUG-002": false,
+	}
+	excluded := map[string]struct{}{
+		"V8-RS-BUG-001": {},
+		"V8-RS-BF-001":  {},
+		"V8-RS-REF-001": {},
+		"V8-TS-BF-004":  {},
+		"V8-PY-TH-001":  {},
+		"V8-ALT-PY-001": {},
+		"V8-DEF-PY-001": {},
+		"V8-ADD-JS-002": {},
+	}
+	pinnedSHA := regexp.MustCompile(`^[0-9a-f]{40}$`)
+	languages := map[Language]int{}
+
+	for _, task := range corpus.Tasks {
+		if _, ok := excluded[task.ID]; ok {
+			t.Fatalf("v8 public corpus includes excluded candidate %q", task.ID)
+		}
+		if _, ok := requiredAnchors[task.ID]; ok {
+			requiredAnchors[task.ID] = true
+		}
+		if task.Repo == "" || task.SourceURL == "" {
+			t.Fatalf("task %q must include repo and source_url", task.ID)
+		}
+		if !pinnedSHA.MatchString(task.RepoRef) {
+			t.Fatalf("task %q repo_ref = %q, want 40-char immutable sha", task.ID, task.RepoRef)
+		}
+		if task.VerificationCommand == "" {
+			t.Fatalf("task %q must include verification_command", task.ID)
+		}
+		if len(task.AcceptanceCriteria) == 0 {
+			t.Fatalf("task %q must include acceptance criteria", task.ID)
+		}
+		languages[task.Language]++
+	}
+	for id, seen := range requiredAnchors {
+		if !seen {
+			t.Fatalf("v8 public corpus missing existing anchor %q", id)
+		}
+	}
+	if languages[LanguageGo] != 9 {
+		t.Fatalf("go task count = %d, want 9", languages[LanguageGo])
+	}
+	if languages[LanguageTypeScript] != 9 {
+		t.Fatalf("typescript task count = %d, want 9", languages[LanguageTypeScript])
+	}
+	if languages[LanguageJavaScript] != 4 {
+		t.Fatalf("javascript task count = %d, want 4", languages[LanguageJavaScript])
+	}
+	if languages[LanguagePython] != 3 {
+		t.Fatalf("python task count = %d, want 3", languages[LanguagePython])
 	}
 }
 
