@@ -403,6 +403,8 @@ ts_bf002_no_change_recovery_guidance() {
 TS-BF-002 no-change recovery guard:
 - Make the smallest production change in `packages/common/module-utils/configurable-module.builder.ts`.
 - Add or update the focused regression in `packages/common/test/module-utils/configurable-module.builder.spec.ts`.
+- Patch `private static createAsyncOptionsProvider`; do not search for a different top-level async provider helper.
+- The two high-signal production seams are the direct `useFactory: options.useFactory` provider path and the class-factory `optionsFactory[self.factoryClassMethodKey ... ]()` path.
 - Preserve public async-options fields such as `provideInjectionTokensFrom`; do not replace public option fields.
 - Do not treat import/module-resolution churn as semantic progress.
 - If recovery still leaves no diff after edit intent, the benchmark will classify the run as `no_change_planning_failure`.
@@ -414,6 +416,13 @@ ts_bf002_recovery_guidance() {
   cat <<'EOF'
 
 TS-BF-002 recovery guard:
+- TS-BF-002 recovery order:
+  1. Keep or add the focused cancellation regression test first.
+  2. Fix focused spec runtime imports.
+  3. Fix TypeScript compile errors from any newly introduced production helper calls.
+  4. Rerun the exact narrow Mocha command.
+- For the production patch, patch `private static createAsyncOptionsProvider` in `packages/common/module-utils/configurable-module.builder.ts`.
+- The two high-signal production seams are: wrap the direct `useFactory: options.useFactory` path, and wrap the class-factory `optionsFactory[self.factoryClassMethodKey ... ]()` path.
 - Keep the semantic cancellation tracing regression test intact while fixing verification errors.
 - Do not treat import/module-resolution churn as progress if the cancellation tracing regression is still missing.
 - import/module-resolution fixes are not completion unless the focused cancellation regression exists and remains intact.
@@ -422,6 +431,12 @@ TS-BF-002 recovery guard:
 - If avoiding a directory import error requires a runtime import adjustment, use a minimal `createRequire(import.meta.url)` bridge for that one runtime import and keep type imports type-only.
 - If verification reports `ERR_UNSUPPORTED_DIR_IMPORT`, inspect and fix every runtime directory import used by the focused spec, not just the first reported import.
 - Keep `../../interfaces` type-only when possible; `../../module-utils` is runtime-used for `ConfigurableModuleBuilder` and must resolve under the narrow Mocha command.
+- Do not keep a runtime `import { Provider } from '../../interfaces'`; use `import type { Provider } from '../../interfaces'` instead.
+- Do not keep a runtime `import { ConfigurableModuleBuilder } from '../../module-utils'`; use `createRequire(import.meta.url)` with `../../module-utils/configurable-module.builder` or another direct-file runtime import that the narrow Mocha command can execute.
+- Do not invent an expected Logger.error message string in the focused regression; assert the actual Logger.error argument shape produced by the production patch.
+- Keep the production tracing implementation and regression assertion consistent: if the patch calls `Logger.error(err)`, assert the original error object; if it logs a fixed message plus stack, assert that exact implemented call shape.
+- If verification already passed and only the focused regression is missing, do not spend the recovery turn re-inspecting broad repo context; add the compact focused test in the existing module-utils spec.
+- In the focused test, select the options provider by `provider.provide === MODULE_OPTIONS_TOKEN`; do not assume the first provider is the options provider for both direct `useFactory` and `useClass` cases.
 - Rerun the exact TS-BF-002 Mocha verification command after final import/test edits: ./node_modules/.bin/mocha packages/common/test/module-utils/configurable-module.builder.spec.ts --require ts-node/register --require tsconfig-paths/register --require node_modules/reflect-metadata/Reflect.js --require hooks/mocha-init-hook.ts
 - Do not claim completion if verification still fails before semantic assertions.
 - Preserve existing public async-options fields such as `provideInjectionTokensFrom`; do not replace public fields with `onCancellation` or any unrelated new option.
@@ -734,6 +749,38 @@ ts_bf002_import_churn_after_recovery() {
   benchmark_changed_files_all | grep -Eq 'packages/common/test/module-utils/configurable-module\.builder\.spec\.ts|packages/common/module-utils/interfaces/configurable-module-async-options\.interface\.ts'
 }
 
+ts_bf002_ts_compile_error_after_recovery() {
+  is_ts_bf002_nestjs_task || return 1
+  benchmark_changed_files_all | grep -qx 'packages/common/module-utils/configurable-module.builder.ts' || return 1
+  local logs
+  logs=""
+  if [[ -f "$VERIFY_RETRY_LOG" ]]; then
+    logs+="$(tail -120 "$VERIFY_RETRY_LOG")"$'\n'
+  fi
+  if [[ -f "$VERIFY_LOG" ]]; then
+    logs+="$(tail -120 "$VERIFY_LOG")"$'\n'
+  fi
+  grep -Eq 'error TS[0-9]+: Cannot find name|Cannot find name .*[.]' <<<"$logs"
+}
+
+ts_bf002_bad_focused_spec_runtime_directory_imports() {
+  is_ts_bf002_nestjs_task || return 1
+  local spec_path="$WORKTREE/packages/common/test/module-utils/configurable-module.builder.spec.ts"
+  [[ -f "$spec_path" ]] || return 1
+  python3 - <<'PY' "$spec_path"
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="ignore")
+patterns = [
+    r"(?m)^\s*import\s+(?!type\b)\{[^}]*\bProvider\b[^}]*\}\s+from\s+['\"]\.\./\.\./interfaces['\"]",
+    r"(?m)^\s*import\s+(?!type\b)\{[^}]*\bConfigurableModuleBuilder\b[^}]*\}\s+from\s+['\"]\.\./\.\./module-utils['\"]",
+]
+sys.exit(0 if any(re.search(pattern, text) for pattern in patterns) else 1)
+PY
+}
+
 ts_bf002_incomplete_patch_after_failed_recovery() {
   is_ts_bf002_nestjs_task || return 1
   if ts_bf002_public_async_option_regression; then
@@ -743,6 +790,12 @@ ts_bf002_incomplete_patch_after_failed_recovery() {
     return 0
   fi
   if ts_bf002_import_churn_after_recovery && ts_bf002_missing_focused_regression; then
+    return 0
+  fi
+  if ts_bf002_ts_compile_error_after_recovery; then
+    return 0
+  fi
+  if ts_bf002_bad_focused_spec_runtime_directory_imports; then
     return 0
   fi
   return 1
@@ -1422,11 +1475,18 @@ NestJS-specific guidance:
   - Preserve existing public async-options fields such as \`provideInjectionTokensFrom\`; do not remove or replace them while adding cancellation tracing.
   - Do not add or replace public option fields with \`onCancellation\` or unrelated cancellation-specific knobs.
   - Do not replace public option fields with unrelated new fields just to expose cancellation tracing.
+  - In \`packages/common/module-utils/configurable-module.builder.ts\`, start at \`private static createAsyncOptionsProvider\`.
+  - The two high-signal production seams are the direct \`useFactory: options.useFactory\` provider path and the class-factory \`optionsFactory[self.factoryClassMethodKey ... ]()\` path.
   - Add a focused cancellation tracing regression test in \`packages/common/test/module-utils/configurable-module.builder.spec.ts\` or an adjacent common module-utils spec.
   - The regression should prove the cancellation/error tracing path and preserve success-path behavior.
   - Avoid import-style rewrites unless verification output proves they are necessary.
   - Preserve the existing TypeScript/ESM import style in \`configurable-module.builder.spec.ts\`; do not replace the file's top-level imports with bare CommonJS \`require(...)\`.
   - If a direct runtime import is needed to avoid a directory import error, use a minimal \`createRequire(import.meta.url)\` bridge for that one runtime import while keeping type imports type-only.
+  - Do not keep a runtime \`import { Provider } from '../../interfaces'\`; use \`import type { Provider } from '../../interfaces'\`.
+  - Do not keep a runtime \`import { ConfigurableModuleBuilder } from '../../module-utils'\`; use a direct-file runtime import such as a minimal \`createRequire(import.meta.url)\` bridge.
+  - Do not invent an expected Logger.error message string in the focused regression; assert the actual Logger.error argument shape produced by the production patch.
+  - Keep the production tracing implementation and regression assertion consistent: if the patch calls \`Logger.error(err)\`, assert the original error object; if it logs a fixed message plus stack, assert that exact implemented call shape.
+  - In the focused test, select the options provider by \`provider.provide === MODULE_OPTIONS_TOKEN\`; do not assume the first provider is the options provider for both direct \`useFactory\` and \`useClass\` cases.
   - Do not finish if the semantic cancellation regression test is missing, even if import or module-resolution mechanics were changed."
 fi
 if [[ "$TASK_REPO" == *"vercel/next.js"* && "$TASK_PROMPT" == *"file-watcher regression"* ]]; then
@@ -1705,7 +1765,7 @@ if ts_bf001_generic_retry_title_target; then
 fi
 
 if ts_bf002_incomplete_patch_after_failed_recovery; then
-  write_result false false "incomplete_patch" true false "TS-BF-002 recovery changed imports/public options without a focused cancellation regression"
+  write_result false false "incomplete_patch" true false "TS-BF-002 recovery left import, public-option, or focused-regression completion incomplete"
   exit 0
 fi
 

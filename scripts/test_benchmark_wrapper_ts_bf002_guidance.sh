@@ -34,13 +34,22 @@ required_current_guidance = [
     "Preserve existing public async-options fields such as `provideInjectionTokensFrom`",
     "Do not replace public option fields",
     "Do not add or replace public option fields with `onCancellation`",
+    "start at `private static createAsyncOptionsProvider`",
+    "direct `useFactory: options.useFactory` provider path",
+    "class-factory `optionsFactory[self.factoryClassMethodKey",
     "focused cancellation tracing regression test",
     "preserve success-path behavior",
     "Avoid import-style rewrites unless verification output proves they are necessary",
     "Preserve the existing TypeScript/ESM import style",
     "do not replace the file's top-level imports with bare CommonJS `require(...)`",
+    "Do not keep a runtime `import { Provider } from '../../interfaces'`",
+    "use `import type { Provider } from '../../interfaces'`",
+    "Do not keep a runtime `import { ConfigurableModuleBuilder } from '../../module-utils'`",
     "use a minimal `createRequire(import.meta.url)` bridge",
     "keeping type imports type-only",
+    "Do not invent an expected Logger.error message string",
+    "assert the actual Logger.error argument shape produced by the production patch",
+    "select the options provider by `provider.provide === MODULE_OPTIONS_TOKEN`",
     "Do not finish if the semantic cancellation regression test is missing",
 ]
 missing = [snippet for snippet in required_current_guidance if snippet not in current_guidance]
@@ -63,6 +72,9 @@ no_change_prompt = current_guidance
 required_no_change_recovery = [
     "packages/common/module-utils/configurable-module.builder.ts",
     "packages/common/test/module-utils/configurable-module.builder.spec.ts",
+    "private static createAsyncOptionsProvider",
+    "useFactory: options.useFactory",
+    "optionsFactory[self.factoryClassMethodKey",
     "provideInjectionTokensFrom",
     "no_change_planning_failure",
     "Do not treat import/module-resolution churn as semantic progress",
@@ -75,14 +87,30 @@ recovery_start = current_guidance.index("TS-BF-002 recovery guard:")
 recovery_end = current_guidance.index("RECOVERY_ATTEMPTED=true", recovery_start)
 recovery_block = current_guidance[recovery_start:recovery_end]
 required_recovery_guidance = [
+    "TS-BF-002 recovery order:",
+    "1. Keep or add the focused cancellation regression test first.",
+    "2. Fix focused spec runtime imports",
+    "3. Fix TypeScript compile errors from any newly introduced production helper calls",
+    "patch `private static createAsyncOptionsProvider`",
+    "wrap the direct `useFactory: options.useFactory` path",
+    "wrap the class-factory `optionsFactory[self.factoryClassMethodKey",
     "fix every runtime directory import used by the focused spec",
     "../../module-utils",
     "ConfigurableModuleBuilder",
+    "Do not keep a runtime `import { Provider } from '../../interfaces'`",
+    "use `import type { Provider } from '../../interfaces'`",
+    "Do not keep a runtime `import { ConfigurableModuleBuilder } from '../../module-utils'`",
+    "`createRequire(import.meta.url)`",
+    "../../module-utils/configurable-module.builder",
     "import/module-resolution fixes are not completion",
     "If verification already passes but TS-BF-002 task-specific evidence is missing, add the missing focused cancellation regression before touching module imports",
     "Rerun the exact TS-BF-002 Mocha verification command after final import/test edits",
     expected_cmd,
     "Do not claim completion if verification still fails before semantic assertions",
+    "Do not invent an expected Logger.error message string",
+    "assert the actual Logger.error argument shape produced by the production patch",
+    "If verification already passed and only the focused regression is missing, do not spend the recovery turn re-inspecting broad repo context",
+    "select the options provider by `provider.provide === MODULE_OPTIONS_TOKEN`",
 ]
 missing_recovery = [snippet for snippet in required_recovery_guidance if snippet not in recovery_block]
 if missing_recovery:
@@ -170,6 +198,70 @@ exit 0
 SH
   chmod +x node_modules/.bin/mocha
   echo "I added cancellation tracing in module-utils."
+  exit 0
+fi
+if [[ "${FAKE_TS_COMPILE_ERROR_WITH_REGRESSION:-}" == "1" ]]; then
+  mkdir -p \
+    packages/common/module-utils \
+    packages/common/test/module-utils \
+    node_modules/.bin
+  cat > packages/common/module-utils/configurable-module.builder.ts <<'TS'
+export class ConfigurableModuleBuilder {
+  traceCancellation(error: unknown) {
+    if (isCancellationError(error)) {
+      return error;
+    }
+  }
+}
+TS
+  cat > packages/common/test/module-utils/configurable-module.builder.spec.ts <<'TS'
+describe('ConfigurableModuleBuilder cancellation tracing', () => {
+  it('keeps AbortError cancellation tracing focused on async options', () => {});
+});
+TS
+  cat > node_modules/.bin/mocha <<'SH'
+#!/usr/bin/env bash
+echo "packages/common/module-utils/configurable-module.builder.ts(335,21): error TS2304: Cannot find name 'isCancellationError'." >&2
+exit 1
+SH
+  chmod +x node_modules/.bin/mocha
+  echo "I added cancellation tracing and a focused regression."
+  exit 0
+fi
+if [[ "${FAKE_BAD_RUNTIME_DIRECTORY_IMPORTS_WITH_REGRESSION:-}" == "1" ]]; then
+  mkdir -p \
+    packages/common/module-utils \
+    packages/common/test/module-utils \
+    node_modules/.bin
+  cat > packages/common/module-utils/configurable-module.builder.ts <<'TS'
+export class ConfigurableModuleBuilder {
+  traceCancellation(error: unknown) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      return error.message;
+    }
+  }
+}
+TS
+  cat > packages/common/test/module-utils/configurable-module.builder.spec.ts <<'TS'
+import { Provider } from '../../interfaces';
+import { ConfigurableModuleBuilder } from '../../module-utils';
+
+describe('ConfigurableModuleBuilder cancellation tracing', () => {
+  it('keeps AbortError cancellation tracing focused on async options', () => {
+    const provider: Provider = {};
+    void provider;
+    new ConfigurableModuleBuilder().traceCancellation(new DOMException('stop', 'AbortError'));
+  });
+});
+TS
+  cat > node_modules/.bin/mocha <<'SH'
+#!/usr/bin/env bash
+echo "Error: Directory import '/repo/packages/common/interfaces' is not supported resolving ES modules imported from /repo/packages/common/test/module-utils/configurable-module.builder.spec.ts" >&2
+echo "code: 'ERR_UNSUPPORTED_DIR_IMPORT'" >&2
+exit 1
+SH
+  chmod +x node_modules/.bin/mocha
+  echo "I added cancellation tracing and a focused regression."
   exit 0
 fi
 mkdir -p \
@@ -415,6 +507,62 @@ import sys
 data = json.load(open(sys.argv[1]))
 assert data["success"] is False, data
 assert data["verification_passed"] is True, data
+assert data["failure_family"] == "incomplete_patch", data
+PY
+
+OUT_TS_COMPILE="$TMP_DIR/ts-bf002-ts-compile-result.json"
+
+FAKE_TS_COMPILE_ERROR_WITH_REGRESSION=1 \
+ELNATH_BIN="$TMP_DIR/fake-elnath.sh" \
+ELNATH_TIMEOUT=30 \
+ELNATH_BENCHMARK_PERMISSION_MODE=bypass \
+HOME="$TMP_DIR/host-home" \
+"$CURRENT_WRAPPER" \
+  "$OUT_TS_COMPILE" \
+  "TS-BF-002" \
+  "brownfield_feature" \
+  "typescript" \
+  "Extend an existing TypeScript async task flow to emit explicit cancellation tracing without changing success-path semantics." \
+  "file://$SOURCE_REPO" \
+  "" \
+  "service_backend" \
+  "month2_canary"
+
+python3 - <<'PY' "$OUT_TS_COMPILE"
+import json
+import sys
+
+data = json.load(open(sys.argv[1]))
+assert data["success"] is False, data
+assert data["verification_passed"] is False, data
+assert data["failure_family"] == "incomplete_patch", data
+PY
+
+OUT_BAD_RUNTIME_IMPORTS="$TMP_DIR/ts-bf002-bad-runtime-imports-result.json"
+
+FAKE_BAD_RUNTIME_DIRECTORY_IMPORTS_WITH_REGRESSION=1 \
+ELNATH_BIN="$TMP_DIR/fake-elnath.sh" \
+ELNATH_TIMEOUT=30 \
+ELNATH_BENCHMARK_PERMISSION_MODE=bypass \
+HOME="$TMP_DIR/host-home" \
+"$CURRENT_WRAPPER" \
+  "$OUT_BAD_RUNTIME_IMPORTS" \
+  "TS-BF-002" \
+  "brownfield_feature" \
+  "typescript" \
+  "Extend an existing TypeScript async task flow to emit explicit cancellation tracing without changing success-path semantics." \
+  "file://$SOURCE_REPO" \
+  "" \
+  "service_backend" \
+  "month2_canary"
+
+python3 - <<'PY' "$OUT_BAD_RUNTIME_IMPORTS"
+import json
+import sys
+
+data = json.load(open(sys.argv[1]))
+assert data["success"] is False, data
+assert data["verification_passed"] is False, data
 assert data["failure_family"] == "incomplete_patch", data
 PY
 
