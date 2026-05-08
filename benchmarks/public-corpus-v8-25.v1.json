@@ -1,0 +1,458 @@
+{
+  "version": "v1",
+  "tasks": [
+    {
+      "id": "GO-BF-001",
+      "title": "Add structured request-id logging middleware",
+      "track": "brownfield_feature",
+      "language": "go",
+      "repo_class": "service_backend",
+      "benchmark_family": "brownfield_primary",
+      "prompt": "Add request-id middleware to the existing HTTP server and thread the request id into structured logs without breaking current handlers.",
+      "repo": "https://github.com/gin-gonic/gin",
+      "source_url": "https://github.com/gin-gonic/gin",
+      "repo_ref": "d3ffc9985281dcf4d3bef604cce4e662b1a327a6",
+      "verification_command": "go test ./...",
+      "acceptance_criteria": [
+        "request id is attached to incoming requests",
+        "logs include the request id",
+        "existing tests still pass"
+      ]
+    },
+    {
+      "id": "TS-BF-001",
+      "title": "Add explicit retry telemetry to an async worker",
+      "track": "brownfield_feature",
+      "language": "typescript",
+      "repo_class": "cli_dev_tool",
+      "benchmark_family": "brownfield_primary",
+      "prompt": "Extend an existing TypeScript worker flow to emit retry telemetry without regressing current behavior.",
+      "repo": "https://github.com/vitest-dev/vitest",
+      "source_url": "https://github.com/vitest-dev/vitest",
+      "repo_ref": "ac04bac206f49d793e7277084f707aee718aa936",
+      "verification_command": "npx pnpm -C packages/vitest build && npx pnpm -C test/cli exec vitest --run test/worker-retry-telemetry.test.ts",
+      "acceptance_criteria": [
+        "retry telemetry is emitted on retry paths",
+        "non-retry paths stay unchanged",
+        "tests cover the new behavior"
+      ]
+    },
+    {
+      "id": "GO-BF-002",
+      "title": "Add graceful shutdown logging to worker service",
+      "track": "brownfield_feature",
+      "language": "go",
+      "repo_class": "service_backend",
+      "benchmark_family": "brownfield_primary",
+      "prompt": "Extend an existing Go worker service so graceful shutdown emits structured progress logging and does not regress existing worker behavior.",
+      "repo": "https://github.com/caddyserver/caddy",
+      "source_url": "https://github.com/caddyserver/caddy",
+      "repo_ref": "d7834676aac1c9718ca78ac4bab421f261fa789e",
+      "verification_command": "go test ./...",
+      "acceptance_criteria": [
+        "shutdown path emits structured log markers",
+        "existing worker/service behavior remains intact",
+        "tests verify the new shutdown behavior"
+      ]
+    },
+    {
+      "id": "TS-BF-002",
+      "title": "Add explicit cancellation tracing to async tasks",
+      "track": "brownfield_feature",
+      "language": "typescript",
+      "repo_class": "service_backend",
+      "benchmark_family": "brownfield_primary",
+      "prompt": "Extend an existing TypeScript async task flow to emit explicit cancellation tracing without changing success-path semantics.",
+      "repo": "https://github.com/nestjs/nest",
+      "source_url": "https://github.com/nestjs/nest",
+      "repo_ref": "f59cc55b6f9a130931706d18c1c77c598185a76f",
+      "verification_command": "./node_modules/.bin/mocha packages/common/test/module-utils/configurable-module.builder.spec.ts --require ts-node/register --require tsconfig-paths/register --require node_modules/reflect-metadata/Reflect.js --require hooks/mocha-init-hook.ts",
+      "acceptance_criteria": [
+        "cancellation path emits trace markers",
+        "success path stays behaviorally unchanged",
+        "tests verify cancellation handling"
+      ]
+    },
+    {
+      "id": "GO-BUG-001",
+      "title": "Fix stale timeout propagation in CLI path",
+      "track": "bugfix",
+      "language": "go",
+      "repo_class": "cli_dev_tool",
+      "benchmark_family": "brownfield_holdout",
+      "holdout": true,
+      "prompt": "Identify and fix a timeout propagation bug in an existing Go CLI/runtime path, then verify the regression with tests.",
+      "repo": "https://github.com/urfave/cli",
+      "source_url": "https://github.com/urfave/cli",
+      "repo_ref": "a9261cf1832b278c1c195c91f9ee961f5fc9554e",
+      "verification_command": "go test ./...",
+      "acceptance_criteria": [
+        "root cause is identified",
+        "regression test is added or updated",
+        "fix passes package tests"
+      ]
+    },
+    {
+      "id": "TS-BUG-001",
+      "title": "Fix a flaky watcher regression",
+      "track": "bugfix",
+      "language": "typescript",
+      "repo_class": "service_backend",
+      "benchmark_family": "brownfield_holdout",
+      "holdout": true,
+      "prompt": "Find and fix a flaky file-watcher regression in an existing TypeScript project and verify the fix with targeted tests.",
+      "repo": "https://github.com/vercel/next.js",
+      "source_url": "https://github.com/vercel/next.js",
+      "repo_ref": "2800d2a7af85ba28c75a447d418563e98a885a57",
+      "verification_command": "pnpm test -- --runInBand packages/next/src/lib/find-config.test.ts",
+      "acceptance_criteria": [
+        "root cause is explained",
+        "targeted regression coverage exists",
+        "the fix is validated by tests"
+      ]
+    },
+    {
+      "id": "GO-BUG-002",
+      "title": "Fix configuration reload regression",
+      "track": "bugfix",
+      "language": "go",
+      "repo_class": "service_backend",
+      "benchmark_family": "brownfield_holdout",
+      "holdout": true,
+      "prompt": "Identify and fix a configuration reload regression in a Go service and verify the fix with targeted regression coverage.",
+      "repo": "https://github.com/spf13/viper",
+      "source_url": "https://github.com/spf13/viper",
+      "repo_ref": "528f7416c4b56a4948673984b190bf8713f0c3c4",
+      "verification_command": "go test ./...",
+      "acceptance_criteria": [
+        "root cause is identified",
+        "regression test captures the bad behavior",
+        "reloaded configuration behaves correctly after the fix"
+      ]
+    },
+    {
+      "id": "V8-GO-BF-003",
+      "title": "Propagate middleware request metadata",
+      "track": "brownfield_feature",
+      "language": "go",
+      "repo_class": "service_backend",
+      "benchmark_family": "v8_public_first_freeze",
+      "prompt": "Extend the middleware stack so request metadata can be propagated to downstream middleware without changing normal routing or handler behavior.",
+      "repo": "https://github.com/go-chi/chi",
+      "source_url": "https://github.com/go-chi/chi",
+      "repo_ref": "a54874f0e2f12647a19e82ee70dfa8185014100c",
+      "verification_command": "go test ./...",
+      "acceptance_criteria": [
+        "metadata is available to downstream middleware",
+        "existing routing behavior remains unchanged",
+        "focused middleware tests cover the new behavior"
+      ]
+    },
+    {
+      "id": "V8-GO-BUG-003",
+      "title": "Preserve command error context",
+      "track": "bugfix",
+      "language": "go",
+      "repo_class": "cli_dev_tool",
+      "benchmark_family": "v8_public_first_freeze",
+      "prompt": "Fix a command or flag error propagation edge case so caller-visible errors preserve useful context without changing successful command execution.",
+      "repo": "https://github.com/spf13/cobra",
+      "source_url": "https://github.com/spf13/cobra",
+      "repo_ref": "ad460ea8f249db69c943a365fb84f3a59042d54e",
+      "verification_command": "go test ./...",
+      "acceptance_criteria": [
+        "the error propagation bug is covered by a regression test",
+        "caller-visible error context is preserved",
+        "successful command behavior remains unchanged"
+      ]
+    },
+    {
+      "id": "V8-GO-BUG-004",
+      "title": "Stabilize watcher rename/remove sequencing",
+      "track": "bugfix",
+      "language": "go",
+      "repo_class": "cli_dev_tool",
+      "benchmark_family": "v8_public_first_freeze",
+      "prompt": "Fix a watcher edge case around rename or remove sequencing and verify it with deterministic regression coverage.",
+      "repo": "https://github.com/fsnotify/fsnotify",
+      "source_url": "https://github.com/fsnotify/fsnotify",
+      "repo_ref": "58d0c04e1e157f143fd65e6a3e3e927ba7df81c7",
+      "verification_command": "go test ./...",
+      "acceptance_criteria": [
+        "the event sequence regression is captured by tests",
+        "the fix avoids broad timing assumptions",
+        "normal watcher behavior remains intact"
+      ]
+    },
+    {
+      "id": "V8-GO-BF-004",
+      "title": "Honor context cancellation in query path",
+      "track": "brownfield_feature",
+      "language": "go",
+      "repo_class": "data_or_infra_tooling",
+      "benchmark_family": "v8_public_first_freeze",
+      "prompt": "Extend a bounded query path so context cancellation is observable and handled cleanly while preserving successful query behavior.",
+      "repo": "https://github.com/go-gorm/gorm",
+      "source_url": "https://github.com/go-gorm/gorm",
+      "repo_ref": "33229296228898b311e868090f30eed169f1ae7a",
+      "verification_command": "go test ./...",
+      "acceptance_criteria": [
+        "cancellation behavior is covered by a focused test",
+        "successful query behavior is preserved",
+        "the change avoids unrelated ORM behavior churn"
+      ]
+    },
+    {
+      "id": "V8-MIX-BF-001",
+      "title": "Preserve deterministic YAML transformer behavior",
+      "track": "brownfield_feature",
+      "language": "go",
+      "repo_class": "mixed_config_tooling",
+      "benchmark_family": "v8_public_first_freeze",
+      "prompt": "Add or fix a deterministic transformer or configuration behavior with fixture coverage while avoiding broad output churn.",
+      "repo": "https://github.com/kubernetes-sigs/kustomize",
+      "source_url": "https://github.com/kubernetes-sigs/kustomize",
+      "repo_ref": "313aacedd3adcb6564fd362bcef52f5aa3abef85",
+      "verification_command": "cd kyaml && go test ./...",
+      "acceptance_criteria": [
+        "the transformer or configuration behavior is covered by a fixture test",
+        "the verification command is module-scoped",
+        "unrelated YAML output remains unchanged"
+      ]
+    },
+    {
+      "id": "V8-TS-BUG-003",
+      "title": "Fix abort timeout behavior",
+      "track": "bugfix",
+      "language": "typescript",
+      "repo_class": "service_backend",
+      "benchmark_family": "v8_public_first_freeze",
+      "prompt": "Fix an abort or timeout edge behavior in the request flow and cover it with a targeted regression test.",
+      "repo": "https://github.com/axios/axios",
+      "source_url": "https://github.com/axios/axios",
+      "repo_ref": "64e1095efedc64c9fecf5176bd9cf2e5e93140d6",
+      "verification_command": "npm exec -- vitest run --project unit",
+      "acceptance_criteria": [
+        "abort or timeout behavior is deterministic",
+        "a targeted regression test covers the edge case",
+        "normal request behavior remains unchanged"
+      ]
+    },
+    {
+      "id": "V8-JS-BUG-001",
+      "title": "Fix middleware error propagation",
+      "track": "bugfix",
+      "language": "javascript",
+      "repo_class": "service_backend",
+      "benchmark_family": "v8_public_first_freeze",
+      "prompt": "Fix a middleware error propagation edge case without changing normal routing semantics.",
+      "repo": "https://github.com/expressjs/express",
+      "source_url": "https://github.com/expressjs/express",
+      "repo_ref": "f873ac23124ffcff8c040b4bd257b32c29828d53",
+      "verification_command": "npm test",
+      "acceptance_criteria": [
+        "error middleware behavior is covered by a regression test",
+        "normal handler paths remain unchanged",
+        "existing route tests continue to pass"
+      ]
+    },
+    {
+      "id": "V8-TS-BF-003",
+      "title": "Extend lint rule fixture coverage",
+      "track": "brownfield_feature",
+      "language": "typescript",
+      "repo_class": "cli_dev_tool",
+      "benchmark_family": "v8_public_first_freeze",
+      "prompt": "Extend a lint rule or fixer path with focused fixture coverage while avoiding unrelated rule or formatting churn.",
+      "repo": "https://github.com/eslint/eslint",
+      "source_url": "https://github.com/eslint/eslint",
+      "repo_ref": "9e37386aa7f2ce220b2ef74a6afbac5f6b3527c5",
+      "verification_command": "npm test -- --grep rule",
+      "acceptance_criteria": [
+        "focused fixtures cover the new rule or fixer behavior",
+        "unrelated lint rules remain unchanged",
+        "existing CLI test behavior is preserved"
+      ]
+    },
+    {
+      "id": "V8-TS-BUG-004",
+      "title": "Fix client abort handling edge case",
+      "track": "bugfix",
+      "language": "typescript",
+      "repo_class": "service_backend",
+      "benchmark_family": "v8_public_first_freeze",
+      "prompt": "Fix an abort or cancellation edge behavior in client request handling and verify the behavior with a focused test.",
+      "repo": "https://github.com/nodejs/undici",
+      "source_url": "https://github.com/nodejs/undici",
+      "repo_ref": "397bc13d71942465e231518b80a3e533856cc283",
+      "verification_command": "npm run test:unit",
+      "acceptance_criteria": [
+        "abort or cancellation behavior is covered by a regression test",
+        "successful request behavior remains unchanged",
+        "the verification target stays focused"
+      ]
+    },
+    {
+      "id": "V8-MIX-BUG-001",
+      "title": "Fix command escaping in action toolkit output",
+      "track": "bugfix",
+      "language": "typescript",
+      "repo_class": "mixed_config_tooling",
+      "benchmark_family": "v8_public_first_freeze",
+      "prompt": "Fix a command escaping or annotation formatting edge behavior while preserving existing action-toolkit output conventions.",
+      "repo": "https://github.com/actions/toolkit",
+      "source_url": "https://github.com/actions/toolkit",
+      "repo_ref": "8066c8132268398c77366dae936dac12c03d39ee",
+      "verification_command": "npm test",
+      "acceptance_criteria": [
+        "escaped command or annotation behavior is covered by tests",
+        "existing output format is preserved",
+        "the change avoids unrelated package churn"
+      ]
+    },
+    {
+      "id": "V8-ALT-TS-001",
+      "title": "Fix formatter regression fixture",
+      "track": "bugfix",
+      "language": "javascript",
+      "repo_class": "cli_dev_tool",
+      "benchmark_family": "v8_public_first_freeze",
+      "prompt": "Fix a formatter regression with focused fixture coverage while avoiding unrelated snapshot or formatting churn.",
+      "repo": "https://github.com/prettier/prettier",
+      "source_url": "https://github.com/prettier/prettier",
+      "repo_ref": "870b6df76058cc6c1c23418524d0272141c50677",
+      "verification_command": "yarn jest",
+      "acceptance_criteria": [
+        "the formatter regression is covered by a focused fixture",
+        "unrelated snapshots are not rewritten",
+        "existing formatter tests continue to pass"
+      ]
+    },
+    {
+      "id": "V8-ALT-MIX-001",
+      "title": "Fix release-tooling configuration edge case",
+      "track": "bugfix",
+      "language": "javascript",
+      "repo_class": "mixed_config_tooling",
+      "benchmark_family": "v8_public_first_freeze",
+      "prompt": "Fix a release-tooling configuration edge case with focused tests while preserving existing release behavior.",
+      "repo": "https://github.com/semantic-release/semantic-release",
+      "source_url": "https://github.com/semantic-release/semantic-release",
+      "repo_ref": "eded7373fcb0e112cb7d8115c0437a7647bf5628",
+      "verification_command": "npm test",
+      "acceptance_criteria": [
+        "the configuration edge case is covered by tests",
+        "existing release behavior remains unchanged",
+        "the fix does not require external release credentials"
+      ]
+    },
+    {
+      "id": "V8-ADD-JS-001",
+      "title": "Fix CLI option parsing edge case",
+      "track": "bugfix",
+      "language": "javascript",
+      "repo_class": "cli_dev_tool",
+      "benchmark_family": "v8_public_first_freeze",
+      "prompt": "Fix a CLI option parsing edge case and verify it with targeted tests without changing normal command parsing behavior.",
+      "repo": "https://github.com/yargs/yargs",
+      "source_url": "https://github.com/yargs/yargs",
+      "repo_ref": "437f3a4e0f4166e1f1a3ce023b0331159582746d",
+      "verification_command": "npm test",
+      "acceptance_criteria": [
+        "the parsing edge case is covered by a focused test",
+        "normal command parsing remains unchanged",
+        "help or usage output is not churned unnecessarily"
+      ]
+    },
+    {
+      "id": "V8-DEF-TS-001",
+      "title": "Preserve state-tooling API compatibility",
+      "track": "brownfield_feature",
+      "language": "typescript",
+      "repo_class": "web_framework",
+      "benchmark_family": "v8_public_first_freeze",
+      "prompt": "Extend a state-tooling helper behavior while preserving public API compatibility and focused test coverage.",
+      "repo": "https://github.com/reduxjs/redux-toolkit",
+      "source_url": "https://github.com/reduxjs/redux-toolkit",
+      "repo_ref": "de2d55e1a2b0bcf8873d96f8ac6bb0f8d1aacce7",
+      "verification_command": "yarn test",
+      "acceptance_criteria": [
+        "the helper behavior is covered by focused tests",
+        "public API compatibility is preserved",
+        "existing state-tooling tests continue to pass"
+      ]
+    },
+    {
+      "id": "V8-DEF-TS-003",
+      "title": "Fix request mocking handler edge case",
+      "track": "bugfix",
+      "language": "typescript",
+      "repo_class": "web_framework",
+      "benchmark_family": "v8_public_first_freeze",
+      "prompt": "Fix a request mocking handler edge case and verify the fix with focused tests across the relevant runtime path.",
+      "repo": "https://github.com/mswjs/msw",
+      "source_url": "https://github.com/mswjs/msw",
+      "repo_ref": "c07e09b4b016928d18d5504fd6338c80c8f0ea0b",
+      "verification_command": "pnpm test",
+      "acceptance_criteria": [
+        "the handler edge case is covered by a regression test",
+        "existing request mocking semantics remain unchanged",
+        "the verification target stays focused"
+      ]
+    },
+    {
+      "id": "V8-PY-BUG-001",
+      "title": "Fix request option propagation",
+      "track": "bugfix",
+      "language": "python",
+      "repo_class": "service_backend",
+      "benchmark_family": "v8_public_first_freeze",
+      "prompt": "Fix a session or request option propagation edge case and verify it with focused regression coverage.",
+      "repo": "https://github.com/psf/requests",
+      "source_url": "https://github.com/psf/requests",
+      "repo_ref": "d60f4773b1f5932e2715b2c64b333649edbb405b",
+      "verification_command": "python -m pytest tests/test_requests.py -q",
+      "acceptance_criteria": [
+        "the option propagation edge case is covered by tests",
+        "existing request behavior remains unchanged",
+        "the focused pytest target passes"
+      ]
+    },
+    {
+      "id": "V8-PY-BUG-002",
+      "title": "Fix CLI parsing help output edge case",
+      "track": "bugfix",
+      "language": "python",
+      "repo_class": "cli_dev_tool",
+      "benchmark_family": "v8_public_first_freeze",
+      "prompt": "Fix a CLI parsing or help-output edge case and verify it with a focused pytest regression.",
+      "repo": "https://github.com/pallets/click",
+      "source_url": "https://github.com/pallets/click",
+      "repo_ref": "5b9630f50fde938b72ad8c99542efe3a6f5717e2",
+      "verification_command": "python -m pytest tests/test_parser.py -q",
+      "acceptance_criteria": [
+        "the parser or help-output edge case is covered by tests",
+        "existing CLI behavior remains unchanged",
+        "the focused pytest target passes"
+      ]
+    },
+    {
+      "id": "V8-PY-BF-001",
+      "title": "Preserve request context behavior",
+      "track": "brownfield_feature",
+      "language": "python",
+      "repo_class": "web_framework",
+      "benchmark_family": "v8_public_first_freeze",
+      "prompt": "Add observable request or app context behavior while preserving existing route semantics and focused test coverage.",
+      "repo": "https://github.com/pallets/flask",
+      "source_url": "https://github.com/pallets/flask",
+      "repo_ref": "7374c85ddefc3f4b177a698ab9f0cbb6a5c0b392",
+      "verification_command": "python -m pytest tests/test_basic.py -q",
+      "acceptance_criteria": [
+        "request or app context behavior is covered by a focused test",
+        "normal route behavior is preserved",
+        "the focused pytest target passes"
+      ]
+    }
+  ]
+}

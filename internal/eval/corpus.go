@@ -29,7 +29,7 @@ func validTrack(track Track) bool {
 
 func validLanguage(language Language) bool {
 	switch language {
-	case LanguageGo, LanguageTypeScript:
+	case LanguageGo, LanguageTypeScript, LanguageJavaScript, LanguagePython:
 		return true
 	default:
 		return false
