@@ -33,6 +33,7 @@ if expected_cmd not in baseline_text:
 required_current_guidance = [
     "Preserve existing public async-options fields such as `provideInjectionTokensFrom`",
     "Do not replace public option fields",
+    "Do not add or replace public option fields with `onCancellation`",
     "focused cancellation tracing regression test",
     "preserve success-path behavior",
     "Avoid import-style rewrites unless verification output proves they are necessary",
@@ -70,6 +71,32 @@ missing_no_change = [snippet for snippet in required_no_change_recovery if snipp
 if missing_no_change:
     raise SystemExit("current wrapper missing TS-BF-002 no-change recovery guidance: " + ", ".join(missing_no_change))
 
+recovery_start = current_guidance.index("TS-BF-002 recovery guard:")
+recovery_end = current_guidance.index("RECOVERY_ATTEMPTED=true", recovery_start)
+recovery_block = current_guidance[recovery_start:recovery_end]
+required_recovery_guidance = [
+    "fix every runtime directory import used by the focused spec",
+    "../../module-utils",
+    "ConfigurableModuleBuilder",
+    "import/module-resolution fixes are not completion",
+    "If verification already passes but TS-BF-002 task-specific evidence is missing, add the missing focused cancellation regression before touching module imports",
+    "Rerun the exact TS-BF-002 Mocha verification command after final import/test edits",
+    expected_cmd,
+    "Do not claim completion if verification still fails before semantic assertions",
+]
+missing_recovery = [snippet for snippet in required_recovery_guidance if snippet not in recovery_block]
+if missing_recovery:
+    raise SystemExit("current wrapper missing TS-BF-002 import-recovery completion guidance: " + ", ".join(missing_recovery))
+
+required_prompt_wiring = [
+    'TASK_SPECIFIC_PROMPT+="$(ts_bf002_recovery_guidance)"',
+    'VERIFIED_INCOMPLETE_PROMPT+="$(ts_bf002_recovery_guidance)"',
+    'RECOVERY_PROMPT+="$(ts_bf002_recovery_guidance)"',
+]
+missing_wiring = [snippet for snippet in required_prompt_wiring if snippet not in current_text]
+if missing_wiring:
+    raise SystemExit("TS-BF-002 recovery guidance is not wired into every recovery path: " + ", ".join(missing_wiring))
+
 guard_start = current_text.index("is_ts_bf002_nestjs_task()")
 guard_end = current_text.index("ts_bf002_missing_focused_regression()", guard_start)
 guard_body = current_text[guard_start:guard_end]
@@ -99,13 +126,52 @@ cat >"$SOURCE_REPO/fail.js" <<'EOF'
 console.error("Error: Cannot find module '/repo/packages/common/module-utils/configurable-module.builder' imported from /repo/packages/common/test/module-utils/configurable-module.builder.spec.ts");
 process.exit(1);
 EOF
+mkdir -p "$SOURCE_REPO/packages/common/module-utils/interfaces"
+cat > "$SOURCE_REPO/packages/common/module-utils/interfaces/configurable-module-async-options.interface.ts" <<'TS'
+export interface ConfigurableModuleAsyncOptions {
+  provideInjectionTokensFrom?: unknown[];
+}
+TS
 git -C "$SOURCE_REPO" init -q
 git -C "$SOURCE_REPO" add .
 git -C "$SOURCE_REPO" -c user.name='Test User' -c user.email='test@example.com' commit -qm "init"
 
+SOURCE_REPO_WITH_ONCANCELLATION="$TMP_DIR/source-repo-with-oncancellation"
+cp -R "$SOURCE_REPO" "$SOURCE_REPO_WITH_ONCANCELLATION"
+mkdir -p "$SOURCE_REPO_WITH_ONCANCELLATION/packages/common/module-utils/interfaces"
+cat > "$SOURCE_REPO_WITH_ONCANCELLATION/packages/common/module-utils/interfaces/configurable-module-async-options.interface.ts" <<'TS'
+export interface ConfigurableModuleAsyncOptions {
+  onCancellation?: (reason: unknown) => void;
+  provideInjectionTokensFrom?: unknown[];
+}
+TS
+git -C "$SOURCE_REPO_WITH_ONCANCELLATION" add .
+git -C "$SOURCE_REPO_WITH_ONCANCELLATION" -c user.name='Test User' -c user.email='test@example.com' commit -qm "seed existing onCancellation"
+
 cat >"$TMP_DIR/fake-elnath.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ "${FAKE_PRODUCTION_ONLY_PASS:-}" == "1" ]]; then
+  mkdir -p \
+    packages/common/module-utils \
+    node_modules/.bin
+  cat > packages/common/module-utils/configurable-module.builder.ts <<'TS'
+export class ConfigurableModuleBuilder {
+  traceCancellation(error: unknown) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      return error.message;
+    }
+  }
+}
+TS
+  cat > node_modules/.bin/mocha <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+  chmod +x node_modules/.bin/mocha
+  echo "I added cancellation tracing in module-utils."
+  exit 0
+fi
 mkdir -p \
   packages/common/module-utils/interfaces \
   packages/common/test/module-utils
@@ -115,7 +181,15 @@ if [[ "${FAKE_MANY_UNTRACKED:-}" == "1" ]]; then
     printf 'generated %s\n' "$i" > "aaa-generated/file-$i.txt"
   done
 fi
-if [[ "${FAKE_ADJACENT_REGRESSION:-}" == "1" ]]; then
+if [[ "${FAKE_EXISTING_ONCANCELLATION:-}" == "1" ]]; then
+  :
+elif [[ "${FAKE_ADJACENT_REGRESSION:-}" == "1" ]]; then
+  cat > packages/common/module-utils/interfaces/configurable-module-async-options.interface.ts <<'TS'
+export interface ConfigurableModuleAsyncOptions {
+  provideInjectionTokensFrom?: unknown[];
+}
+TS
+elif [[ "${FAKE_PUBLIC_OPTION_CHURN:-}" == "1" ]]; then
   cat > packages/common/module-utils/interfaces/configurable-module-async-options.interface.ts <<'TS'
 export interface ConfigurableModuleAsyncOptions {
   onCancellation?: (reason: unknown) => void;
@@ -135,6 +209,12 @@ const { ConfigurableModuleBuilder } = require('../../module-utils');
 type Provider = import('../../interfaces').Provider;
 TS
 if [[ "${FAKE_ADJACENT_REGRESSION:-}" == "1" ]]; then
+  cat > packages/common/test/module-utils/configurable-module.cancellation.spec.ts <<'TS'
+describe('ConfigurableModuleBuilder cancellation tracing', () => {
+  it('keeps AbortError cancellation tracing focused on async options', () => {});
+});
+TS
+elif [[ "${FAKE_PUBLIC_OPTION_CHURN:-}" == "1" ]]; then
   cat > packages/common/test/module-utils/configurable-module.cancellation.spec.ts <<'TS'
 describe('ConfigurableModuleBuilder cancellation tracing', () => {
   it('keeps AbortError cancellation tracing focused on async options', () => {});
@@ -255,6 +335,87 @@ data = json.load(open(sys.argv[1]))
 assert data["success"] is False, data
 assert data["verification_passed"] is False, data
 assert data["failure_family"] == "verification_failed", data
+PY
+
+OUT_PUBLIC_CHURN="$TMP_DIR/ts-bf002-public-option-churn-result.json"
+
+FAKE_PUBLIC_OPTION_CHURN=1 \
+ELNATH_BIN="$TMP_DIR/fake-elnath.sh" \
+ELNATH_TIMEOUT=30 \
+ELNATH_BENCHMARK_PERMISSION_MODE=bypass \
+HOME="$TMP_DIR/host-home" \
+"$CURRENT_WRAPPER" \
+  "$OUT_PUBLIC_CHURN" \
+  "TS-BF-002" \
+  "brownfield_feature" \
+  "typescript" \
+  "Extend an existing TypeScript async task flow to emit explicit cancellation tracing without changing success-path semantics." \
+  "file://$SOURCE_REPO" \
+  "" \
+  "service_backend" \
+  "month2_canary"
+
+python3 - <<'PY' "$OUT_PUBLIC_CHURN"
+import json
+import sys
+
+data = json.load(open(sys.argv[1]))
+assert data["success"] is False, data
+assert data["failure_family"] == "incomplete_patch", data
+PY
+
+OUT_EXISTING_ONCANCELLATION="$TMP_DIR/ts-bf002-existing-oncancellation-result.json"
+
+FAKE_EXISTING_ONCANCELLATION=1 \
+ELNATH_BIN="$TMP_DIR/fake-elnath.sh" \
+ELNATH_TIMEOUT=30 \
+ELNATH_BENCHMARK_PERMISSION_MODE=bypass \
+HOME="$TMP_DIR/host-home" \
+"$CURRENT_WRAPPER" \
+  "$OUT_EXISTING_ONCANCELLATION" \
+  "TS-BF-002" \
+  "brownfield_feature" \
+  "typescript" \
+  "Extend an existing TypeScript async task flow to emit explicit cancellation tracing without changing success-path semantics." \
+  "file://$SOURCE_REPO_WITH_ONCANCELLATION" \
+  "" \
+  "service_backend" \
+  "month2_canary"
+
+python3 - <<'PY' "$OUT_EXISTING_ONCANCELLATION"
+import json
+import sys
+
+data = json.load(open(sys.argv[1]))
+assert data["failure_family"] != "incomplete_patch", data
+PY
+
+OUT_PASS_NO_REGRESSION="$TMP_DIR/ts-bf002-pass-without-regression-result.json"
+
+FAKE_PRODUCTION_ONLY_PASS=1 \
+ELNATH_BIN="$TMP_DIR/fake-elnath.sh" \
+ELNATH_TIMEOUT=30 \
+ELNATH_BENCHMARK_PERMISSION_MODE=bypass \
+HOME="$TMP_DIR/host-home" \
+"$CURRENT_WRAPPER" \
+  "$OUT_PASS_NO_REGRESSION" \
+  "TS-BF-002" \
+  "brownfield_feature" \
+  "typescript" \
+  "Extend an existing TypeScript async task flow to emit explicit cancellation tracing without changing success-path semantics." \
+  "file://$SOURCE_REPO" \
+  "" \
+  "service_backend" \
+  "month2_canary"
+
+python3 - <<'PY' "$OUT_PASS_NO_REGRESSION"
+import json
+import sys
+
+data = json.load(open(sys.argv[1]))
+assert data["success"] is False, data
+assert data["verification_passed"] is True, data
+assert data["failure_family"] == "incomplete_patch", data
 PY
 
 echo "PASS: TS-BF-002 import-churn recovery is classified as incomplete_patch"
