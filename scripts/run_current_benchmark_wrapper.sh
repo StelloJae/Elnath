@@ -409,6 +409,27 @@ TS-BF-002 no-change recovery guard:
 EOF
 }
 
+ts_bf002_recovery_guidance() {
+  is_ts_bf002_nestjs_task || return 0
+  cat <<'EOF'
+
+TS-BF-002 recovery guard:
+- Keep the semantic cancellation tracing regression test intact while fixing verification errors.
+- Do not treat import/module-resolution churn as progress if the cancellation tracing regression is still missing.
+- import/module-resolution fixes are not completion unless the focused cancellation regression exists and remains intact.
+- If verification already passes but TS-BF-002 task-specific evidence is missing, add the missing focused cancellation regression before touching module imports.
+- Preserve the existing TypeScript/ESM import style in `configurable-module.builder.spec.ts`; do not convert the spec to bare CommonJS `require(...)`.
+- If avoiding a directory import error requires a runtime import adjustment, use a minimal `createRequire(import.meta.url)` bridge for that one runtime import and keep type imports type-only.
+- If verification reports `ERR_UNSUPPORTED_DIR_IMPORT`, inspect and fix every runtime directory import used by the focused spec, not just the first reported import.
+- Keep `../../interfaces` type-only when possible; `../../module-utils` is runtime-used for `ConfigurableModuleBuilder` and must resolve under the narrow Mocha command.
+- Rerun the exact TS-BF-002 Mocha verification command after final import/test edits: ./node_modules/.bin/mocha packages/common/test/module-utils/configurable-module.builder.spec.ts --require ts-node/register --require tsconfig-paths/register --require node_modules/reflect-metadata/Reflect.js --require hooks/mocha-init-hook.ts
+- Do not claim completion if verification still fails before semantic assertions.
+- Preserve existing public async-options fields such as `provideInjectionTokensFrom`; do not replace public fields with `onCancellation` or any unrelated new option.
+- Do not add or replace public option fields with `onCancellation`.
+- If you must change imports, keep the change minimal and verify with the same narrow Mocha command.
+EOF
+}
+
 go_bf002_recovery_guidance() {
   [[ "$TASK_ID" == "GO-BF-002" ]] || return 0
   cat <<'EOF'
@@ -683,12 +704,19 @@ ts_bf002_missing_focused_regression() {
   return 0
 }
 
+ts_bf002_production_diff_without_focused_regression() {
+  is_ts_bf002_nestjs_task || return 1
+  benchmark_changed_files_all | grep -qx 'packages/common/module-utils/configurable-module.builder.ts' || return 1
+  ts_bf002_missing_focused_regression
+}
+
 ts_bf002_public_async_option_regression() {
-  local interface_path="$WORKTREE/packages/common/module-utils/interfaces/configurable-module-async-options.interface.ts"
-  if [[ ! -f "$interface_path" ]]; then
-    return 1
-  fi
-  grep -q 'onCancellation' "$interface_path" && ! grep -q 'provideInjectionTokensFrom' "$interface_path"
+  is_ts_bf002_nestjs_task || return 1
+  (
+    cd "$WORKTREE"
+    git diff -- packages/common/module-utils/interfaces/configurable-module-async-options.interface.ts |
+      grep -Eq '^\+[^+].*onCancellation|^-[^-].*provideInjectionTokensFrom'
+  )
 }
 
 ts_bf002_import_churn_after_recovery() {
@@ -709,6 +737,9 @@ ts_bf002_import_churn_after_recovery() {
 ts_bf002_incomplete_patch_after_failed_recovery() {
   is_ts_bf002_nestjs_task || return 1
   if ts_bf002_public_async_option_regression; then
+    return 0
+  fi
+  if ts_bf002_production_diff_without_focused_regression; then
     return 0
   fi
   if ts_bf002_import_churn_after_recovery && ts_bf002_missing_focused_regression; then
@@ -827,6 +858,10 @@ write_passed_verification_task_specific_failure() {
     write_result false true "incomplete_patch" "$recovery_attempted" false "$prefix, but GO-BUG-002 regression asserts brittle internal configFile state after ReadInConfig"
     return 0
   fi
+  if ts_bf002_production_diff_without_focused_regression; then
+    write_result false true "incomplete_patch" "$recovery_attempted" false "$prefix, but TS-BF-002 changed module-utils behavior without focused cancellation regression coverage"
+    return 0
+  fi
   return 1
 }
 
@@ -843,6 +878,10 @@ task_specific_completion_failure_reason() {
     echo "GO-BUG-002 regression asserts brittle internal configFile state after ReadInConfig instead of observable reload behavior."
     return 0
   fi
+  if ts_bf002_production_diff_without_focused_regression; then
+    echo "TS-BF-002 changed module-utils behavior without focused cancellation regression coverage."
+    return 0
+  fi
   return 1
 }
 
@@ -857,6 +896,7 @@ recover_passed_task_specific_failure() {
   TASK_SPECIFIC_PROMPT+="$(recovery_completion_checklist)"
   TASK_SPECIFIC_PROMPT+="$(ts_bf001_recovery_guidance)"
   TASK_SPECIFIC_PROMPT+="$(ts_bf002_no_change_recovery_guidance)"
+  TASK_SPECIFIC_PROMPT+="$(ts_bf002_recovery_guidance)"
   TASK_SPECIFIC_PROMPT+="$(go_bf001_recovery_guidance)"
   TASK_SPECIFIC_PROMPT+="$(go_bf002_recovery_guidance)"
   TASK_SPECIFIC_PROMPT+="$(go_bug001_recovery_guidance)"
@@ -1380,6 +1420,7 @@ NestJS-specific guidance:
 - Avoid GraphQL/Mongoose/TypeORM integration suites unless your patch truly requires them; start with the shared common module-utils seam.
 - Benchmark TS-BF-002 cancellation tracing guidance:
   - Preserve existing public async-options fields such as \`provideInjectionTokensFrom\`; do not remove or replace them while adding cancellation tracing.
+  - Do not add or replace public option fields with \`onCancellation\` or unrelated cancellation-specific knobs.
   - Do not replace public option fields with unrelated new fields just to expose cancellation tracing.
   - Add a focused cancellation tracing regression test in \`packages/common/test/module-utils/configurable-module.builder.spec.ts\` or an adjacent common module-utils spec.
   - The regression should prove the cancellation/error tracing path and preserve success-path behavior.
@@ -1510,6 +1551,7 @@ if run_verification_command "$VERIFY_LOG"; then
       VERIFIED_INCOMPLETE_PROMPT+="$(recovery_completion_checklist)"
       VERIFIED_INCOMPLETE_PROMPT+="$(ts_bf001_recovery_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(ts_bf002_no_change_recovery_guidance)"
+      VERIFIED_INCOMPLETE_PROMPT+="$(ts_bf002_recovery_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(go_bf001_recovery_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(go_bf002_recovery_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(go_bug001_recovery_guidance)"
@@ -1573,21 +1615,12 @@ printf -v RECOVERY_PROMPT '%s\n\n%s\n\nVerification output (last 50 lines):\n```
 RECOVERY_PROMPT+="$(typescript_recovery_checklist)"
 RECOVERY_PROMPT+="$(recovery_completion_checklist)"
 RECOVERY_PROMPT+="$(ts_bf001_recovery_guidance)"
+RECOVERY_PROMPT+="$(ts_bf002_no_change_recovery_guidance)"
+RECOVERY_PROMPT+="$(ts_bf002_recovery_guidance)"
 RECOVERY_PROMPT+="$(go_bf001_recovery_guidance)"
 RECOVERY_PROMPT+="$(go_bf002_recovery_guidance)"
 RECOVERY_PROMPT+="$(go_bug001_recovery_guidance)"
 RECOVERY_PROMPT+="$(go_bug002_recovery_guidance)"
-if is_ts_bf002_nestjs_task; then
-  RECOVERY_PROMPT+="
-
-TS-BF-002 recovery guard:
-- Keep the semantic cancellation tracing regression test intact while fixing verification errors.
-- Do not treat import/module-resolution churn as progress if the cancellation tracing regression is still missing.
-- Preserve the existing TypeScript/ESM import style in \`configurable-module.builder.spec.ts\`; do not convert the spec to bare CommonJS \`require(...)\`.
-- If avoiding a directory import error requires a runtime import adjustment, use a minimal \`createRequire(import.meta.url)\` bridge for that one runtime import and keep type imports type-only.
-- Preserve existing public async-options fields such as \`provideInjectionTokensFrom\`; do not replace public fields with \`onCancellation\` or any unrelated new option.
-- If you must change imports, keep the change minimal and verify with the same narrow Mocha command."
-fi
 RECOVERY_ATTEMPTED=true
 RECOVERY_EXIT=0
 RECOVERY_TIMEOUT=$(task_recovery_timeout)
