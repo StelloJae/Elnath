@@ -31,6 +31,8 @@ required_current = [
     "`pytest.raises(TypeError)` for unsupported `rel` / `nan_ok` arguments",
     "In no-change recovery, stop re-reading once `ApproxScalar`, the `approx()` factory, and the nearby `TestApprox` tests are identified",
     "is_v8_py_th001_pytest_task",
+    "abs=timedelta(seconds=2)",
+    "abs=datetime.timedelta(seconds=2)",
     "V8-GO-BUG-004 fsnotify inotify guidance:",
     "`backend_inotify.go`",
     "`IN_MOVE_SELF`, `IN_DELETE_SELF`",

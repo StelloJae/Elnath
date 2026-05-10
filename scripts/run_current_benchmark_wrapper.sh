@@ -808,8 +808,12 @@ v8_py_th001_missing_behavior_or_regression() {
   is_v8_py_th001_pytest_task || return 1
   benchmark_changed_files_all | grep -qx 'src/_pytest/python_api.py' || return 0
   benchmark_changed_files_all | grep -qx 'testing/python/approx.py' || return 0
-  git -C "$WORKTREE" diff -- testing/python/approx.py \
-    | grep -Eq '^\+.*(datetime|timedelta|pytest\.raises|approx\()' || return 0
+  local test_diff
+  test_diff="$(git -C "$WORKTREE" diff -- testing/python/approx.py)"
+  grep -Eq '^\+.*datetime' <<<"$test_diff" || return 0
+  grep -Eq '^\+.*timedelta' <<<"$test_diff" || return 0
+  grep -Eq '^\+.*abs[[:space:]]*=[[:space:]]*([A-Za-z_][A-Za-z0-9_]*\.)?timedelta\(' <<<"$test_diff" || return 0
+  grep -Eq '^\+.*pytest\.raises\(TypeError' <<<"$test_diff" || return 0
   return 1
 }
 
@@ -1166,7 +1170,7 @@ recover_passed_task_specific_failure() {
       "Task ID: ${TASK_ID}" \
       "The verification command '${VERIFY_CMD}' passed, but the benchmark guard rejected the patch: ${reason}" \
       "Do not re-open or rework production code unless the test file requires an import. Keep the existing production diff intact and immediately edit only 'testing/python/approx.py' to add focused datetime/timedelta pytest.approx assertions." \
-      "Add tests for datetime within tolerance, datetime outside tolerance, timedelta within/outside tolerance, and pytest.raises(TypeError) for unsupported rel / nan_ok. Then run '${VERIFY_CMD}' and finish only if both 'src/_pytest/python_api.py' and 'testing/python/approx.py' are changed."
+      "Add tests for datetime within tolerance, datetime outside tolerance, timedelta within/outside tolerance, and pytest.raises(TypeError) for unsupported rel / nan_ok. Use explicit timedelta tolerance such as 'abs=timedelta(seconds=2)' or 'abs=datetime.timedelta(seconds=2)', not a numeric 'abs=2'. Then run '${VERIFY_CMD}' and finish only if both 'src/_pytest/python_api.py' and 'testing/python/approx.py' are changed."
   else
     printf -v TASK_SPECIFIC_PROMPT '%s\n\n%s\n\n%s' \
       "$BENCHMARK_PROMPT" \
