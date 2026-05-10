@@ -35,6 +35,19 @@ required_current = [
     "`backend_inotify.go`",
     "`IN_MOVE_SELF`, `IN_DELETE_SELF`",
     "is_v8_go_bug004_fsnotify_task",
+    "V8-GO-BUG-003 cobra command error guidance:",
+    "`Command.Traverse` around the `ParseFlags(flags)` error path",
+    "c.FlagErrorFunc()(c, err)",
+    "is_v8_go_bug003_cobra_task",
+    "V8-PY-BUG-001 requests option propagation guidance:",
+    "`Session.merge_environment_settings`",
+    "`Session.verify = False` is not overwritten by `REQUESTS_CA_BUNDLE`",
+    "is_v8_py_bug001_requests_task",
+    "No-change recovery discipline:",
+    "If you are about to say you will apply a patch, apply it now.",
+    "Do not re-open or rework production code unless the test file requires an import.",
+    "immediately edit only 'testing/python/approx.py'",
+    "finish only if both 'src/_pytest/python_api.py' and 'testing/python/approx.py' are changed",
     "V8-PY-TH-001 lacks the required pytest approx behavior diff plus focused datetime/timedelta regression coverage pair",
 ]
 missing_current = [snippet for snippet in required_current if snippet not in current]
@@ -45,6 +58,8 @@ for forbidden in [
     "V8-JS-BUG-001 express mounted-app guidance:",
     "V8-PY-TH-001 pytest approx guidance:",
     "V8-GO-BUG-004 fsnotify inotify guidance:",
+    "V8-GO-BUG-003 cobra command error guidance:",
+    "V8-PY-BUG-001 requests option propagation guidance:",
 ]:
     if forbidden in baseline:
         raise SystemExit("baseline wrapper should not receive current-side guidance: " + forbidden)
