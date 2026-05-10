@@ -131,7 +131,7 @@ func TestAdviseSimilarRates(t *testing.T) {
 func TestAdviseMultipleIntents(t *testing.T) {
 	dir := t.TempDir()
 	store := NewOutcomeStore(dir + "/outcomes.jsonl")
-	advisor := NewRoutingAdvisor(store)
+	advisor := NewRoutingAdvisorWithConfig(store, 40, 5)
 
 	// complex: ralph wins
 	appendN(t, store, "proj", "complex", "ralph", 10, 9)

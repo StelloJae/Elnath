@@ -362,6 +362,12 @@ is_v8_go_bf003_chi_task() {
   }
 }
 
+is_v8_go_bf004_gorm_context_task() {
+  [[ "$TASK_ID" == "V8-GO-BF-004" ]] || {
+    [[ "$TASK_REPO" == *"go-gorm/gorm"* && "$TASK_PROMPT" == *"context cancellation"* ]]
+  }
+}
+
 is_v8_ts_bug003_axios_task() {
   [[ "$TASK_ID" == "V8-TS-BUG-003" ]] || {
     [[ "$TASK_REPO" == *"axios/axios"* && "$TASK_PROMPT" == *"abort or timeout"* ]]
@@ -441,7 +447,7 @@ EOF
 }
 
 task_recovery_timeout() {
-  if is_ts_bf001_vitest_task || is_ts_bf002_nestjs_task || is_v8_py_th001_pytest_task || is_v8_go_bug004_fsnotify_task || is_v8_go_bug003_cobra_task || is_v8_py_bug001_requests_task; then
+  if is_ts_bf001_vitest_task || is_ts_bf002_nestjs_task || is_v8_py_th001_pytest_task || is_v8_go_bug004_fsnotify_task || is_v8_go_bug003_cobra_task || is_v8_go_bf004_gorm_context_task || is_v8_py_bug001_requests_task; then
     printf '%s\n' "$ELNATH_TIMEOUT"
     return 0
   fi
@@ -558,6 +564,21 @@ V8-GO-BF-003 chi request metadata guidance:
 - The task requires observable request metadata behavior plus focused regression coverage.
 - A diff without a focused Go test is incomplete even if `go test ./...` passes.
 - Prefer the smallest production change that makes route/request metadata visible to downstream middleware while preserving existing route and handler semantics.
+- Run `go test ./...` before the final answer.
+EOF
+}
+
+v8_go_bf004_gorm_context_guidance() {
+  is_v8_go_bf004_gorm_context_task || return 0
+  cat <<'EOF'
+
+V8-GO-BF-004 GORM context cancellation guidance:
+- Start in `callbacks/query.go`, especially `Query(db *gorm.DB)` before `BuildQuerySQL(db)` and row execution.
+- The high-signal production seam is checking `db.Statement.Context.Err()` and adding that error before query SQL is built/executed when the context is already canceled.
+- Add focused coverage in `tests/query_test.go`; a compact regression should cancel a context, call `DB.WithContext(ctx).Where(...).First(&user)`, and assert `errors.Is(err, context.Canceled)`.
+- If `go test ./...` initially fails only in `logger/slog_test.go` because the caller path differs in a shallow benchmark clone, fix that test expectation to a repository-location-agnostic suffix such as `logger/slog_test.go`; do not change logger runtime behavior for this task.
+- Do not drift into broad `finisher_api.go`, `utils`, or generic scan rewrites unless the focused canceled-context regression proves the query callback seam cannot satisfy the task.
+- In no-change recovery, stop re-reading once `callbacks/query.go`, `tests/query_test.go`, and any clone-path-only logger test failure are identified; apply the small production+test patch before further exploration.
 - Run `go test ./...` before the final answer.
 EOF
 }
@@ -1187,6 +1208,7 @@ recover_passed_task_specific_failure() {
     TASK_SPECIFIC_PROMPT+="$(ts_bf002_recovery_guidance)"
     TASK_SPECIFIC_PROMPT+="$(go_bf001_recovery_guidance)"
     TASK_SPECIFIC_PROMPT+="$(v8_go_bf003_recovery_guidance)"
+    TASK_SPECIFIC_PROMPT+="$(v8_go_bf004_gorm_context_guidance)"
     TASK_SPECIFIC_PROMPT+="$(v8_js_bug001_express_guidance)"
     TASK_SPECIFIC_PROMPT+="$(v8_py_th001_pytest_guidance)"
     TASK_SPECIFIC_PROMPT+="$(v8_go_bug004_fsnotify_guidance)"
@@ -1783,6 +1805,7 @@ This task appears to target worker/runtime transport files. Prefer hinted worker
 fi
 BENCHMARK_PROMPT+="$(go_bf001_recovery_guidance)"
 BENCHMARK_PROMPT+="$(v8_go_bf003_recovery_guidance)"
+BENCHMARK_PROMPT+="$(v8_go_bf004_gorm_context_guidance)"
 BENCHMARK_PROMPT+="$(v8_js_bug001_express_guidance)"
 BENCHMARK_PROMPT+="$(v8_py_th001_pytest_guidance)"
 BENCHMARK_PROMPT+="$(v8_go_bug004_fsnotify_guidance)"
@@ -1924,6 +1947,7 @@ if [[ "$HAS_CHANGES" == "false" ]]; then
   NO_CHANGE_PROMPT+="$(ts_bf002_no_change_recovery_guidance)"
   NO_CHANGE_PROMPT+="$(go_bf001_recovery_guidance)"
   NO_CHANGE_PROMPT+="$(v8_go_bf003_recovery_guidance)"
+  NO_CHANGE_PROMPT+="$(v8_go_bf004_gorm_context_guidance)"
   NO_CHANGE_PROMPT+="$(v8_js_bug001_express_guidance)"
   NO_CHANGE_PROMPT+="$(v8_py_th001_pytest_guidance)"
   NO_CHANGE_PROMPT+="$(v8_go_bug004_fsnotify_guidance)"
@@ -1994,6 +2018,7 @@ if run_verification_command "$VERIFY_LOG"; then
       VERIFIED_INCOMPLETE_PROMPT+="$(ts_bf002_recovery_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(go_bf001_recovery_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(v8_go_bf003_recovery_guidance)"
+      VERIFIED_INCOMPLETE_PROMPT+="$(v8_go_bf004_gorm_context_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(v8_js_bug001_express_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(v8_py_th001_pytest_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(v8_go_bug004_fsnotify_guidance)"
@@ -2067,6 +2092,7 @@ RECOVERY_PROMPT+="$(ts_bf002_no_change_recovery_guidance)"
 RECOVERY_PROMPT+="$(ts_bf002_recovery_guidance)"
 RECOVERY_PROMPT+="$(go_bf001_recovery_guidance)"
 RECOVERY_PROMPT+="$(v8_go_bf003_recovery_guidance)"
+RECOVERY_PROMPT+="$(v8_go_bf004_gorm_context_guidance)"
 RECOVERY_PROMPT+="$(v8_js_bug001_express_guidance)"
 RECOVERY_PROMPT+="$(v8_py_th001_pytest_guidance)"
 RECOVERY_PROMPT+="$(v8_go_bug004_fsnotify_guidance)"
