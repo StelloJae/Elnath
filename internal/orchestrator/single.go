@@ -90,6 +90,12 @@ func agentOptions(cfg WorkflowConfig, session *agent.Session) []agent.Option {
 	if cfg.SystemPrompt != "" {
 		opts = append(opts, agent.WithSystemPrompt(cfg.SystemPrompt))
 	}
+	if cfg.ReasoningEffort != "" {
+		opts = append(opts, agent.WithReasoningEffort(cfg.ReasoningEffort))
+	}
+	if cfg.ReasoningEffortMode != "" {
+		opts = append(opts, agent.WithReasoningEffortMode(cfg.ReasoningEffortMode))
+	}
 	if cfg.MaxIterations > 0 {
 		opts = append(opts, agent.WithMaxIterations(cfg.MaxIterations))
 	}

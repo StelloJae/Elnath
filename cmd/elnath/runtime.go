@@ -543,6 +543,8 @@ func buildExecutionRuntime(
 		Model:                model,
 		MaxIterations:        maxIterationsFromEnv(),
 		SystemPrompt:         "",
+		ReasoningEffort:      cfg.Reasoning.Effort,
+		ReasoningEffortMode:  cfg.Reasoning.EffortMode,
 		Hooks:                hooks,
 		Permission:           perm,
 		ContextWindow:        wrappedCtxWindow,

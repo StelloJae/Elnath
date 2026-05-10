@@ -42,6 +42,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Research.MaxRounds <= 0 {
 		t.Error("Research.MaxRounds should be positive")
 	}
+	if cfg.Reasoning.EffortMode != "manual" {
+		t.Errorf("expected Reasoning.EffortMode default %q, got %q", "manual", cfg.Reasoning.EffortMode)
+	}
 	if cfg.LLMExtraction.MinMessages != 5 {
 		t.Errorf("expected LLMExtraction.MinMessages %d, got %d", 5, cfg.LLMExtraction.MinMessages)
 	}
@@ -170,6 +173,38 @@ func TestLoad_OpenAIResponsesConfig(t *testing.T) {
 	}
 	if cfg.OpenAIResponses.ReasoningEffort != "high" {
 		t.Fatalf("OpenAIResponses.ReasoningEffort = %q, want high", cfg.OpenAIResponses.ReasoningEffort)
+	}
+}
+
+func TestLoad_ReasoningConfig(t *testing.T) {
+	dir := t.TempDir()
+	wikiDir := filepath.Join(dir, "wiki")
+	if err := os.MkdirAll(wikiDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	yaml := strings.Join([]string{
+		"data_dir: " + dir,
+		"wiki_dir: " + wikiDir,
+		"reasoning:",
+		"  effort_mode: auto",
+		"  effort: medium",
+		"",
+	}, "\n")
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.Reasoning.EffortMode != "auto" {
+		t.Fatalf("Reasoning.EffortMode = %q, want auto", cfg.Reasoning.EffortMode)
+	}
+	if cfg.Reasoning.Effort != "medium" {
+		t.Fatalf("Reasoning.Effort = %q, want medium", cfg.Reasoning.Effort)
 	}
 }
 
@@ -418,6 +453,20 @@ func TestApplyEnvOverrides(t *testing.T) {
 			want:   "medium",
 		},
 		{
+			name:   "ELNATH_REASONING_EFFORT_MODE",
+			envKey: "ELNATH_REASONING_EFFORT_MODE",
+			envVal: "auto",
+			check:  func(c *Config) string { return c.Reasoning.EffortMode },
+			want:   "auto",
+		},
+		{
+			name:   "ELNATH_REASONING_EFFORT",
+			envKey: "ELNATH_REASONING_EFFORT",
+			envVal: "low",
+			check:  func(c *Config) string { return c.Reasoning.Effort },
+			want:   "low",
+		},
+		{
 			name:   "ELNATH_OLLAMA_BASE_URL",
 			envKey: "ELNATH_OLLAMA_BASE_URL",
 			envVal: "http://localhost:11434",
@@ -596,6 +645,21 @@ func TestValidate(t *testing.T) {
 			name:    "openai responses reasoning effort alone is valid",
 			mutate:  func(c *Config) { c.OpenAIResponses.ReasoningEffort = "high" },
 			wantErr: "",
+		},
+		{
+			name:    "reasoning auto mode is valid",
+			mutate:  func(c *Config) { c.Reasoning.EffortMode = "auto" },
+			wantErr: "",
+		},
+		{
+			name:    "unsupported reasoning effort mode",
+			mutate:  func(c *Config) { c.Reasoning.EffortMode = "adaptive" },
+			wantErr: "reasoning.effort_mode",
+		},
+		{
+			name:    "unsupported request reasoning effort",
+			mutate:  func(c *Config) { c.Reasoning.Effort = "giant" },
+			wantErr: "reasoning.reasoning_effort",
 		},
 		{
 			name: "openai responses base url requires api key",

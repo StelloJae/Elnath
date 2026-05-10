@@ -90,6 +90,8 @@ type WorkflowConfig struct {
 	MaxTokens            int
 	Model                string
 	SystemPrompt         string
+	ReasoningEffort      string
+	ReasoningEffortMode  string
 	Hooks                *agent.HookRegistry
 	Permission           *agent.Permission
 	ToolExecutor         tools.Executor

@@ -133,6 +133,72 @@ func TestWithOptions(t *testing.T) {
 	}
 }
 
+func TestAgentReasoningEffortManual(t *testing.T) {
+	reg := tools.NewRegistry()
+	var captured llm.ChatRequest
+	provider := &mockProvider{
+		streamFn: func(_ context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
+			captured = req
+			cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: "done"})
+			cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{InputTokens: 1, OutputTokens: 1}})
+			return nil
+		},
+	}
+
+	a := New(provider, reg,
+		WithMaxIterations(1),
+		WithReasoningEffort("high"),
+		WithReasoningEffortMode("manual"),
+	)
+	_, err := a.Run(context.Background(), []llm.Message{llm.NewUserMessage("hello")}, event.NopSink{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if captured.ReasoningEffort != "high" {
+		t.Fatalf("ReasoningEffort = %q, want high", captured.ReasoningEffort)
+	}
+}
+
+func TestAgentReasoningEffortAuto(t *testing.T) {
+	tests := []struct {
+		name    string
+		message string
+		want    string
+	}{
+		{name: "simple status", message: "quick status summary", want: "low"},
+		{name: "implementation", message: "implement provider policy and run tests", want: "high"},
+		{name: "root cause benchmark", message: "diagnose root cause for full benchmark baseline comparison", want: "xhigh"},
+		{name: "default medium", message: "think through this product idea", want: "medium"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := tools.NewRegistry()
+			var captured llm.ChatRequest
+			provider := &mockProvider{
+				streamFn: func(_ context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
+					captured = req
+					cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: "done"})
+					cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{InputTokens: 1, OutputTokens: 1}})
+					return nil
+				},
+			}
+
+			a := New(provider, reg,
+				WithMaxIterations(1),
+				WithReasoningEffortMode("auto"),
+			)
+			_, err := a.Run(context.Background(), []llm.Message{llm.NewUserMessage(tt.message)}, event.NopSink{})
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if captured.ReasoningEffort != tt.want {
+				t.Fatalf("ReasoningEffort = %q, want %q", captured.ReasoningEffort, tt.want)
+			}
+		})
+	}
+}
+
 func TestIsRetryable(t *testing.T) {
 	cases := []struct {
 		name string
