@@ -43,9 +43,10 @@ func (e codexOAuthStatusError) Error() string { return e.msg }
 
 // CodexOAuthProvider implements Provider using ChatGPT Backend OAuth tokens.
 type CodexOAuthProvider struct {
-	authPath string
-	model    string
-	client   *http.Client
+	authPath        string
+	model           string
+	reasoningEffort string
+	client          *http.Client
 }
 
 // CodexOAuthOption configures a CodexOAuthProvider.
@@ -54,6 +55,10 @@ type CodexOAuthOption func(*CodexOAuthProvider)
 // WithCodexOAuthTimeout sets the HTTP client timeout.
 func WithCodexOAuthTimeout(d time.Duration) CodexOAuthOption {
 	return func(p *CodexOAuthProvider) { p.client = newHTTPClientWithPerHostCap(int(d / time.Second)) }
+}
+
+func WithCodexOAuthReasoningEffort(effort string) CodexOAuthOption {
+	return func(p *CodexOAuthProvider) { p.reasoningEffort = strings.TrimSpace(effort) }
 }
 
 // DefaultCodexAuthPath returns the default path to the Codex CLI auth file.
@@ -168,7 +173,7 @@ func (p *CodexOAuthProvider) streamWithRefresh(ctx context.Context, auth codexOA
 
 // streamOnce makes a single SSE-streaming POST to the Codex responses endpoint.
 func (p *CodexOAuthProvider) streamOnce(ctx context.Context, auth codexOAuthAuthFile, req ChatRequest, cb func(StreamEvent)) error {
-	body, err := buildCodexRequest(req, p.model)
+	body, err := buildCodexRequestWithEffort(req, p.model, p.reasoningEffort)
 	if err != nil {
 		return fmt.Errorf("codex: build request: %w", err)
 	}
@@ -202,6 +207,10 @@ func (p *CodexOAuthProvider) streamOnce(ctx context.Context, auth codexOAuthAuth
 
 // buildCodexRequest constructs the Codex Responses API payload.
 func buildCodexRequest(req ChatRequest, defaultModel string) ([]byte, error) {
+	return buildCodexRequestWithEffort(req, defaultModel, "")
+}
+
+func buildCodexRequestWithEffort(req ChatRequest, defaultModel, defaultReasoningEffort string) ([]byte, error) {
 	model := req.Model
 	if model == "" {
 		model = defaultModel
@@ -211,6 +220,9 @@ func buildCodexRequest(req ChatRequest, defaultModel string) ([]byte, error) {
 		"model":  model,
 		"stream": true,
 		"store":  false,
+	}
+	if effort := effectiveResponsesReasoningEffort(req.ReasoningEffort, defaultReasoningEffort); effort != "" {
+		payload["reasoning"] = map[string]any{"effort": effort}
 	}
 
 	instructions := req.System

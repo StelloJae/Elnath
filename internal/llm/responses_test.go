@@ -320,6 +320,71 @@ func TestResponsesBuildRequestDefaultInstructions(t *testing.T) {
 	}
 }
 
+func TestResponsesBuildRequestReasoningEffort(t *testing.T) {
+	t.Run("provider default", func(t *testing.T) {
+		p := NewResponsesProvider("test-token", "codex-mini", "acct-1",
+			WithResponsesBaseURL("http://localhost"),
+			WithResponsesReasoningEffort("high"))
+
+		body := p.buildRequest(ChatRequest{Messages: []Message{NewUserMessage("hi")}}, true)
+		reasoning, ok := body["reasoning"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("reasoning type = %T, want map[string]interface{}", body["reasoning"])
+		}
+		if got := reasoning["effort"]; got != "high" {
+			t.Fatalf("reasoning.effort = %v, want high", got)
+		}
+	})
+
+	t.Run("request override", func(t *testing.T) {
+		p := NewResponsesProvider("test-token", "codex-mini", "acct-1",
+			WithResponsesBaseURL("http://localhost"),
+			WithResponsesReasoningEffort("high"))
+
+		body := p.buildRequest(ChatRequest{
+			Messages:        []Message{NewUserMessage("hi")},
+			ReasoningEffort: "low",
+		}, true)
+		reasoning, ok := body["reasoning"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("reasoning type = %T, want map[string]interface{}", body["reasoning"])
+		}
+		if got := reasoning["effort"]; got != "low" {
+			t.Fatalf("reasoning.effort = %v, want low", got)
+		}
+	})
+}
+
+func TestResponsesSetHeadersBetaHeaderOption(t *testing.T) {
+	t.Run("default codex backend header", func(t *testing.T) {
+		p := newResponsesProvider("http://localhost")
+		req, err := http.NewRequest(http.MethodPost, "http://localhost/v1/responses", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		p.setHeaders(req)
+		if got := req.Header.Get("OpenAI-Beta"); got != "responses=experimental" {
+			t.Fatalf("OpenAI-Beta = %q, want responses=experimental", got)
+		}
+	})
+
+	t.Run("public compatible endpoint", func(t *testing.T) {
+		p := NewResponsesProvider("test-token", "codex-mini", "",
+			WithResponsesBaseURL("http://localhost"),
+			WithResponsesBetaHeader(false))
+		req, err := http.NewRequest(http.MethodPost, "http://localhost/v1/responses", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		p.setHeaders(req)
+		if got := req.Header.Get("OpenAI-Beta"); got != "" {
+			t.Fatalf("OpenAI-Beta = %q, want empty", got)
+		}
+	})
+}
+
 // TestResponsesBuildRequest_WebSearchEmitsNativeSchema pins the native-tool
 // emission rule for the Responses API. When any ChatRequest tool carries
 // Name=="web_search", the wire payload must include a

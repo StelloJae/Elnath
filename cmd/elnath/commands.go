@@ -150,6 +150,31 @@ func summarizeToolUses(stats []agent.ToolStat) (calls, errors int) {
 func buildProvider(cfg *config.Config) (llm.Provider, string, error) {
 	reg := llm.NewRegistry()
 	var model string
+	explicitResponses := cfg.OpenAIResponses.APIKey != ""
+
+	if explicitResponses {
+		var opts []llm.ResponsesOption
+		baseURL := cfg.OpenAIResponses.BaseURL
+		if baseURL == "" {
+			baseURL = defaultOpenAIBaseURLForResponses()
+		}
+		opts = append(opts,
+			llm.WithResponsesBaseURL(baseURL),
+			llm.WithResponsesBetaHeader(false),
+			llm.WithResponsesReasoningEffort(cfg.OpenAIResponses.ReasoningEffort),
+		)
+		if cfg.OpenAIResponses.Timeout > 0 {
+			opts = append(opts, llm.WithResponsesTimeout(time.Duration(cfg.OpenAIResponses.Timeout)*time.Second))
+		}
+		m := cfg.OpenAIResponses.Model
+		if m == "" {
+			m = resolveFallbackModel(cfg)
+		}
+		reg.Register("openai-responses", llm.NewResponsesProvider(cfg.OpenAIResponses.APIKey, m, "", opts...))
+		if model == "" {
+			model = m
+		}
+	}
 
 	if cfg.Anthropic.APIKey != "" {
 		var opts []llm.AnthropicOption
@@ -180,15 +205,20 @@ func buildProvider(cfg *config.Config) (llm.Provider, string, error) {
 	// Codex OAuth provider (preferred — auto-refreshes tokens).
 	if llm.CodexOAuthAvailable() {
 		codexModel := loadCodexModel()
-		reg.Register("codex", llm.NewCodexOAuthProvider(codexModel))
+		var opts []llm.CodexOAuthOption
+		if cfg.OpenAIResponses.ReasoningEffort != "" {
+			opts = append(opts, llm.WithCodexOAuthReasoningEffort(cfg.OpenAIResponses.ReasoningEffort))
+		}
+		reg.Register("codex", llm.NewCodexOAuthProvider(codexModel, opts...))
 		if model == "" {
 			model = codexModel
 		}
 	} else {
 		// Fallback: use access_token as static API key (no refresh).
 		codexToken, codexModel, codexAccountID := loadCodexAuth()
-		if codexToken != "" {
-			reg.Register("openai-responses", llm.NewResponsesProvider(codexToken, codexModel, codexAccountID))
+		if codexToken != "" && !explicitResponses {
+			reg.Register("openai-responses", llm.NewResponsesProvider(codexToken, codexModel, codexAccountID,
+				llm.WithResponsesReasoningEffort(cfg.OpenAIResponses.ReasoningEffort)))
 			if model == "" {
 				model = codexModel
 			}
@@ -226,7 +256,7 @@ func buildProvider(cfg *config.Config) (llm.Provider, string, error) {
 	}
 
 	if len(reg.List()) == 0 {
-		inner := fmt.Errorf("no LLM provider configured: set ELNATH_ANTHROPIC_API_KEY or ELNATH_OPENAI_API_KEY")
+		inner := fmt.Errorf("no LLM provider configured: set ELNATH_ANTHROPIC_API_KEY, ELNATH_OPENAI_API_KEY, or ELNATH_OPENAI_RESPONSES_API_KEY")
 		return nil, "", userfacingerr.Wrap(userfacingerr.ELN001, inner, "build provider")
 	}
 
@@ -235,6 +265,11 @@ func buildProvider(cfg *config.Config) (llm.Provider, string, error) {
 
 	// Codex provider preferred over plain OpenAI for the same model names.
 	if detectedProvider == "openai" {
+		if explicitResponses {
+			if p, err := reg.Get("openai-responses"); err == nil {
+				return p, canonical, nil
+			}
+		}
 		if p, err := reg.Get("codex"); err == nil {
 			return p, canonical, nil
 		}
@@ -248,6 +283,10 @@ func buildProvider(cfg *config.Config) (llm.Provider, string, error) {
 		return nil, "", err
 	}
 	return p, resolvedModel, nil
+}
+
+func defaultOpenAIBaseURLForResponses() string {
+	return "https://api.openai.com/v1"
 }
 
 // defaultFallbackModel is the hardcoded fallback when neither the
