@@ -185,6 +185,27 @@ GO
       echo "Verification: go test ./... passed."
     fi
     ;;
+  verified_recovery_with_incomplete_final)
+    if [[ "$count" -eq 1 ]]; then
+      cat > main.go <<'GO'
+package recovery
+
+func Answer() int { return 0 }
+GO
+      echo "Modified files: main.go"
+      echo "Verification: go test ./... failed."
+    else
+      cat > main.go <<'GO'
+package recovery
+
+func Answer() int { return 42 }
+GO
+      printf '\nverified despite stale incomplete note\n' >> README.md
+      echo "Incomplete: I still have a stale incomplete note in the final response."
+      echo "Modified files: README.md"
+      echo "Verification: go test ./... passed."
+    fi
+    ;;
   added_missing_regression_then_passed)
     cat > main.go <<'GO'
 package recovery
@@ -385,6 +406,16 @@ assert data["recovery_attempted"] is True, data
 assert data["recovery_succeeded"] is True, data
 assert data["final_incomplete_detected"] is False, data
 assert "regression_test.go" in data["changed_files"], data
+'
+
+run_wrapper_case verified_recovery_with_incomplete_final "$TMP_DIR/verified-recovery-with-incomplete-final.json" "$SOURCE_REPO"
+assert_json_case "$TMP_DIR/verified-recovery-with-incomplete-final.json" '
+assert data["success"] is True, data
+assert data["verification_passed"] is True, data
+assert data["failure_family"] == "", data
+assert data["recovery_attempted"] is True, data
+assert data["recovery_succeeded"] is True, data
+assert data["final_incomplete_detected"] is False, data
 '
 
 run_wrapper_case added_missing_regression_then_passed "$TMP_DIR/added-missing-regression-then-passed.json" "$SOURCE_REPO"

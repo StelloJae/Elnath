@@ -88,13 +88,17 @@ BENCHMARK_HOME_DIR="$BENCHMARK_ENV_DIR/home"
 BENCHMARK_TMP_DIR="$BENCHMARK_ENV_DIR/tmp"
 BENCHMARK_GOMODCACHE_DIR="$BENCHMARK_ENV_DIR/go/pkg/mod"
 BENCHMARK_GOCACHE_DIR="$BENCHMARK_ENV_DIR/.cache/go-build"
+BENCHMARK_PYTHON_VENV="$BENCHMARK_ENV_DIR/python-venv"
+BENCHMARK_PIP_CACHE_DIR="$BENCHMARK_ENV_DIR/pip-cache"
+WRAPPER_SETUP_STATUS_PATH="$TMP_DIR/wrapper-setup-status.txt"
 mkdir -p \
   "$BENCHMARK_DATA_DIR" \
   "$BENCHMARK_WIKI_DIR" \
   "$BENCHMARK_HOME_DIR" \
   "$BENCHMARK_TMP_DIR" \
   "$BENCHMARK_GOMODCACHE_DIR" \
-  "$BENCHMARK_GOCACHE_DIR"
+  "$BENCHMARK_GOCACHE_DIR" \
+  "$BENCHMARK_PIP_CACHE_DIR"
 
 prepare_benchmark_provider_home() {
   if [[ -z "$ORIGINAL_HOME" || ! -f "$ORIGINAL_HOME/.codex/auth.json" ]]; then
@@ -137,8 +141,22 @@ benchmark_changed_files_all() {
         if (path ~ /^\.omx\// || path ~ /^\.codex\//) next
         print path
       }
-    '
+    ' | {
+      if [[ -s "$WRAPPER_SETUP_STATUS_PATH" ]]; then
+        grep -vxF -f "$WRAPPER_SETUP_STATUS_PATH" || true
+      else
+        cat
+      fi
+    }
   )
+}
+
+record_wrapper_setup_status() {
+  : >"$WRAPPER_SETUP_STATUS_PATH"
+  if [[ ! -d "$WORKTREE/.git" ]]; then
+    return 0
+  fi
+  benchmark_changed_files_all >"$WRAPPER_SETUP_STATUS_PATH"
 }
 
 benchmark_changed_files() {
@@ -847,7 +865,9 @@ write_result() {
   else
     edit_intent=false
   fi
-  if [[ "$force_final_incomplete" == "true" ]] || detect_final_incomplete; then
+  if [[ "$success" == "true" && "$verification_passed" == "true" && -z "$failure_family" ]]; then
+    final_incomplete=false
+  elif [[ "$force_final_incomplete" == "true" ]] || detect_final_incomplete; then
     final_incomplete=true
   else
     final_incomplete=false
@@ -1137,6 +1157,45 @@ PY
   return 1
 }
 
+python_pytest_verification_task() {
+  local cmd="${1:-${VERIFY_CMD:-${TASK_VERIFICATION_COMMAND:-}}}"
+  [[ "$cmd" == python\ -m\ pytest* ]] && return 0
+  [[ "$cmd" == python3\ -m\ pytest* ]] && return 0
+  return 1
+}
+
+pick_python_for_venv() {
+  if command -v python3.11 >/dev/null 2>&1; then
+    echo "python3.11"
+    return 0
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    echo "python3"
+    return 0
+  fi
+  return 1
+}
+
+prepare_python_verification_env() {
+  local verification_cmd="${1:-${VERIFY_CMD:-${TASK_VERIFICATION_COMMAND:-}}}"
+  python_pytest_verification_task "$verification_cmd" || return 0
+
+  local python_bin
+  python_bin="$(pick_python_for_venv)" || return 1
+  if [[ ! -x "$BENCHMARK_PYTHON_VENV/bin/python" ]]; then
+    "$python_bin" -m venv "$BENCHMARK_PYTHON_VENV" >/dev/null
+    if [[ -f requirements-dev.txt ]]; then
+      "$BENCHMARK_PYTHON_VENV/bin/python" -m pip install -r requirements-dev.txt >/dev/null
+    elif "$BENCHMARK_PYTHON_VENV/bin/python" -m pip install -e '.[test]' pytest >/dev/null 2>&1; then
+      :
+    else
+      "$BENCHMARK_PYTHON_VENV/bin/python" -m pip install -e . pytest >/dev/null
+    fi
+  fi
+  export VIRTUAL_ENV="$BENCHMARK_PYTHON_VENV"
+  export PATH="$BENCHMARK_PYTHON_VENV/bin:$PATH"
+}
+
 pick_verification_command() {
   if [[ -n "${TASK_VERIFICATION_COMMAND:-}" ]]; then
     normalize_task_verification_command "$TASK_VERIFICATION_COMMAND"
@@ -1312,6 +1371,12 @@ maybe_prepare_verification() {
 run_verification_command() {
   local log_path="$1"
   local timeout_override="${2:-$ELNATH_VERIFY_TIMEOUT}"
+  local verification_shell_cmd="$VERIFY_CMD"
+  if [[ -n "${VIRTUAL_ENV:-}" && -f "$VIRTUAL_ENV/bin/activate" ]]; then
+    local quoted_activate
+    printf -v quoted_activate '%q' "$VIRTUAL_ENV/bin/activate"
+    verification_shell_cmd="source $quoted_activate && $VERIFY_CMD"
+  fi
   (
     cd "$WORKTREE"
     export HOME="$BENCHMARK_HOME_DIR"
@@ -1321,7 +1386,7 @@ run_verification_command() {
     export GOMODCACHE="$BENCHMARK_GOMODCACHE_DIR"
     export GOCACHE="$BENCHMARK_GOCACHE_DIR"
     maybe_prepare_verification
-    python3 - <<'PY' "$timeout_override" "$log_path" "$VERIFY_CMD"
+    python3 - <<'PY' "$timeout_override" "$log_path" "$verification_shell_cmd"
 import subprocess
 import sys
 
@@ -1395,6 +1460,25 @@ if VERIFY_CMD_OVERRIDE="$(benchmark_specific_verification_command 2>/dev/null)";
   VERIFY_CMD="$VERIFY_CMD_OVERRIDE"
 fi
 export VERIFICATION_CMD="$VERIFY_CMD"
+
+if python_pytest_verification_task "$VERIFY_CMD"; then
+  if ! (
+    cd "$WORKTREE"
+    export HOME="$BENCHMARK_HOME_DIR"
+    export TMPDIR="$BENCHMARK_TMP_DIR"
+    export TMP="$BENCHMARK_TMP_DIR"
+    export TEMP="$BENCHMARK_TMP_DIR"
+    export PIP_CACHE_DIR="$BENCHMARK_PIP_CACHE_DIR"
+    prepare_python_verification_env "$VERIFY_CMD"
+  ); then
+    write_result false false "dependency_install_failed" false false "failed to install Python verification dependencies"
+    exit 0
+  fi
+  export VIRTUAL_ENV="$BENCHMARK_PYTHON_VENV"
+  export PATH="$BENCHMARK_PYTHON_VENV/bin:$PATH"
+fi
+
+record_wrapper_setup_status
 
 REPO_HINTS="$(collect_repo_hints || true)"
 BENCHMARK_PROMPT="$(cat <<EOF
@@ -1710,10 +1794,6 @@ fi
 
 if run_verification_command "$VERIFY_RETRY_LOG"; then
   if write_passed_verification_task_specific_failure true "verification passed after recovery"; then
-    exit 0
-  fi
-  if detect_final_incomplete; then
-    write_result false true "incomplete_patch" true false "verification passed after recovery, but final response self-reported incomplete work"
     exit 0
   fi
   write_result true true "" true true "verification passed after one recovery attempt"
