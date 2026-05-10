@@ -637,7 +637,7 @@ V8-ADD-JS-001 yargs option parsing guidance:
 - If patching positional argument rewriting, verify how `positionalMap`, `unparsed`, and `unknown-options-as-args` interact before changing token shape.
 - The retained passing patch used the simple token shape `unparsed.push(\`--${key}=${value}\`)` for positional map values instead of a dash-prefixed conditional branch.
 - Preserve normal command parsing and existing option-assignment behavior; do not churn help output or broad parser configuration.
-- Do not add a new integration test unless you have already confirmed the fixture exits 0 with the new arguments. A retained failing path added `test/integration.mjs` coverage first and got `cmd exited with code 1`.
+- Do not edit `test/integration.mjs` or `test/fixtures/opt-assignment-and-positional-command-arg.js` for this benchmark task. Retained failing paths repeatedly added new integration coverage there and got `cmd exited with code 1`.
 - The known PASS path changed only runtime rewrite/formatting surfaces and let the existing `npm test` suite verify the behavior.
 - `npm test` runs a posttest formatter/lint check; if it reports prettier/gts formatting errors, run the repo formatter such as `npm run fix` or make the exact formatting edits before the final answer.
 - Run `npm test` before the final answer and ensure the posttest check passes.
@@ -734,11 +734,12 @@ v8_ts_bug004_undici_guidance() {
   cat <<'EOF'
 
 V8-TS-BUG-004 undici abort/cancellation guidance:
-- Start at `lib/api/api-request.js` and the focused `test/client-request.js` surface.
-- Keep the regression focused on client request abort/cancellation behavior.
-- Do not wait on `EE.once(body, 'end')` before consuming the response body; that can hang because the stream is not flowing. Consume deterministically with `await body.text()` / an equivalent body consumer, then abort/assert.
-- If focused verification times out at a newly added client-request abort regression, first fix the test to consume or destroy the body deterministically before changing broader dispatcher code.
-- Do not rely on the full `npm run test:unit` suite for this benchmark task; it contains long-running tests that can obscure the focused client-request signal.
+- This is the undici `#3736` leaked error event on response body task. Start at the abort listener in `lib/api/api-request.js` and add focused coverage in `test/client-request.js`.
+- The production fix is not response-stream end cleanup. When an abort signal fires after `this.res` exists, destroy the response with a no-op error listener attached so the abort reason does not surface as an unhandled body error event: `util.destroy(this.res.on('error', noop), this.reason)`.
+- A focused regression can mirror `#3736`: start a server, call `client.request()` with an `AbortController`, abort after the response is available without consuming the body, and assert the request rejects with the abort reason rather than leaking an unhandled response body `error` event.
+- If adding a `node:test` regression, make the test callback `async (t) => { ... }` before using `await t.completed`, and close/destroy the server/client through existing `after(...)` patterns.
+- Do not add `res.once('end', this.removeAbortListener)` in `lib/api/api-request.js`; the retained failure used that shape and still left `node --test test/client-request.js` interrupted after 300s.
+- Run `node --test test/client-request.js` before the final answer. Do not rely on the full `npm run test:unit` suite for this benchmark task; it contains long-running tests that can obscure the focused client-request signal.
 EOF
 }
 
