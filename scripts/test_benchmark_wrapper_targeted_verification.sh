@@ -39,6 +39,47 @@ print("\n".join(selected))
 PY
 }
 
+extract_optional_function() {
+  python3 - "$1" "$2" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+name = sys.argv[2]
+lines = path.read_text().splitlines()
+start = None
+for idx, line in enumerate(lines):
+    if line.startswith(f"{name}() {{"):
+        start = idx
+        break
+if start is None:
+    sys.exit(0)
+
+depth = 0
+selected = []
+for line in lines[start:]:
+    selected.append(line)
+    depth += line.count("{")
+    depth -= line.count("}")
+    if depth == 0:
+        break
+
+print("\n".join(selected))
+PY
+}
+
+extract_task_matchers() {
+  local wrapper_path="$1"
+  for fn in \
+    is_ts_bf001_vitest_task \
+    is_ts_bf002_nestjs_task \
+    is_v8_ts_bug003_axios_task \
+    is_v8_ts_bug004_undici_task
+  do
+    extract_optional_function "$wrapper_path" "$fn"
+  done
+}
+
 create_vitest_fixture() {
   local repo_dir="$1"
   mkdir -p "$repo_dir/packages/vitest" "$repo_dir/test/cli/test"
@@ -106,13 +147,17 @@ run_benchmark_specific_command() {
   local task_prompt="$3"
   local runner="$TMP_DIR/specific-runner.sh"
   local function_src
+  local matcher_src
   function_src="$(extract_function "$wrapper_path" "benchmark_specific_verification_command")"
+  matcher_src="$(extract_task_matchers "$wrapper_path")"
 
   {
     echo '#!/usr/bin/env bash'
     echo 'set -euo pipefail'
+    printf 'TASK_ID=%q\n' ""
     printf 'TASK_REPO=%q\n' "$task_repo"
     printf 'TASK_PROMPT=%q\n' "$task_prompt"
+    printf '%s\n' "$matcher_src"
     printf '%s\n' "$function_src"
     echo 'benchmark_specific_verification_command'
   } >"$runner"
@@ -129,9 +174,11 @@ run_final_command_after_changes() {
   local pick_src
   local specific_src
   local final_src
+  local matcher_src
   pick_src="$(extract_function "$wrapper_path" "pick_targeted_verification_command")"
   specific_src="$(extract_function "$wrapper_path" "benchmark_specific_verification_command")"
   final_src="$(extract_function "$wrapper_path" "pick_final_verification_command")"
+  matcher_src="$(extract_task_matchers "$wrapper_path")"
 
   {
     echo '#!/usr/bin/env bash'
@@ -140,6 +187,7 @@ run_final_command_after_changes() {
     printf 'TASK_REPO=%q\n' "$task_repo"
     printf 'TASK_PROMPT=%q\n' "$task_prompt"
     echo 'working_tree_changes() { git diff --name-only; }'
+    printf '%s\n' "$matcher_src"
     printf '%s\n' "$specific_src"
     printf '%s\n' "$pick_src"
     printf '%s\n' "$final_src"
@@ -189,6 +237,30 @@ assert_caddy_serialized_command() {
   fi
 }
 
+assert_axios_focused_command() {
+  local wrapper_rel="$1"
+  local actual="$2"
+  local expected="npm exec -- vitest run --project unit tests/unit/composeSignals.test.js"
+  if [[ "$actual" != "$expected" ]]; then
+    echo "FAIL: $wrapper_rel produced unexpected axios focused verification command" >&2
+    echo "expected: $expected" >&2
+    echo "actual:   $actual" >&2
+    exit 1
+  fi
+}
+
+assert_undici_focused_command() {
+  local wrapper_rel="$1"
+  local actual="$2"
+  local expected="node --test test/client-request.js"
+  if [[ "$actual" != "$expected" ]]; then
+    echo "FAIL: $wrapper_rel produced unexpected undici focused verification command" >&2
+    echo "expected: $expected" >&2
+    echo "actual:   $actual" >&2
+    exit 1
+  fi
+}
+
 FIXTURE_REPO="$TMP_DIR/vitest-fixture"
 create_vitest_fixture "$FIXTURE_REPO"
 
@@ -221,5 +293,19 @@ assert_caddy_serialized_command "scripts/run_current_benchmark_wrapper.sh final"
 
 BASELINE_CADDY_FINAL_CMD="$(run_final_command_after_changes "$REPO_ROOT/scripts/run_baseline_benchmark_wrapper.sh" "$GO_FIXTURE_REPO" "$CADDY_REPO" "$CADDY_PROMPT" || true)"
 assert_caddy_serialized_command "scripts/run_baseline_benchmark_wrapper.sh final" "$BASELINE_CADDY_FINAL_CMD"
+
+AXIOS_REPO="https://github.com/axios/axios"
+AXIOS_PROMPT="Fix an abort or timeout edge behavior in the request flow and cover it with a targeted regression test."
+CURRENT_AXIOS_CMD="$(run_benchmark_specific_command "$REPO_ROOT/scripts/run_current_benchmark_wrapper.sh" "$AXIOS_REPO" "$AXIOS_PROMPT" || true)"
+assert_axios_focused_command "scripts/run_current_benchmark_wrapper.sh axios" "$CURRENT_AXIOS_CMD"
+BASELINE_AXIOS_CMD="$(run_benchmark_specific_command "$REPO_ROOT/scripts/run_baseline_benchmark_wrapper.sh" "$AXIOS_REPO" "$AXIOS_PROMPT" || true)"
+assert_axios_focused_command "scripts/run_baseline_benchmark_wrapper.sh axios" "$BASELINE_AXIOS_CMD"
+
+UNDICI_REPO="https://github.com/nodejs/undici"
+UNDICI_PROMPT="Fix an abort or cancellation edge behavior in client request handling and verify the behavior with a focused test."
+CURRENT_UNDICI_CMD="$(run_benchmark_specific_command "$REPO_ROOT/scripts/run_current_benchmark_wrapper.sh" "$UNDICI_REPO" "$UNDICI_PROMPT" || true)"
+assert_undici_focused_command "scripts/run_current_benchmark_wrapper.sh undici" "$CURRENT_UNDICI_CMD"
+BASELINE_UNDICI_CMD="$(run_benchmark_specific_command "$REPO_ROOT/scripts/run_baseline_benchmark_wrapper.sh" "$UNDICI_REPO" "$UNDICI_PROMPT" || true)"
+assert_undici_focused_command "scripts/run_baseline_benchmark_wrapper.sh undici" "$BASELINE_UNDICI_CMD"
 
 echo "PASS: targeted benchmark verification commands stay scoped"
