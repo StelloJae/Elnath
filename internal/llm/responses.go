@@ -133,7 +133,15 @@ func (p *ResponsesProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRes
 }
 
 func (p *ResponsesProvider) Stream(ctx context.Context, req ChatRequest, cb func(StreamEvent)) error {
-	body := p.buildRequest(req, true)
+	err := p.streamOnce(ctx, req, true, false, cb)
+	if err != nil && p.shouldRetryWithoutReasoning(req, err) {
+		return p.streamOnce(ctx, req, true, true, cb)
+	}
+	return err
+}
+
+func (p *ResponsesProvider) streamOnce(ctx context.Context, req ChatRequest, stream, suppressReasoning bool, cb func(StreamEvent)) error {
+	body := p.buildRequestWithReasoning(req, stream, !suppressReasoning)
 	data, err := json.Marshal(body)
 	if err != nil {
 		return fmt.Errorf("responses: marshal: %w", err)
@@ -227,6 +235,23 @@ func (p *ResponsesProvider) Stream(ctx context.Context, req ChatRequest, cb func
 	return scanner.Err()
 }
 
+func (p *ResponsesProvider) shouldRetryWithoutReasoning(req ChatRequest, err error) bool {
+	if effectiveResponsesReasoningEffort(req.ReasoningEffort, p.reasoningEffort) == "" {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	if !strings.Contains(msg, "http 400") && !strings.Contains(msg, "http 422") {
+		return false
+	}
+	if !strings.Contains(msg, "reason") && !strings.Contains(msg, "effort") {
+		return false
+	}
+	return strings.Contains(msg, "unsupported") ||
+		strings.Contains(msg, "not supported") ||
+		strings.Contains(msg, "invalid") ||
+		strings.Contains(msg, "unknown")
+}
+
 func (p *ResponsesProvider) setHeaders(req *http.Request) {
 	req.Header.Set("Authorization", "Bearer "+p.accessToken)
 	req.Header.Set("Content-Type", "application/json")
@@ -240,6 +265,10 @@ func (p *ResponsesProvider) setHeaders(req *http.Request) {
 }
 
 func (p *ResponsesProvider) buildRequest(req ChatRequest, stream bool) map[string]interface{} {
+	return p.buildRequestWithReasoning(req, stream, true)
+}
+
+func (p *ResponsesProvider) buildRequestWithReasoning(req ChatRequest, stream, includeReasoning bool) map[string]interface{} {
 	input := make([]interface{}, 0, len(req.Messages)*2)
 
 	// System prompt handled via "instructions" field, not in input
@@ -297,7 +326,7 @@ func (p *ResponsesProvider) buildRequest(req ChatRequest, stream bool) map[strin
 		"instructions": instructions,
 		"store":        false,
 	}
-	if effort := effectiveResponsesReasoningEffort(req.ReasoningEffort, p.reasoningEffort); effort != "" {
+	if effort := effectiveResponsesReasoningEffort(req.ReasoningEffort, p.reasoningEffort); includeReasoning && effort != "" {
 		body["reasoning"] = map[string]interface{}{"effort": effort}
 	}
 	if stream {
