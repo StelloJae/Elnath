@@ -1366,6 +1366,20 @@ PY
     fi
   fi
   if [[ -f yarn.lock ]] && command -v yarn >/dev/null 2>&1; then
+    if [[ -f .yarnrc.yml ]] && grep -Eq '(^|[[:space:]])yarnPath:|(^|[[:space:]])nodeLinker:' .yarnrc.yml; then
+      yarn install --immutable --mode=skip-build >/dev/null 2>&1 || yarn install --mode=skip-build >/dev/null
+      return 0
+    fi
+    if python3 - <<'PY'
+import json, sys
+from pathlib import Path
+pkg = json.loads(Path("package.json").read_text())
+sys.exit(0 if str(pkg.get("packageManager", "")).startswith("yarn@") else 1)
+PY
+    then
+      yarn install --immutable --mode=skip-build >/dev/null 2>&1 || yarn install --mode=skip-build >/dev/null
+      return 0
+    fi
     yarn install --frozen-lockfile --ignore-scripts >/dev/null 2>&1 || yarn install --ignore-scripts >/dev/null
     return 0
   fi
