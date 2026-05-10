@@ -585,6 +585,8 @@ V8-PY-TH-001 pytest approx guidance:
 - Support `datetime.datetime` and `datetime.timedelta` with explicit `datetime.timedelta` tolerance.
 - Reject unsupported datetime relative tolerance and `nan_ok` combinations with clear `TypeError`s.
 - Do not stop after production-only changes. Add focused assertions for datetime within tolerance, datetime outside tolerance, timedelta comparisons, and `pytest.raises(TypeError)` for unsupported `rel` / `nan_ok` arguments.
+- In `ApproxScalar.tolerance`, handle explicit `datetime.timedelta` absolute tolerance before numeric `< 0` tolerance checks; otherwise pytest will fail with `TypeError: '<' not supported between instances of 'datetime.timedelta' and 'int'`.
+- For unsupported `rel` / `nan_ok`, make the regression exercise comparison against a distinct actual datetime/timedelta value; exact equality can short-circuit before the TypeError path.
 - Reuse the existing approx test style in `testing/python/approx.py`; small table-driven or class-local tests are preferred over new fixtures.
 - In no-change recovery, stop re-reading once `ApproxScalar`, the `approx()` factory, and the nearby `TestApprox` tests are identified; apply the two-file patch before further exploration.
 - In task-specific recovery after production-only verification passes, edit `testing/python/approx.py` immediately; do not re-open production files before adding the missing datetime/timedelta assertions.
@@ -651,6 +653,8 @@ v8_ts_bug004_undici_guidance() {
 V8-TS-BUG-004 undici abort/cancellation guidance:
 - Start at `lib/api/api-request.js` and the focused `test/client-request.js` surface.
 - Keep the regression focused on client request abort/cancellation behavior.
+- Do not wait on `EE.once(body, 'end')` before consuming the response body; that can hang because the stream is not flowing. Consume deterministically with `await body.text()` / an equivalent body consumer, then abort/assert.
+- If focused verification times out at a newly added client-request abort regression, first fix the test to consume or destroy the body deterministically before changing broader dispatcher code.
 - Do not rely on the full `npm run test:unit` suite for this benchmark task; it contains long-running tests that can obscure the focused client-request signal.
 EOF
 }
@@ -1169,8 +1173,8 @@ recover_passed_task_specific_failure() {
     printf -v TASK_SPECIFIC_PROMPT '%s\n\n%s\n\n%s\n\n%s' \
       "Task ID: ${TASK_ID}" \
       "The verification command '${VERIFY_CMD}' passed, but the benchmark guard rejected the patch: ${reason}" \
-      "Do not re-open or rework production code unless the test file requires an import. Keep the existing production diff intact and immediately edit only 'testing/python/approx.py' to add focused datetime/timedelta pytest.approx assertions." \
-      "Add tests for datetime within tolerance, datetime outside tolerance, timedelta within/outside tolerance, and pytest.raises(TypeError) for unsupported rel / nan_ok. Use explicit timedelta tolerance such as 'abs=timedelta(seconds=2)' or 'abs=datetime.timedelta(seconds=2)', not a numeric 'abs=2'. Then run '${VERIFY_CMD}' and finish only if both 'src/_pytest/python_api.py' and 'testing/python/approx.py' are changed."
+      "Keep the existing production diff intact initially and immediately edit 'testing/python/approx.py' to add focused datetime/timedelta pytest.approx assertions. If those tests expose missing explicit timedelta tolerance handling, patch 'src/_pytest/python_api.py' narrowly in 'ApproxScalar.tolerance' before rerunning." \
+      "Add tests for datetime within tolerance, datetime outside tolerance, timedelta within/outside tolerance, and pytest.raises(TypeError) for unsupported rel / nan_ok. Use explicit timedelta tolerance such as 'abs=timedelta(seconds=2)' or 'abs=datetime.timedelta(seconds=2)', not a numeric 'abs=2'. Make rel/nan_ok tests compare against a distinct actual value so exact equality cannot short-circuit the TypeError path. Then run '${VERIFY_CMD}' and finish only if both 'src/_pytest/python_api.py' and 'testing/python/approx.py' are changed."
   else
     printf -v TASK_SPECIFIC_PROMPT '%s\n\n%s\n\n%s' \
       "$BENCHMARK_PROMPT" \
