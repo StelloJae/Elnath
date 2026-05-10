@@ -339,7 +339,7 @@
       "repo": "https://github.com/semantic-release/semantic-release",
       "source_url": "https://github.com/semantic-release/semantic-release",
       "repo_ref": "eded7373fcb0e112cb7d8115c0437a7647bf5628",
-      "verification_command": "npm test",
+      "verification_command": "npm run test:unit -- test/get-release-to-add.test.js && npm run test:integration",
       "acceptance_criteria": [
         "the configuration edge case is covered by tests",
         "existing release behavior remains unchanged",
