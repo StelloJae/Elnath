@@ -131,21 +131,21 @@
       ]
     },
     {
-      "id": "V8-GO-BF-003",
-      "title": "Propagate middleware request metadata",
-      "track": "brownfield_feature",
-      "language": "go",
-      "repo_class": "service_backend",
+      "id": "V8-PY-TH-001",
+      "title": "Support datetime approx comparisons",
+      "track": "bugfix",
+      "language": "python",
+      "repo_class": "cli_dev_tool",
       "benchmark_family": "v8_public_first_freeze",
-      "prompt": "Extend the middleware stack so request metadata can be propagated to downstream middleware without changing normal routing or handler behavior.",
-      "repo": "https://github.com/go-chi/chi",
-      "source_url": "https://github.com/go-chi/chi",
-      "repo_ref": "a54874f0e2f12647a19e82ee70dfa8185014100c",
-      "verification_command": "go test ./...",
+      "prompt": "Add datetime and timedelta support to pytest.approx with explicit timedelta tolerance, while rejecting unsupported datetime relative tolerance and nan_ok behavior.",
+      "repo": "https://github.com/pytest-dev/pytest",
+      "source_url": "https://github.com/pytest-dev/pytest",
+      "repo_ref": "84ae27e4710af45cc307f8c0c25259e917090219",
+      "verification_command": "python -m pytest -o minversion=0 testing/python/approx.py -q",
       "acceptance_criteria": [
-        "metadata is available to downstream middleware",
-        "existing routing behavior remains unchanged",
-        "focused middleware tests cover the new behavior"
+        "datetime and timedelta approx comparisons work with explicit timedelta tolerance",
+        "unsupported datetime relative tolerance and nan_ok combinations raise clear TypeError",
+        "focused approx tests cover success, failure, and error-message behavior"
       ]
     },
     {
@@ -240,20 +240,20 @@
     },
     {
       "id": "V8-JS-BUG-001",
-      "title": "Fix middleware error propagation",
+      "title": "Handle mounted app router sentinel",
       "track": "bugfix",
       "language": "javascript",
       "repo_class": "service_backend",
       "benchmark_family": "v8_public_first_freeze",
-      "prompt": "Fix a middleware error propagation edge case without changing normal routing semantics.",
+      "prompt": "Fix Express mounted-app next('router') propagation so the parent router continues to the next matching middleware without treating the sentinel as a real error.",
       "repo": "https://github.com/expressjs/express",
       "source_url": "https://github.com/expressjs/express",
       "repo_ref": "f873ac23124ffcff8c040b4bd257b32c29828d53",
       "verification_command": "npm test",
       "acceptance_criteria": [
-        "error middleware behavior is covered by a regression test",
-        "normal handler paths remain unchanged",
-        "existing route tests continue to pass"
+        "mounted-app next('router') behavior is covered by a regression test",
+        "real mounted-app errors still propagate as errors",
+        "normal handler paths remain unchanged"
       ]
     },
     {
