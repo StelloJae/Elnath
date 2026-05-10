@@ -281,13 +281,14 @@
       "language": "typescript",
       "repo_class": "service_backend",
       "benchmark_family": "v8_public_first_freeze",
-      "prompt": "Fix an abort or cancellation edge behavior in client request handling and verify the behavior with a focused test.",
+      "prompt": "Fix the leaked response-body error event when an undici request is aborted after the server returns, and verify the behavior with a focused client request regression test.",
       "repo": "https://github.com/nodejs/undici",
-      "source_url": "https://github.com/nodejs/undici",
-      "repo_ref": "397bc13d71942465e231518b80a3e533856cc283",
-      "verification_command": "npm run test:unit",
+      "source_url": "https://github.com/nodejs/undici/issues/3736",
+      "repo_ref": "68107da3fdd6cd0397f4800a2bc9630c802eda58",
+      "verification_command": "node --test test/client-request.js",
       "acceptance_criteria": [
-        "abort or cancellation behavior is covered by a regression test",
+        "aborting the request does not emit an unhandled response body error event",
+        "abort or cancellation behavior is covered by a focused regression test",
         "successful request behavior remains unchanged",
         "the verification target stays focused"
       ]
