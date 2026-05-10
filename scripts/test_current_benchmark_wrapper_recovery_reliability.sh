@@ -13,6 +13,9 @@ text = Path(sys.argv[1]).read_text()
 required = [
     "ELNATH_VERIFY_TIMEOUT",
     "verification command timed out after",
+    "start_new_session=True",
+    "os.killpg(proc.pid, signal.SIGTERM)",
+    "os.killpg(proc.pid, signal.SIGKILL)",
 ]
 missing = [snippet for snippet in required if snippet not in text]
 if missing:

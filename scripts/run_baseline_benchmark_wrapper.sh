@@ -232,6 +232,14 @@ benchmark_specific_verification_command() {
     echo "./node_modules/.bin/mocha packages/common/test/module-utils/configurable-module.builder.spec.ts --require ts-node/register --require tsconfig-paths/register --require node_modules/reflect-metadata/Reflect.js --require hooks/mocha-init-hook.ts"
     return 0
   fi
+  if [[ "$TASK_REPO" == *"axios/axios"* && "$TASK_PROMPT" == *"abort or timeout"* ]]; then
+    echo "npm exec -- vitest run --project unit tests/unit/composeSignals.test.js"
+    return 0
+  fi
+  if [[ "$TASK_REPO" == *"nodejs/undici"* && "$TASK_PROMPT" == *"abort or cancellation"* ]]; then
+    echo "node --test test/client-request.js"
+    return 0
+  fi
   if [[ "$TASK_REPO" == *"vercel/next.js"* && "$TASK_PROMPT" == *"file-watcher regression"* ]]; then
     echo "pnpm testonly packages/next/src/lib/find-config.test.ts"
     return 0

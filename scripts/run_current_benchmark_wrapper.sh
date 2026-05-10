@@ -356,6 +356,24 @@ is_typescript_canary_task() {
   }
 }
 
+is_v8_go_bf003_chi_task() {
+  [[ "$TASK_ID" == "V8-GO-BF-003" ]] || {
+    [[ "$TASK_REPO" == *"go-chi/chi"* && "$TASK_PROMPT" == *"request metadata"* ]]
+  }
+}
+
+is_v8_ts_bug003_axios_task() {
+  [[ "$TASK_ID" == "V8-TS-BUG-003" ]] || {
+    [[ "$TASK_REPO" == *"axios/axios"* && "$TASK_PROMPT" == *"abort or timeout"* ]]
+  }
+}
+
+is_v8_ts_bug004_undici_task() {
+  [[ "$TASK_ID" == "V8-TS-BUG-004" ]] || {
+    [[ "$TASK_REPO" == *"nodejs/undici"* && "$TASK_PROMPT" == *"abort or cancellation"* ]]
+  }
+}
+
 typescript_recovery_checklist() {
   is_typescript_canary_task || return 0
   cat <<'EOF'
@@ -487,6 +505,42 @@ GO-BF-001 request-id logging guidance:
 - Keep request-id middleware opt-in, for example `router.Use(RequestID(), LoggerWithWriter(buffer))` in focused tests.
 - If threading the request id into logs, read it from the Gin context inside `LoggerWithConfig` and preserve existing formatter behavior when no request id is present.
 - Run `go test ./...` before the final answer.
+EOF
+}
+
+v8_go_bf003_recovery_guidance() {
+  is_v8_go_bf003_chi_task || return 0
+  cat <<'EOF'
+
+V8-GO-BF-003 chi request metadata guidance:
+- Start in `mux.go` / route context handling and the existing routing or middleware tests; do not stop at comment-only edits.
+- The task requires observable request metadata behavior plus focused regression coverage.
+- A diff without a focused Go test is incomplete even if `go test ./...` passes.
+- Prefer the smallest production change that makes route/request metadata visible to downstream middleware while preserving existing route and handler semantics.
+- Run `go test ./...` before the final answer.
+EOF
+}
+
+v8_ts_bug003_axios_guidance() {
+  is_v8_ts_bug003_axios_task || return 0
+  cat <<'EOF'
+
+V8-TS-BUG-003 axios abort/timeout guidance:
+- Start with abort-signal composition and request cancellation seams such as `lib/helpers/composeSignals.js`.
+- Prefer the focused regression in `tests/unit/composeSignals.test.js`.
+- Do not change HTTP proxy/SNI behavior in `lib/adapters/http.js` unless the root cause investigation proves the abort/timeout bug is there.
+- The benchmark verification is intentionally focused because the pinned axios HTTP proxy suite is not clean in this Node runtime.
+EOF
+}
+
+v8_ts_bug004_undici_guidance() {
+  is_v8_ts_bug004_undici_task || return 0
+  cat <<'EOF'
+
+V8-TS-BUG-004 undici abort/cancellation guidance:
+- Start at `lib/api/api-request.js` and the focused `test/client-request.js` surface.
+- Keep the regression focused on client request abort/cancellation behavior.
+- Do not rely on the full `npm run test:unit` suite for this benchmark task; it contains long-running tests that can obscure the focused client-request signal.
 EOF
 }
 
@@ -628,6 +682,15 @@ for raw in diff.stdout.splitlines():
 
 sys.exit(0 if hunk_is_brittle(hunk) else 1)
 PY
+}
+
+v8_go_bf003_missing_behavior_or_regression() {
+  is_v8_go_bf003_chi_task || return 1
+  local files
+  files="$(benchmark_changed_files_all)"
+  awk 'NF && /\.go$/ && !/_test\.go$/ { found=1 } END { exit found ? 0 : 1 }' <<<"$files" || return 0
+  grep -Eq '(^|/)[^/]+_test\.go$' <<<"$files" || return 0
+  return 1
 }
 
 ts_bf001_missing_focused_regression() {
@@ -932,6 +995,10 @@ write_passed_verification_task_specific_failure() {
     write_result false true "incomplete_patch" "$recovery_attempted" false "$prefix, but GO-BUG-002 regression asserts brittle internal configFile state after ReadInConfig"
     return 0
   fi
+  if v8_go_bf003_missing_behavior_or_regression; then
+    write_result false true "incomplete_patch" "$recovery_attempted" false "$prefix, but V8-GO-BF-003 lacks the required production Go behavior diff plus focused Go regression coverage pair"
+    return 0
+  fi
   if ts_bf002_production_diff_without_focused_regression; then
     write_result false true "incomplete_patch" "$recovery_attempted" false "$prefix, but TS-BF-002 changed module-utils behavior without focused cancellation regression coverage"
     return 0
@@ -950,6 +1017,10 @@ task_specific_completion_failure_reason() {
   fi
   if go_bug002_brittle_internal_state_assertion; then
     echo "GO-BUG-002 regression asserts brittle internal configFile state after ReadInConfig instead of observable reload behavior."
+    return 0
+  fi
+  if v8_go_bf003_missing_behavior_or_regression; then
+    echo "V8-GO-BF-003 lacks the required production Go behavior diff plus focused Go regression coverage pair."
     return 0
   fi
   if ts_bf002_production_diff_without_focused_regression; then
@@ -972,6 +1043,9 @@ recover_passed_task_specific_failure() {
   TASK_SPECIFIC_PROMPT+="$(ts_bf002_no_change_recovery_guidance)"
   TASK_SPECIFIC_PROMPT+="$(ts_bf002_recovery_guidance)"
   TASK_SPECIFIC_PROMPT+="$(go_bf001_recovery_guidance)"
+  TASK_SPECIFIC_PROMPT+="$(v8_go_bf003_recovery_guidance)"
+  TASK_SPECIFIC_PROMPT+="$(v8_ts_bug003_axios_guidance)"
+  TASK_SPECIFIC_PROMPT+="$(v8_ts_bug004_undici_guidance)"
   TASK_SPECIFIC_PROMPT+="$(go_bf002_recovery_guidance)"
   TASK_SPECIFIC_PROMPT+="$(go_bug001_recovery_guidance)"
   TASK_SPECIFIC_PROMPT+="$(go_bug002_recovery_guidance)"
@@ -1279,6 +1353,14 @@ benchmark_specific_verification_command() {
     echo "./node_modules/.bin/mocha packages/common/test/module-utils/configurable-module.builder.spec.ts --require ts-node/register --require tsconfig-paths/register --require node_modules/reflect-metadata/Reflect.js --require hooks/mocha-init-hook.ts"
     return 0
   fi
+  if is_v8_ts_bug003_axios_task; then
+    echo "npm exec -- vitest run --project unit tests/unit/composeSignals.test.js"
+    return 0
+  fi
+  if is_v8_ts_bug004_undici_task; then
+    echo "node --test test/client-request.js"
+    return 0
+  fi
   if [[ "$TASK_REPO" == *"vercel/next.js"* && "$TASK_PROMPT" == *"file-watcher regression"* ]]; then
     echo "pnpm testonly packages/next/src/lib/find-config.test.ts"
     return 0
@@ -1387,6 +1469,8 @@ run_verification_command() {
     export GOCACHE="$BENCHMARK_GOCACHE_DIR"
     maybe_prepare_verification
     python3 - <<'PY' "$timeout_override" "$log_path" "$verification_shell_cmd"
+import os
+import signal
 import subprocess
 import sys
 
@@ -1394,15 +1478,27 @@ timeout = int(sys.argv[1])
 log_path = sys.argv[2]
 cmd = sys.argv[3]
 with open(log_path, "wb") as f:
+    proc = subprocess.Popen(
+        ["bash", "-lc", cmd],
+        stdout=f,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
     try:
-        proc = subprocess.run(
-            ["bash", "-lc", cmd],
-            stdout=f,
-            stderr=subprocess.STDOUT,
-            timeout=timeout,
-        )
-        sys.exit(proc.returncode)
+        sys.exit(proc.wait(timeout=timeout))
     except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            proc.wait()
         f.write(f"\nverification command timed out after {timeout}s\n".encode())
         sys.exit(124)
 PY
@@ -1523,6 +1619,9 @@ if [[ "$REPO_HINTS" == *worker* ]]; then
 This task appears to target worker/runtime transport files. Prefer hinted worker/runtime files over generic runner/reporting/test-only files unless inspection proves otherwise."
 fi
 BENCHMARK_PROMPT+="$(go_bf001_recovery_guidance)"
+BENCHMARK_PROMPT+="$(v8_go_bf003_recovery_guidance)"
+BENCHMARK_PROMPT+="$(v8_ts_bug003_axios_guidance)"
+BENCHMARK_PROMPT+="$(v8_ts_bug004_undici_guidance)"
 BENCHMARK_PROMPT+="$(go_bf002_recovery_guidance)"
 BENCHMARK_PROMPT+="$(go_bug001_recovery_guidance)"
 BENCHMARK_PROMPT+="$(go_bug002_recovery_guidance)"
@@ -1655,6 +1754,9 @@ if [[ "$HAS_CHANGES" == "false" ]]; then
   NO_CHANGE_PROMPT+="$(ts_bf001_recovery_guidance)"
   NO_CHANGE_PROMPT+="$(ts_bf002_no_change_recovery_guidance)"
   NO_CHANGE_PROMPT+="$(go_bf001_recovery_guidance)"
+  NO_CHANGE_PROMPT+="$(v8_go_bf003_recovery_guidance)"
+  NO_CHANGE_PROMPT+="$(v8_ts_bug003_axios_guidance)"
+  NO_CHANGE_PROMPT+="$(v8_ts_bug004_undici_guidance)"
   NO_CHANGE_PROMPT+="$(go_bf002_recovery_guidance)"
   NO_CHANGE_PROMPT+="$(go_bug001_recovery_guidance)"
   NO_CHANGE_PROMPT+="$(go_bug002_recovery_guidance)"
@@ -1717,6 +1819,9 @@ if run_verification_command "$VERIFY_LOG"; then
       VERIFIED_INCOMPLETE_PROMPT+="$(ts_bf002_no_change_recovery_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(ts_bf002_recovery_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(go_bf001_recovery_guidance)"
+      VERIFIED_INCOMPLETE_PROMPT+="$(v8_go_bf003_recovery_guidance)"
+      VERIFIED_INCOMPLETE_PROMPT+="$(v8_ts_bug003_axios_guidance)"
+      VERIFIED_INCOMPLETE_PROMPT+="$(v8_ts_bug004_undici_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(go_bf002_recovery_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(go_bug001_recovery_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(go_bug002_recovery_guidance)"
@@ -1782,6 +1887,9 @@ RECOVERY_PROMPT+="$(ts_bf001_recovery_guidance)"
 RECOVERY_PROMPT+="$(ts_bf002_no_change_recovery_guidance)"
 RECOVERY_PROMPT+="$(ts_bf002_recovery_guidance)"
 RECOVERY_PROMPT+="$(go_bf001_recovery_guidance)"
+RECOVERY_PROMPT+="$(v8_go_bf003_recovery_guidance)"
+RECOVERY_PROMPT+="$(v8_ts_bug003_axios_guidance)"
+RECOVERY_PROMPT+="$(v8_ts_bug004_undici_guidance)"
 RECOVERY_PROMPT+="$(go_bf002_recovery_guidance)"
 RECOVERY_PROMPT+="$(go_bug001_recovery_guidance)"
 RECOVERY_PROMPT+="$(go_bug002_recovery_guidance)"
