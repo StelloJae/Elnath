@@ -140,6 +140,53 @@ func TestBuildCodexRequest_ToolUseResultPairStructure(t *testing.T) {
 	}
 }
 
+func TestBuildCodexRequestReasoningEffort(t *testing.T) {
+	t.Run("provider default", func(t *testing.T) {
+		body, err := buildCodexRequestWithEffort(ChatRequest{
+			Model:    "gpt-5.5",
+			Messages: []Message{NewUserMessage("hi")},
+		}, "gpt-5.5", "high")
+		if err != nil {
+			t.Fatalf("buildCodexRequestWithEffort: %v", err)
+		}
+
+		var payload map[string]any
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Fatalf("unmarshal payload: %v; raw=%s", err, body)
+		}
+		reasoning, ok := payload["reasoning"].(map[string]any)
+		if !ok {
+			t.Fatalf("reasoning type = %T, want map[string]any; raw=%s", payload["reasoning"], body)
+		}
+		if got := reasoning["effort"]; got != "high" {
+			t.Fatalf("reasoning.effort = %v, want high", got)
+		}
+	})
+
+	t.Run("request override", func(t *testing.T) {
+		body, err := buildCodexRequestWithEffort(ChatRequest{
+			Model:           "gpt-5.5",
+			Messages:        []Message{NewUserMessage("hi")},
+			ReasoningEffort: "low",
+		}, "gpt-5.5", "high")
+		if err != nil {
+			t.Fatalf("buildCodexRequestWithEffort: %v", err)
+		}
+
+		var payload map[string]any
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Fatalf("unmarshal payload: %v; raw=%s", err, body)
+		}
+		reasoning, ok := payload["reasoning"].(map[string]any)
+		if !ok {
+			t.Fatalf("reasoning type = %T, want map[string]any; raw=%s", payload["reasoning"], body)
+		}
+		if got := reasoning["effort"]; got != "low" {
+			t.Fatalf("reasoning.effort = %v, want low", got)
+		}
+	})
+}
+
 func TestNewHTTPClientWithPerHostCap_DefaultsAndCallerContracts(t *testing.T) {
 	client := newHTTPClientWithPerHostCap(42)
 	transport, ok := client.Transport.(*http.Transport)

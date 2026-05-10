@@ -40,10 +40,10 @@ type UsageStats struct {
 // StreamEvent is emitted by a provider during streaming.
 type StreamEvent struct {
 	Type     StreamEventType
-	Content  string       // text delta for content_delta events
+	Content  string        // text delta for content_delta events
 	ToolCall *ToolUseEvent // populated for tool_use events
-	Usage    *UsageStats  // populated for message_stop event
-	Error    error        // populated for error events
+	Usage    *UsageStats   // populated for message_stop event
+	Error    error         // populated for error events
 
 	// InputTokens is populated for message_start events (convenience field).
 	InputTokens int
@@ -66,14 +66,15 @@ type Usage struct {
 
 // ChatRequest is the provider-agnostic input to an LLM call.
 type ChatRequest struct {
-	Model          string
-	Messages       []Message
-	Tools          []ToolDef
-	MaxTokens      int
-	Temperature    float64
-	System         string
-	ThinkingBudget int  // If > 0, enables extended thinking with this token budget.
-	EnableCache    bool // If true, adds prompt caching hints to system + tools.
+	Model           string
+	Messages        []Message
+	Tools           []ToolDef
+	MaxTokens       int
+	Temperature     float64
+	System          string
+	ThinkingBudget  int    // If > 0, enables extended thinking with this token budget.
+	ReasoningEffort string // Provider-native effort hint such as none/minimal/low/medium/high/xhigh.
+	EnableCache     bool   // If true, adds prompt caching hints to system + tools.
 	// SessionID scopes provider-side telemetry (prompt-cache event
 	// recording in particular). Empty string means "skip telemetry
 	// sinks" — providers must tolerate callers that do not thread a

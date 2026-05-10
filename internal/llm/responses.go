@@ -15,11 +15,13 @@ import (
 // ResponsesProvider uses OpenAI's Responses API (/v1/responses)
 // which works with ChatGPT OAuth tokens (Codex CLI auth_mode: "chatgpt").
 type ResponsesProvider struct {
-	accessToken string
-	accountID   string
-	baseURL     string
-	client      *http.Client
-	model       string
+	accessToken     string
+	accountID       string
+	baseURL         string
+	client          *http.Client
+	model           string
+	reasoningEffort string
+	betaHeader      bool
 }
 
 func NewResponsesProvider(accessToken, model, accountID string, opts ...ResponsesOption) *ResponsesProvider {
@@ -29,6 +31,7 @@ func NewResponsesProvider(accessToken, model, accountID string, opts ...Response
 		client:      &http.Client{Timeout: 300 * time.Second},
 		model:       model,
 		accountID:   accountID,
+		betaHeader:  true,
 	}
 	for _, opt := range opts {
 		opt(p)
@@ -40,6 +43,18 @@ type ResponsesOption func(*ResponsesProvider)
 
 func WithResponsesBaseURL(url string) ResponsesOption {
 	return func(p *ResponsesProvider) { p.baseURL = strings.TrimRight(url, "/") }
+}
+
+func WithResponsesTimeout(d time.Duration) ResponsesOption {
+	return func(p *ResponsesProvider) { p.client = newHTTPClientWithPerHostCap(int(d / time.Second)) }
+}
+
+func WithResponsesReasoningEffort(effort string) ResponsesOption {
+	return func(p *ResponsesProvider) { p.reasoningEffort = strings.TrimSpace(effort) }
+}
+
+func WithResponsesBetaHeader(enabled bool) ResponsesOption {
+	return func(p *ResponsesProvider) { p.betaHeader = enabled }
 }
 
 func (p *ResponsesProvider) Name() string { return "openai-responses" }
@@ -218,7 +233,9 @@ func (p *ResponsesProvider) setHeaders(req *http.Request) {
 	if p.accountID != "" {
 		req.Header.Set("chatgpt-account-id", p.accountID)
 	}
-	req.Header.Set("OpenAI-Beta", "responses=experimental")
+	if p.betaHeader {
+		req.Header.Set("OpenAI-Beta", "responses=experimental")
+	}
 	req.Header.Set("Accept", "text/event-stream")
 }
 
@@ -280,6 +297,9 @@ func (p *ResponsesProvider) buildRequest(req ChatRequest, stream bool) map[strin
 		"instructions": instructions,
 		"store":        false,
 	}
+	if effort := effectiveResponsesReasoningEffort(req.ReasoningEffort, p.reasoningEffort); effort != "" {
+		body["reasoning"] = map[string]interface{}{"effort": effort}
+	}
 	if stream {
 		body["stream"] = true
 	}
@@ -322,6 +342,13 @@ func (p *ResponsesProvider) buildRequest(req ChatRequest, stream bool) map[strin
 		body["tools"] = tools
 	}
 	return body
+}
+
+func effectiveResponsesReasoningEffort(requestEffort, providerEffort string) string {
+	if effort := strings.TrimSpace(requestEffort); effort != "" {
+		return effort
+	}
+	return strings.TrimSpace(providerEffort)
 }
 
 func buildRoleMessage(role string, parts []map[string]interface{}) map[string]interface{} {

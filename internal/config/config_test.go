@@ -30,6 +30,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Anthropic.Timeout <= 0 {
 		t.Error("Anthropic.Timeout should be positive")
 	}
+	if cfg.OpenAIResponses.Timeout <= 0 {
+		t.Error("OpenAIResponses.Timeout should be positive")
+	}
 	if cfg.Permission.Mode != "default" {
 		t.Errorf("expected Permission.Mode %q, got %q", "default", cfg.Permission.Mode)
 	}
@@ -127,6 +130,46 @@ func TestLoad_PrincipalConfig(t *testing.T) {
 	}
 	if cfg.Principal.UserID != "stello" {
 		t.Fatalf("Principal.UserID = %q, want stello", cfg.Principal.UserID)
+	}
+}
+
+func TestLoad_OpenAIResponsesConfig(t *testing.T) {
+	dir := t.TempDir()
+	wikiDir := filepath.Join(dir, "wiki")
+	if err := os.MkdirAll(wikiDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	yaml := strings.Join([]string{
+		"data_dir: " + dir,
+		"wiki_dir: " + wikiDir,
+		"openai_responses:",
+		"  api_key: sk-responses",
+		"  base_url: https://api.moonshot.ai/v1",
+		"  model: kimi-k2",
+		"  reasoning_effort: high",
+		"",
+	}, "\n")
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.OpenAIResponses.APIKey != "sk-responses" {
+		t.Fatalf("OpenAIResponses.APIKey = %q, want sk-responses", cfg.OpenAIResponses.APIKey)
+	}
+	if cfg.OpenAIResponses.BaseURL != "https://api.moonshot.ai/v1" {
+		t.Fatalf("OpenAIResponses.BaseURL = %q, want https://api.moonshot.ai/v1", cfg.OpenAIResponses.BaseURL)
+	}
+	if cfg.OpenAIResponses.Model != "kimi-k2" {
+		t.Fatalf("OpenAIResponses.Model = %q, want kimi-k2", cfg.OpenAIResponses.Model)
+	}
+	if cfg.OpenAIResponses.ReasoningEffort != "high" {
+		t.Fatalf("OpenAIResponses.ReasoningEffort = %q, want high", cfg.OpenAIResponses.ReasoningEffort)
 	}
 }
 
@@ -347,6 +390,34 @@ func TestApplyEnvOverrides(t *testing.T) {
 			want:   "oai-key",
 		},
 		{
+			name:   "ELNATH_OPENAI_RESPONSES_API_KEY",
+			envKey: "ELNATH_OPENAI_RESPONSES_API_KEY",
+			envVal: "responses-key",
+			check:  func(c *Config) string { return c.OpenAIResponses.APIKey },
+			want:   "responses-key",
+		},
+		{
+			name:   "ELNATH_OPENAI_RESPONSES_BASE_URL",
+			envKey: "ELNATH_OPENAI_RESPONSES_BASE_URL",
+			envVal: "https://api.minimax.io/v1",
+			check:  func(c *Config) string { return c.OpenAIResponses.BaseURL },
+			want:   "https://api.minimax.io/v1",
+		},
+		{
+			name:   "ELNATH_OPENAI_RESPONSES_MODEL",
+			envKey: "ELNATH_OPENAI_RESPONSES_MODEL",
+			envVal: "minimax-m2.7",
+			check:  func(c *Config) string { return c.OpenAIResponses.Model },
+			want:   "minimax-m2.7",
+		},
+		{
+			name:   "ELNATH_OPENAI_RESPONSES_REASONING_EFFORT",
+			envKey: "ELNATH_OPENAI_RESPONSES_REASONING_EFFORT",
+			envVal: "medium",
+			check:  func(c *Config) string { return c.OpenAIResponses.ReasoningEffort },
+			want:   "medium",
+		},
+		{
 			name:   "ELNATH_OLLAMA_BASE_URL",
 			envKey: "ELNATH_OLLAMA_BASE_URL",
 			envVal: "http://localhost:11434",
@@ -515,6 +586,30 @@ func TestValidate(t *testing.T) {
 			name:    "unsupported locale",
 			mutate:  func(c *Config) { c.Locale = "fr" },
 			wantErr: "supported: en, ko, ja, zh, auto",
+		},
+		{
+			name:    "unsupported openai responses reasoning effort",
+			mutate:  func(c *Config) { c.OpenAIResponses.ReasoningEffort = "huge" },
+			wantErr: "openai_responses.reasoning_effort",
+		},
+		{
+			name:    "openai responses reasoning effort alone is valid",
+			mutate:  func(c *Config) { c.OpenAIResponses.ReasoningEffort = "high" },
+			wantErr: "",
+		},
+		{
+			name: "openai responses base url requires api key",
+			mutate: func(c *Config) {
+				c.OpenAIResponses.BaseURL = "https://api.example.test/v1"
+			},
+			wantErr: "openai_responses.api_key is required",
+		},
+		{
+			name: "openai responses model requires api key",
+			mutate: func(c *Config) {
+				c.OpenAIResponses.Model = "kimi-k2"
+			},
+			wantErr: "openai_responses.api_key is required",
 		},
 		{
 			name: "wiki_dir is a file not a dir",

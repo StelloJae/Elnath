@@ -27,3 +27,46 @@ func TestResolveFallbackModel(t *testing.T) {
 		}
 	})
 }
+
+func TestBuildProviderPrefersExplicitOpenAIResponses(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := config.DefaultConfig()
+	cfg.Anthropic.APIKey = "anthropic-key"
+	cfg.OpenAIResponses.APIKey = "responses-key"
+	cfg.OpenAIResponses.BaseURL = "https://api.moonshot.ai/v1"
+	cfg.OpenAIResponses.Model = "kimi-k2"
+	cfg.OpenAIResponses.ReasoningEffort = "high"
+
+	provider, model, err := buildProvider(cfg)
+	if err != nil {
+		t.Fatalf("buildProvider: %v", err)
+	}
+	if provider.Name() != "openai-responses" {
+		t.Fatalf("provider.Name() = %q, want openai-responses", provider.Name())
+	}
+	if model != "kimi-k2" {
+		t.Fatalf("model = %q, want kimi-k2", model)
+	}
+}
+
+func TestBuildProviderOpenAIResponsesUsesFallbackModel(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := config.DefaultConfig()
+	cfg.Anthropic.APIKey = ""
+	cfg.OpenAI.APIKey = ""
+	cfg.OpenAIResponses.APIKey = "responses-key"
+	cfg.OpenAIResponses.BaseURL = "https://api.openai.com/v1"
+	cfg.OpenAIResponses.Model = ""
+	cfg.FallbackModel = "gpt-5.5"
+
+	provider, model, err := buildProvider(cfg)
+	if err != nil {
+		t.Fatalf("buildProvider: %v", err)
+	}
+	if provider.Name() != "openai-responses" {
+		t.Fatalf("provider.Name() = %q, want openai-responses", provider.Name())
+	}
+	if model != "gpt-5.5" {
+		t.Fatalf("model = %q, want gpt-5.5", model)
+	}
+}

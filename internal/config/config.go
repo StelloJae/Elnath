@@ -18,7 +18,11 @@ type Config struct {
 
 	Anthropic ProviderConfig `yaml:"anthropic"`
 	OpenAI    ProviderConfig `yaml:"openai"`
-	Ollama    OllamaConfig   `yaml:"ollama"`
+	// OpenAIResponses is for OpenAI Responses-compatible providers. This keeps
+	// transport choice independent from model names, so users can route GPT,
+	// Kimi, MiniMax, or other compatible models through /responses.
+	OpenAIResponses ProviderConfig `yaml:"openai_responses"`
+	Ollama          OllamaConfig   `yaml:"ollama"`
 
 	MaxContextTokens  int     `yaml:"max_context_tokens"`
 	CompressThreshold float64 `yaml:"compress_threshold"`
@@ -83,10 +87,11 @@ type ProjectRef struct {
 }
 
 type ProviderConfig struct {
-	APIKey  string `yaml:"api_key"`
-	BaseURL string `yaml:"base_url"`
-	Model   string `yaml:"model"`
-	Timeout int    `yaml:"timeout_seconds"`
+	APIKey          string `yaml:"api_key"`
+	BaseURL         string `yaml:"base_url"`
+	Model           string `yaml:"model"`
+	ReasoningEffort string `yaml:"reasoning_effort"`
+	Timeout         int    `yaml:"timeout_seconds"`
 }
 
 type PermissionConfig struct {
@@ -246,6 +251,18 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("ELNATH_OPENAI_API_KEY"); v != "" {
 		cfg.OpenAI.APIKey = v
 	}
+	if v := os.Getenv("ELNATH_OPENAI_RESPONSES_API_KEY"); v != "" {
+		cfg.OpenAIResponses.APIKey = v
+	}
+	if v := os.Getenv("ELNATH_OPENAI_RESPONSES_BASE_URL"); v != "" {
+		cfg.OpenAIResponses.BaseURL = v
+	}
+	if v := os.Getenv("ELNATH_OPENAI_RESPONSES_MODEL"); v != "" {
+		cfg.OpenAIResponses.Model = v
+	}
+	if v := os.Getenv("ELNATH_OPENAI_RESPONSES_REASONING_EFFORT"); v != "" {
+		cfg.OpenAIResponses.ReasoningEffort = v
+	}
 	if v := os.Getenv("ELNATH_OLLAMA_BASE_URL"); v != "" {
 		cfg.Ollama.BaseURL = v
 	}
@@ -305,6 +322,19 @@ func validate(cfg *Config) error {
 		return fmt.Errorf("unsupported locale: %q (supported: en, ko, ja, zh, auto)", cfg.Locale)
 	}
 
+	if err := validateProviderReasoningEffort("anthropic", cfg.Anthropic.ReasoningEffort); err != nil {
+		return err
+	}
+	if err := validateProviderReasoningEffort("openai", cfg.OpenAI.ReasoningEffort); err != nil {
+		return err
+	}
+	if err := validateProviderReasoningEffort("openai_responses", cfg.OpenAIResponses.ReasoningEffort); err != nil {
+		return err
+	}
+	if cfg.OpenAIResponses.APIKey == "" && (cfg.OpenAIResponses.BaseURL != "" || cfg.OpenAIResponses.Model != "") {
+		return fmt.Errorf("openai_responses.api_key is required when openai_responses base_url or model is set")
+	}
+
 	switch cfg.Permission.Mode {
 	case "default", "accept_edits", "plan", "bypass":
 	default:
@@ -342,4 +372,13 @@ func validate(cfg *Config) error {
 	}
 
 	return nil
+}
+
+func validateProviderReasoningEffort(providerName, effort string) error {
+	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case "", "none", "minimal", "low", "medium", "high", "xhigh":
+		return nil
+	default:
+		return fmt.Errorf("%s.reasoning_effort %q is invalid (supported: none, minimal, low, medium, high, xhigh)", providerName, effort)
+	}
 }

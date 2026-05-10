@@ -25,6 +25,9 @@ func DefaultConfig() *Config {
 			Model:   "gpt-4o",
 			Timeout: 120,
 		},
+		OpenAIResponses: ProviderConfig{
+			Timeout: 120,
+		},
 
 		Permission: PermissionConfig{
 			Mode: "default",
