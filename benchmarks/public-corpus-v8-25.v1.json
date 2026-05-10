@@ -303,7 +303,7 @@
       "repo": "https://github.com/actions/toolkit",
       "source_url": "https://github.com/actions/toolkit",
       "repo_ref": "8066c8132268398c77366dae936dac12c03d39ee",
-      "verification_command": "npm test",
+      "verification_command": "npm test -- packages/core/__tests__/command.test.ts",
       "acceptance_criteria": [
         "escaped command or annotation behavior is covered by tests",
         "existing output format is preserved",

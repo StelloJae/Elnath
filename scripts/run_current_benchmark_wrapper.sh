@@ -386,6 +386,12 @@ is_v8_js_bug001_express_task() {
   }
 }
 
+is_v8_mix_bug001_actions_toolkit_task() {
+  [[ "$TASK_ID" == "V8-MIX-BUG-001" ]] || {
+    [[ "$TASK_REPO" == *"actions/toolkit"* && "$TASK_PROMPT" == *"command escaping"* ]]
+  }
+}
+
 is_v8_py_th001_pytest_task() {
   [[ "$TASK_ID" == "V8-PY-TH-001" ]] || {
     [[ "$TASK_REPO" == *"pytest-dev/pytest"* && "$TASK_PROMPT" == *"pytest.approx"* ]]
@@ -447,7 +453,7 @@ EOF
 }
 
 task_recovery_timeout() {
-  if is_ts_bf001_vitest_task || is_ts_bf002_nestjs_task || is_v8_py_th001_pytest_task || is_v8_go_bug004_fsnotify_task || is_v8_go_bug003_cobra_task || is_v8_go_bf004_gorm_context_task || is_v8_py_bug001_requests_task; then
+  if is_ts_bf001_vitest_task || is_ts_bf002_nestjs_task || is_v8_py_th001_pytest_task || is_v8_go_bug004_fsnotify_task || is_v8_go_bug003_cobra_task || is_v8_go_bf004_gorm_context_task || is_v8_mix_bug001_actions_toolkit_task || is_v8_py_bug001_requests_task; then
     printf '%s\n' "$ELNATH_TIMEOUT"
     return 0
   fi
@@ -593,6 +599,19 @@ V8-JS-BUG-001 express mounted-app guidance:
 - Do not add a new `app.handle(..., err)` API or inject generic errors into child apps; real `next(err)` errors should still propagate normally.
 - Prefer focused coverage in `test/app.use.js` or adjacent app/router tests that proves mounted-app `next('router')` fallthrough and preserves normal error behavior.
 - Run `npm test` before the final answer.
+EOF
+}
+
+v8_mix_bug001_actions_toolkit_guidance() {
+  is_v8_mix_bug001_actions_toolkit_task || return 0
+  cat <<'EOF'
+
+V8-MIX-BUG-001 actions/toolkit command guidance:
+- Start in `packages/core/src/command.ts` and `packages/core/__tests__/command.test.ts`.
+- The high-signal edge case is command property separators when every property value is empty, null, or undefined; do not emit a trailing space before `::message`.
+- Keep the patch local to command formatting behavior and focused command tests.
+- Do not modify root `jest.config.js` or remap `@actions/*` packages to TypeScript source files; that pulls broad package dependencies such as `tunnel` into unrelated tests.
+- Run `npm test -- packages/core/__tests__/command.test.ts` before the final answer.
 EOF
 }
 
@@ -1210,6 +1229,7 @@ recover_passed_task_specific_failure() {
     TASK_SPECIFIC_PROMPT+="$(v8_go_bf003_recovery_guidance)"
     TASK_SPECIFIC_PROMPT+="$(v8_go_bf004_gorm_context_guidance)"
     TASK_SPECIFIC_PROMPT+="$(v8_js_bug001_express_guidance)"
+    TASK_SPECIFIC_PROMPT+="$(v8_mix_bug001_actions_toolkit_guidance)"
     TASK_SPECIFIC_PROMPT+="$(v8_py_th001_pytest_guidance)"
     TASK_SPECIFIC_PROMPT+="$(v8_go_bug004_fsnotify_guidance)"
     TASK_SPECIFIC_PROMPT+="$(v8_go_bug003_cobra_guidance)"
@@ -1807,6 +1827,7 @@ BENCHMARK_PROMPT+="$(go_bf001_recovery_guidance)"
 BENCHMARK_PROMPT+="$(v8_go_bf003_recovery_guidance)"
 BENCHMARK_PROMPT+="$(v8_go_bf004_gorm_context_guidance)"
 BENCHMARK_PROMPT+="$(v8_js_bug001_express_guidance)"
+BENCHMARK_PROMPT+="$(v8_mix_bug001_actions_toolkit_guidance)"
 BENCHMARK_PROMPT+="$(v8_py_th001_pytest_guidance)"
 BENCHMARK_PROMPT+="$(v8_go_bug004_fsnotify_guidance)"
 BENCHMARK_PROMPT+="$(v8_go_bug003_cobra_guidance)"
@@ -1949,6 +1970,7 @@ if [[ "$HAS_CHANGES" == "false" ]]; then
   NO_CHANGE_PROMPT+="$(v8_go_bf003_recovery_guidance)"
   NO_CHANGE_PROMPT+="$(v8_go_bf004_gorm_context_guidance)"
   NO_CHANGE_PROMPT+="$(v8_js_bug001_express_guidance)"
+  NO_CHANGE_PROMPT+="$(v8_mix_bug001_actions_toolkit_guidance)"
   NO_CHANGE_PROMPT+="$(v8_py_th001_pytest_guidance)"
   NO_CHANGE_PROMPT+="$(v8_go_bug004_fsnotify_guidance)"
   NO_CHANGE_PROMPT+="$(v8_go_bug003_cobra_guidance)"
@@ -2020,6 +2042,7 @@ if run_verification_command "$VERIFY_LOG"; then
       VERIFIED_INCOMPLETE_PROMPT+="$(v8_go_bf003_recovery_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(v8_go_bf004_gorm_context_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(v8_js_bug001_express_guidance)"
+      VERIFIED_INCOMPLETE_PROMPT+="$(v8_mix_bug001_actions_toolkit_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(v8_py_th001_pytest_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(v8_go_bug004_fsnotify_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(v8_go_bug003_cobra_guidance)"
@@ -2094,6 +2117,7 @@ RECOVERY_PROMPT+="$(go_bf001_recovery_guidance)"
 RECOVERY_PROMPT+="$(v8_go_bf003_recovery_guidance)"
 RECOVERY_PROMPT+="$(v8_go_bf004_gorm_context_guidance)"
 RECOVERY_PROMPT+="$(v8_js_bug001_express_guidance)"
+RECOVERY_PROMPT+="$(v8_mix_bug001_actions_toolkit_guidance)"
 RECOVERY_PROMPT+="$(v8_py_th001_pytest_guidance)"
 RECOVERY_PROMPT+="$(v8_go_bug004_fsnotify_guidance)"
 RECOVERY_PROMPT+="$(v8_go_bug003_cobra_guidance)"

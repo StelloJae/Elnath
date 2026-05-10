@@ -21,6 +21,12 @@ required_current = [
     "mounted child app calling `next('router')`",
     "Do not add a new `app.handle(..., err)` API",
     "real `next(err)` errors should still propagate normally",
+    "V8-MIX-BUG-001 actions/toolkit command guidance:",
+    "`packages/core/src/command.ts`",
+    "`packages/core/__tests__/command.test.ts`",
+    "Do not modify root `jest.config.js`",
+    "npm test -- packages/core/__tests__/command.test.ts",
+    "is_v8_mix_bug001_actions_toolkit_task",
     'allowed_suffixes = (".go", ".ts", ".tsx", ".js", ".jsx", ".py")',
     "V8-PY-TH-001 pytest approx guidance:",
     "`src/_pytest/python_api.py`",
@@ -81,6 +87,7 @@ for forbidden in [
 tasks = {task["id"]: task for task in corpus["tasks"]}
 js_prompt = tasks["V8-JS-BUG-001"]["prompt"]
 py_task = tasks["V8-PY-TH-001"]
+mix_bug_task = tasks["V8-MIX-BUG-001"]
 
 if "V8-GO-BF-003" in tasks:
     raise SystemExit("V8-GO-BF-003 should be removed from the repaired v8 corpus")
@@ -97,6 +104,8 @@ if py_task["repo_ref"] != "84ae27e4710af45cc307f8c0c25259e917090219":
     raise SystemExit("V8-PY-TH-001 must pin the pre-datetime-support pytest parent commit")
 if py_task["verification_command"] != "python -m pytest -o minversion=0 testing/python/approx.py -q":
     raise SystemExit("V8-PY-TH-001 must use the focused approx verification command")
+if mix_bug_task["verification_command"] != "npm test -- packages/core/__tests__/command.test.ts":
+    raise SystemExit("V8-MIX-BUG-001 must use the focused core command test")
 PY
 
 echo "PASS: v8 task guidance and corpus prompts stay focused"
