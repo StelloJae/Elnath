@@ -393,7 +393,7 @@
       "repo": "https://github.com/mswjs/msw",
       "source_url": "https://github.com/mswjs/msw",
       "repo_ref": "c07e09b4b016928d18d5504fd6338c80c8f0ea0b",
-      "verification_command": "pnpm test",
+      "verification_command": "pnpm exec vitest src/core/utils/handleRequest.test.ts && pnpm exec vitest --config=./test/node/vitest.config.ts test/node/regressions/many-request-handlers.test.ts test/node/regressions/many-request-handlers-jsdom.test.ts",
       "acceptance_criteria": [
         "the handler edge case is covered by a regression test",
         "existing request mocking semantics remain unchanged",

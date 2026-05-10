@@ -392,6 +392,18 @@ is_v8_mix_bug001_actions_toolkit_task() {
   }
 }
 
+is_v8_add_js001_yargs_task() {
+  [[ "$TASK_ID" == "V8-ADD-JS-001" ]] || {
+    [[ "$TASK_REPO" == *"yargs/yargs"* && "$TASK_PROMPT" == *"CLI option parsing edge case"* ]]
+  }
+}
+
+is_v8_def_ts003_msw_task() {
+  [[ "$TASK_ID" == "V8-DEF-TS-003" ]] || {
+    [[ "$TASK_REPO" == *"mswjs/msw"* && "$TASK_PROMPT" == *"request mocking handler edge case"* ]]
+  }
+}
+
 is_v8_py_th001_pytest_task() {
   [[ "$TASK_ID" == "V8-PY-TH-001" ]] || {
     [[ "$TASK_REPO" == *"pytest-dev/pytest"* && "$TASK_PROMPT" == *"pytest.approx"* ]]
@@ -453,7 +465,7 @@ EOF
 }
 
 task_recovery_timeout() {
-  if is_ts_bf001_vitest_task || is_ts_bf002_nestjs_task || is_v8_py_th001_pytest_task || is_v8_go_bug004_fsnotify_task || is_v8_go_bug003_cobra_task || is_v8_go_bf004_gorm_context_task || is_v8_mix_bug001_actions_toolkit_task || is_v8_py_bug001_requests_task; then
+  if is_ts_bf001_vitest_task || is_ts_bf002_nestjs_task || is_v8_py_th001_pytest_task || is_v8_go_bug004_fsnotify_task || is_v8_go_bug003_cobra_task || is_v8_go_bf004_gorm_context_task || is_v8_mix_bug001_actions_toolkit_task || is_v8_add_js001_yargs_task || is_v8_def_ts003_msw_task || is_v8_py_bug001_requests_task; then
     printf '%s\n' "$ELNATH_TIMEOUT"
     return 0
   fi
@@ -612,6 +624,37 @@ V8-MIX-BUG-001 actions/toolkit command guidance:
 - Keep the patch local to command formatting behavior and focused command tests.
 - Do not modify root `jest.config.js` or remap `@actions/*` packages to TypeScript source files; that pulls broad package dependencies such as `tunnel` into unrelated tests.
 - Run `npm test -- packages/core/__tests__/command.test.ts` before the final answer.
+EOF
+}
+
+v8_add_js001_yargs_guidance() {
+  is_v8_add_js001_yargs_task || return 0
+  cat <<'EOF'
+
+V8-ADD-JS-001 yargs option parsing guidance:
+- Start in `lib/command.ts` and the existing integration tests in `test/integration.mjs`.
+- The retained failing path added a regression for positional command args that resemble options and then failed that same regression. Do not stop after adding a failing test.
+- If patching positional argument rewriting, verify how `positionalMap`, `unparsed`, and `unknown-options-as-args` interact before changing token shape.
+- The retained passing patch used the simple token shape `unparsed.push(\`--${key}=${value}\`)` for positional map values instead of a dash-prefixed conditional branch.
+- Preserve normal command parsing and existing option-assignment behavior; do not churn help output or broad parser configuration.
+- Do not add a new integration test unless you have already confirmed the fixture exits 0 with the new arguments. A retained failing path added `test/integration.mjs` coverage first and got `cmd exited with code 1`.
+- The known PASS path changed only runtime rewrite/formatting surfaces and let the existing `npm test` suite verify the behavior.
+- `npm test` runs a posttest formatter/lint check; if it reports prettier/gts formatting errors, run the repo formatter such as `npm run fix` or make the exact formatting edits before the final answer.
+- Run `npm test` before the final answer and ensure the posttest check passes.
+EOF
+}
+
+v8_def_ts003_msw_guidance() {
+  is_v8_def_ts003_msw_task || return 0
+  cat <<'EOF'
+
+V8-DEF-TS-003 MSW handler guidance:
+- Start in `src/core/utils/executeHandlers.ts`, `src/core/handlers/RequestHandler.ts`, and the focused handler tests around `handleRequest`.
+- Do not clone the request for every handler. Existing many-handler regressions assert low clone counts; per-handler `request.clone()` explodes counts such as expected 1/3/2/4 into 100+/200+/300+.
+- Preserve existing `request:match`, `request:unhandled`, and `request:end` event semantics; do not make passthrough or no-response handlers appear unhandled.
+- If preserving the matching handler result, keep the last matching result without changing request clone behavior for every candidate handler.
+- Run the corpus verification command exactly: `pnpm exec vitest src/core/utils/handleRequest.test.ts && pnpm exec vitest --config=./test/node/vitest.config.ts test/node/regressions/many-request-handlers.test.ts test/node/regressions/many-request-handlers-jsdom.test.ts`.
+- Do not substitute full `pnpm test`; retained evidence shows it includes unrelated body/blob failures in the current benchmark environment.
 EOF
 }
 
@@ -1230,6 +1273,8 @@ recover_passed_task_specific_failure() {
     TASK_SPECIFIC_PROMPT+="$(v8_go_bf004_gorm_context_guidance)"
     TASK_SPECIFIC_PROMPT+="$(v8_js_bug001_express_guidance)"
     TASK_SPECIFIC_PROMPT+="$(v8_mix_bug001_actions_toolkit_guidance)"
+    TASK_SPECIFIC_PROMPT+="$(v8_add_js001_yargs_guidance)"
+    TASK_SPECIFIC_PROMPT+="$(v8_def_ts003_msw_guidance)"
     TASK_SPECIFIC_PROMPT+="$(v8_py_th001_pytest_guidance)"
     TASK_SPECIFIC_PROMPT+="$(v8_go_bug004_fsnotify_guidance)"
     TASK_SPECIFIC_PROMPT+="$(v8_go_bug003_cobra_guidance)"
@@ -1828,6 +1873,8 @@ BENCHMARK_PROMPT+="$(v8_go_bf003_recovery_guidance)"
 BENCHMARK_PROMPT+="$(v8_go_bf004_gorm_context_guidance)"
 BENCHMARK_PROMPT+="$(v8_js_bug001_express_guidance)"
 BENCHMARK_PROMPT+="$(v8_mix_bug001_actions_toolkit_guidance)"
+BENCHMARK_PROMPT+="$(v8_add_js001_yargs_guidance)"
+BENCHMARK_PROMPT+="$(v8_def_ts003_msw_guidance)"
 BENCHMARK_PROMPT+="$(v8_py_th001_pytest_guidance)"
 BENCHMARK_PROMPT+="$(v8_go_bug004_fsnotify_guidance)"
 BENCHMARK_PROMPT+="$(v8_go_bug003_cobra_guidance)"
@@ -1971,6 +2018,8 @@ if [[ "$HAS_CHANGES" == "false" ]]; then
   NO_CHANGE_PROMPT+="$(v8_go_bf004_gorm_context_guidance)"
   NO_CHANGE_PROMPT+="$(v8_js_bug001_express_guidance)"
   NO_CHANGE_PROMPT+="$(v8_mix_bug001_actions_toolkit_guidance)"
+  NO_CHANGE_PROMPT+="$(v8_add_js001_yargs_guidance)"
+  NO_CHANGE_PROMPT+="$(v8_def_ts003_msw_guidance)"
   NO_CHANGE_PROMPT+="$(v8_py_th001_pytest_guidance)"
   NO_CHANGE_PROMPT+="$(v8_go_bug004_fsnotify_guidance)"
   NO_CHANGE_PROMPT+="$(v8_go_bug003_cobra_guidance)"
@@ -2043,6 +2092,8 @@ if run_verification_command "$VERIFY_LOG"; then
       VERIFIED_INCOMPLETE_PROMPT+="$(v8_go_bf004_gorm_context_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(v8_js_bug001_express_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(v8_mix_bug001_actions_toolkit_guidance)"
+      VERIFIED_INCOMPLETE_PROMPT+="$(v8_add_js001_yargs_guidance)"
+      VERIFIED_INCOMPLETE_PROMPT+="$(v8_def_ts003_msw_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(v8_py_th001_pytest_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(v8_go_bug004_fsnotify_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(v8_go_bug003_cobra_guidance)"
@@ -2118,6 +2169,8 @@ RECOVERY_PROMPT+="$(v8_go_bf003_recovery_guidance)"
 RECOVERY_PROMPT+="$(v8_go_bf004_gorm_context_guidance)"
 RECOVERY_PROMPT+="$(v8_js_bug001_express_guidance)"
 RECOVERY_PROMPT+="$(v8_mix_bug001_actions_toolkit_guidance)"
+RECOVERY_PROMPT+="$(v8_add_js001_yargs_guidance)"
+RECOVERY_PROMPT+="$(v8_def_ts003_msw_guidance)"
 RECOVERY_PROMPT+="$(v8_py_th001_pytest_guidance)"
 RECOVERY_PROMPT+="$(v8_go_bug004_fsnotify_guidance)"
 RECOVERY_PROMPT+="$(v8_go_bug003_cobra_guidance)"
