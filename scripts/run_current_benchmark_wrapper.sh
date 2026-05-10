@@ -374,6 +374,24 @@ is_v8_ts_bug004_undici_task() {
   }
 }
 
+is_v8_js_bug001_express_task() {
+  [[ "$TASK_ID" == "V8-JS-BUG-001" ]] || {
+    [[ "$TASK_REPO" == *"expressjs/express"* && "$TASK_PROMPT" == *"next('router')"* ]]
+  }
+}
+
+is_v8_py_th001_pytest_task() {
+  [[ "$TASK_ID" == "V8-PY-TH-001" ]] || {
+    [[ "$TASK_REPO" == *"pytest-dev/pytest"* && "$TASK_PROMPT" == *"pytest.approx"* ]]
+  }
+}
+
+is_v8_go_bug004_fsnotify_task() {
+  [[ "$TASK_ID" == "V8-GO-BUG-004" ]] || {
+    [[ "$TASK_REPO" == *"fsnotify/fsnotify"* && "$TASK_PROMPT" == *"rename or remove sequencing"* ]]
+  }
+}
+
 typescript_recovery_checklist() {
   is_typescript_canary_task || return 0
   cat <<'EOF'
@@ -400,7 +418,7 @@ EOF
 }
 
 task_recovery_timeout() {
-  if is_ts_bf001_vitest_task || is_ts_bf002_nestjs_task; then
+  if is_ts_bf001_vitest_task || is_ts_bf002_nestjs_task || is_v8_py_th001_pytest_task || is_v8_go_bug004_fsnotify_task; then
     printf '%s\n' "$ELNATH_TIMEOUT"
     return 0
   fi
@@ -517,6 +535,48 @@ V8-GO-BF-003 chi request metadata guidance:
 - The task requires observable request metadata behavior plus focused regression coverage.
 - A diff without a focused Go test is incomplete even if `go test ./...` passes.
 - Prefer the smallest production change that makes route/request metadata visible to downstream middleware while preserving existing route and handler semantics.
+- Run `go test ./...` before the final answer.
+EOF
+}
+
+v8_js_bug001_express_guidance() {
+  is_v8_js_bug001_express_task || return 0
+  cat <<'EOF'
+
+V8-JS-BUG-001 express mounted-app guidance:
+- Start in `lib/application.js`, specifically the mounted app wrapper inside `app.use`.
+- The target edge case is a mounted child app calling `next('router')`; the parent router should continue to the next matching middleware instead of treating the sentinel as a real error.
+- Do not add a new `app.handle(..., err)` API or inject generic errors into child apps; real `next(err)` errors should still propagate normally.
+- Prefer focused coverage in `test/app.use.js` or adjacent app/router tests that proves mounted-app `next('router')` fallthrough and preserves normal error behavior.
+- Run `npm test` before the final answer.
+EOF
+}
+
+v8_py_th001_pytest_guidance() {
+  is_v8_py_th001_pytest_task || return 0
+  cat <<'EOF'
+
+V8-PY-TH-001 pytest approx guidance:
+- Start in `src/_pytest/python_api.py`, especially the `approx` factory and scalar approximation classes.
+- Add focused regression coverage in `testing/python/approx.py`; do not create a broad new test module.
+- Support `datetime.datetime` and `datetime.timedelta` with explicit `datetime.timedelta` tolerance.
+- Reject unsupported datetime relative tolerance and `nan_ok` combinations with clear `TypeError`s.
+- Do not stop after production-only changes. Add focused assertions for datetime within tolerance, datetime outside tolerance, timedelta comparisons, and `pytest.raises(TypeError)` for unsupported `rel` / `nan_ok` arguments.
+- Reuse the existing approx test style in `testing/python/approx.py`; small table-driven or class-local tests are preferred over new fixtures.
+- In no-change recovery, stop re-reading once `ApproxScalar`, the `approx()` factory, and the nearby `TestApprox` tests are identified; apply the two-file patch before further exploration.
+- Run `python3 -m pytest -o minversion=0 testing/python/approx.py -q` before the final answer.
+EOF
+}
+
+v8_go_bug004_fsnotify_guidance() {
+  is_v8_go_bug004_fsnotify_task || return 0
+  cat <<'EOF'
+
+V8-GO-BUG-004 fsnotify inotify guidance:
+- Start in `backend_inotify.go`, especially `handleEvent`, `IN_MOVE_SELF`, `IN_DELETE_SELF`, and watch descriptor bookkeeping.
+- Use `backend_inotify_test.go` for focused Linux regression coverage when adding a new test; do not create a broad timing-heavy test harness.
+- The expected patch is small and should preserve normal watcher behavior while fixing rename/remove event sequencing.
+- If no-change recovery starts, stop re-reading after the event conversion and existing rename/remove tests are identified; patch `backend_inotify.go` before further exploration.
 - Run `go test ./...` before the final answer.
 EOF
 }
@@ -690,6 +750,15 @@ v8_go_bf003_missing_behavior_or_regression() {
   files="$(benchmark_changed_files_all)"
   awk 'NF && /\.go$/ && !/_test\.go$/ { found=1 } END { exit found ? 0 : 1 }' <<<"$files" || return 0
   grep -Eq '(^|/)[^/]+_test\.go$' <<<"$files" || return 0
+  return 1
+}
+
+v8_py_th001_missing_behavior_or_regression() {
+  is_v8_py_th001_pytest_task || return 1
+  benchmark_changed_files_all | grep -qx 'src/_pytest/python_api.py' || return 0
+  benchmark_changed_files_all | grep -qx 'testing/python/approx.py' || return 0
+  git -C "$WORKTREE" diff -- testing/python/approx.py \
+    | grep -Eq '^\+.*(datetime|timedelta|pytest\.raises|approx\()' || return 0
   return 1
 }
 
@@ -999,6 +1068,10 @@ write_passed_verification_task_specific_failure() {
     write_result false true "incomplete_patch" "$recovery_attempted" false "$prefix, but V8-GO-BF-003 lacks the required production Go behavior diff plus focused Go regression coverage pair"
     return 0
   fi
+  if v8_py_th001_missing_behavior_or_regression; then
+    write_result false true "incomplete_patch" "$recovery_attempted" false "$prefix, but V8-PY-TH-001 lacks the required pytest approx behavior diff plus focused datetime/timedelta regression coverage pair"
+    return 0
+  fi
   if ts_bf002_production_diff_without_focused_regression; then
     write_result false true "incomplete_patch" "$recovery_attempted" false "$prefix, but TS-BF-002 changed module-utils behavior without focused cancellation regression coverage"
     return 0
@@ -1023,6 +1096,10 @@ task_specific_completion_failure_reason() {
     echo "V8-GO-BF-003 lacks the required production Go behavior diff plus focused Go regression coverage pair."
     return 0
   fi
+  if v8_py_th001_missing_behavior_or_regression; then
+    echo "V8-PY-TH-001 lacks the required pytest approx behavior diff plus focused datetime/timedelta regression coverage pair."
+    return 0
+  fi
   if ts_bf002_production_diff_without_focused_regression; then
     echo "TS-BF-002 changed module-utils behavior without focused cancellation regression coverage."
     return 0
@@ -1044,6 +1121,9 @@ recover_passed_task_specific_failure() {
   TASK_SPECIFIC_PROMPT+="$(ts_bf002_recovery_guidance)"
   TASK_SPECIFIC_PROMPT+="$(go_bf001_recovery_guidance)"
   TASK_SPECIFIC_PROMPT+="$(v8_go_bf003_recovery_guidance)"
+  TASK_SPECIFIC_PROMPT+="$(v8_js_bug001_express_guidance)"
+  TASK_SPECIFIC_PROMPT+="$(v8_py_th001_pytest_guidance)"
+  TASK_SPECIFIC_PROMPT+="$(v8_go_bug004_fsnotify_guidance)"
   TASK_SPECIFIC_PROMPT+="$(v8_ts_bug003_axios_guidance)"
   TASK_SPECIFIC_PROMPT+="$(v8_ts_bug004_undici_guidance)"
   TASK_SPECIFIC_PROMPT+="$(go_bf002_recovery_guidance)"
@@ -1112,7 +1192,7 @@ for token in re.findall(r"[a-z0-9_-]+", prompt):
         keywords.append(token)
 if not keywords:
     sys.exit(0)
-allowed_suffixes = (".go", ".ts", ".tsx", ".js", ".jsx")
+allowed_suffixes = (".go", ".ts", ".tsx", ".js", ".jsx", ".py")
 skip_dirs = {".git", "vendor", "node_modules", "dist", "build", "coverage", "tmp"}
 skip_names = {"go.sum", "go.mod", "package-lock.json", "pnpm-lock.yaml", "yarn.lock"}
 
@@ -1620,6 +1700,9 @@ This task appears to target worker/runtime transport files. Prefer hinted worker
 fi
 BENCHMARK_PROMPT+="$(go_bf001_recovery_guidance)"
 BENCHMARK_PROMPT+="$(v8_go_bf003_recovery_guidance)"
+BENCHMARK_PROMPT+="$(v8_js_bug001_express_guidance)"
+BENCHMARK_PROMPT+="$(v8_py_th001_pytest_guidance)"
+BENCHMARK_PROMPT+="$(v8_go_bug004_fsnotify_guidance)"
 BENCHMARK_PROMPT+="$(v8_ts_bug003_axios_guidance)"
 BENCHMARK_PROMPT+="$(v8_ts_bug004_undici_guidance)"
 BENCHMARK_PROMPT+="$(go_bf002_recovery_guidance)"
@@ -1755,6 +1838,9 @@ if [[ "$HAS_CHANGES" == "false" ]]; then
   NO_CHANGE_PROMPT+="$(ts_bf002_no_change_recovery_guidance)"
   NO_CHANGE_PROMPT+="$(go_bf001_recovery_guidance)"
   NO_CHANGE_PROMPT+="$(v8_go_bf003_recovery_guidance)"
+  NO_CHANGE_PROMPT+="$(v8_js_bug001_express_guidance)"
+  NO_CHANGE_PROMPT+="$(v8_py_th001_pytest_guidance)"
+  NO_CHANGE_PROMPT+="$(v8_go_bug004_fsnotify_guidance)"
   NO_CHANGE_PROMPT+="$(v8_ts_bug003_axios_guidance)"
   NO_CHANGE_PROMPT+="$(v8_ts_bug004_undici_guidance)"
   NO_CHANGE_PROMPT+="$(go_bf002_recovery_guidance)"
@@ -1820,6 +1906,9 @@ if run_verification_command "$VERIFY_LOG"; then
       VERIFIED_INCOMPLETE_PROMPT+="$(ts_bf002_recovery_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(go_bf001_recovery_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(v8_go_bf003_recovery_guidance)"
+      VERIFIED_INCOMPLETE_PROMPT+="$(v8_js_bug001_express_guidance)"
+      VERIFIED_INCOMPLETE_PROMPT+="$(v8_py_th001_pytest_guidance)"
+      VERIFIED_INCOMPLETE_PROMPT+="$(v8_go_bug004_fsnotify_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(v8_ts_bug003_axios_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(v8_ts_bug004_undici_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(go_bf002_recovery_guidance)"
@@ -1888,6 +1977,9 @@ RECOVERY_PROMPT+="$(ts_bf002_no_change_recovery_guidance)"
 RECOVERY_PROMPT+="$(ts_bf002_recovery_guidance)"
 RECOVERY_PROMPT+="$(go_bf001_recovery_guidance)"
 RECOVERY_PROMPT+="$(v8_go_bf003_recovery_guidance)"
+RECOVERY_PROMPT+="$(v8_js_bug001_express_guidance)"
+RECOVERY_PROMPT+="$(v8_py_th001_pytest_guidance)"
+RECOVERY_PROMPT+="$(v8_go_bug004_fsnotify_guidance)"
 RECOVERY_PROMPT+="$(v8_ts_bug003_axios_guidance)"
 RECOVERY_PROMPT+="$(v8_ts_bug004_undici_guidance)"
 RECOVERY_PROMPT+="$(go_bf002_recovery_guidance)"

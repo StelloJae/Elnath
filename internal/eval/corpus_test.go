@@ -282,7 +282,7 @@ func TestLoadV8PublicCorpus(t *testing.T) {
 		"V8-RS-BF-001":  {},
 		"V8-RS-REF-001": {},
 		"V8-TS-BF-004":  {},
-		"V8-PY-TH-001":  {},
+		"V8-GO-BF-003":  {},
 		"V8-ALT-PY-001": {},
 		"V8-DEF-PY-001": {},
 		"V8-ADD-JS-002": {},
@@ -316,8 +316,8 @@ func TestLoadV8PublicCorpus(t *testing.T) {
 			t.Fatalf("v8 public corpus missing existing anchor %q", id)
 		}
 	}
-	if languages[LanguageGo] != 9 {
-		t.Fatalf("go task count = %d, want 9", languages[LanguageGo])
+	if languages[LanguageGo] != 8 {
+		t.Fatalf("go task count = %d, want 8", languages[LanguageGo])
 	}
 	if languages[LanguageTypeScript] != 9 {
 		t.Fatalf("typescript task count = %d, want 9", languages[LanguageTypeScript])
@@ -325,8 +325,8 @@ func TestLoadV8PublicCorpus(t *testing.T) {
 	if languages[LanguageJavaScript] != 4 {
 		t.Fatalf("javascript task count = %d, want 4", languages[LanguageJavaScript])
 	}
-	if languages[LanguagePython] != 3 {
-		t.Fatalf("python task count = %d, want 3", languages[LanguagePython])
+	if languages[LanguagePython] != 4 {
+		t.Fatalf("python task count = %d, want 4", languages[LanguagePython])
 	}
 }
 
