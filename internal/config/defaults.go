@@ -50,6 +50,9 @@ func DefaultConfig() *Config {
 			MaxRounds:  5,
 			CostCapUSD: 5.0,
 		},
+		Reasoning: ReasoningConfig{
+			EffortMode: "manual",
+		},
 		LLMExtraction: LLMExtractionConfig{
 			Model:       "claude-haiku-4-5",
 			MinMessages: 5,

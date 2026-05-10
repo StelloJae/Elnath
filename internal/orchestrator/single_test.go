@@ -94,6 +94,24 @@ func (p *scriptedSingleProvider) Chat(_ context.Context, _ llm.ChatRequest) (*ll
 func (p *scriptedSingleProvider) Name() string            { return "test" }
 func (p *scriptedSingleProvider) Models() []llm.ModelInfo { return nil }
 
+type reasoningCaptureProvider struct {
+	lastReq llm.ChatRequest
+}
+
+func (p *reasoningCaptureProvider) Stream(_ context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
+	p.lastReq = req
+	cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: "done"})
+	cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{InputTokens: 1, OutputTokens: 1}})
+	return nil
+}
+
+func (p *reasoningCaptureProvider) Chat(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+	return &llm.ChatResponse{}, nil
+}
+
+func (p *reasoningCaptureProvider) Name() string            { return "test" }
+func (p *reasoningCaptureProvider) Models() []llm.ModelInfo { return nil }
+
 func assistantStep(text string, toolCalls ...llm.CompletedToolCall) llm.Message {
 	return llm.BuildAssistantMessage([]string{text}, toolCalls)
 }
@@ -157,6 +175,29 @@ func TestSingleWorkflow_PermissionPropagated(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected 'permission denied' in tool result messages")
+	}
+}
+
+func TestSingleWorkflow_ReasoningEffortPropagated(t *testing.T) {
+	provider := &reasoningCaptureProvider{}
+	result, err := NewSingleWorkflow().Run(context.Background(), WorkflowInput{
+		Message:  "hello",
+		Tools:    tools.NewRegistry(),
+		Provider: provider,
+		Config: WorkflowConfig{
+			MaxIterations:       1,
+			ReasoningEffort:     "medium",
+			ReasoningEffortMode: "manual",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Summary != "done" {
+		t.Fatalf("Summary = %q, want done", result.Summary)
+	}
+	if provider.lastReq.ReasoningEffort != "medium" {
+		t.Fatalf("ReasoningEffort = %q, want medium", provider.lastReq.ReasoningEffort)
 	}
 }
 

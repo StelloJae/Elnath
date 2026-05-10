@@ -42,12 +42,21 @@ type Config struct {
 	Telegram       TelegramConfig       `yaml:"telegram"`
 	Research       ResearchConfig       `yaml:"research"`
 	LLMExtraction  LLMExtractionConfig  `yaml:"llm_extraction"`
+	Reasoning      ReasoningConfig      `yaml:"reasoning"`
 	MagicDocs      MagicDocsConfig      `yaml:"magic_docs"`
 	Ambient        AmbientConfig        `yaml:"ambient"`
 	SelfHealing    SelfHealingConfig    `yaml:"self_healing"`
 	Projects       []ProjectRef         `yaml:"projects"`
 	MCPServers     []MCPServerConfig    `yaml:"mcp_servers"`
 	Hooks          []HookConfig         `yaml:"hooks"`
+}
+
+// ReasoningConfig controls request-level reasoning effort. It is separate
+// from provider defaults so a runtime can choose per-task effort when the
+// active provider supports it.
+type ReasoningConfig struct {
+	EffortMode string `yaml:"effort_mode"` // manual or auto
+	Effort     string `yaml:"effort"`      // none/minimal/low/medium/high/xhigh
 }
 
 // SelfHealingConfig controls the Phase 0 observe-only reflection infrastructure.
@@ -263,6 +272,12 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("ELNATH_OPENAI_RESPONSES_REASONING_EFFORT"); v != "" {
 		cfg.OpenAIResponses.ReasoningEffort = v
 	}
+	if v := os.Getenv("ELNATH_REASONING_EFFORT_MODE"); v != "" {
+		cfg.Reasoning.EffortMode = v
+	}
+	if v := os.Getenv("ELNATH_REASONING_EFFORT"); v != "" {
+		cfg.Reasoning.Effort = v
+	}
 	if v := os.Getenv("ELNATH_OLLAMA_BASE_URL"); v != "" {
 		cfg.Ollama.BaseURL = v
 	}
@@ -331,6 +346,12 @@ func validate(cfg *Config) error {
 	if err := validateProviderReasoningEffort("openai_responses", cfg.OpenAIResponses.ReasoningEffort); err != nil {
 		return err
 	}
+	if err := validateReasoningEffortMode(cfg.Reasoning.EffortMode); err != nil {
+		return err
+	}
+	if err := validateProviderReasoningEffort("reasoning", cfg.Reasoning.Effort); err != nil {
+		return err
+	}
 	if cfg.OpenAIResponses.APIKey == "" && (cfg.OpenAIResponses.BaseURL != "" || cfg.OpenAIResponses.Model != "") {
 		return fmt.Errorf("openai_responses.api_key is required when openai_responses base_url or model is set")
 	}
@@ -380,5 +401,14 @@ func validateProviderReasoningEffort(providerName, effort string) error {
 		return nil
 	default:
 		return fmt.Errorf("%s.reasoning_effort %q is invalid (supported: none, minimal, low, medium, high, xhigh)", providerName, effort)
+	}
+}
+
+func validateReasoningEffortMode(mode string) error {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", "manual", "auto":
+		return nil
+	default:
+		return fmt.Errorf("reasoning.effort_mode %q is invalid (supported: manual, auto)", mode)
 	}
 }

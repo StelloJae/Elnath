@@ -76,20 +76,22 @@ type ReflectionEnqueuer func(in ReflectionInput)
 // Agent runs the message→LLM→tools→repeat loop.
 // The message array is the ONLY state — no hidden state machines.
 type Agent struct {
-	provider      llm.Provider
-	tools         *tools.Registry
-	executor      tools.Executor
-	readTracker   *tools.ReadTracker
-	permission    *Permission
-	hooks         *HookRegistry
-	model         string
-	systemPrompt  string
-	maxIterations int
-	logger        *slog.Logger
-	compressFunc       CompressFunc
-	contextWindow      int // cached from provider.Models(); 0 = unknown
-	compressFailCount  int // consecutive compressFunc failures in current Run
-	reflectEnqueue     ReflectionEnqueuer
+	provider            llm.Provider
+	tools               *tools.Registry
+	executor            tools.Executor
+	readTracker         *tools.ReadTracker
+	permission          *Permission
+	hooks               *HookRegistry
+	model               string
+	systemPrompt        string
+	reasoningEffort     string
+	reasoningEffortMode string
+	maxIterations       int
+	logger              *slog.Logger
+	compressFunc        CompressFunc
+	contextWindow       int // cached from provider.Models(); 0 = unknown
+	compressFailCount   int // consecutive compressFunc failures in current Run
+	reflectEnqueue      ReflectionEnqueuer
 	// sessionID is threaded into every ChatRequest so provider-level
 	// telemetry sinks (e.g. promptcache FileSink) can scope per-session.
 	// Empty = no per-session correlation; providers treat as no-op.
@@ -107,6 +109,18 @@ func WithModel(model string) Option {
 // WithSystemPrompt sets the system prompt for every request.
 func WithSystemPrompt(prompt string) Option {
 	return func(a *Agent) { a.systemPrompt = prompt }
+}
+
+// WithReasoningEffort sets a fixed request-level effort hint. Providers that
+// do not support llm.ChatRequest.ReasoningEffort may ignore it.
+func WithReasoningEffort(effort string) Option {
+	return func(a *Agent) { a.reasoningEffort = strings.TrimSpace(effort) }
+}
+
+// WithReasoningEffortMode controls how the request-level effort hint is chosen.
+// Supported modes are "manual" and "auto"; unknown values behave as manual.
+func WithReasoningEffortMode(mode string) Option {
+	return func(a *Agent) { a.reasoningEffortMode = strings.TrimSpace(mode) }
 }
 
 // WithMaxIterations overrides the default iteration cap.
@@ -340,13 +354,14 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, sink event.Sink
 		messages = a.maybeProactiveCompress(ctx, messages)
 
 		req := llm.Request{
-			Model:       a.model,
-			Messages:    messages,
-			Tools:       toolDefs,
-			System:      a.systemPrompt,
-			MaxTokens:   defaultMaxTokens,
-			EnableCache: a.provider.Name() == "anthropic",
-			SessionID:   a.sessionID,
+			Model:           a.model,
+			Messages:        messages,
+			Tools:           toolDefs,
+			System:          a.systemPrompt,
+			MaxTokens:       defaultMaxTokens,
+			ReasoningEffort: a.resolveReasoningEffort(messages),
+			EnableCache:     a.provider.Name() == "anthropic",
+			SessionID:       a.sessionID,
 		}
 		if a.hooks != nil {
 			if err := a.hooks.RunPreLLMCall(ctx, &req); err != nil {
