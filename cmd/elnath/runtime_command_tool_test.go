@@ -98,6 +98,37 @@ func TestCommandCatalogToolShowsCommandWithoutExecuting(t *testing.T) {
 	}
 }
 
+func TestCommandCatalogToolRecommendsCommandsByQuery(t *testing.T) {
+	tool := newCommandCatalogTool()
+
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"recommend","query":"provider model status","max_results":1}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("Execute returned error result: %s", res.Output)
+	}
+
+	var out struct {
+		Action   string `json:"action"`
+		Query    string `json:"query"`
+		Commands []struct {
+			Name          string   `json:"name"`
+			Score         int      `json:"score"`
+			MatchedFields []string `json:"matched_fields"`
+		} `json:"commands"`
+	}
+	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, res.Output)
+	}
+	if out.Action != "recommend" || out.Query != "provider model status" || len(out.Commands) != 1 {
+		t.Fatalf("output = %+v, want one recommendation", out)
+	}
+	if got := out.Commands[0]; got.Name != "provider" || got.Score == 0 || len(got.MatchedFields) == 0 {
+		t.Fatalf("recommendation = %+v, want scored provider command", got)
+	}
+}
+
 func TestCommandCatalogToolRejectsExecuteAction(t *testing.T) {
 	tool := newCommandCatalogTool()
 

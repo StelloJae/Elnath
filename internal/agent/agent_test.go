@@ -562,6 +562,9 @@ func TestAgentSearchFirstLoadsSelectedDeferredToolNextTurn(t *testing.T) {
 	if !second["mcp_github_issue"] {
 		t.Fatalf("second request tools = %v, want selected deferred tool loaded", second)
 	}
+	if got := result.LoadedDeferredTools; len(got) != 1 || got[0] != "mcp_github_issue" {
+		t.Fatalf("LoadedDeferredTools = %v, want [mcp_github_issue]", got)
+	}
 }
 
 func TestBuildToolDefsSearchFirstFallsBackWithoutToolSearch(t *testing.T) {

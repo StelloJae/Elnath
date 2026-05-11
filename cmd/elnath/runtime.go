@@ -469,8 +469,11 @@ func buildExecutionRuntime(
 			app.Logger.Warn("skill registry load failed", "error", err)
 		}
 	}
-	if err := skillReg.LoadClaudeSkills(effectiveWorkDir); err != nil {
-		app.Logger.Warn("claude skill registry load failed", "error", err)
+	homeDir, _ := os.UserHomeDir()
+	for _, root := range skill.DefaultCompatibleSkillRoots(effectiveWorkDir, homeDir) {
+		if err := skillReg.LoadCompatibleSkillRoots([]skill.CompatibleSkillRoot{root}); err != nil {
+			app.Logger.Warn("compatible skill registry load failed", "root", root.Path, "source", root.Source, "error", err)
+		}
 	}
 	reg.Register(skill.NewCatalogTool(skillReg))
 	profiles := make(map[string]*profile.Profile)
@@ -1321,6 +1324,7 @@ func (rt *executionRuntime) recordOutcome(ctx context.Context, in outcomeInput) 
 		ProviderName:            in.completion.ProviderName,
 		ProviderEffort:          in.completion.ProviderEffort,
 		ProviderEffortNote:      in.completion.ProviderEffortNote,
+		LoadedDeferredTools:     append([]string(nil), in.completion.LoadedDeferredTools...),
 		CorrectionAttempted:     in.completion.CorrectionAttempted,
 		CorrectionAttempts:      in.completion.CorrectionAttempts,
 		CorrectionDecision:      in.completion.CorrectionDecision,

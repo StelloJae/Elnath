@@ -238,6 +238,38 @@ func TestSingleWorkflow_ToolExposureModePropagated(t *testing.T) {
 	}
 }
 
+func TestSingleWorkflow_LoadedDeferredToolsPropagated(t *testing.T) {
+	reg := tools.NewRegistry()
+	reg.Register(&testTool{name: "read_file"})
+	reg.Register(&testTool{name: "mcp_github_issue"})
+	reg.Register(tools.NewToolSearchTool(reg))
+
+	provider := &scriptedSingleProvider{messages: []llm.Message{
+		assistantStep("", llm.CompletedToolCall{
+			ID:    "tool-search-1",
+			Name:  tools.ToolSearchName,
+			Input: `{"query":"select:mcp_github_issue"}`,
+		}),
+		assistantStep("done"),
+	}}
+
+	result, err := NewSingleWorkflow().Run(context.Background(), WorkflowInput{
+		Message:  "create an issue",
+		Tools:    reg,
+		Provider: provider,
+		Config: WorkflowConfig{
+			MaxIterations:    3,
+			ToolExposureMode: string(agent.ToolExposureSearchFirst),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := result.LoadedDeferredTools; len(got) != 1 || got[0] != "mcp_github_issue" {
+		t.Fatalf("LoadedDeferredTools = %v, want [mcp_github_issue]", got)
+	}
+}
+
 func TestSingleWorkflow_Learning_Nil(t *testing.T) {
 	ctx := context.Background()
 	lessonPath := filepath.Join(t.TempDir(), "lessons.jsonl")

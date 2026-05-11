@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/stello/elnath/internal/tools"
@@ -25,9 +26,11 @@ func (t *commandCatalogTool) Description() string {
 
 func (t *commandCatalogTool) Schema() json.RawMessage {
 	return tools.Object(map[string]tools.Property{
-		"action":         tools.StringEnum("Catalog action. Only list and show are supported; this tool never executes commands.", "list", "show"),
+		"action":         tools.StringEnum("Catalog action. This tool never executes commands.", "list", "show", "recommend"),
 		"command":        tools.String("Command name for action=show."),
 		"include_hidden": tools.Bool("Include hidden internal commands. Defaults to false."),
+		"query":          tools.String("Intent or task query for action=recommend."),
+		"max_results":    tools.Int("Maximum recommendations for action=recommend. Defaults to 5, max 20."),
 	}, []string{"action"})
 }
 
@@ -43,6 +46,14 @@ type commandCatalogToolInput struct {
 	Action        string `json:"action"`
 	Command       string `json:"command"`
 	IncludeHidden bool   `json:"include_hidden"`
+	Query         string `json:"query"`
+	MaxResults    int    `json:"max_results"`
+}
+
+type commandCatalogRecommendation struct {
+	commandCatalogEntry
+	Score         int      `json:"score,omitempty"`
+	MatchedFields []string `json:"matched_fields,omitempty"`
 }
 
 func (t *commandCatalogTool) Execute(_ context.Context, params json.RawMessage) (*tools.Result, error) {
@@ -73,8 +84,15 @@ func (t *commandCatalogTool) Execute(_ context.Context, params json.RawMessage) 
 			"action":  "show",
 			"command": entry,
 		})
+	case "recommend":
+		query := strings.TrimSpace(input.Query)
+		return marshalCommandCatalogToolOutput(map[string]any{
+			"action":   "recommend",
+			"query":    query,
+			"commands": recommendedCommandCatalogEntries(query, input.IncludeHidden, normalizeCommandCatalogMax(input.MaxResults)),
+		})
 	default:
-		return tools.ErrorResult(fmt.Sprintf("command_catalog: unsupported action %q; supported actions are list and show", input.Action)), nil
+		return tools.ErrorResult(fmt.Sprintf("command_catalog: unsupported action %q; supported actions are list, show, and recommend", input.Action)), nil
 	}
 }
 
@@ -90,6 +108,105 @@ func findCommandCatalogEntry(name string, includeHidden bool) (commandCatalogEnt
 		}
 	}
 	return commandCatalogEntry{}, false
+}
+
+func recommendedCommandCatalogEntries(query string, includeHidden bool, maxResults int) []commandCatalogRecommendation {
+	commands := commandCatalog(includeHidden)
+	terms := commandCatalogQueryTerms(query)
+	if len(terms) == 0 {
+		if len(commands) > maxResults {
+			commands = commands[:maxResults]
+		}
+		out := make([]commandCatalogRecommendation, 0, len(commands))
+		for _, entry := range commands {
+			out = append(out, commandCatalogRecommendation{commandCatalogEntry: entry})
+		}
+		return out
+	}
+
+	var matches []commandCatalogRecommendation
+	for _, entry := range commands {
+		score, fields := scoreCommandCatalogEntry(entry, terms)
+		if score == 0 {
+			continue
+		}
+		matches = append(matches, commandCatalogRecommendation{
+			commandCatalogEntry: entry,
+			Score:               score,
+			MatchedFields:       fields,
+		})
+	}
+	sort.SliceStable(matches, func(i, j int) bool {
+		if matches[i].Score == matches[j].Score {
+			return matches[i].Name < matches[j].Name
+		}
+		return matches[i].Score > matches[j].Score
+	})
+	if len(matches) > maxResults {
+		matches = matches[:maxResults]
+	}
+	return matches
+}
+
+func scoreCommandCatalogEntry(entry commandCatalogEntry, terms []string) (int, []string) {
+	fields := []struct {
+		name   string
+		text   string
+		weight int
+	}{
+		{name: "name", text: entry.Name, weight: 4},
+		{name: "description", text: entry.Description, weight: 3},
+		{name: "category", text: entry.Category, weight: 2},
+		{name: "aliases", text: strings.Join(entry.Aliases, " "), weight: 1},
+		{name: "argument_hint", text: entry.ArgumentHint, weight: 1},
+	}
+	score := 0
+	seen := map[string]struct{}{}
+	for _, term := range terms {
+		for _, field := range fields {
+			if strings.Contains(strings.ToLower(field.text), term) {
+				score += field.weight
+				seen[field.name] = struct{}{}
+			}
+		}
+	}
+	if len(seen) == 0 {
+		return score, nil
+	}
+	matched := make([]string, 0, len(seen))
+	for field := range seen {
+		matched = append(matched, field)
+	}
+	sort.Strings(matched)
+	return score, matched
+}
+
+func commandCatalogQueryTerms(query string) []string {
+	parts := strings.Fields(strings.ToLower(strings.TrimSpace(query)))
+	terms := make([]string, 0, len(parts))
+	seen := map[string]struct{}{}
+	for _, part := range parts {
+		part = strings.Trim(part, ".,;:()[]{}<>\"'`")
+		if len(part) < 2 {
+			continue
+		}
+		if _, ok := seen[part]; ok {
+			continue
+		}
+		seen[part] = struct{}{}
+		terms = append(terms, part)
+	}
+	return terms
+}
+
+func normalizeCommandCatalogMax(maxResults int) int {
+	if maxResults <= 0 {
+		return 5
+	}
+	if maxResults > 20 {
+		return 20
+	}
+	return maxResults
 }
 
 func marshalCommandCatalogToolOutput(output any) (*tools.Result, error) {

@@ -174,6 +174,7 @@ func TestOutcomeRecordCompletionObservabilityJSONCompatibility(t *testing.T) {
 	rec.ProviderName = "openai-responses"
 	rec.ProviderEffort = "native_with_unsupported_retry"
 	rec.ProviderEffortNote = "retry_without_reasoning_on_400_or_422_unsupported_effort"
+	rec.LoadedDeferredTools = []string{"mcp_github_issue"}
 	rec.CorrectionAttempted = true
 	rec.CorrectionAttempts = 1
 	rec.CorrectionDecision = "retry_smaller_scope"
@@ -197,6 +198,7 @@ func TestOutcomeRecordCompletionObservabilityJSONCompatibility(t *testing.T) {
 		`"provider_name":"openai-responses"`,
 		`"provider_effort":"native_with_unsupported_retry"`,
 		`"provider_effort_note":"retry_without_reasoning_on_400_or_422_unsupported_effort"`,
+		`"loaded_deferred_tools":["mcp_github_issue"]`,
 		`"correction_attempted":true`,
 		`"correction_attempts":1`,
 		`"correction_decision":"retry_smaller_scope"`,

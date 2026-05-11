@@ -77,6 +77,7 @@ type WorkflowResult struct {
 	ReasoningEffort       string
 	ReasoningEffortMode   string
 	ReasoningEffortReason string
+	LoadedDeferredTools   []string
 }
 
 // ContextCompressor is the minimal interface workflows need to trigger message
