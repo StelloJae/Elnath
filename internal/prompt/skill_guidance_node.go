@@ -27,7 +27,10 @@ func (n *SkillGuidanceNode) Render(_ context.Context, state *RenderState) (strin
 	if state != nil && state.BenchmarkMode {
 		return "", nil
 	}
-	return `You have a create_skill tool. Use it when:
+	return `You have a skill tool for invoking available skills and a create_skill tool for creating reusable skills.
+
+Use the skill tool when an available skill matches the user's request.
+Use create_skill when:
 - You notice a repeated pattern across sessions
 - The user says "make this a skill" or similar
 - A multi-step workflow could be reusable

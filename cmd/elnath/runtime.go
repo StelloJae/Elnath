@@ -477,6 +477,15 @@ func buildExecutionRuntime(
 	if hooks == nil {
 		hooks = agent.NewHookRegistry()
 	}
+	reg.Register(skill.NewInvocationTool(skill.InvocationToolConfig{
+		Registry:   skillReg,
+		Provider:   provider,
+		Tools:      reg,
+		Model:      model,
+		Permission: perm,
+		Hooks:      hooks,
+		Locale:     string(loadLocale()),
+	}))
 
 	auditPath := filepath.Join(cfg.DataDir, "audit.jsonl")
 	auditTrail, err := audit.NewTrail(auditPath)

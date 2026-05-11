@@ -51,10 +51,24 @@ func (s *Skill) RenderPrompt(args map[string]string) string {
 	}
 
 	result := s.Prompt
+	if arguments := firstNonEmptyArg(args, "ARGUMENTS", "arguments", "args"); arguments != "" {
+		result = strings.ReplaceAll(result, "$ARGUMENTS", arguments)
+		result = strings.ReplaceAll(result, "{arguments}", arguments)
+		result = strings.ReplaceAll(result, "{args}", arguments)
+	}
 	for key, value := range args {
 		result = strings.ReplaceAll(result, "{"+key+"}", value)
 	}
 	return result
+}
+
+func firstNonEmptyArg(args map[string]string, keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(args[key]); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func hasTag(tags []string, want string) bool {
