@@ -168,6 +168,9 @@ func TestSkillToolScope(t *testing.T) {
 	if want := (tools.ToolScope{ReadPaths: []string{wikiDir}, WritePaths: []string{wikiDir}, Persistent: true}); !reflect.DeepEqual(deleteScope, want) {
 		t.Fatalf("Scope(delete) = %+v, want %+v", deleteScope, want)
 	}
+	if !tool.DeferInitialToolSchema() {
+		t.Fatal("create_skill should be deferred in search-first mode")
+	}
 }
 
 func TestSkillToolCreateRejectsEmptyName(t *testing.T) {

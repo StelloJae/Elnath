@@ -113,4 +113,7 @@ func TestInvocationToolMetadataIsConservative(t *testing.T) {
 	if !invoke.ShouldCancelSiblingsOnError() {
 		t.Fatal("skill invocation errors should cancel sibling batch")
 	}
+	if !invoke.DeferInitialToolSchema() {
+		t.Fatal("skill invocation should be deferred in search-first mode")
+	}
 }

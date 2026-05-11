@@ -54,6 +54,8 @@ func (t *InvocationTool) Scope(json.RawMessage) tools.ToolScope {
 
 func (t *InvocationTool) ShouldCancelSiblingsOnError() bool { return true }
 
+func (t *InvocationTool) DeferInitialToolSchema() bool { return true }
+
 type invocationInput struct {
 	Skill     string            `json:"skill"`
 	Args      string            `json:"args"`

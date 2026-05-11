@@ -75,6 +75,8 @@ func (t *EnterTool) Scope(json.RawMessage) tools.ToolScope {
 
 func (t *EnterTool) ShouldCancelSiblingsOnError() bool { return false }
 
+func (t *EnterTool) DeferInitialToolSchema() bool { return true }
+
 type EnterInput struct {
 	Name string `json:"name"`
 }
@@ -144,6 +146,8 @@ func (t *ExitTool) Scope(json.RawMessage) tools.ToolScope {
 }
 
 func (t *ExitTool) ShouldCancelSiblingsOnError() bool { return false }
+
+func (t *ExitTool) DeferInitialToolSchema() bool { return true }
 
 type ExitInput struct {
 	Name           string `json:"name"`

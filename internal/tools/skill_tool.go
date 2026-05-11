@@ -43,6 +43,8 @@ func (t *SkillTool) Reversible() bool { return true }
 
 func (t *SkillTool) ShouldCancelSiblingsOnError() bool { return false }
 
+func (t *SkillTool) DeferInitialToolSchema() bool { return true }
+
 func (t *SkillTool) Scope(params json.RawMessage) ToolScope {
 	var input skillToolInput
 	if err := json.Unmarshal(params, &input); err != nil {

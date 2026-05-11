@@ -59,6 +59,8 @@ func (t *TaskCreateTool) Scope(json.RawMessage) tools.ToolScope {
 
 func (t *TaskCreateTool) ShouldCancelSiblingsOnError() bool { return false }
 
+func (t *TaskCreateTool) DeferInitialToolSchema() bool { return true }
+
 type taskCreateToolInput struct {
 	Prompt                string `json:"prompt"`
 	SessionID             string `json:"session_id"`
@@ -147,6 +149,8 @@ func (t *TaskListTool) Reversible() bool { return true }
 func (t *TaskListTool) Scope(json.RawMessage) tools.ToolScope { return tools.ToolScope{} }
 
 func (t *TaskListTool) ShouldCancelSiblingsOnError() bool { return false }
+
+func (t *TaskListTool) DeferInitialToolSchema() bool { return true }
 
 type taskListToolInput struct {
 	Limit  int    `json:"limit"`
@@ -251,6 +255,8 @@ func (t *TaskGetTool) Scope(json.RawMessage) tools.ToolScope { return tools.Tool
 
 func (t *TaskGetTool) ShouldCancelSiblingsOnError() bool { return false }
 
+func (t *TaskGetTool) DeferInitialToolSchema() bool { return true }
+
 type taskGetToolInput struct {
 	ID int64 `json:"id"`
 }
@@ -328,6 +334,8 @@ func (t *TaskStopTool) Scope(json.RawMessage) tools.ToolScope {
 }
 
 func (t *TaskStopTool) ShouldCancelSiblingsOnError() bool { return false }
+
+func (t *TaskStopTool) DeferInitialToolSchema() bool { return true }
 
 type taskStopToolInput struct {
 	ID     int64  `json:"id"`
@@ -414,6 +422,8 @@ func (t *TaskOutputTool) Reversible() bool { return true }
 func (t *TaskOutputTool) Scope(json.RawMessage) tools.ToolScope { return tools.ToolScope{} }
 
 func (t *TaskOutputTool) ShouldCancelSiblingsOnError() bool { return false }
+
+func (t *TaskOutputTool) DeferInitialToolSchema() bool { return true }
 
 type taskOutputToolInput struct {
 	ID       int64  `json:"id"`
@@ -503,6 +513,8 @@ func (t *TaskUpdateTool) Scope(json.RawMessage) tools.ToolScope {
 }
 
 func (t *TaskUpdateTool) ShouldCancelSiblingsOnError() bool { return false }
+
+func (t *TaskUpdateTool) DeferInitialToolSchema() bool { return true }
 
 type taskUpdateToolInput struct {
 	ID       int64  `json:"id"`
