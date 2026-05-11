@@ -2525,6 +2525,31 @@ func TestExecutionRuntimeRunTaskHelpSlashCommandListsCatalog(t *testing.T) {
 	}
 }
 
+func TestRuntimeLocalSlashCommandRegistry(t *testing.T) {
+	specs := runtimeLocalSlashCommandSpecs()
+	if len(specs) == 0 {
+		t.Fatal("runtimeLocalSlashCommandSpecs returned no commands")
+	}
+	names := map[string]bool{}
+	for _, spec := range specs {
+		if spec.Name == "" {
+			t.Fatalf("spec with empty name: %+v", spec)
+		}
+		if !strings.HasPrefix(spec.Name, "/") {
+			t.Fatalf("spec name = %q, want leading slash", spec.Name)
+		}
+		if spec.Description == "" {
+			t.Fatalf("spec %q has empty description", spec.Name)
+		}
+		names[spec.Name] = true
+	}
+	for _, want := range []string{"/effort", "/model", "/provider", "/commands", "/help"} {
+		if !names[want] {
+			t.Fatalf("runtime local slash registry missing %s; got %+v", want, specs)
+		}
+	}
+}
+
 func TestExecutionRuntimeRunTaskProviderSlashCommandRejectsRuntimeSwitch(t *testing.T) {
 	provider := &capabilityCountingProvider{}
 	rt := newTestExecutionRuntime(t, provider)
