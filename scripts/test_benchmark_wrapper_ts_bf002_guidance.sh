@@ -39,14 +39,16 @@ required_current_guidance = [
     "class-factory `optionsFactory[self.factoryClassMethodKey",
     "focused cancellation tracing regression test",
     "preserve success-path behavior",
-    "Avoid import-style rewrites unless verification output proves they are necessary",
+    "Do not delete or replace the existing `describe('build')` coverage",
     "Preserve the existing TypeScript/ESM import style",
     "do not replace the file's top-level imports with bare CommonJS `require(...)`",
     "Do not keep a runtime `import { Provider } from '../../interfaces'`",
     "use `import type { Provider } from '../../interfaces'`",
     "Do not keep a runtime `import { ConfigurableModuleBuilder } from '../../module-utils'`",
-    "use a minimal `createRequire(import.meta.url)` bridge",
-    "keeping type imports type-only",
+    "Mocha may be masking an earlier ts-node TypeScript diagnostic behind its ESM fallback",
+    "`Provider` is a union type",
+    "`(provider as any).provide === MODULE_OPTIONS_TOKEN`",
+    "Keep type-only imports type-only",
     "Do not invent an expected Logger.error message string",
     "assert the actual Logger.error argument shape produced by the production patch",
     "select the options provider by `provider.provide === MODULE_OPTIONS_TOKEN`",
@@ -63,7 +65,7 @@ if "packages/common/module-utils/configurable-module.builder.ts" not in current_
     raise SystemExit("TS-BF-002 guidance should name the module-utils production seam")
 if "packages/common/test/module-utils/configurable-module.builder.spec.ts" not in current_guidance:
     raise SystemExit("TS-BF-002 guidance should name the focused module-utils spec seam")
-if "if is_ts_bf001_vitest_task || is_ts_bf002_nestjs_task; then" not in current_text:
+if "if is_ts_bf001_vitest_task || is_ts_bf002_nestjs_task ||" not in current_text:
     raise SystemExit("TS-BF-002 recovery should use the full ELNATH_TIMEOUT budget")
 if "RECOVERY_TIMEOUT=$(task_recovery_timeout)" not in current_text:
     raise SystemExit("recovery paths should use task-specific recovery timeout")
@@ -100,7 +102,9 @@ required_recovery_guidance = [
     "Do not keep a runtime `import { Provider } from '../../interfaces'`",
     "use `import type { Provider } from '../../interfaces'`",
     "Do not keep a runtime `import { ConfigurableModuleBuilder } from '../../module-utils'`",
-    "`createRequire(import.meta.url)`",
+    "Mocha may be masking an earlier ts-node TypeScript diagnostic behind its ESM fallback",
+    "`Provider` is a union type",
+    "`(provider as any).provide === MODULE_OPTIONS_TOKEN`",
     "../../module-utils/configurable-module.builder",
     "import/module-resolution fixes are not completion",
     "If verification already passes but TS-BF-002 task-specific evidence is missing, add the missing focused cancellation regression before touching module imports",
@@ -126,7 +130,7 @@ if missing_wiring:
     raise SystemExit("TS-BF-002 recovery guidance is not wired into every recovery path: " + ", ".join(missing_wiring))
 
 guard_start = current_text.index("is_ts_bf002_nestjs_task()")
-guard_end = current_text.index("ts_bf002_missing_focused_regression()", guard_start)
+guard_end = current_text.index("is_ts_bf001_vitest_task()", guard_start)
 guard_body = current_text[guard_start:guard_end]
 if 'TASK_ID" == "TS-BF-002"' not in guard_body:
     raise SystemExit("TS-BF-002 guard should be keyed to TASK_ID")
@@ -164,6 +168,19 @@ git -C "$SOURCE_REPO" init -q
 git -C "$SOURCE_REPO" add .
 git -C "$SOURCE_REPO" -c user.name='Test User' -c user.email='test@example.com' commit -qm "init"
 
+SOURCE_REPO_WITH_BUILD_SPEC="$TMP_DIR/source-repo-with-build-spec"
+cp -R "$SOURCE_REPO" "$SOURCE_REPO_WITH_BUILD_SPEC"
+mkdir -p "$SOURCE_REPO_WITH_BUILD_SPEC/packages/common/test/module-utils"
+cat > "$SOURCE_REPO_WITH_BUILD_SPEC/packages/common/test/module-utils/configurable-module.builder.spec.ts" <<'TS'
+describe('ConfigurableModuleBuilder', () => {
+  describe('build', () => {
+    it('should keep existing build coverage', () => {});
+  });
+});
+TS
+git -C "$SOURCE_REPO_WITH_BUILD_SPEC" add .
+git -C "$SOURCE_REPO_WITH_BUILD_SPEC" -c user.name='Test User' -c user.email='test@example.com' commit -qm "seed existing build coverage"
+
 SOURCE_REPO_WITH_ONCANCELLATION="$TMP_DIR/source-repo-with-oncancellation"
 cp -R "$SOURCE_REPO" "$SOURCE_REPO_WITH_ONCANCELLATION"
 mkdir -p "$SOURCE_REPO_WITH_ONCANCELLATION/packages/common/module-utils/interfaces"
@@ -198,6 +215,35 @@ exit 0
 SH
   chmod +x node_modules/.bin/mocha
   echo "I added cancellation tracing in module-utils."
+  exit 0
+fi
+if [[ "${FAKE_DELETED_BUILD_WITH_PASS:-}" == "1" ]]; then
+  mkdir -p \
+    packages/common/module-utils \
+    packages/common/test/module-utils \
+    node_modules/.bin
+  cat > packages/common/module-utils/configurable-module.builder.ts <<'TS'
+export class ConfigurableModuleBuilder {
+  traceCancellation(error: unknown) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      return error.message;
+    }
+  }
+}
+TS
+  cat > packages/common/test/module-utils/configurable-module.builder.spec.ts <<'TS'
+describe('ConfigurableModuleBuilder', () => {
+  describe('async options provider tracing', () => {
+    it('should trace AbortError cancellation from async options', () => {});
+  });
+});
+TS
+  cat > node_modules/.bin/mocha <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+  chmod +x node_modules/.bin/mocha
+  echo "I added cancellation tracing and focused regression coverage."
   exit 0
 fi
 if [[ "${FAKE_TS_COMPILE_ERROR_WITH_REGRESSION:-}" == "1" ]]; then
@@ -508,6 +554,35 @@ data = json.load(open(sys.argv[1]))
 assert data["success"] is False, data
 assert data["verification_passed"] is True, data
 assert data["failure_family"] == "incomplete_patch", data
+PY
+
+OUT_DELETED_BUILD="$TMP_DIR/ts-bf002-deleted-build-result.json"
+
+FAKE_DELETED_BUILD_WITH_PASS=1 \
+ELNATH_BIN="$TMP_DIR/fake-elnath.sh" \
+ELNATH_TIMEOUT=30 \
+ELNATH_BENCHMARK_PERMISSION_MODE=bypass \
+HOME="$TMP_DIR/host-home" \
+"$CURRENT_WRAPPER" \
+  "$OUT_DELETED_BUILD" \
+  "TS-BF-002" \
+  "brownfield_feature" \
+  "typescript" \
+  "Extend an existing TypeScript async task flow to emit explicit cancellation tracing without changing success-path semantics." \
+  "file://$SOURCE_REPO_WITH_BUILD_SPEC" \
+  "" \
+  "service_backend" \
+  "month2_canary"
+
+python3 - <<'PY' "$OUT_DELETED_BUILD"
+import json
+import sys
+
+data = json.load(open(sys.argv[1]))
+assert data["success"] is False, data
+assert data["verification_passed"] is True, data
+assert data["failure_family"] == "incomplete_patch", data
+assert "build coverage" in data["notes"], data
 PY
 
 OUT_TS_COMPILE="$TMP_DIR/ts-bf002-ts-compile-result.json"

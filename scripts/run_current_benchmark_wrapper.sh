@@ -558,6 +558,7 @@ TS-BF-002 recovery guard:
 - For the production patch, patch `private static createAsyncOptionsProvider` in `packages/common/module-utils/configurable-module.builder.ts`.
 - The two high-signal production seams are: wrap the direct `useFactory: options.useFactory` path, and wrap the class-factory `optionsFactory[self.factoryClassMethodKey ... ]()` path.
 - Keep the semantic cancellation tracing regression test intact while fixing verification errors.
+- Do not delete or replace the existing `describe('build')` coverage in `configurable-module.builder.spec.ts`; add cancellation tracing coverage as an additive block.
 - Do not treat import/module-resolution churn as progress if the cancellation tracing regression is still missing.
 - import/module-resolution fixes are not completion unless the focused cancellation regression exists and remains intact.
 - If verification already passes but TS-BF-002 task-specific evidence is missing, add the missing focused cancellation regression before touching module imports.
@@ -565,6 +566,8 @@ TS-BF-002 recovery guard:
 - When editing `packages/common/test/module-utils/configurable-module.builder.spec.ts`, first replace runtime barrel-directory imports used by the focused spec with direct-file runtime imports that the exact Mocha command can execute.
 - Do not rely on the pre-existing runtime `../../module-utils` barrel import after adding the focused cancellation regression; direct the `ConfigurableModuleBuilder` runtime import to `../../module-utils/configurable-module.builder` or an equivalent direct-file path accepted by the exact Mocha command.
 - Use the known-good focused spec import shape: `import { ConfigurableModuleBuilder } from '../../module-utils/configurable-module.builder';` without a `.ts` extension, plus `import { Logger } from '../../services/logger.service';` and `import type { Provider } from '../../interfaces';`.
+- If Mocha reports `ERR_MODULE_NOT_FOUND` for that extensionless direct-file import, do not keep changing import style first; Mocha may be masking an earlier ts-node TypeScript diagnostic behind its ESM fallback. Inspect the first TypeScript diagnostic and fix that compile error.
+- `Provider` is a union type; when selecting the options provider in a focused test, use a structural cast or type guard such as `(provider as any).provide === MODULE_OPTIONS_TOKEN` so the test compiles under ts-node.
 - Do not add `.ts` extensions to runtime imports in `configurable-module.builder.spec.ts`; retained evidence shows this pushes Node into native strip-only TypeScript loading.
 - Do not change top-level imports or constructor parameter properties in `packages/common/module-utils/configurable-module.builder.ts` merely to satisfy the focused Mocha loader. Keep the production diff focused on `createAsyncOptionsProvider`.
 - Keep type-only imports type-only; avoid adding runtime imports from barrel directories that Mocha's ESM loader cannot resolve.
@@ -580,6 +583,7 @@ TS-BF-002 recovery guard:
 - Do not finish with only the existing five module-utils tests passing; the focused Mocha output must include the newly added cancellation regression.
 - If verification already passed and only the focused regression is missing, do not spend the recovery turn re-inspecting broad repo context; add the compact focused test in the existing module-utils spec.
 - In the focused test, select the options provider by `provider.provide === MODULE_OPTIONS_TOKEN`; do not assume the first provider is the options provider for both direct `useFactory` and `useClass` cases.
+- Because `Provider` is a union type, write that selection with a structural cast/type guard; a direct `(provider as Provider).provide` access can fail TypeScript compilation and surface later as a misleading Mocha module-resolution error.
 - Rerun the exact TS-BF-002 Mocha verification command after final import/test edits: ./node_modules/.bin/mocha packages/common/test/module-utils/configurable-module.builder.spec.ts --require ts-node/register --require tsconfig-paths/register --require node_modules/reflect-metadata/Reflect.js --require hooks/mocha-init-hook.ts
 - Do not claim completion if verification still fails before semantic assertions.
 - Preserve existing public async-options fields such as `provideInjectionTokensFrom`; do not replace public fields with `onCancellation` or any unrelated new option.
@@ -1169,6 +1173,17 @@ ts_bf002_production_diff_without_focused_regression() {
   ts_bf002_missing_focused_regression
 }
 
+ts_bf002_deleted_existing_build_coverage() {
+  is_ts_bf002_nestjs_task || return 1
+  local spec_path="$WORKTREE/packages/common/test/module-utils/configurable-module.builder.spec.ts"
+  [[ -f "$spec_path" ]] || return 1
+  (
+    cd "$WORKTREE"
+    git diff -- packages/common/test/module-utils/configurable-module.builder.spec.ts |
+      grep -Eq "^-  describe\\(['\"]build['\"]"
+  )
+}
+
 ts_bf002_public_async_option_regression() {
   is_ts_bf002_nestjs_task || return 1
   (
@@ -1280,6 +1295,9 @@ ts_bf002_incomplete_patch_after_failed_recovery() {
     return 0
   fi
   if ts_bf002_production_diff_without_focused_regression; then
+    return 0
+  fi
+  if ts_bf002_deleted_existing_build_coverage; then
     return 0
   fi
   if ts_bf002_import_churn_after_recovery && ts_bf002_missing_focused_regression; then
@@ -1437,6 +1455,10 @@ write_passed_verification_task_specific_failure() {
     write_result false true "incomplete_patch" "$recovery_attempted" false "$prefix, but TS-BF-002 changed module-utils behavior without focused cancellation regression coverage"
     return 0
   fi
+  if ts_bf002_deleted_existing_build_coverage; then
+    write_result false true "incomplete_patch" "$recovery_attempted" false "$prefix, but TS-BF-002 deleted existing configurable-module build coverage while adding cancellation regression coverage"
+    return 0
+  fi
   return 1
 }
 
@@ -1479,6 +1501,10 @@ task_specific_completion_failure_reason() {
   fi
   if ts_bf002_production_diff_without_focused_regression; then
     echo "TS-BF-002 changed module-utils behavior without focused cancellation regression coverage."
+    return 0
+  fi
+  if ts_bf002_deleted_existing_build_coverage; then
+    echo "TS-BF-002 deleted existing configurable-module build coverage while adding cancellation regression coverage."
     return 0
   fi
   return 1
@@ -1563,7 +1589,7 @@ recover_passed_task_specific_failure() {
     exit 0
   fi
   if ts_bf002_incomplete_patch_after_failed_recovery; then
-    write_result false false "incomplete_patch" true false "task-specific recovery left TS-BF-002 import, public-option, or focused-regression completion incomplete"
+    write_result false false "incomplete_patch" true false "task-specific recovery left TS-BF-002 import, public-option, existing-coverage, or focused-regression completion incomplete"
     exit 0
   fi
   if compile_error_incomplete_patch_after_failed_recovery; then
@@ -2192,9 +2218,12 @@ NestJS-specific guidance:
   - The two high-signal production seams are the direct \`useFactory: options.useFactory\` provider path and the class-factory \`optionsFactory[self.factoryClassMethodKey ... ]()\` path.
   - Add a focused cancellation tracing regression test in \`packages/common/test/module-utils/configurable-module.builder.spec.ts\` or an adjacent common module-utils spec.
   - The regression should prove the cancellation/error tracing path and preserve success-path behavior.
+  - Do not delete or replace the existing \`describe('build')\` coverage in \`configurable-module.builder.spec.ts\`; add cancellation tracing coverage as an additive block.
   - Preserve the existing TypeScript/ESM import style in \`configurable-module.builder.spec.ts\`; do not replace the file's top-level imports with bare CommonJS \`require(...)\`.
   - When editing \`configurable-module.builder.spec.ts\`, replace runtime barrel-directory imports used by the focused spec with direct-file runtime imports that the exact Mocha command can execute before rerunning verification.
   - Use the known-good focused spec import shape: \`import { ConfigurableModuleBuilder } from '../../module-utils/configurable-module.builder';\` without a \`.ts\` extension, plus \`import { Logger } from '../../services/logger.service';\` and \`import type { Provider } from '../../interfaces';\`.
+  - If Mocha reports \`ERR_MODULE_NOT_FOUND\` for that extensionless direct-file import, do not keep changing import style first; Mocha may be masking an earlier ts-node TypeScript diagnostic behind its ESM fallback. Inspect the first TypeScript diagnostic and fix that compile error.
+  - \`Provider\` is a union type; when selecting the options provider in a focused test, use a structural cast or type guard such as \`(provider as any).provide === MODULE_OPTIONS_TOKEN\` so the test compiles under ts-node.
   - Do not add \`.ts\` extensions to runtime imports in \`configurable-module.builder.spec.ts\`; retained evidence shows this pushes Node into native strip-only TypeScript loading.
   - Do not change top-level imports or constructor parameter properties in \`packages/common/module-utils/configurable-module.builder.ts\` merely to satisfy the focused Mocha loader. Keep the production diff focused on \`createAsyncOptionsProvider\`.
   - Do not keep a runtime \`import { Provider } from '../../interfaces'\`; use \`import type { Provider } from '../../interfaces'\`.
@@ -2202,6 +2231,7 @@ NestJS-specific guidance:
   - Do not invent an expected Logger.error message string in the focused regression; assert the actual Logger.error argument shape produced by the production patch.
   - Keep the production tracing implementation and regression assertion consistent: if the patch calls \`Logger.error(err)\`, assert the original error object; if it logs a fixed message plus stack, assert that exact implemented call shape.
   - In the focused test, select the options provider by \`provider.provide === MODULE_OPTIONS_TOKEN\`; do not assume the first provider is the options provider for both direct \`useFactory\` and \`useClass\` cases.
+  - Because \`Provider\` is a union type, write that selection with a structural cast/type guard; a direct \`(provider as Provider).provide\` access can fail TypeScript compilation and surface later as a misleading Mocha module-resolution error.
   - Do not finish if the semantic cancellation regression test is missing, even if import or module-resolution mechanics were changed."
 fi
 if [[ "$TASK_REPO" == *"vercel/next.js"* && "$TASK_PROMPT" == *"file-watcher regression"* ]]; then
@@ -2522,7 +2552,7 @@ if ts_bf001_generic_retry_title_target; then
 fi
 
 if ts_bf002_incomplete_patch_after_failed_recovery; then
-  write_result false false "incomplete_patch" true false "TS-BF-002 recovery left import, public-option, or focused-regression completion incomplete"
+  write_result false false "incomplete_patch" true false "TS-BF-002 recovery left import, public-option, existing-coverage, or focused-regression completion incomplete"
   exit 0
 fi
 
