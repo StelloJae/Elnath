@@ -10,6 +10,91 @@ import (
 	"github.com/stello/elnath/internal/tools"
 )
 
+func TestTaskCreateToolEnqueuesPendingTask(t *testing.T) {
+	ctx := context.Background()
+	queue := newTaskToolTestQueue(t)
+
+	result, err := NewTaskCreateTool(queue).Execute(ctx, json.RawMessage(`{
+		"prompt": "continue the reference lane",
+		"session_id": "sess-123",
+		"surface": "tool-test",
+		"idempotency_key": "task-create-1",
+		"agentic_enforcement": "observe",
+		"agentic_completion_gate": "verification"
+	}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute returned error result: %s", result.Output)
+	}
+
+	var output taskCreateToolOutput
+	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if output.TaskID == 0 {
+		t.Fatal("TaskID = 0, want created task id")
+	}
+	if output.Status != string(StatusPending) {
+		t.Fatalf("Status = %q, want pending", output.Status)
+	}
+	if output.SessionID != "sess-123" {
+		t.Fatalf("SessionID = %q, want sess-123", output.SessionID)
+	}
+
+	task, err := queue.Get(ctx, output.TaskID)
+	if err != nil {
+		t.Fatalf("Get created task: %v", err)
+	}
+	payload := ParseTaskPayload(task.Payload)
+	if payload.Prompt != "continue the reference lane" || payload.SessionID != "sess-123" || payload.Surface != "tool-test" {
+		t.Fatalf("payload = %+v, want normalized task payload", payload)
+	}
+	if payload.AgenticEnforcement != "observe" || payload.AgenticCompletionGate != "verification" {
+		t.Fatalf("payload gates = (%q,%q), want observe/verification", payload.AgenticEnforcement, payload.AgenticCompletionGate)
+	}
+}
+
+func TestTaskCreateToolDeduplicatesActiveTask(t *testing.T) {
+	ctx := context.Background()
+	queue := newTaskToolTestQueue(t)
+	params := json.RawMessage(`{"prompt":"same task","idempotency_key":"same-key"}`)
+
+	first, err := NewTaskCreateTool(queue).Execute(ctx, params)
+	if err != nil {
+		t.Fatalf("first Execute error = %v", err)
+	}
+	second, err := NewTaskCreateTool(queue).Execute(ctx, params)
+	if err != nil {
+		t.Fatalf("second Execute error = %v", err)
+	}
+
+	var firstOutput, secondOutput taskCreateToolOutput
+	if err := json.Unmarshal([]byte(first.Output), &firstOutput); err != nil {
+		t.Fatalf("unmarshal first: %v", err)
+	}
+	if err := json.Unmarshal([]byte(second.Output), &secondOutput); err != nil {
+		t.Fatalf("unmarshal second: %v", err)
+	}
+	if firstOutput.TaskID != secondOutput.TaskID {
+		t.Fatalf("dedup ids = %d/%d, want same", firstOutput.TaskID, secondOutput.TaskID)
+	}
+	if !secondOutput.Deduplicated {
+		t.Fatal("second Deduplicated = false, want true")
+	}
+}
+
+func TestTaskCreateToolRejectsMissingPrompt(t *testing.T) {
+	result, err := NewTaskCreateTool(newTaskToolTestQueue(t)).Execute(context.Background(), json.RawMessage(`{"prompt":" "}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if !result.IsError || !strings.Contains(result.Output, "prompt is required") {
+		t.Fatalf("result = %+v, want prompt error", result)
+	}
+}
+
 func TestTaskListToolListsQueueTasks(t *testing.T) {
 	ctx := context.Background()
 	queue := newTaskToolTestQueue(t)
@@ -138,6 +223,20 @@ func TestTaskToolsRejectInvalidInput(t *testing.T) {
 }
 
 func TestTaskToolsMetadata(t *testing.T) {
+	createTool := NewTaskCreateTool(nil)
+	if createTool.IsConcurrencySafe(nil) {
+		t.Fatal("task_create should not be concurrency-safe")
+	}
+	if createTool.Reversible() {
+		t.Fatal("task_create should not be reversible")
+	}
+	if got := createTool.Scope(nil); !got.Persistent || got.Network || len(got.ReadPaths) != 0 || len(got.WritePaths) != 0 {
+		t.Fatalf("task_create Scope() = %+v, want persistent-only scope", got)
+	}
+	if createTool.ShouldCancelSiblingsOnError() {
+		t.Fatal("task_create should not cancel siblings")
+	}
+
 	listTool := NewTaskListTool(nil)
 	getTool := NewTaskGetTool(nil)
 	for _, tool := range []tools.Tool{listTool, getTool} {

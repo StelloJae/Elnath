@@ -423,6 +423,7 @@ func buildExecutionRuntime(
 	if err != nil {
 		return nil, fmt.Errorf("open task queue tools: %w", err)
 	}
+	reg.Register(daemon.NewTaskCreateTool(taskQueue))
 	reg.Register(daemon.NewTaskListTool(taskQueue))
 	reg.Register(daemon.NewTaskGetTool(taskQueue))
 	gitSync, wikiIdx := registerWikiTools(reg, cfg.WikiDir, db.Wiki)

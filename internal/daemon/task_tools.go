@@ -11,12 +11,108 @@ import (
 )
 
 const (
+	TaskCreateToolName     = "task_create"
 	TaskListToolName       = "task_list"
 	TaskGetToolName        = "task_get"
 	defaultTaskListLimit   = 20
 	maxTaskListLimit       = 100
 	taskToolPreviewMaxRune = 240
 )
+
+type TaskCreateTool struct {
+	queue *Queue
+}
+
+func NewTaskCreateTool(queue *Queue) *TaskCreateTool {
+	return &TaskCreateTool{queue: queue}
+}
+
+func (t *TaskCreateTool) Name() string { return TaskCreateToolName }
+
+func (t *TaskCreateTool) Description() string {
+	return "Create a pending daemon queue task for background execution"
+}
+
+func (t *TaskCreateTool) Schema() json.RawMessage {
+	return tools.Object(map[string]tools.Property{
+		"prompt":                  tools.String("Task prompt to enqueue."),
+		"session_id":              tools.String("Optional session id to continue."),
+		"surface":                 tools.String("Optional originating surface label."),
+		"idempotency_key":         tools.String("Optional key used to deduplicate active pending/running tasks."),
+		"agentic_enforcement":     tools.String("Optional explicit agentic enforcement mode."),
+		"agentic_completion_gate": tools.String("Optional explicit completion gate mode."),
+	}, []string{"prompt"})
+}
+
+func (t *TaskCreateTool) IsConcurrencySafe(json.RawMessage) bool { return false }
+
+func (t *TaskCreateTool) Reversible() bool { return false }
+
+func (t *TaskCreateTool) Scope(json.RawMessage) tools.ToolScope {
+	return tools.ToolScope{Persistent: true}
+}
+
+func (t *TaskCreateTool) ShouldCancelSiblingsOnError() bool { return false }
+
+type taskCreateToolInput struct {
+	Prompt                string `json:"prompt"`
+	SessionID             string `json:"session_id"`
+	Surface               string `json:"surface"`
+	IdempotencyKey        string `json:"idempotency_key"`
+	AgenticEnforcement    string `json:"agentic_enforcement"`
+	AgenticCompletionGate string `json:"agentic_completion_gate"`
+}
+
+type taskCreateToolOutput struct {
+	TaskID         int64  `json:"task_id"`
+	Status         string `json:"status"`
+	Deduplicated   bool   `json:"deduplicated"`
+	SessionID      string `json:"session_id,omitempty"`
+	IdempotencyKey string `json:"idempotency_key,omitempty"`
+	PayloadPreview string `json:"payload_preview"`
+}
+
+func (t *TaskCreateTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
+	if t == nil || t.queue == nil {
+		return tools.ErrorResult("task_create: queue unavailable"), nil
+	}
+	var input taskCreateToolInput
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &input); err != nil {
+			return tools.ErrorResult(fmt.Sprintf("invalid params: %v", err)), nil
+		}
+	}
+	prompt := strings.TrimSpace(input.Prompt)
+	if prompt == "" {
+		return tools.ErrorResult("task_create: prompt is required"), nil
+	}
+
+	payload := EncodeTaskPayload(TaskPayload{
+		Prompt:                prompt,
+		SessionID:             input.SessionID,
+		Surface:               input.Surface,
+		AgenticEnforcement:    input.AgenticEnforcement,
+		AgenticCompletionGate: input.AgenticCompletionGate,
+	})
+	id, deduped, err := t.queue.Enqueue(ctx, payload, input.IdempotencyKey)
+	if err != nil {
+		return tools.ErrorResult(fmt.Sprintf("task_create: %v", err)), nil
+	}
+
+	output := taskCreateToolOutput{
+		TaskID:         id,
+		Status:         string(StatusPending),
+		Deduplicated:   deduped,
+		SessionID:      strings.TrimSpace(input.SessionID),
+		IdempotencyKey: strings.TrimSpace(input.IdempotencyKey),
+		PayloadPreview: truncateTaskToolText(payload, taskToolPreviewMaxRune),
+	}
+	raw, err := json.Marshal(output)
+	if err != nil {
+		return tools.ErrorResult(fmt.Sprintf("task_create: marshal output: %v", err)), nil
+	}
+	return tools.SuccessResult(string(raw)), nil
+}
 
 type TaskListTool struct {
 	queue *Queue
