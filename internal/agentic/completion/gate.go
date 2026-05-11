@@ -28,18 +28,41 @@ type Store interface {
 	ListToolActionReceiptsByTask(context.Context, int64) ([]agentic.ToolActionReceipt, error)
 }
 
-type Gate struct {
-	store Store
-	mode  string
-	now   func() time.Time
+type CompletionContext struct {
+	VerificationHint     bool
+	VerificationObserved *bool
+	CompletionWarning    string
+	ReasoningEffort      string
+	ReasoningEffortMode  string
 }
 
-func NewGate(store Store, mode string) *Gate {
+type CompletionContextProvider interface {
+	CompletionContext(context.Context, daemon.Task, int64) (CompletionContext, error)
+}
+
+type Option func(*Gate)
+
+func WithCompletionContextProvider(provider CompletionContextProvider) Option {
+	return func(g *Gate) { g.contextProvider = provider }
+}
+
+type Gate struct {
+	store           Store
+	mode            string
+	now             func() time.Time
+	contextProvider CompletionContextProvider
+}
+
+func NewGate(store Store, mode string, opts ...Option) *Gate {
 	mode = strings.ToLower(strings.TrimSpace(mode))
 	if mode == "" {
 		mode = ModeObserve
 	}
-	return &Gate{store: store, mode: mode, now: func() time.Time { return time.Now().UTC() }}
+	g := &Gate{store: store, mode: mode, now: func() time.Time { return time.Now().UTC() }}
+	for _, opt := range opts {
+		opt(g)
+	}
+	return g
 }
 
 func (g *Gate) Validate(_ context.Context, task daemon.Task, agenticTaskID int64) error {
@@ -79,7 +102,8 @@ func (g *Gate) Evaluate(ctx context.Context, task daemon.Task, agenticTaskID int
 		return daemon.CompletionGateDecision{}, fmt.Errorf("completion gate receipt lookup: %w", err)
 	}
 	summary := receiptSummary(receipts)
-	summaryJSON := encodeReceiptSummary(summary)
+	completionContext := g.completionContext(ctx, task, agenticTaskID)
+	summaryJSON := encodeReceiptSummary(summary, completionContext)
 
 	if verifierReason != "" {
 		return g.record(ctx, task, agenticTaskID, verificationID(run), agentic.CompletionGateStatusBlocked, verifierReason, summaryJSON)
@@ -88,6 +112,17 @@ func (g *Gate) Evaluate(ctx context.Context, task daemon.Task, agenticTaskID int
 		return g.record(ctx, task, agenticTaskID, run.ID, agentic.CompletionGateStatusBlocked, fmt.Sprintf("non-terminal receipt started=%d", started), summaryJSON)
 	}
 	return g.record(ctx, task, agenticTaskID, run.ID, agentic.CompletionGateStatusPassed, "verification passed", summaryJSON)
+}
+
+func (g *Gate) completionContext(ctx context.Context, task daemon.Task, agenticTaskID int64) CompletionContext {
+	if g == nil || g.contextProvider == nil {
+		return CompletionContext{}
+	}
+	completionContext, err := g.contextProvider.CompletionContext(ctx, task, agenticTaskID)
+	if err != nil {
+		return CompletionContext{}
+	}
+	return completionContext
 }
 
 func (g *Gate) latestRelevantVerification(ctx context.Context, task daemon.Task, taskID int64) (*agentic.VerificationRun, string, error) {
@@ -163,8 +198,27 @@ func receiptSummary(receipts []agentic.ToolActionReceipt) map[string]int {
 	return summary
 }
 
-func encodeReceiptSummary(summary map[string]int) string {
-	data, err := json.Marshal(summary)
+func encodeReceiptSummary(summary map[string]int, completionContext CompletionContext) string {
+	payload := make(map[string]any, len(summary)+5)
+	for status, count := range summary {
+		payload[status] = count
+	}
+	if completionContext.VerificationHint {
+		payload["verification_hint"] = true
+	}
+	if completionContext.VerificationObserved != nil {
+		payload["verification_observed"] = *completionContext.VerificationObserved
+	}
+	if completionContext.CompletionWarning != "" {
+		payload["completion_warning"] = completionContext.CompletionWarning
+	}
+	if completionContext.ReasoningEffort != "" {
+		payload["reasoning_effort"] = completionContext.ReasoningEffort
+	}
+	if completionContext.ReasoningEffortMode != "" {
+		payload["reasoning_effort_mode"] = completionContext.ReasoningEffortMode
+	}
+	data, err := json.Marshal(payload)
 	if err != nil {
 		return "{}"
 	}
