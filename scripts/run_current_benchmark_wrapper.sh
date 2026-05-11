@@ -564,6 +564,9 @@ TS-BF-002 recovery guard:
 - Preserve the existing TypeScript/ESM import style in `configurable-module.builder.spec.ts`; do not convert the spec to bare CommonJS `require(...)`.
 - When editing `packages/common/test/module-utils/configurable-module.builder.spec.ts`, first replace runtime barrel-directory imports used by the focused spec with direct-file runtime imports that the exact Mocha command can execute.
 - Do not rely on the pre-existing runtime `../../module-utils` barrel import after adding the focused cancellation regression; direct the `ConfigurableModuleBuilder` runtime import to `../../module-utils/configurable-module.builder` or an equivalent direct-file path accepted by the exact Mocha command.
+- Use the known-good focused spec import shape: `import { ConfigurableModuleBuilder } from '../../module-utils/configurable-module.builder';` without a `.ts` extension, plus `import { Logger } from '../../services/logger.service';` and `import type { Provider } from '../../interfaces';`.
+- Do not add `.ts` extensions to runtime imports in `configurable-module.builder.spec.ts`; retained evidence shows this pushes Node into native strip-only TypeScript loading.
+- Do not change top-level imports or constructor parameter properties in `packages/common/module-utils/configurable-module.builder.ts` merely to satisfy the focused Mocha loader. Keep the production diff focused on `createAsyncOptionsProvider`.
 - Keep type-only imports type-only; avoid adding runtime imports from barrel directories that Mocha's ESM loader cannot resolve.
 - If verification reports `ERR_UNSUPPORTED_DIR_IMPORT`, inspect and fix every runtime directory import used by the focused spec, not just the first reported import.
 - Keep `../../interfaces` type-only when possible; `../../module-utils` is runtime-used for `ConfigurableModuleBuilder` and must resolve under the narrow Mocha command.
@@ -1219,6 +1222,55 @@ sys.exit(0 if any(re.search(pattern, text) for pattern in patterns) else 1)
 PY
 }
 
+ts_bf002_loader_escape_churn() {
+  is_ts_bf002_nestjs_task || return 1
+  local spec_path="$WORKTREE/packages/common/test/module-utils/configurable-module.builder.spec.ts"
+  local builder_path="$WORKTREE/packages/common/module-utils/configurable-module.builder.ts"
+  [[ -f "$spec_path" || -f "$builder_path" ]] || return 1
+  python3 - <<'PY' "$WORKTREE"
+import subprocess
+import sys
+
+root = sys.argv[1]
+
+def diff(path: str) -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "-C", root, "diff", "-U0", "--", path],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+    except subprocess.CalledProcessError:
+        return ""
+
+spec = diff("packages/common/test/module-utils/configurable-module.builder.spec.ts")
+builder = diff("packages/common/module-utils/configurable-module.builder.ts")
+
+bad_spec_import = any(
+    line.startswith("+")
+    and not line.startswith("+++")
+    and (
+        "configurable-module.builder.ts" in line
+        or "logger.service.ts" in line
+    )
+    for line in spec.splitlines()
+)
+bad_builder_loader_churn = any(
+    line.startswith("+")
+    and not line.startswith("+++")
+    and (
+        ".ts';" in line
+        or '.ts";' in line
+        or "this.options = options" in line
+        or "protected readonly options: ConfigurableModuleBuilderOptions;" in line
+    )
+    for line in builder.splitlines()
+)
+
+sys.exit(0 if bad_spec_import or bad_builder_loader_churn else 1)
+PY
+}
+
 ts_bf002_incomplete_patch_after_failed_recovery() {
   is_ts_bf002_nestjs_task || return 1
   if ts_bf002_public_async_option_regression; then
@@ -1234,6 +1286,9 @@ ts_bf002_incomplete_patch_after_failed_recovery() {
     return 0
   fi
   if ts_bf002_bad_focused_spec_runtime_directory_imports; then
+    return 0
+  fi
+  if ts_bf002_loader_escape_churn; then
     return 0
   fi
   return 1
@@ -2130,6 +2185,9 @@ NestJS-specific guidance:
   - The regression should prove the cancellation/error tracing path and preserve success-path behavior.
   - Preserve the existing TypeScript/ESM import style in \`configurable-module.builder.spec.ts\`; do not replace the file's top-level imports with bare CommonJS \`require(...)\`.
   - When editing \`configurable-module.builder.spec.ts\`, replace runtime barrel-directory imports used by the focused spec with direct-file runtime imports that the exact Mocha command can execute before rerunning verification.
+  - Use the known-good focused spec import shape: \`import { ConfigurableModuleBuilder } from '../../module-utils/configurable-module.builder';\` without a \`.ts\` extension, plus \`import { Logger } from '../../services/logger.service';\` and \`import type { Provider } from '../../interfaces';\`.
+  - Do not add \`.ts\` extensions to runtime imports in \`configurable-module.builder.spec.ts\`; retained evidence shows this pushes Node into native strip-only TypeScript loading.
+  - Do not change top-level imports or constructor parameter properties in \`packages/common/module-utils/configurable-module.builder.ts\` merely to satisfy the focused Mocha loader. Keep the production diff focused on \`createAsyncOptionsProvider\`.
   - Do not keep a runtime \`import { Provider } from '../../interfaces'\`; use \`import type { Provider } from '../../interfaces'\`.
   - Do not keep a runtime \`import { ConfigurableModuleBuilder } from '../../module-utils'\`; direct it to \`../../module-utils/configurable-module.builder\` or an equivalent direct-file path accepted by the exact Mocha command.
   - Do not invent an expected Logger.error message string in the focused regression; assert the actual Logger.error argument shape produced by the production patch.
