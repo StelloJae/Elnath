@@ -10,13 +10,18 @@ import (
 )
 
 const (
-	claudeSkillSource = "claude-skill"
-	codexSkillSource  = "codex-skill"
+	claudeSkillSource        = "claude-skill"
+	claudeCommandSkillSource = "claude-command-skill"
+	codexSkillSource         = "codex-skill"
+
+	compatibleRootKindSkills   = "skills"
+	compatibleRootKindCommands = "commands"
 )
 
 type CompatibleSkillRoot struct {
 	Path   string
 	Source string
+	Kind   string
 }
 
 var claudeToolNameMap = map[string]string{
@@ -103,16 +108,18 @@ func DefaultCompatibleSkillRoots(projectRoot, homeDir string) []CompatibleSkillR
 	homeDir = strings.TrimSpace(homeDir)
 	if homeDir != "" {
 		roots = append(roots,
-			CompatibleSkillRoot{Path: filepath.Join(homeDir, ".claude", "skills"), Source: claudeSkillSource},
-			CompatibleSkillRoot{Path: filepath.Join(homeDir, ".codex", "skills"), Source: codexSkillSource},
-			CompatibleSkillRoot{Path: filepath.Join(homeDir, ".agents", "skills"), Source: codexSkillSource},
+			CompatibleSkillRoot{Path: filepath.Join(homeDir, ".claude", "skills"), Source: claudeSkillSource, Kind: compatibleRootKindSkills},
+			CompatibleSkillRoot{Path: filepath.Join(homeDir, ".codex", "skills"), Source: codexSkillSource, Kind: compatibleRootKindSkills},
+			CompatibleSkillRoot{Path: filepath.Join(homeDir, ".agents", "skills"), Source: codexSkillSource, Kind: compatibleRootKindSkills},
+			CompatibleSkillRoot{Path: filepath.Join(homeDir, ".claude", "commands"), Source: claudeCommandSkillSource, Kind: compatibleRootKindCommands},
 		)
 	}
 	projectRoot = strings.TrimSpace(projectRoot)
 	if projectRoot != "" {
 		roots = append(roots,
-			CompatibleSkillRoot{Path: filepath.Join(projectRoot, ".claude", "skills"), Source: claudeSkillSource},
-			CompatibleSkillRoot{Path: filepath.Join(projectRoot, ".codex", "skills"), Source: codexSkillSource},
+			CompatibleSkillRoot{Path: filepath.Join(projectRoot, ".claude", "skills"), Source: claudeSkillSource, Kind: compatibleRootKindSkills},
+			CompatibleSkillRoot{Path: filepath.Join(projectRoot, ".codex", "skills"), Source: codexSkillSource, Kind: compatibleRootKindSkills},
+			CompatibleSkillRoot{Path: filepath.Join(projectRoot, ".claude", "commands"), Source: claudeCommandSkillSource, Kind: compatibleRootKindCommands},
 		)
 	}
 	return dedupeCompatibleSkillRoots(roots)
@@ -130,11 +137,16 @@ func dedupeCompatibleSkillRoots(roots []CompatibleSkillRoot) []CompatibleSkillRo
 		if root.Source == "" {
 			root.Source = claudeSkillSource
 		}
+		root.Kind = strings.TrimSpace(root.Kind)
+		if root.Kind == "" {
+			root.Kind = compatibleRootKindSkills
+		}
 		clean := filepath.Clean(root.Path)
-		if _, ok := seen[clean]; ok {
+		key := root.Kind + "\x00" + clean
+		if _, ok := seen[key]; ok {
 			continue
 		}
-		seen[clean] = struct{}{}
+		seen[key] = struct{}{}
 		root.Path = clean
 		out = append(out, root)
 	}
@@ -150,6 +162,10 @@ func LoadCompatibleSkillRoot(root CompatibleSkillRoot) ([]*Skill, error) {
 	if source == "" {
 		source = claudeSkillSource
 	}
+	kind := strings.TrimSpace(root.Kind)
+	if kind == "" {
+		kind = compatibleRootKindSkills
+	}
 	if info, err := os.Stat(skillsRoot); err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -164,15 +180,18 @@ func LoadCompatibleSkillRoot(root CompatibleSkillRoot) ([]*Skill, error) {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() || d.Name() != "SKILL.md" {
+		if d.IsDir() {
 			return nil
 		}
-		nameHint := filepath.Base(filepath.Dir(path))
+		nameHint, ok := compatibleSkillFileNameHint(skillsRoot, path, kind)
+		if !ok {
+			return nil
+		}
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return fmt.Errorf("read %q: %w", path, err)
 		}
-		sk, err := parseClaudeSkillWithSource(nameHint, data, source)
+		sk, err := parseCompatibleSkillWithSource(nameHint, data, source, kind)
 		if err != nil {
 			return fmt.Errorf("parse %q: %w", path, err)
 		}
@@ -183,6 +202,29 @@ func LoadCompatibleSkillRoot(root CompatibleSkillRoot) ([]*Skill, error) {
 		return nil, err
 	}
 	return skills, nil
+}
+
+func compatibleSkillFileNameHint(root, path, kind string) (string, bool) {
+	base := filepath.Base(path)
+	switch kind {
+	case compatibleRootKindCommands:
+		if base == "SKILL.md" {
+			return filepath.Base(filepath.Dir(path)), true
+		}
+		if strings.EqualFold(filepath.Ext(base), ".md") {
+			rel, err := filepath.Rel(root, path)
+			if err != nil || strings.Contains(rel, string(os.PathSeparator)) {
+				return "", false
+			}
+			return strings.TrimSuffix(base, filepath.Ext(base)), true
+		}
+		return "", false
+	default:
+		if base != "SKILL.md" {
+			return "", false
+		}
+		return filepath.Base(filepath.Dir(path)), true
+	}
 }
 
 // LoadClaudeSkills adds Claude Code-style project skills to the registry.
@@ -221,14 +263,25 @@ func parseClaudeSkill(nameHint string, raw []byte) (*Skill, error) {
 }
 
 func parseClaudeSkillWithSource(nameHint string, raw []byte, source string) (*Skill, error) {
+	return parseCompatibleSkillWithSource(nameHint, raw, source, compatibleRootKindSkills)
+}
+
+func parseCompatibleSkillWithSource(nameHint string, raw []byte, source, kind string) (*Skill, error) {
 	yamlBlock, body, err := splitClaudeSkillFrontmatter(raw)
+	if err != nil && kind == compatibleRootKindCommands && !hasFrontmatter(raw) {
+		yamlBlock = ""
+		body = strings.TrimPrefix(strings.ReplaceAll(string(raw), "\r\n", "\n"), "\n")
+		err = nil
+	}
 	if err != nil {
 		return nil, err
 	}
 
 	var fm claudeSkillFrontmatter
-	if err := yaml.Unmarshal([]byte(yamlBlock), &fm); err != nil {
-		return nil, fmt.Errorf("parse frontmatter yaml: %w", err)
+	if yamlBlock != "" {
+		if err := yaml.Unmarshal([]byte(yamlBlock), &fm); err != nil {
+			return nil, fmt.Errorf("parse frontmatter yaml: %w", err)
+		}
 	}
 
 	name := strings.TrimSpace(fm.Name)
@@ -246,7 +299,7 @@ func parseClaudeSkillWithSource(nameHint string, raw []byte, source string) (*Sk
 
 	return &Skill{
 		Name:          name,
-		Description:   buildClaudeSkillDescription(fm.Description, fm.WhenToUse),
+		Description:   compatibleSkillDescription(fm, kind),
 		Trigger:       "/" + name,
 		RequiredTools: collectClaudeSkillTools(fm),
 		Model:         strings.TrimSpace(fm.Model),
@@ -255,6 +308,19 @@ func parseClaudeSkillWithSource(nameHint string, raw []byte, source string) (*Sk
 		Status:        "active",
 		Source:        strings.TrimSpace(source),
 	}, nil
+}
+
+func hasFrontmatter(raw []byte) bool {
+	content := strings.ReplaceAll(string(raw), "\r\n", "\n")
+	return strings.HasPrefix(content, "---\n")
+}
+
+func compatibleSkillDescription(fm claudeSkillFrontmatter, kind string) string {
+	description := buildClaudeSkillDescription(fm.Description, fm.WhenToUse)
+	if description == "" && kind == compatibleRootKindCommands {
+		return "Custom command"
+	}
+	return description
 }
 
 func splitClaudeSkillFrontmatter(raw []byte) (yamlBlock, body string, err error) {
