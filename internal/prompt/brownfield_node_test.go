@@ -51,7 +51,7 @@ func TestBrownfieldNodeContainsVerificationDiscipline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render error: %v", err)
 	}
-	for _, want := range []string{"Report outcomes faithfully", "Do not hedge confirmed results"} {
+	for _, want := range []string{"Report outcomes faithfully", "Do not hedge confirmed results", "required production diff, regression test, artifact, or named file"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("Render = %q, want substring %q", got, want)
 		}

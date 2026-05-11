@@ -339,11 +339,11 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, sink event.Sink
 		// Budget pressure injection.
 		if pct := float64(iter) / float64(a.maxIterations); pct >= 0.9 {
 			messages = append(messages, llm.NewUserMessage(fmt.Sprintf(
-				"[BUDGET WARNING: Only %d iterations remaining. Provide your final response NOW. Do not start new explorations.]",
+				"[BUDGET WARNING: Only %d iterations remaining. Preserve every explicit completion requirement from the user prompt. If a required edit, regression test, or verification command is still missing, make that smallest remaining tool call now. Only provide your final response when no required tool call remains; otherwise state the work is incomplete.]",
 				a.maxIterations-iter)))
 		} else if pct >= 0.7 {
 			messages = append(messages, llm.NewUserMessage(fmt.Sprintf(
-				"[BUDGET: Iteration %d/%d. %d remaining. Start consolidating your work.]",
+				"[BUDGET: Iteration %d/%d. %d remaining. Start consolidating your work. Preserve explicit completion requirements; prioritize the smallest remaining required edit, regression test, or verification command before final reporting.]",
 				iter, a.maxIterations, a.maxIterations-iter)))
 		}
 
