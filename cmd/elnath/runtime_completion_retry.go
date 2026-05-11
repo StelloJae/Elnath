@@ -58,7 +58,7 @@ func (rt *executionRuntime) runSmallerScopeCompletionRetry(
 		)
 		return result, completionCorrectionFailedSummary(summary, "workflow_error")
 	}
-	retrySummary := withProviderCapabilities(summarizeCompletionContract(nil, retryInput.Config, retryResult), rt.provider)
+	retrySummary := withProviderCapabilities(summarizeCompletionContract(completionRetryRoutingContext(summary), retryInput.Config, retryResult), rt.provider)
 	retrySummary.CorrectionAttempted = true
 	retrySummary.CorrectionAttempts = 1
 	retrySummary.CorrectionDecision = summary.RetryDecision
@@ -70,6 +70,13 @@ func (rt *executionRuntime) runSmallerScopeCompletionRetry(
 		retrySummary.ReasoningEffortReason = retryEffortReason
 	}
 	return retryResult, retrySummary
+}
+
+func completionRetryRoutingContext(summary completionContractSummary) *orchestrator.RoutingContext {
+	if !summary.VerificationHint && summary.VerificationObserved == nil {
+		return nil
+	}
+	return &orchestrator.RoutingContext{VerificationHint: true}
 }
 
 func completionCorrectionFailedSummary(summary completionContractSummary, failureFamily string) completionContractSummary {

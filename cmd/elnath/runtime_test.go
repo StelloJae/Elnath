@@ -2707,6 +2707,46 @@ func TestCompletionRetryEscalatesAutoEffort(t *testing.T) {
 	}
 }
 
+func TestCompletionRetryPreservesVerificationRequirement(t *testing.T) {
+	rt := newTestExecutionRuntimeWithConfig(t, &countingProvider{}, false, func(cfg *config.Config) {
+		cfg.SelfHealing.Enabled = true
+		cfg.SelfHealing.ObserveOnly = false
+	})
+	rt.completionRetryMax = 1
+	wf := &captureRetryWorkflow{name: "single"}
+	result := &orchestrator.WorkflowResult{
+		Messages:     []llm.Message{llm.NewAssistantMessage("I could not finish the patch.")},
+		Summary:      "I could not finish the patch.",
+		FinishReason: "stop",
+		Workflow:     "single",
+	}
+	observed := false
+	summary := completionContractSummary{
+		VerificationHint:     true,
+		VerificationObserved: &observed,
+		CompletionWarning:    "final_response_reports_incomplete",
+		RetryDecision:        completionRetryDecisionRetrySmallerScope,
+		RetryReason:          "final_response_reports_incomplete",
+	}
+
+	_, gotSummary := rt.maybeRunCompletionRetry(context.Background(), wf, orchestrator.WorkflowInput{
+		Provider: rt.provider,
+	}, result, summary)
+
+	if !gotSummary.VerificationHint {
+		t.Fatal("VerificationHint = false, want preserved true after correction retry")
+	}
+	if gotSummary.VerificationObserved == nil || *gotSummary.VerificationObserved {
+		t.Fatalf("VerificationObserved = %v, want explicit false after unverified correction retry", gotSummary.VerificationObserved)
+	}
+	if gotSummary.RetryDecision != completionRetryDecisionRunVerification || gotSummary.RetryReason != "verification_hint_not_observed" {
+		t.Fatalf("retry plan = %q/%q, want run_verification/verification_hint_not_observed", gotSummary.RetryDecision, gotSummary.RetryReason)
+	}
+	if gotSummary.CorrectionStatus != "succeeded" {
+		t.Fatalf("CorrectionStatus = %q, want succeeded workflow correction with remaining verification requirement", gotSummary.CorrectionStatus)
+	}
+}
+
 func TestCompletionRetryRecordsFailedCorrectionAttempt(t *testing.T) {
 	rt := newTestExecutionRuntimeWithConfig(t, &countingProvider{}, false, func(cfg *config.Config) {
 		cfg.SelfHealing.Enabled = true
