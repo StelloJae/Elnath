@@ -2905,6 +2905,7 @@ func TestExecutionRuntimeBuildsSkillCatalogFromCodexSkillRoots(t *testing.T) {
 	writeRuntimeCompatSkill(t, filepath.Join(root, ".codex", "skills", "project-codex"), "Project Codex")
 	writeRuntimeCompatSkill(t, filepath.Join(homeDir, ".codex", "skills", "user-codex"), "User Codex")
 	writeRuntimeCompatSkill(t, filepath.Join(homeDir, ".agents", "skills", "agent-skill"), "Agent Skill")
+	writeRuntimeCompatSkill(t, filepath.Join(homeDir, ".codex", "plugins", "cache", "openai-curated", "github", "63976030", "skills", "github"), "GitHub")
 
 	cfg := &config.Config{
 		DataDir:  filepath.Join(root, "data"),
@@ -2947,7 +2948,7 @@ func TestExecutionRuntimeBuildsSkillCatalogFromCodexSkillRoots(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildExecutionRuntime: %v", err)
 	}
-	want := []string{"agent-skill", "project-codex", "user-codex"}
+	want := []string{"agent-skill", "github", "project-codex", "user-codex"}
 	if got := rt.skillReg.Names(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("skillReg names = %v, want %v", got, want)
 	}
