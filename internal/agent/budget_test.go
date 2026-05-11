@@ -49,6 +49,12 @@ func TestBudgetPressureAt70Percent(t *testing.T) {
 	if !requestContainsText(requests[len(requests)-1], "[BUDGET:") {
 		t.Fatalf("last request missing budget pressure message")
 	}
+	if !requestContainsText(requests[len(requests)-1], "Preserve explicit completion requirements") {
+		t.Fatalf("last request missing completion requirement reminder")
+	}
+	if !requestContainsText(requests[len(requests)-1], "regression test") {
+		t.Fatalf("last request missing regression-test reminder")
+	}
 }
 
 func TestBudgetPressureAt90Percent(t *testing.T) {
@@ -88,6 +94,12 @@ func TestBudgetPressureAt90Percent(t *testing.T) {
 	}
 	if !requestContainsText(requests[len(requests)-1], "[BUDGET WARNING:") {
 		t.Fatalf("last request missing budget warning message")
+	}
+	if !requestContainsText(requests[len(requests)-1], "Preserve every explicit completion requirement") {
+		t.Fatalf("last request missing completion requirement warning")
+	}
+	if !requestContainsText(requests[len(requests)-1], "Only provide your final response when no required tool call remains") {
+		t.Fatalf("last request should not force a final answer before required tool calls")
 	}
 }
 
