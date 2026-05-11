@@ -19,6 +19,8 @@ required = [
     "Do not finish with only a `requestIDKey` constant or `RequestID` field",
     "add an opt-in `RequestID()` middleware",
     "set `param.RequestID` inside `LoggerWithConfig`",
+    "Do not assert a local `buffer.String()` after `LoggerWithFormatter(...)` unless the test redirects `DefaultWriter`",
+    "Prefer `LoggerWithConfig(LoggerConfig{Formatter: ..., Output: buffer})` for focused request-id logger tests",
     "GO-BF-002 graceful shutdown guidance:",
     "`caddy.go`",
     "`unsyncedStop(ctx Context)`",
@@ -172,6 +174,53 @@ package benchmark
 const requestIDKey = "requestID"
 GO
     echo "Modified files: logger.go"
+    echo "Verification: go test ./... passed."
+    ;;
+  go_bf001_unwired_logger_formatter)
+    cat > logger.go <<'GO'
+package benchmark
+
+type Context struct{}
+type HandlerFunc func(*Context)
+type LogFormatterParams struct{ RequestID string }
+
+const requestIDKey = "requestID"
+
+func (c *Context) Set(string, any) {}
+
+func RequestID() HandlerFunc {
+	return func(c *Context) {
+		c.Set(requestIDKey, "req-1")
+	}
+}
+
+func setFormatterParam() LogFormatterParams {
+	return LogFormatterParams{RequestID: "req-1"}
+}
+GO
+    cat > logger_test.go <<'GO'
+package benchmark
+
+import (
+	"strings"
+	"testing"
+)
+
+func LoggerWithFormatter(func(LogFormatterParams) string) HandlerFunc {
+	return func(*Context) {}
+}
+
+func TestLoggerWithRequestID(t *testing.T) {
+	buffer := new(strings.Builder)
+	_ = LoggerWithFormatter(func(param LogFormatterParams) string {
+		return param.RequestID
+	})
+	if buffer.String() == "req-1" {
+		t.Fatal("unreachable")
+	}
+}
+GO
+    echo "Modified files: logger.go, logger_test.go"
     echo "Verification: go test ./... passed."
     ;;
   go_bug002_unbounded_wait_test)
@@ -384,6 +433,15 @@ assert data["verification_passed"] is True, data
 assert data["failure_family"] == "incomplete_patch", data
 assert "logger.go" in data["changed_files"], data
 assert "GO-BF-001" in data["notes"], data
+'
+
+run_wrapper_case go_bf001_unwired_logger_formatter "$TMP_DIR/go-bf001-unwired-logger-formatter.json" "$SOURCE_REPO" "GO-BF-001"
+assert_json_case "$TMP_DIR/go-bf001-unwired-logger-formatter.json" '
+assert data["success"] is False, data
+assert data["verification_passed"] is True, data
+assert data["failure_family"] == "incomplete_patch", data
+assert "logger_test.go" in data["changed_files"], data
+assert "logger output buffer" in data["notes"], data
 '
 
 run_wrapper_case go_bug002_unbounded_wait_test "$TMP_DIR/go-bug002-unbounded-wait-test.json" "$SOURCE_REPO" "GO-BUG-002"
