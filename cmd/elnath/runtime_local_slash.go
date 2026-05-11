@@ -20,6 +20,7 @@ func runtimeLocalSlashCommandSpecs() []localSlashCommandSpec {
 		{Name: "/provider", Description: "Inspect active provider capabilities."},
 		{Name: "/commands", Description: "List local command catalog entries."},
 		{Name: "/help", Description: "Alias for the local command catalog."},
+		{Name: "/skills", Description: "List registered skills without executing them."},
 	}
 }
 
@@ -43,6 +44,8 @@ func (rt *executionRuntime) tryLocalSlashCommand(
 		return rt.tryProviderCommand(sess, messages, input, bus)
 	case "/commands", "/help":
 		return rt.tryCommandsCommand(sess, messages, input, bus)
+	case "/skills":
+		return rt.trySkillsCommand(sess, messages, input, bus)
 	default:
 		return nil, "", false, nil
 	}
