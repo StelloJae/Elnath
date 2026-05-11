@@ -170,6 +170,8 @@ func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testi
 				VerificationObserved: &observed,
 				VerificationCommand:  "go test ./internal/agentic/completion -count=1",
 				CompletionWarning:    "final_response_reports_incomplete",
+				EditIntent:           true,
+				EditObserved:         &observed,
 				ReasoningEffort:      "high",
 				ReasoningEffortMode:  "auto",
 				RetryDecision:        "retry_smaller_scope",
@@ -207,6 +209,9 @@ func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testi
 	}
 	if summary["completion_warning"] != "final_response_reports_incomplete" {
 		t.Fatalf("completion_warning = %v; summary=%v", summary["completion_warning"], summary)
+	}
+	if summary["edit_intent"] != true || summary["edit_observed"] != false {
+		t.Fatalf("edit fields missing: summary=%v", summary)
 	}
 	if summary["reasoning_effort"] != "high" || summary["reasoning_effort_mode"] != "auto" {
 		t.Fatalf("reasoning fields missing: summary=%v", summary)

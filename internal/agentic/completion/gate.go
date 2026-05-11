@@ -33,6 +33,8 @@ type CompletionContext struct {
 	VerificationObserved *bool
 	VerificationCommand  string
 	CompletionWarning    string
+	EditIntent           bool
+	EditObserved         *bool
 	ReasoningEffort      string
 	ReasoningEffortMode  string
 	RetryDecision        string
@@ -217,6 +219,12 @@ func encodeReceiptSummary(summary map[string]int, completionContext CompletionCo
 	}
 	if completionContext.CompletionWarning != "" {
 		payload["completion_warning"] = completionContext.CompletionWarning
+	}
+	if completionContext.EditIntent {
+		payload["edit_intent"] = true
+	}
+	if completionContext.EditObserved != nil {
+		payload["edit_observed"] = *completionContext.EditObserved
 	}
 	if completionContext.ReasoningEffort != "" {
 		payload["reasoning_effort"] = completionContext.ReasoningEffort

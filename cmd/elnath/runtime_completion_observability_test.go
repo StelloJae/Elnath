@@ -18,7 +18,7 @@ import (
 func TestCompletionContractSummaryRecordsMissingVerification(t *testing.T) {
 	result := &orchestrator.WorkflowResult{
 		Messages: []llm.Message{
-			llm.NewUserMessage("fix the bug and run tests"),
+			llm.NewUserMessage("check the project status and run tests"),
 			llm.NewAssistantMessage("I changed the code."),
 		},
 		FinishReason: "stop",
@@ -42,7 +42,7 @@ func TestCompletionContractSummaryRecordsMissingVerification(t *testing.T) {
 func TestCompletionContractSummaryDetectsBashVerification(t *testing.T) {
 	result := &orchestrator.WorkflowResult{
 		Messages: []llm.Message{
-			llm.NewUserMessage("fix the bug and run tests"),
+			llm.NewUserMessage("check the project status and run tests"),
 			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
 				llm.ToolUseBlock{ID: "bash-1", Name: "bash", Input: json.RawMessage(`{"command":"go test ./internal/llm -count=1"}`)},
 			}},
@@ -70,7 +70,7 @@ func TestCompletionContractSummaryDetectsBashVerification(t *testing.T) {
 func TestCompletionContractSummaryDetectsIncompleteFinalResponse(t *testing.T) {
 	result := &orchestrator.WorkflowResult{
 		Messages: []llm.Message{
-			llm.NewUserMessage("fix the bug and run tests"),
+			llm.NewUserMessage("check the project status and run tests"),
 			llm.NewAssistantMessage("I could not finish the regression test before stopping."),
 		},
 		FinishReason: "stop",
@@ -82,6 +82,58 @@ func TestCompletionContractSummaryDetectsIncompleteFinalResponse(t *testing.T) {
 	}
 	if summary.RetryDecision != completionRetryDecisionRetrySmallerScope || summary.RetryReason != "final_response_reports_incomplete" {
 		t.Fatalf("retry plan = %q/%q, want retry_smaller_scope/final_response_reports_incomplete", summary.RetryDecision, summary.RetryReason)
+	}
+}
+
+func TestCompletionContractSummaryDetectsEditIntentWithoutMutation(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("fix the bug in the daemon and run tests"),
+			llm.NewAssistantMessage("Done."),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(&orchestrator.RoutingContext{VerificationHint: true}, orchestrator.WorkflowConfig{}, result)
+
+	if !summary.EditIntent {
+		t.Fatal("EditIntent = false, want true")
+	}
+	if summary.EditObserved == nil {
+		t.Fatal("EditObserved = nil, want explicit false")
+	}
+	if *summary.EditObserved {
+		t.Fatal("EditObserved = true, want false")
+	}
+	if summary.CompletionWarning != "edit_intent_without_mutation" {
+		t.Fatalf("CompletionWarning = %q, want edit_intent_without_mutation", summary.CompletionWarning)
+	}
+	if summary.RetryDecision != completionRetryDecisionRetrySmallerScope || summary.RetryReason != "edit_intent_without_mutation" {
+		t.Fatalf("retry plan = %q/%q, want retry_smaller_scope/edit_intent_without_mutation", summary.RetryDecision, summary.RetryReason)
+	}
+}
+
+func TestCompletionContractSummaryDetectsEditToolMutation(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("fix the bug in the daemon and run tests"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "edit-1", Name: "edit_file", Input: json.RawMessage(`{"file_path":"internal/daemon/daemon.go","old_string":"old","new_string":"new"}`)},
+			}},
+			llm.NewToolResultMessage("edit-1", "ok", false),
+			llm.NewAssistantMessage("Done."),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(&orchestrator.RoutingContext{VerificationHint: true}, orchestrator.WorkflowConfig{}, result)
+
+	if !summary.EditIntent {
+		t.Fatal("EditIntent = false, want true")
+	}
+	if summary.EditObserved == nil || !*summary.EditObserved {
+		t.Fatalf("EditObserved = %v, want true", summary.EditObserved)
+	}
+	if summary.CompletionWarning != "" {
+		t.Fatalf("CompletionWarning = %q, want empty", summary.CompletionWarning)
 	}
 }
 
@@ -142,6 +194,8 @@ func TestCompletionGateContextProviderConsumesRuntimeSummary(t *testing.T) {
 		VerificationObserved: &observed,
 		VerificationCommand:  "go test ./cmd/elnath -count=1",
 		CompletionWarning:    "final_response_reports_incomplete",
+		EditIntent:           true,
+		EditObserved:         &observed,
 		ReasoningEffort:      "high",
 		ReasoningEffortMode:  "auto",
 		RetryDecision:        completionRetryDecisionRetrySmallerScope,
@@ -163,6 +217,9 @@ func TestCompletionGateContextProviderConsumesRuntimeSummary(t *testing.T) {
 	}
 	if summary.CompletionWarning != "final_response_reports_incomplete" {
 		t.Fatalf("CompletionWarning = %q", summary.CompletionWarning)
+	}
+	if !summary.EditIntent || summary.EditObserved == nil || *summary.EditObserved {
+		t.Fatalf("edit context = intent %v observed %v, want true/false", summary.EditIntent, summary.EditObserved)
 	}
 	if summary.ReasoningEffort != "high" || summary.ReasoningEffortMode != "auto" {
 		t.Fatalf("reasoning = effort %q mode %q, want high/auto", summary.ReasoningEffort, summary.ReasoningEffortMode)
@@ -220,6 +277,8 @@ func TestCompletionGateReceiptSummaryIncludesRuntimeContext(t *testing.T) {
 		VerificationObserved: &observed,
 		VerificationCommand:  "go test ./cmd/elnath -count=1",
 		CompletionWarning:    "final_response_reports_incomplete",
+		EditIntent:           true,
+		EditObserved:         &observed,
 		ReasoningEffort:      "medium",
 		ReasoningEffortMode:  "manual",
 		RetryDecision:        completionRetryDecisionRetrySmallerScope,
@@ -262,6 +321,9 @@ func TestCompletionGateReceiptSummaryIncludesRuntimeContext(t *testing.T) {
 	}
 	if summary["completion_warning"] != "final_response_reports_incomplete" {
 		t.Fatalf("completion warning missing from gate summary: %v", summary)
+	}
+	if summary["edit_intent"] != true || summary["edit_observed"] != false {
+		t.Fatalf("edit context missing from gate summary: %v", summary)
 	}
 	if summary["reasoning_effort"] != "medium" || summary["reasoning_effort_mode"] != "manual" {
 		t.Fatalf("reasoning context missing from gate summary: %v", summary)
