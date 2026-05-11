@@ -73,6 +73,9 @@ func TestCommandCatalog_DefaultHidesInternalCommands(t *testing.T) {
 		if entry.Description == "" {
 			t.Fatalf("catalog entry %q has empty description", entry.Name)
 		}
+		if entry.Category == "" {
+			t.Fatalf("catalog entry %q has empty category", entry.Name)
+		}
 		seen[entry.Name] = entry
 	}
 
