@@ -170,6 +170,7 @@ func TestOutcomeRecordCompletionObservabilityJSONCompatibility(t *testing.T) {
 	rec.CompletionWarning = "final_response_reports_incomplete"
 	rec.ReasoningEffort = "high"
 	rec.ReasoningEffortMode = "auto"
+	rec.ReasoningEffortReason = "work_keyword"
 	rec.ProviderName = "openai-responses"
 	rec.ProviderEffort = "native_with_unsupported_retry"
 	rec.ProviderEffortNote = "retry_without_reasoning_on_400_or_422_unsupported_effort"
@@ -190,6 +191,7 @@ func TestOutcomeRecordCompletionObservabilityJSONCompatibility(t *testing.T) {
 		`"completion_warning":"final_response_reports_incomplete"`,
 		`"reasoning_effort":"high"`,
 		`"reasoning_effort_mode":"auto"`,
+		`"reasoning_effort_reason":"work_keyword"`,
 		`"provider_name":"openai-responses"`,
 		`"provider_effort":"native_with_unsupported_retry"`,
 		`"provider_effort_note":"retry_without_reasoning_on_400_or_422_unsupported_effort"`,

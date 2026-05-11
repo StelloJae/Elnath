@@ -282,11 +282,14 @@ func (a *Agent) maybeProactiveCompress(ctx context.Context, messages []llm.Messa
 
 // RunResult is returned after the agent loop completes.
 type RunResult struct {
-	Messages     []llm.Message
-	Usage        llm.UsageStats
-	ToolStats    []ToolStat
-	Iterations   int
-	FinishReason FinishReason
+	Messages              []llm.Message
+	Usage                 llm.UsageStats
+	ToolStats             []ToolStat
+	Iterations            int
+	FinishReason          FinishReason
+	ReasoningEffort       string
+	ReasoningEffortMode   string
+	ReasoningEffortReason string
 }
 
 // ToolStat aggregates execution outcomes for a single tool across one Run.
@@ -334,6 +337,7 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, sink event.Sink
 	toolStats := map[string]*toolStatAcc{}
 	var toolStatsMu sync.Mutex
 	var lastClassified *errorclass.ClassifiedError
+	var lastEffortDecision reasoningEffortDecision
 
 	defer func() {
 		a.fireReflectionHook(ctx, messages, result, err, lastClassified)
@@ -366,6 +370,7 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, sink event.Sink
 		toolDefs := buildToolDefsWithLoaded(a.tools, a.toolExposureMode, loadedDeferredTools)
 
 		effortDecision := a.resolveReasoningEffortDecision(messages)
+		lastEffortDecision = effortDecision
 		if effortDecision.Effort != "" && a.logger != nil {
 			a.logger.Debug("reasoning effort selected",
 				"mode", effortDecision.Mode,
@@ -479,11 +484,14 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, sink event.Sink
 	}
 
 	return &RunResult{
-		Messages:     messages,
-		Usage:        totalUsage,
-		ToolStats:    finalizeToolStats(toolStats),
-		Iterations:   iterations,
-		FinishReason: finishReason,
+		Messages:              messages,
+		Usage:                 totalUsage,
+		ToolStats:             finalizeToolStats(toolStats),
+		Iterations:            iterations,
+		FinishReason:          finishReason,
+		ReasoningEffort:       lastEffortDecision.Effort,
+		ReasoningEffortMode:   lastEffortDecision.Mode,
+		ReasoningEffortReason: lastEffortDecision.Reason,
 	}, nil
 }
 

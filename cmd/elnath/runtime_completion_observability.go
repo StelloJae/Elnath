@@ -10,23 +10,24 @@ import (
 )
 
 type completionContractSummary struct {
-	VerificationHint     bool
-	VerificationObserved *bool
-	VerificationCommand  string
-	CompletionWarning    string
-	EditIntent           bool
-	EditObserved         *bool
-	ReasoningEffort      string
-	ReasoningEffortMode  string
-	ProviderName         string
-	ProviderEffort       string
-	ProviderEffortNote   string
-	CorrectionAttempted  bool
-	CorrectionAttempts   int
-	CorrectionDecision   string
-	CorrectionReason     string
-	RetryDecision        string
-	RetryReason          string
+	VerificationHint      bool
+	VerificationObserved  *bool
+	VerificationCommand   string
+	CompletionWarning     string
+	EditIntent            bool
+	EditObserved          *bool
+	ReasoningEffort       string
+	ReasoningEffortMode   string
+	ReasoningEffortReason string
+	ProviderName          string
+	ProviderEffort        string
+	ProviderEffortNote    string
+	CorrectionAttempted   bool
+	CorrectionAttempts    int
+	CorrectionDecision    string
+	CorrectionReason      string
+	RetryDecision         string
+	RetryReason           string
 }
 
 const (
@@ -49,6 +50,13 @@ func summarizeCompletionContract(routeCtx *orchestrator.RoutingContext, cfg orch
 	if result == nil {
 		return summary
 	}
+	if effort := strings.TrimSpace(result.ReasoningEffort); effort != "" {
+		summary.ReasoningEffort = effort
+	}
+	if mode := strings.TrimSpace(result.ReasoningEffortMode); mode != "" {
+		summary.ReasoningEffortMode = mode
+	}
+	summary.ReasoningEffortReason = strings.TrimSpace(result.ReasoningEffortReason)
 
 	verificationCommand := observedVerificationCommand(result.Messages)
 	observed := verificationCommand != ""

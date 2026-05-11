@@ -199,6 +199,9 @@ func TestSingleWorkflow_ReasoningEffortPropagated(t *testing.T) {
 	if provider.lastReq.ReasoningEffort != "medium" {
 		t.Fatalf("ReasoningEffort = %q, want medium", provider.lastReq.ReasoningEffort)
 	}
+	if result.ReasoningEffort != "medium" || result.ReasoningEffortMode != "manual" || result.ReasoningEffortReason != "manual" {
+		t.Fatalf("result reasoning = effort %q mode %q reason %q", result.ReasoningEffort, result.ReasoningEffortMode, result.ReasoningEffortReason)
+	}
 }
 
 func TestSingleWorkflow_ToolExposureModePropagated(t *testing.T) {
