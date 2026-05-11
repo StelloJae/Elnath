@@ -959,29 +959,8 @@ func (rt *executionRuntime) runTask(
 	}
 
 	userInput = normalizeSkillInput(userInput)
-	if strings.HasPrefix(userInput, "/effort") {
-		result, summary, handled, err := rt.tryEffortCommand(sess, messages, userInput, bus)
-		if handled {
-			return result, summary, err
-		}
-	}
-	if strings.HasPrefix(userInput, "/model") {
-		result, summary, handled, err := rt.tryModelCommand(sess, messages, userInput, bus)
-		if handled {
-			return result, summary, err
-		}
-	}
-	if strings.HasPrefix(userInput, "/provider") {
-		result, summary, handled, err := rt.tryProviderCommand(sess, messages, userInput, bus)
-		if handled {
-			return result, summary, err
-		}
-	}
-	if strings.HasPrefix(userInput, "/commands") {
-		result, summary, handled, err := rt.tryCommandsCommand(sess, messages, userInput, bus)
-		if handled {
-			return result, summary, err
-		}
+	if result, summary, handled, err := rt.tryLocalSlashCommand(sess, messages, userInput, bus); handled {
+		return result, summary, err
 	}
 	if rt.skillReg != nil && strings.HasPrefix(userInput, "/") {
 		result, summary, handled, err := rt.trySkillExecution(ctx, sess, messages, userInput, bus, output)

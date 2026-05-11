@@ -2319,6 +2319,65 @@ func TestExecutionRuntimeRunTaskEffortSlashCommandPinsManualEffort(t *testing.T)
 	}
 }
 
+func TestExecutionRuntimeEffortStatusExplainsAutoRoutingPolicy(t *testing.T) {
+	provider := &countingProvider{streamText: "runtime answer"}
+	rt := newTestExecutionRuntimeWithConfig(t, provider, false, func(cfg *config.Config) {
+		cfg.Reasoning.EffortMode = "auto"
+	})
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	_, summary, err := rt.runTask(context.Background(), sess, nil, "/effort status", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask /effort status: %v", err)
+	}
+	if provider.streamCalls != 0 {
+		t.Fatalf("streamCalls = %d, want 0 for local effort status command", provider.streamCalls)
+	}
+	for _, want := range []string{
+		"Effort level: auto.",
+		"Auto routing policy:",
+		"simple/status/summary -> low",
+		"implementation/debug/benchmark/CI -> high",
+		"root-cause/security/architecture/autonomous -> xhigh",
+		"Manual override: /effort <level>",
+	} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary = %q, want contains %q", summary, want)
+		}
+	}
+}
+
+func TestExecutionRuntimeEffortStatusReportsProviderCapability(t *testing.T) {
+	provider := &capabilityCountingProvider{}
+	rt := newTestExecutionRuntimeWithConfig(t, provider, false, func(cfg *config.Config) {
+		cfg.Reasoning.EffortMode = "auto"
+	})
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	_, summary, err := rt.runTask(context.Background(), sess, nil, "/effort status", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask /effort status: %v", err)
+	}
+	if provider.streamCalls != 0 || provider.chatCalls != 0 {
+		t.Fatalf("provider calls = chat:%d stream:%d, want none for local effort status command", provider.chatCalls, provider.streamCalls)
+	}
+	for _, want := range []string{
+		"Provider effort capability: native_with_unsupported_retry",
+		"Provider effort note: retry_without_reasoning",
+		"Auto effort compatible: true",
+	} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary = %q, want contains %q", summary, want)
+		}
+	}
+}
+
 func TestExecutionRuntimeRunTaskModelSlashCommandPinsModel(t *testing.T) {
 	provider := &countingProvider{streamText: "runtime answer"}
 	rt := newTestExecutionRuntime(t, provider)
@@ -2438,6 +2497,56 @@ func TestExecutionRuntimeRunTaskCommandsSlashCommandListsCatalog(t *testing.T) {
 	}
 	if len(messages) != 2 {
 		t.Fatalf("messages len = %d, want 2", len(messages))
+	}
+}
+
+func TestExecutionRuntimeRunTaskHelpSlashCommandListsCatalog(t *testing.T) {
+	provider := &countingProvider{streamText: "runtime answer"}
+	rt := newTestExecutionRuntime(t, provider)
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	messages, summary, err := rt.runTask(context.Background(), sess, nil, "/help", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask /help: %v", err)
+	}
+	if provider.streamCalls != 0 || provider.chatCalls != 0 {
+		t.Fatalf("provider calls = chat:%d stream:%d, want none for local help command", provider.chatCalls, provider.streamCalls)
+	}
+	for _, want := range []string{"Elnath commands:", "commands", "run", "skill"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary=%q missing %q", summary, want)
+		}
+	}
+	if len(messages) != 2 {
+		t.Fatalf("messages len = %d, want 2", len(messages))
+	}
+}
+
+func TestRuntimeLocalSlashCommandRegistry(t *testing.T) {
+	specs := runtimeLocalSlashCommandSpecs()
+	if len(specs) == 0 {
+		t.Fatal("runtimeLocalSlashCommandSpecs returned no commands")
+	}
+	names := map[string]bool{}
+	for _, spec := range specs {
+		if spec.Name == "" {
+			t.Fatalf("spec with empty name: %+v", spec)
+		}
+		if !strings.HasPrefix(spec.Name, "/") {
+			t.Fatalf("spec name = %q, want leading slash", spec.Name)
+		}
+		if spec.Description == "" {
+			t.Fatalf("spec %q has empty description", spec.Name)
+		}
+		names[spec.Name] = true
+	}
+	for _, want := range []string{"/effort", "/model", "/provider", "/commands", "/help"} {
+		if !names[want] {
+			t.Fatalf("runtime local slash registry missing %s; got %+v", want, specs)
+		}
 	}
 }
 
