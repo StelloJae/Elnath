@@ -25,15 +25,34 @@ func (a *Agent) resolveReasoningEffortDecision(messages []llm.Message) reasoning
 	mode := strings.ToLower(strings.TrimSpace(a.reasoningEffortMode))
 	if mode == reasoningEffortModeAuto {
 		if decision := autoReasoningEffortDecision(messages); decision.Effort != "" {
+			if unsupported := providerUnsupportedAutoEffort(a.provider); unsupported != "" {
+				return reasoningEffortDecision{Mode: reasoningEffortModeAuto, Reason: unsupported}
+			}
 			decision.Mode = reasoningEffortModeAuto
 			return decision
 		}
 		if effort := strings.TrimSpace(a.reasoningEffort); effort != "" {
+			if unsupported := providerUnsupportedAutoEffort(a.provider); unsupported != "" {
+				return reasoningEffortDecision{Mode: reasoningEffortModeAuto, Reason: unsupported}
+			}
 			return reasoningEffortDecision{Effort: effort, Mode: reasoningEffortModeAuto, Reason: "configured_fallback"}
 		}
 		return reasoningEffortDecision{Effort: "medium", Mode: reasoningEffortModeAuto, Reason: "empty_task_default"}
 	}
 	return reasoningEffortDecision{Effort: strings.TrimSpace(a.reasoningEffort), Mode: reasoningEffortModeManual, Reason: "manual"}
+}
+
+func providerUnsupportedAutoEffort(provider llm.Provider) string {
+	switch llm.CapabilitiesOf(provider).ReasoningEffort {
+	case llm.ReasoningEffortIgnored:
+		return "provider_effort_ignored"
+	case llm.ReasoningEffortUnsupported:
+		return "provider_effort_unsupported"
+	case llm.ReasoningEffortThinkingBudgetOnly:
+		return "provider_effort_thinking_budget_only"
+	default:
+		return ""
+	}
 }
 
 func autoReasoningEffort(messages []llm.Message) string {

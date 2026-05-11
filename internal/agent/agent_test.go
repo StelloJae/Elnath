@@ -25,6 +25,11 @@ type mockProvider struct {
 	modelsFn func() []llm.ModelInfo
 }
 
+type capabilityMockProvider struct {
+	mockProvider
+	reasoningEffort string
+}
+
 func (m *mockProvider) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
 	if m.chatFn != nil {
 		return m.chatFn(ctx, req)
@@ -45,6 +50,13 @@ func (m *mockProvider) Models() []llm.ModelInfo {
 		return m.modelsFn()
 	}
 	return nil
+}
+
+func (m *capabilityMockProvider) Capabilities() llm.ProviderCapabilities {
+	return llm.ProviderCapabilities{
+		Name:            m.Name(),
+		ReasoningEffort: m.reasoningEffort,
+	}
 }
 
 type statusCodeErr struct {
@@ -197,6 +209,51 @@ func TestAgentReasoningEffortAuto(t *testing.T) {
 				t.Fatalf("ReasoningEffort = %q, want %q", captured.ReasoningEffort, tt.want)
 			}
 		})
+	}
+}
+
+func TestAgentReasoningEffortAutoSkipsKnownIgnoredProvider(t *testing.T) {
+	reg := tools.NewRegistry()
+	var captured llm.ChatRequest
+	provider := &capabilityMockProvider{
+		reasoningEffort: llm.ReasoningEffortIgnored,
+		mockProvider: mockProvider{
+			streamFn: func(_ context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
+				captured = req
+				cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: "done"})
+				cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{InputTokens: 1, OutputTokens: 1}})
+				return nil
+			},
+		},
+	}
+
+	a := New(provider, reg,
+		WithMaxIterations(1),
+		WithReasoningEffortMode("auto"),
+	)
+	_, err := a.Run(context.Background(), []llm.Message{llm.NewUserMessage("implement provider policy and run tests")}, event.NopSink{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if captured.ReasoningEffort != "" {
+		t.Fatalf("ReasoningEffort = %q, want empty for provider that ignores auto effort", captured.ReasoningEffort)
+	}
+	decision := a.resolveReasoningEffortDecision([]llm.Message{llm.NewUserMessage("implement provider policy and run tests")})
+	if decision.Reason != "provider_effort_ignored" {
+		t.Fatalf("decision reason = %q, want provider_effort_ignored", decision.Reason)
+	}
+}
+
+func TestAgentReasoningEffortManualPreservesExplicitEffortForIgnoredProvider(t *testing.T) {
+	provider := &capabilityMockProvider{reasoningEffort: llm.ReasoningEffortIgnored}
+	a := New(provider, tools.NewRegistry(),
+		WithReasoningEffortMode("manual"),
+		WithReasoningEffort("xhigh"),
+	)
+
+	decision := a.resolveReasoningEffortDecision([]llm.Message{llm.NewUserMessage("quick status")})
+	if decision.Effort != "xhigh" || decision.Reason != "manual" {
+		t.Fatalf("decision = %+v, want manual xhigh preserved", decision)
 	}
 }
 
