@@ -1161,7 +1161,7 @@ func renderAgenticLineage(view *agenticLineageView) string {
 		fmt.Fprintln(&b, "  none")
 	} else {
 		for _, gate := range view.CompletionGates {
-			fmt.Fprintf(&b, "  #%d %s verifier=%s reason=%s\n", gate.ID, gate.Status, hashIDOrNone(gate.VerificationRunID), noneIfEmpty(gate.Reason))
+			fmt.Fprintf(&b, "  #%d %s verifier=%s reason=%s summary=%s\n", gate.ID, gate.Status, hashIDOrNone(gate.VerificationRunID), noneIfEmpty(gate.Reason), noneIfEmpty(gate.ReceiptSummaryJSON))
 		}
 	}
 	fmt.Fprintln(&b, "\nVerification")

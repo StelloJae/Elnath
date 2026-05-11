@@ -311,13 +311,19 @@ func (q *Queue) MarkDone(ctx context.Context, id int64, result, summary string) 
 
 // MarkFailed sets a task to failed with the given error message.
 func (q *Queue) MarkFailed(ctx context.Context, id int64, errMsg string) error {
+	return q.MarkFailedWithTimeoutClass(ctx, id, errMsg, TimeoutClassNone)
+}
+
+// MarkFailedWithTimeoutClass sets a task to failed and records a timeout
+// classification when the failure came from daemon timeout enforcement.
+func (q *Queue) MarkFailedWithTimeoutClass(ctx context.Context, id int64, errMsg string, timeoutClass TimeoutClass) error {
 	completionJSON, err := q.buildCompletionJSON(ctx, id, StatusFailed, "", errMsg)
 	if err != nil {
 		return fmt.Errorf("queue: mark failed: %w", err)
 	}
 	res, err := q.db.ExecContext(ctx, `
 		UPDATE task_queue SET status = ?, progress = ?, summary = ?, result = ?, completion = ?, updated_at = ?, completed_at = ?, timeout_class = ? WHERE id = ? AND status = ?`,
-		string(StatusFailed), "failed", completionSummary(StatusFailed, "", errMsg), errMsg, completionJSON, time.Now().UnixMilli(), time.Now().UnixMilli(), string(TimeoutClassNone), id, string(StatusRunning),
+		string(StatusFailed), "failed", completionSummary(StatusFailed, "", errMsg), errMsg, completionJSON, time.Now().UnixMilli(), time.Now().UnixMilli(), string(timeoutClass), id, string(StatusRunning),
 	)
 	if err != nil {
 		return fmt.Errorf("queue: mark failed: %w", err)

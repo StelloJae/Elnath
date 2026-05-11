@@ -737,7 +737,7 @@ func TestAgenticCommand_LineageShowsGoalSignalTaskActorPolicyApprovalReceiptVeri
 		"Receipts",
 		fmt.Sprintf("#%d failed tool=bash", fx.receipt.ID),
 		"Completion gates",
-		fmt.Sprintf("#%d blocked verifier=#%d reason=verification failed bounded reason", fx.gate.ID, fx.verifier.ID),
+		fmt.Sprintf("#%d blocked verifier=#%d reason=verification failed bounded reason summary={\"started\":0,\"failed\":1}", fx.gate.ID, fx.verifier.ID),
 		"Verification",
 		fmt.Sprintf("#%d failed", fx.verifier.ID),
 		"Memory",

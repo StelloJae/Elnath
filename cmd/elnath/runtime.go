@@ -227,6 +227,8 @@ type executionRuntime struct {
 	reflectModel       string
 	reflectMaxTurns    int
 	reflectTimeout     time.Duration
+	completionCtxMu    sync.Mutex
+	completionCtxs     map[int64]completionContractSummary
 }
 
 type agenticRuntimeEnforcementKey struct{}
@@ -1077,6 +1079,9 @@ func (rt *executionRuntime) runTask(
 	}
 
 	completionSummary := summarizeCompletionContract(routeCtx, cfg, result)
+	if hasAgenticTask {
+		rt.rememberAgenticCompletionContext(agenticTaskID, completionSummary)
+	}
 	if learning.ShouldRecord(result.FinishReason) {
 		rt.recordOutcome(ctx, outcomeInput{
 			agenticTaskID:  agenticTaskID,

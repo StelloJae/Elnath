@@ -3,6 +3,7 @@ package completion
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -153,6 +154,120 @@ func TestCompletionGate_NoAutonomousSideEffects(t *testing.T) {
 	}
 }
 
+func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testing.T) {
+	ctx := context.Background()
+	_, store := newCompletionTestStore(t)
+	task := createCompletionTestTask(t, ctx, store)
+	started := time.Now().Add(-time.Minute).UTC()
+	createCompletionTestVerificationAt(t, ctx, store, task.ID, agentic.VerificationVerdictPassed, started.Add(time.Second))
+	createCompletionTestReceipt(t, ctx, store, task.ID, agentic.ReceiptStatusSucceeded)
+	observed := false
+
+	gate := NewGate(store, ModeVerification, WithCompletionContextProvider(completionContextProviderFunc(
+		func(context.Context, daemon.Task, int64) (CompletionContext, error) {
+			return CompletionContext{
+				VerificationHint:     true,
+				VerificationObserved: &observed,
+				VerificationCommand:  "go test ./internal/agentic/completion -count=1",
+				CompletionWarning:    "final_response_reports_incomplete",
+				EditIntent:           true,
+				EditObserved:         &observed,
+				ReasoningEffort:      "high",
+				ReasoningEffortMode:  "auto",
+				RetryDecision:        "retry_smaller_scope",
+				RetryReason:          "final_response_reports_incomplete",
+			}, nil
+		},
+	)))
+
+	if _, err := gate.Evaluate(ctx, completionQueueTask(task.ID, started), task.ID); err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	gates, err := store.ListCompletionGatesByTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListCompletionGatesByTask: %v", err)
+	}
+	if len(gates) != 1 {
+		t.Fatalf("completion gates = %d, want 1", len(gates))
+	}
+
+	var summary map[string]any
+	if err := json.Unmarshal([]byte(gates[0].ReceiptSummaryJSON), &summary); err != nil {
+		t.Fatalf("summary json: %v", err)
+	}
+	if summary[agentic.ReceiptStatusSucceeded] != float64(1) {
+		t.Fatalf("succeeded count = %v, want 1; summary=%v", summary[agentic.ReceiptStatusSucceeded], summary)
+	}
+	if summary["verification_hint"] != true {
+		t.Fatalf("verification_hint = %v, want true; summary=%v", summary["verification_hint"], summary)
+	}
+	if summary["verification_observed"] != false {
+		t.Fatalf("verification_observed = %v, want false; summary=%v", summary["verification_observed"], summary)
+	}
+	if summary["verification_command"] != "go test ./internal/agentic/completion -count=1" {
+		t.Fatalf("verification_command = %v; summary=%v", summary["verification_command"], summary)
+	}
+	if summary["completion_warning"] != "final_response_reports_incomplete" {
+		t.Fatalf("completion_warning = %v; summary=%v", summary["completion_warning"], summary)
+	}
+	if summary["edit_intent"] != true || summary["edit_observed"] != false {
+		t.Fatalf("edit fields missing: summary=%v", summary)
+	}
+	if summary["reasoning_effort"] != "high" || summary["reasoning_effort_mode"] != "auto" {
+		t.Fatalf("reasoning fields missing: summary=%v", summary)
+	}
+	if summary["retry_decision"] != "retry_smaller_scope" || summary["retry_reason"] != "final_response_reports_incomplete" {
+		t.Fatalf("retry fields missing: summary=%v", summary)
+	}
+}
+
+func TestCompletionGate_ReceiptSummaryOmitsEmptyCompletionContext(t *testing.T) {
+	ctx := context.Background()
+	_, store := newCompletionTestStore(t)
+	task := createCompletionTestTask(t, ctx, store)
+	started := time.Now().Add(-time.Minute).UTC()
+	createCompletionTestVerificationAt(t, ctx, store, task.ID, agentic.VerificationVerdictPassed, started.Add(time.Second))
+
+	if _, err := NewGate(store, ModeVerification).Evaluate(ctx, completionQueueTask(task.ID, started), task.ID); err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	gates, err := store.ListCompletionGatesByTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListCompletionGatesByTask: %v", err)
+	}
+	var summary map[string]any
+	if err := json.Unmarshal([]byte(gates[0].ReceiptSummaryJSON), &summary); err != nil {
+		t.Fatalf("summary json: %v", err)
+	}
+	if _, ok := summary["verification_hint"]; ok {
+		t.Fatalf("verification_hint should be omitted for empty context: %v", summary)
+	}
+	if _, ok := summary[agentic.ReceiptStatusStarted]; !ok {
+		t.Fatalf("receipt count keys should remain present: %v", summary)
+	}
+}
+
+func TestCompletionGate_ContextProviderErrorDoesNotBlockGate(t *testing.T) {
+	ctx := context.Background()
+	_, store := newCompletionTestStore(t)
+	task := createCompletionTestTask(t, ctx, store)
+	started := time.Now().Add(-time.Minute).UTC()
+	run := createCompletionTestVerificationAt(t, ctx, store, task.ID, agentic.VerificationVerdictPassed, started.Add(time.Second))
+
+	gate := NewGate(store, ModeVerification, WithCompletionContextProvider(completionContextProviderFunc(
+		func(context.Context, daemon.Task, int64) (CompletionContext, error) {
+			return CompletionContext{}, errors.New("context unavailable")
+		},
+	)))
+	decision, err := gate.Evaluate(ctx, completionQueueTask(task.ID, started), task.ID)
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if !decision.Passed || decision.VerificationRunID != run.ID {
+		t.Fatalf("decision = %+v, want pass despite optional context failure", decision)
+	}
+}
+
 func assertCompletionGateBlocksVerdict(t *testing.T, verdict string) {
 	t.Helper()
 	ctx := context.Background()
@@ -168,6 +283,12 @@ func assertCompletionGateBlocksVerdict(t *testing.T, verdict string) {
 	if decision.Passed || decision.VerificationRunID != run.ID || !strings.Contains(decision.Reason, verdict) {
 		t.Fatalf("decision = %+v, want %s verifier block", decision, verdict)
 	}
+}
+
+type completionContextProviderFunc func(context.Context, daemon.Task, int64) (CompletionContext, error)
+
+func (f completionContextProviderFunc) CompletionContext(ctx context.Context, task daemon.Task, agenticTaskID int64) (CompletionContext, error) {
+	return f(ctx, task, agenticTaskID)
 }
 
 func newCompletionTestStore(t *testing.T) (*sql.DB, *agentic.Store) {

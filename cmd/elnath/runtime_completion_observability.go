@@ -12,12 +12,24 @@ import (
 type completionContractSummary struct {
 	VerificationHint     bool
 	VerificationObserved *bool
+	VerificationCommand  string
 	CompletionWarning    string
+	EditIntent           bool
+	EditObserved         *bool
 	ReasoningEffort      string
 	ReasoningEffortMode  string
+	RetryDecision        string
+	RetryReason          string
 }
 
+const (
+	completionRetryDecisionRunVerification   = "run_verification"
+	completionRetryDecisionRetrySmallerScope = "retry_smaller_scope"
+)
+
 var verificationCommandRE = regexp.MustCompile(`(?i)(^|[;&|()\s])((go\s+test|go\s+vet|git\s+diff\s+--check|bash\s+-n|make\s+(test|lint|vet)|npm\s+(test|run\s+test|run\s+lint)|pnpm\s+(test|run\s+test|run\s+lint)|yarn\s+(test|run\s+test|run\s+lint)|bun\s+test|pytest|python\d*(\.\d+)?\s+-m\s+pytest|ruff\s+check|cargo\s+test|mvn\s+test|gradle\s+test))([;&|()\s]|$)`)
+
+var mutatingBashCommandRE = regexp.MustCompile(`(?i)(^|[;&|()\s])((apply_patch|gofmt\s+-w|sed\s+-i|perl\s+-pi|tee\s+|touch\s+|mkdir\s+|rm\s+|mv\s+|cp\s+|cat\s+>|python\d*(\.\d+)?\s+(-c|-)\b))`)
 
 func summarizeCompletionContract(routeCtx *orchestrator.RoutingContext, cfg orchestrator.WorkflowConfig, result *orchestrator.WorkflowResult) completionContractSummary {
 	summary := completionContractSummary{
@@ -31,17 +43,46 @@ func summarizeCompletionContract(routeCtx *orchestrator.RoutingContext, cfg orch
 		return summary
 	}
 
-	observed := verificationObservedInMessages(result.Messages)
+	verificationCommand := observedVerificationCommand(result.Messages)
+	observed := verificationCommand != ""
 	if summary.VerificationHint || observed {
 		summary.VerificationObserved = &observed
+	}
+	summary.VerificationCommand = verificationCommand
+	editIntent := editIntentDetected(result.Messages)
+	editObserved := mutationObservedInMessages(result.Messages)
+	summary.EditIntent = editIntent
+	if editIntent || editObserved {
+		summary.EditObserved = &editObserved
 	}
 	if finalAssistantReportsIncomplete(result.Messages) {
 		summary.CompletionWarning = "final_response_reports_incomplete"
 	}
+	if summary.CompletionWarning == "" && editIntent && !editObserved {
+		summary.CompletionWarning = "edit_intent_without_mutation"
+	}
+	summary.RetryDecision, summary.RetryReason = completionRetryPlan(summary)
 	return summary
 }
 
+func completionRetryPlan(summary completionContractSummary) (string, string) {
+	if summary.CompletionWarning == "final_response_reports_incomplete" {
+		return completionRetryDecisionRetrySmallerScope, summary.CompletionWarning
+	}
+	if summary.CompletionWarning == "edit_intent_without_mutation" {
+		return completionRetryDecisionRetrySmallerScope, summary.CompletionWarning
+	}
+	if summary.VerificationObserved != nil && !*summary.VerificationObserved {
+		return completionRetryDecisionRunVerification, "verification_hint_not_observed"
+	}
+	return "", ""
+}
+
 func verificationObservedInMessages(messages []llm.Message) bool {
+	return observedVerificationCommand(messages) != ""
+}
+
+func observedVerificationCommand(messages []llm.Message) string {
 	for _, msg := range messages {
 		for _, block := range msg.Content {
 			toolUse, ok := block.(llm.ToolUseBlock)
@@ -51,12 +92,13 @@ func verificationObservedInMessages(messages []llm.Message) bool {
 			if toolUse.Name != "bash" {
 				continue
 			}
-			if isVerificationCommand(bashCommandFromToolInput(toolUse.Input)) {
-				return true
+			command := bashCommandFromToolInput(toolUse.Input)
+			if isVerificationCommand(command) {
+				return strings.TrimSpace(command)
 			}
 		}
 	}
-	return false
+	return ""
 }
 
 func bashCommandFromToolInput(input json.RawMessage) string {
@@ -71,6 +113,91 @@ func bashCommandFromToolInput(input json.RawMessage) string {
 
 func isVerificationCommand(command string) bool {
 	return verificationCommandRE.MatchString(command)
+}
+
+func editIntentDetected(messages []llm.Message) bool {
+	text := strings.ToLower(strings.TrimSpace(userMessageText(messages)))
+	if text == "" {
+		return false
+	}
+	return completionContainsAny(text, []string{
+		"fix",
+		"repair",
+		"implement",
+		"change",
+		"modify",
+		"update",
+		"refactor",
+		"patch",
+		"write",
+		"edit",
+		"수정",
+		"고쳐",
+		"구현",
+		"변경",
+		"패치",
+		"리팩터",
+	})
+}
+
+func mutationObservedInMessages(messages []llm.Message) bool {
+	for _, msg := range messages {
+		for _, block := range msg.Content {
+			toolUse, ok := block.(llm.ToolUseBlock)
+			if !ok {
+				continue
+			}
+			if mutatingToolUseObserved(toolUse) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func mutatingToolUseObserved(toolUse llm.ToolUseBlock) bool {
+	switch toolUse.Name {
+	case "write_file", "edit_file", "wiki_write":
+		return true
+	case "git":
+		var payload struct {
+			Subcommand string `json:"subcommand"`
+		}
+		if err := json.Unmarshal(toolUse.Input, &payload); err != nil {
+			return false
+		}
+		return payload.Subcommand == "commit"
+	case "bash":
+		return bashCommandLooksMutating(bashCommandFromToolInput(toolUse.Input))
+	default:
+		return false
+	}
+}
+
+func bashCommandLooksMutating(command string) bool {
+	return mutatingBashCommandRE.MatchString(command)
+}
+
+func userMessageText(messages []llm.Message) string {
+	var parts []string
+	for _, msg := range messages {
+		if msg.Role != llm.RoleUser {
+			continue
+		}
+		if text := strings.TrimSpace(msg.Text()); text != "" {
+			parts = append(parts, text)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+func completionContainsAny(s string, needles []string) bool {
+	for _, needle := range needles {
+		if strings.Contains(s, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func finalAssistantReportsIncomplete(messages []llm.Message) bool {

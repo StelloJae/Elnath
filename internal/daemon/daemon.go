@@ -512,7 +512,7 @@ func (d *Daemon) worker(ctx context.Context, id int) {
 				"principal_surface", principal.Surface,
 				"error", err,
 			)
-			if markErr := d.queue.MarkFailed(ctx, task.ID, err.Error()); markErr != nil {
+			if markErr := d.queue.MarkFailedWithTimeoutClass(ctx, task.ID, err.Error(), failureTimeoutClass(err)); markErr != nil {
 				d.logger.Error("worker: mark failed", "task_id", task.ID, "error", markErr)
 			} else if envelopeRun != nil {
 				if envelopeErr := envelopeRun.Fail(ctx); envelopeErr != nil {
@@ -704,11 +704,12 @@ func (d *Daemon) runTask(ctx context.Context, task *Task) (TaskResult, error) {
 	var lastActivity atomic.Int64
 	lastActivity.Store(time.Now().UnixMilli())
 
+	var inactivityTimedOut atomic.Bool
 	if d.inactivityTimeout > 0 {
 		d.wg.Add(1)
 		go func() {
 			defer d.wg.Done()
-			d.inactivityWatchdog(taskCtx, taskCancel, &lastActivity, task.ID)
+			d.inactivityWatchdog(taskCtx, taskCancel, &lastActivity, task.ID, &inactivityTimedOut)
 		}()
 	}
 
@@ -739,7 +740,14 @@ func (d *Daemon) runTask(ctx context.Context, task *Task) (TaskResult, error) {
 	if err != nil {
 		if taskCtx.Err() != nil && ctx.Err() == nil {
 			inner := fmt.Errorf("daemon: task timed out: %w", taskCtx.Err())
-			return TaskResult{}, userfacingerr.Wrap(userfacingerr.ELN110, inner, "daemon task")
+			timeoutClass := TimeoutClassActiveButKilled
+			if inactivityTimedOut.Load() {
+				timeoutClass = TimeoutClassIdle
+			}
+			return TaskResult{}, taskTimeoutError{
+				err:          userfacingerr.Wrap(userfacingerr.ELN110, inner, "daemon task"),
+				timeoutClass: timeoutClass,
+			}
 		}
 		return TaskResult{}, fmt.Errorf("daemon: run task: %w", err)
 	}
@@ -758,7 +766,34 @@ func (d *Daemon) runTask(ctx context.Context, task *Task) (TaskResult, error) {
 	return result, nil
 }
 
-func (d *Daemon) inactivityWatchdog(ctx context.Context, cancel context.CancelFunc, lastActivity *atomic.Int64, taskID int64) {
+type taskTimeoutError struct {
+	err          error
+	timeoutClass TimeoutClass
+}
+
+func (e taskTimeoutError) Error() string {
+	if e.err == nil {
+		return ""
+	}
+	return e.err.Error()
+}
+
+func (e taskTimeoutError) Unwrap() error {
+	return e.err
+}
+
+func (e taskTimeoutError) TimeoutClass() TimeoutClass {
+	return e.timeoutClass
+}
+
+func failureTimeoutClass(err error) TimeoutClass {
+	if timeoutErr, ok := err.(interface{ TimeoutClass() TimeoutClass }); ok {
+		return timeoutErr.TimeoutClass()
+	}
+	return TimeoutClassNone
+}
+
+func (d *Daemon) inactivityWatchdog(ctx context.Context, cancel context.CancelFunc, lastActivity *atomic.Int64, taskID int64, timedOut *atomic.Bool) {
 	ticker := time.NewTicker(d.watchdogTick())
 	defer ticker.Stop()
 
@@ -773,6 +808,9 @@ func (d *Daemon) inactivityWatchdog(ctx context.Context, cancel context.CancelFu
 					"task_id", taskID,
 					"idle_seconds", int(elapsed.Seconds()),
 				)
+				if timedOut != nil {
+					timedOut.Store(true)
+				}
 				cancel()
 				return
 			}
