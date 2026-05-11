@@ -936,6 +936,12 @@ func (rt *executionRuntime) runTask(
 	}
 
 	userInput = normalizeSkillInput(userInput)
+	if strings.HasPrefix(userInput, "/effort") {
+		result, summary, handled, err := rt.tryEffortCommand(sess, messages, userInput, bus)
+		if handled {
+			return result, summary, err
+		}
+	}
 	if rt.skillReg != nil && strings.HasPrefix(userInput, "/") {
 		result, summary, handled, err := rt.trySkillExecution(ctx, sess, messages, userInput, bus, output)
 		if handled {

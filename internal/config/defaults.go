@@ -54,7 +54,7 @@ func DefaultConfig() *Config {
 			CostCapUSD: 5.0,
 		},
 		Reasoning: ReasoningConfig{
-			EffortMode: "manual",
+			EffortMode: "auto",
 		},
 		LLMExtraction: LLMExtractionConfig{
 			Model:       "claude-haiku-4-5",

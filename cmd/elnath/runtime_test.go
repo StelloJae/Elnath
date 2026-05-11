@@ -33,10 +33,11 @@ import (
 )
 
 type countingProvider struct {
-	chatCalls   int
-	streamCalls int
-	streamText  string
-	lastSystem  string
+	chatCalls           int
+	streamCalls         int
+	streamText          string
+	lastSystem          string
+	lastReasoningEffort string
 }
 
 type sequenceStreamProvider struct {
@@ -190,6 +191,7 @@ func (p *countingProvider) Chat(_ context.Context, req llm.ChatRequest) (*llm.Ch
 func (p *countingProvider) Stream(_ context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
 	p.streamCalls++
 	p.lastSystem = req.System
+	p.lastReasoningEffort = req.ReasoningEffort
 	if p.streamText != "" {
 		cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: p.streamText})
 	}
@@ -2166,6 +2168,79 @@ func TestExecutionRuntimeRunTaskExecutesSkillSlashCommand(t *testing.T) {
 	}
 	if got := reloaded.Messages[1].Text(); got != "skill output" {
 		t.Fatalf("reloaded assistant output = %q, want %q", got, "skill output")
+	}
+}
+
+func TestExecutionRuntimeRunTaskEffortSlashCommandSwitchesToAuto(t *testing.T) {
+	provider := &countingProvider{streamText: "runtime answer"}
+	rt := newTestExecutionRuntimeWithConfig(t, provider, false, func(cfg *config.Config) {
+		cfg.Reasoning.EffortMode = "manual"
+		cfg.Reasoning.Effort = "high"
+	})
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	var streamed strings.Builder
+	messages, summary, err := rt.runTask(context.Background(), sess, nil, "/effort auto", orchestrationOutput{
+		OnText: func(s string) { streamed.WriteString(s) },
+	})
+	if err != nil {
+		t.Fatalf("runTask /effort auto: %v", err)
+	}
+	if provider.streamCalls != 0 {
+		t.Fatalf("streamCalls = %d, want 0 for local effort command", provider.streamCalls)
+	}
+	if rt.wfCfg.ReasoningEffortMode != "auto" || rt.wfCfg.ReasoningEffort != "" {
+		t.Fatalf("reasoning config = mode %q effort %q, want auto/empty", rt.wfCfg.ReasoningEffortMode, rt.wfCfg.ReasoningEffort)
+	}
+	if !strings.Contains(summary, "auto") || !strings.Contains(streamed.String(), "auto") {
+		t.Fatalf("summary=%q streamed=%q, want auto message", summary, streamed.String())
+	}
+	if len(messages) != 2 {
+		t.Fatalf("messages len = %d, want 2", len(messages))
+	}
+
+	_, _, err = rt.runTask(context.Background(), sess, messages, "quick status summary", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask status: %v", err)
+	}
+	if provider.lastReasoningEffort != "low" {
+		t.Fatalf("ReasoningEffort = %q, want low", provider.lastReasoningEffort)
+	}
+}
+
+func TestExecutionRuntimeRunTaskEffortSlashCommandPinsManualEffort(t *testing.T) {
+	provider := &countingProvider{streamText: "runtime answer"}
+	rt := newTestExecutionRuntimeWithConfig(t, provider, false, func(cfg *config.Config) {
+		cfg.Reasoning.EffortMode = "auto"
+	})
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	messages, summary, err := rt.runTask(context.Background(), sess, nil, "/effort max", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask /effort max: %v", err)
+	}
+	if provider.streamCalls != 0 {
+		t.Fatalf("streamCalls = %d, want 0 for local effort command", provider.streamCalls)
+	}
+	if rt.wfCfg.ReasoningEffortMode != "manual" || rt.wfCfg.ReasoningEffort != "xhigh" {
+		t.Fatalf("reasoning config = mode %q effort %q, want manual/xhigh", rt.wfCfg.ReasoningEffortMode, rt.wfCfg.ReasoningEffort)
+	}
+	if !strings.Contains(summary, "xhigh") {
+		t.Fatalf("summary = %q, want xhigh", summary)
+	}
+
+	_, _, err = rt.runTask(context.Background(), sess, messages, "quick status summary", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask status: %v", err)
+	}
+	if provider.lastReasoningEffort != "xhigh" {
+		t.Fatalf("ReasoningEffort = %q, want xhigh", provider.lastReasoningEffort)
 	}
 }
 

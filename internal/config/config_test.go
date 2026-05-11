@@ -42,8 +42,8 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Research.MaxRounds <= 0 {
 		t.Error("Research.MaxRounds should be positive")
 	}
-	if cfg.Reasoning.EffortMode != "manual" {
-		t.Errorf("expected Reasoning.EffortMode default %q, got %q", "manual", cfg.Reasoning.EffortMode)
+	if cfg.Reasoning.EffortMode != "auto" {
+		t.Errorf("expected Reasoning.EffortMode default %q, got %q", "auto", cfg.Reasoning.EffortMode)
 	}
 	if cfg.LLMExtraction.MinMessages != 5 {
 		t.Errorf("expected LLMExtraction.MinMessages %d, got %d", 5, cfg.LLMExtraction.MinMessages)
