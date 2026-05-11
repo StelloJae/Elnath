@@ -17,6 +17,7 @@
 
 # Local worktrees
 .worktrees/
+.elnath/worktrees/
 
 # Benchmark run outputs (keep corpus/plan definitions)
 /benchmarks/results/

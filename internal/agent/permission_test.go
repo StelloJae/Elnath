@@ -154,6 +154,8 @@ func TestPermissionWithActualToolNames(t *testing.T) {
 		{"plan denies task_update", ModePlan, "task_update", false},
 		{"plan denies schedule_create", ModePlan, "schedule_create", false},
 		{"plan denies schedule_delete", ModePlan, "schedule_delete", false},
+		{"plan denies enter_worktree", ModePlan, "enter_worktree", false},
+		{"plan denies exit_worktree", ModePlan, "exit_worktree", false},
 		{"plan denies wiki_write", ModePlan, "wiki_write", false},
 		{"plan denies mcp tool", ModePlan, "mcp_some_tool", false},
 	}

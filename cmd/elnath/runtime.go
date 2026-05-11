@@ -40,6 +40,7 @@ import (
 	"github.com/stello/elnath/internal/skill"
 	"github.com/stello/elnath/internal/tools"
 	"github.com/stello/elnath/internal/wiki"
+	"github.com/stello/elnath/internal/worktree"
 )
 
 // orchestrationOutput carries optional callbacks for event routing.
@@ -437,6 +438,9 @@ func buildExecutionRuntime(
 	reg.Register(scheduler.NewScheduleCreateTool(schedulePath))
 	reg.Register(scheduler.NewScheduleListTool(schedulePath))
 	reg.Register(scheduler.NewScheduleDeleteTool(schedulePath))
+	worktreeManager := worktree.NewManager(effectiveWorkDir)
+	reg.Register(worktree.NewEnterTool(worktreeManager))
+	reg.Register(worktree.NewExitTool(worktreeManager))
 	gitSync, wikiIdx := registerWikiTools(reg, cfg.WikiDir, db.Wiki)
 	reg.Register(conversation.NewConversationSearchTool(historyStore))
 
