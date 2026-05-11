@@ -13,6 +13,7 @@ const (
 	claudeSkillSource        = "claude-skill"
 	claudeCommandSkillSource = "claude-command-skill"
 	codexSkillSource         = "codex-skill"
+	codexPluginSkillSource   = "codex-plugin-skill"
 
 	compatibleRootKindSkills   = "skills"
 	compatibleRootKindCommands = "commands"
@@ -114,6 +115,7 @@ func DefaultCompatibleSkillRoots(projectRoot, homeDir string) []CompatibleSkillR
 			CompatibleSkillRoot{Path: filepath.Join(homeDir, ".agents", "skills"), Source: codexSkillSource, Kind: compatibleRootKindSkills},
 			CompatibleSkillRoot{Path: filepath.Join(homeDir, ".claude", "commands"), Source: claudeCommandSkillSource, Kind: compatibleRootKindCommands},
 		)
+		roots = append(roots, defaultCodexPluginSkillRoots(homeDir)...)
 	}
 	projectRoot = strings.TrimSpace(projectRoot)
 	if projectRoot != "" {
@@ -124,6 +126,29 @@ func DefaultCompatibleSkillRoots(projectRoot, homeDir string) []CompatibleSkillR
 		)
 	}
 	return dedupeCompatibleSkillRoots(roots)
+}
+
+func defaultCodexPluginSkillRoots(homeDir string) []CompatibleSkillRoot {
+	cacheRoot := filepath.Join(homeDir, ".codex", "plugins", "cache")
+	patterns := []string{
+		filepath.Join(cacheRoot, "*", "*", "skills"),
+		filepath.Join(cacheRoot, "*", "*", "*", "skills"),
+	}
+	var roots []CompatibleSkillRoot
+	for _, pattern := range patterns {
+		matches, err := filepath.Glob(pattern)
+		if err != nil {
+			continue
+		}
+		for _, match := range matches {
+			roots = append(roots, CompatibleSkillRoot{
+				Path:   match,
+				Source: codexPluginSkillSource,
+				Kind:   compatibleRootKindSkills,
+			})
+		}
+	}
+	return roots
 }
 
 func dedupeCompatibleSkillRoots(roots []CompatibleSkillRoot) []CompatibleSkillRoot {
