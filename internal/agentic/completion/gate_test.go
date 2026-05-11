@@ -171,6 +171,8 @@ func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testi
 				CompletionWarning:    "final_response_reports_incomplete",
 				ReasoningEffort:      "high",
 				ReasoningEffortMode:  "auto",
+				RetryDecision:        "retry_smaller_scope",
+				RetryReason:          "final_response_reports_incomplete",
 			}, nil
 		},
 	)))
@@ -204,6 +206,9 @@ func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testi
 	}
 	if summary["reasoning_effort"] != "high" || summary["reasoning_effort_mode"] != "auto" {
 		t.Fatalf("reasoning fields missing: summary=%v", summary)
+	}
+	if summary["retry_decision"] != "retry_smaller_scope" || summary["retry_reason"] != "final_response_reports_incomplete" {
+		t.Fatalf("retry fields missing: summary=%v", summary)
 	}
 }
 

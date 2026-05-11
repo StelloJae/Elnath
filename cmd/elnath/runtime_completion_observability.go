@@ -15,7 +15,14 @@ type completionContractSummary struct {
 	CompletionWarning    string
 	ReasoningEffort      string
 	ReasoningEffortMode  string
+	RetryDecision        string
+	RetryReason          string
 }
+
+const (
+	completionRetryDecisionRunVerification   = "run_verification"
+	completionRetryDecisionRetrySmallerScope = "retry_smaller_scope"
+)
 
 var verificationCommandRE = regexp.MustCompile(`(?i)(^|[;&|()\s])((go\s+test|go\s+vet|git\s+diff\s+--check|bash\s+-n|make\s+(test|lint|vet)|npm\s+(test|run\s+test|run\s+lint)|pnpm\s+(test|run\s+test|run\s+lint)|yarn\s+(test|run\s+test|run\s+lint)|bun\s+test|pytest|python\d*(\.\d+)?\s+-m\s+pytest|ruff\s+check|cargo\s+test|mvn\s+test|gradle\s+test))([;&|()\s]|$)`)
 
@@ -38,7 +45,18 @@ func summarizeCompletionContract(routeCtx *orchestrator.RoutingContext, cfg orch
 	if finalAssistantReportsIncomplete(result.Messages) {
 		summary.CompletionWarning = "final_response_reports_incomplete"
 	}
+	summary.RetryDecision, summary.RetryReason = completionRetryPlan(summary)
 	return summary
+}
+
+func completionRetryPlan(summary completionContractSummary) (string, string) {
+	if summary.CompletionWarning == "final_response_reports_incomplete" {
+		return completionRetryDecisionRetrySmallerScope, summary.CompletionWarning
+	}
+	if summary.VerificationObserved != nil && !*summary.VerificationObserved {
+		return completionRetryDecisionRunVerification, "verification_hint_not_observed"
+	}
+	return "", ""
 }
 
 func verificationObservedInMessages(messages []llm.Message) bool {

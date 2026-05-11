@@ -38,5 +38,7 @@ func (rt *executionRuntime) CompletionContext(_ context.Context, _ daemon.Task, 
 		CompletionWarning:    summary.CompletionWarning,
 		ReasoningEffort:      summary.ReasoningEffort,
 		ReasoningEffortMode:  summary.ReasoningEffortMode,
+		RetryDecision:        summary.RetryDecision,
+		RetryReason:          summary.RetryReason,
 	}, nil
 }

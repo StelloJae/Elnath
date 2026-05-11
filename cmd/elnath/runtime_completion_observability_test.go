@@ -34,6 +34,9 @@ func TestCompletionContractSummaryRecordsMissingVerification(t *testing.T) {
 	if *summary.VerificationObserved {
 		t.Fatal("VerificationObserved = true, want false")
 	}
+	if summary.RetryDecision != completionRetryDecisionRunVerification || summary.RetryReason != "verification_hint_not_observed" {
+		t.Fatalf("retry plan = %q/%q, want run_verification/verification_hint_not_observed", summary.RetryDecision, summary.RetryReason)
+	}
 }
 
 func TestCompletionContractSummaryDetectsBashVerification(t *testing.T) {
@@ -56,6 +59,9 @@ func TestCompletionContractSummaryDetectsBashVerification(t *testing.T) {
 	if summary.CompletionWarning != "" {
 		t.Fatalf("CompletionWarning = %q, want empty", summary.CompletionWarning)
 	}
+	if summary.RetryDecision != "" || summary.RetryReason != "" {
+		t.Fatalf("retry plan = %q/%q, want empty", summary.RetryDecision, summary.RetryReason)
+	}
 }
 
 func TestCompletionContractSummaryDetectsIncompleteFinalResponse(t *testing.T) {
@@ -70,6 +76,9 @@ func TestCompletionContractSummaryDetectsIncompleteFinalResponse(t *testing.T) {
 
 	if summary.CompletionWarning != "final_response_reports_incomplete" {
 		t.Fatalf("CompletionWarning = %q, want final_response_reports_incomplete", summary.CompletionWarning)
+	}
+	if summary.RetryDecision != completionRetryDecisionRetrySmallerScope || summary.RetryReason != "final_response_reports_incomplete" {
+		t.Fatalf("retry plan = %q/%q, want retry_smaller_scope/final_response_reports_incomplete", summary.RetryDecision, summary.RetryReason)
 	}
 }
 
@@ -131,6 +140,8 @@ func TestCompletionGateContextProviderConsumesRuntimeSummary(t *testing.T) {
 		CompletionWarning:    "final_response_reports_incomplete",
 		ReasoningEffort:      "high",
 		ReasoningEffortMode:  "auto",
+		RetryDecision:        completionRetryDecisionRetrySmallerScope,
+		RetryReason:          "final_response_reports_incomplete",
 	})
 
 	summary, err := rt.CompletionContext(ctx, daemon.Task{ID: 7}, 42)
@@ -148,6 +159,9 @@ func TestCompletionGateContextProviderConsumesRuntimeSummary(t *testing.T) {
 	}
 	if summary.ReasoningEffort != "high" || summary.ReasoningEffortMode != "auto" {
 		t.Fatalf("reasoning = effort %q mode %q, want high/auto", summary.ReasoningEffort, summary.ReasoningEffortMode)
+	}
+	if summary.RetryDecision != completionRetryDecisionRetrySmallerScope || summary.RetryReason != "final_response_reports_incomplete" {
+		t.Fatalf("retry plan = %q/%q", summary.RetryDecision, summary.RetryReason)
 	}
 
 	empty, err := rt.CompletionContext(ctx, daemon.Task{ID: 7}, 42)
@@ -200,6 +214,8 @@ func TestCompletionGateReceiptSummaryIncludesRuntimeContext(t *testing.T) {
 		CompletionWarning:    "final_response_reports_incomplete",
 		ReasoningEffort:      "medium",
 		ReasoningEffortMode:  "manual",
+		RetryDecision:        completionRetryDecisionRetrySmallerScope,
+		RetryReason:          "final_response_reports_incomplete",
 	})
 
 	gate := agenticcompletion.NewGate(rt.agenticStore, agenticcompletion.ModeVerification,
@@ -238,6 +254,9 @@ func TestCompletionGateReceiptSummaryIncludesRuntimeContext(t *testing.T) {
 	}
 	if summary["reasoning_effort"] != "medium" || summary["reasoning_effort_mode"] != "manual" {
 		t.Fatalf("reasoning context missing from gate summary: %v", summary)
+	}
+	if summary["retry_decision"] != completionRetryDecisionRetrySmallerScope || summary["retry_reason"] != "final_response_reports_incomplete" {
+		t.Fatalf("retry context missing from gate summary: %v", summary)
 	}
 }
 

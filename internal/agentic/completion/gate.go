@@ -34,6 +34,8 @@ type CompletionContext struct {
 	CompletionWarning    string
 	ReasoningEffort      string
 	ReasoningEffortMode  string
+	RetryDecision        string
+	RetryReason          string
 }
 
 type CompletionContextProvider interface {
@@ -217,6 +219,12 @@ func encodeReceiptSummary(summary map[string]int, completionContext CompletionCo
 	}
 	if completionContext.ReasoningEffortMode != "" {
 		payload["reasoning_effort_mode"] = completionContext.ReasoningEffortMode
+	}
+	if completionContext.RetryDecision != "" {
+		payload["retry_decision"] = completionContext.RetryDecision
+	}
+	if completionContext.RetryReason != "" {
+		payload["retry_reason"] = completionContext.RetryReason
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
