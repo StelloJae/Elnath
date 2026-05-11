@@ -35,6 +35,7 @@ func (rt *executionRuntime) CompletionContext(_ context.Context, _ daemon.Task, 
 	return agenticcompletion.CompletionContext{
 		VerificationHint:     summary.VerificationHint,
 		VerificationObserved: summary.VerificationObserved,
+		VerificationCommand:  summary.VerificationCommand,
 		CompletionWarning:    summary.CompletionWarning,
 		ReasoningEffort:      summary.ReasoningEffort,
 		ReasoningEffortMode:  summary.ReasoningEffortMode,

@@ -168,6 +168,7 @@ func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testi
 			return CompletionContext{
 				VerificationHint:     true,
 				VerificationObserved: &observed,
+				VerificationCommand:  "go test ./internal/agentic/completion -count=1",
 				CompletionWarning:    "final_response_reports_incomplete",
 				ReasoningEffort:      "high",
 				ReasoningEffortMode:  "auto",
@@ -200,6 +201,9 @@ func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testi
 	}
 	if summary["verification_observed"] != false {
 		t.Fatalf("verification_observed = %v, want false; summary=%v", summary["verification_observed"], summary)
+	}
+	if summary["verification_command"] != "go test ./internal/agentic/completion -count=1" {
+		t.Fatalf("verification_command = %v; summary=%v", summary["verification_command"], summary)
 	}
 	if summary["completion_warning"] != "final_response_reports_incomplete" {
 		t.Fatalf("completion_warning = %v; summary=%v", summary["completion_warning"], summary)

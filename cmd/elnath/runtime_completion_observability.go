@@ -12,6 +12,7 @@ import (
 type completionContractSummary struct {
 	VerificationHint     bool
 	VerificationObserved *bool
+	VerificationCommand  string
 	CompletionWarning    string
 	ReasoningEffort      string
 	ReasoningEffortMode  string
@@ -38,10 +39,12 @@ func summarizeCompletionContract(routeCtx *orchestrator.RoutingContext, cfg orch
 		return summary
 	}
 
-	observed := verificationObservedInMessages(result.Messages)
+	verificationCommand := observedVerificationCommand(result.Messages)
+	observed := verificationCommand != ""
 	if summary.VerificationHint || observed {
 		summary.VerificationObserved = &observed
 	}
+	summary.VerificationCommand = verificationCommand
 	if finalAssistantReportsIncomplete(result.Messages) {
 		summary.CompletionWarning = "final_response_reports_incomplete"
 	}
@@ -60,6 +63,10 @@ func completionRetryPlan(summary completionContractSummary) (string, string) {
 }
 
 func verificationObservedInMessages(messages []llm.Message) bool {
+	return observedVerificationCommand(messages) != ""
+}
+
+func observedVerificationCommand(messages []llm.Message) string {
 	for _, msg := range messages {
 		for _, block := range msg.Content {
 			toolUse, ok := block.(llm.ToolUseBlock)
@@ -69,12 +76,13 @@ func verificationObservedInMessages(messages []llm.Message) bool {
 			if toolUse.Name != "bash" {
 				continue
 			}
-			if isVerificationCommand(bashCommandFromToolInput(toolUse.Input)) {
-				return true
+			command := bashCommandFromToolInput(toolUse.Input)
+			if isVerificationCommand(command) {
+				return strings.TrimSpace(command)
 			}
 		}
 	}
-	return false
+	return ""
 }
 
 func bashCommandFromToolInput(input json.RawMessage) string {

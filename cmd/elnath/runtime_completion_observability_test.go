@@ -56,6 +56,9 @@ func TestCompletionContractSummaryDetectsBashVerification(t *testing.T) {
 	if summary.VerificationObserved == nil || !*summary.VerificationObserved {
 		t.Fatalf("VerificationObserved = %v, want true", summary.VerificationObserved)
 	}
+	if summary.VerificationCommand != "go test ./internal/llm -count=1" {
+		t.Fatalf("VerificationCommand = %q", summary.VerificationCommand)
+	}
 	if summary.CompletionWarning != "" {
 		t.Fatalf("CompletionWarning = %q, want empty", summary.CompletionWarning)
 	}
@@ -137,6 +140,7 @@ func TestCompletionGateContextProviderConsumesRuntimeSummary(t *testing.T) {
 	rt.rememberAgenticCompletionContext(42, completionContractSummary{
 		VerificationHint:     true,
 		VerificationObserved: &observed,
+		VerificationCommand:  "go test ./cmd/elnath -count=1",
 		CompletionWarning:    "final_response_reports_incomplete",
 		ReasoningEffort:      "high",
 		ReasoningEffortMode:  "auto",
@@ -153,6 +157,9 @@ func TestCompletionGateContextProviderConsumesRuntimeSummary(t *testing.T) {
 	}
 	if summary.VerificationObserved == nil || *summary.VerificationObserved {
 		t.Fatalf("VerificationObserved = %v, want explicit false", summary.VerificationObserved)
+	}
+	if summary.VerificationCommand != "go test ./cmd/elnath -count=1" {
+		t.Fatalf("VerificationCommand = %q", summary.VerificationCommand)
 	}
 	if summary.CompletionWarning != "final_response_reports_incomplete" {
 		t.Fatalf("CompletionWarning = %q", summary.CompletionWarning)
@@ -211,6 +218,7 @@ func TestCompletionGateReceiptSummaryIncludesRuntimeContext(t *testing.T) {
 	rt.rememberAgenticCompletionContext(task.ID, completionContractSummary{
 		VerificationHint:     true,
 		VerificationObserved: &observed,
+		VerificationCommand:  "go test ./cmd/elnath -count=1",
 		CompletionWarning:    "final_response_reports_incomplete",
 		ReasoningEffort:      "medium",
 		ReasoningEffortMode:  "manual",
@@ -248,6 +256,9 @@ func TestCompletionGateReceiptSummaryIncludesRuntimeContext(t *testing.T) {
 	}
 	if summary["verification_hint"] != true || summary["verification_observed"] != false {
 		t.Fatalf("verification context missing from gate summary: %v", summary)
+	}
+	if summary["verification_command"] != "go test ./cmd/elnath -count=1" {
+		t.Fatalf("verification command missing from gate summary: %v", summary)
 	}
 	if summary["completion_warning"] != "final_response_reports_incomplete" {
 		t.Fatalf("completion warning missing from gate summary: %v", summary)

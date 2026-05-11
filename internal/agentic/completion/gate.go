@@ -31,6 +31,7 @@ type Store interface {
 type CompletionContext struct {
 	VerificationHint     bool
 	VerificationObserved *bool
+	VerificationCommand  string
 	CompletionWarning    string
 	ReasoningEffort      string
 	ReasoningEffortMode  string
@@ -210,6 +211,9 @@ func encodeReceiptSummary(summary map[string]int, completionContext CompletionCo
 	}
 	if completionContext.VerificationObserved != nil {
 		payload["verification_observed"] = *completionContext.VerificationObserved
+	}
+	if completionContext.VerificationCommand != "" {
+		payload["verification_command"] = completionContext.VerificationCommand
 	}
 	if completionContext.CompletionWarning != "" {
 		payload["completion_warning"] = completionContext.CompletionWarning
