@@ -1131,7 +1131,7 @@ func (rt *executionRuntime) runTask(
 		return nil, "", fmt.Errorf("workflow %s: %w", wf.Name(), err)
 	}
 
-	completionSummary := summarizeCompletionContract(routeCtx, cfg, result)
+	completionSummary := withProviderCapabilities(summarizeCompletionContract(routeCtx, cfg, result), rt.provider)
 	if hasAgenticTask {
 		rt.rememberAgenticCompletionContext(agenticTaskID, completionSummary)
 	}
@@ -1302,6 +1302,9 @@ func (rt *executionRuntime) recordOutcome(ctx context.Context, in outcomeInput) 
 		CompletionWarning:    in.completion.CompletionWarning,
 		ReasoningEffort:      in.completion.ReasoningEffort,
 		ReasoningEffortMode:  in.completion.ReasoningEffortMode,
+		ProviderName:         in.completion.ProviderName,
+		ProviderEffort:       in.completion.ProviderEffort,
+		ProviderEffortNote:   in.completion.ProviderEffortNote,
 		RetryDecision:        in.completion.RetryDecision,
 		RetryReason:          in.completion.RetryReason,
 	}

@@ -18,6 +18,9 @@ type completionContractSummary struct {
 	EditObserved         *bool
 	ReasoningEffort      string
 	ReasoningEffortMode  string
+	ProviderName         string
+	ProviderEffort       string
+	ProviderEffortNote   string
 	RetryDecision        string
 	RetryReason          string
 }
@@ -62,6 +65,14 @@ func summarizeCompletionContract(routeCtx *orchestrator.RoutingContext, cfg orch
 		summary.CompletionWarning = "edit_intent_without_mutation"
 	}
 	summary.RetryDecision, summary.RetryReason = completionRetryPlan(summary)
+	return summary
+}
+
+func withProviderCapabilities(summary completionContractSummary, provider llm.Provider) completionContractSummary {
+	caps := llm.CapabilitiesOf(provider)
+	summary.ProviderName = caps.Name
+	summary.ProviderEffort = caps.ReasoningEffort
+	summary.ProviderEffortNote = caps.ReasoningEffortFallback
 	return summary
 }
 

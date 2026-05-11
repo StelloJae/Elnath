@@ -40,6 +40,9 @@ type OutcomeRecord struct {
 	CompletionWarning    string `json:"completion_warning,omitempty"`
 	ReasoningEffort      string `json:"reasoning_effort,omitempty"`
 	ReasoningEffortMode  string `json:"reasoning_effort_mode,omitempty"`
+	ProviderName         string `json:"provider_name,omitempty"`
+	ProviderEffort       string `json:"provider_effort,omitempty"`
+	ProviderEffortNote   string `json:"provider_effort_note,omitempty"`
 	RetryDecision        string `json:"retry_decision,omitempty"`
 	RetryReason          string `json:"retry_reason,omitempty"`
 }

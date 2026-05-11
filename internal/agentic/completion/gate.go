@@ -37,6 +37,9 @@ type CompletionContext struct {
 	EditObserved         *bool
 	ReasoningEffort      string
 	ReasoningEffortMode  string
+	ProviderName         string
+	ProviderEffort       string
+	ProviderEffortNote   string
 	RetryDecision        string
 	RetryReason          string
 }
@@ -231,6 +234,15 @@ func encodeReceiptSummary(summary map[string]int, completionContext CompletionCo
 	}
 	if completionContext.ReasoningEffortMode != "" {
 		payload["reasoning_effort_mode"] = completionContext.ReasoningEffortMode
+	}
+	if completionContext.ProviderName != "" {
+		payload["provider_name"] = completionContext.ProviderName
+	}
+	if completionContext.ProviderEffort != "" {
+		payload["provider_effort"] = completionContext.ProviderEffort
+	}
+	if completionContext.ProviderEffortNote != "" {
+		payload["provider_effort_note"] = completionContext.ProviderEffortNote
 	}
 	if completionContext.RetryDecision != "" {
 		payload["retry_decision"] = completionContext.RetryDecision
