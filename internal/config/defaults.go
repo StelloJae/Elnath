@@ -41,6 +41,7 @@ func DefaultConfig() *Config {
 			MaxRecoveries:      3,
 			InactivityTimeout:  600,
 			WallClockTimeout:   1800,
+			ScheduledTasksPath: "scheduled_tasks.yaml",
 			WorkDir:            filepath.Join(base, "workspace"),
 			WorkspaceRetention: "immediate",
 		},

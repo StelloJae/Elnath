@@ -34,6 +34,7 @@ import (
 	"github.com/stello/elnath/internal/profile"
 	"github.com/stello/elnath/internal/prompt"
 	"github.com/stello/elnath/internal/research"
+	"github.com/stello/elnath/internal/scheduler"
 	"github.com/stello/elnath/internal/secret"
 	"github.com/stello/elnath/internal/self"
 	"github.com/stello/elnath/internal/skill"
@@ -432,6 +433,10 @@ func buildExecutionRuntime(
 	reg.Register(daemon.NewTaskStopTool(taskQueue))
 	reg.Register(daemon.NewTaskOutputTool(taskQueue))
 	reg.Register(daemon.NewTaskUpdateTool(taskQueue))
+	schedulePath := resolveRuntimeScheduledTasksPath(cfg)
+	reg.Register(scheduler.NewScheduleCreateTool(schedulePath))
+	reg.Register(scheduler.NewScheduleListTool(schedulePath))
+	reg.Register(scheduler.NewScheduleDeleteTool(schedulePath))
 	gitSync, wikiIdx := registerWikiTools(reg, cfg.WikiDir, db.Wiki)
 	reg.Register(conversation.NewConversationSearchTool(historyStore))
 
@@ -1159,6 +1164,20 @@ func (rt *executionRuntime) toolContextForSession(ctx context.Context, sess *age
 		return tools.WithRootSessionWorkDir(ctx)
 	}
 	return ctx
+}
+
+func resolveRuntimeScheduledTasksPath(cfg *config.Config) string {
+	if cfg == nil {
+		return "scheduled_tasks.yaml"
+	}
+	path := strings.TrimSpace(cfg.Daemon.ScheduledTasksPath)
+	if path == "" {
+		path = "scheduled_tasks.yaml"
+	}
+	if filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(cfg.DataDir, path)
 }
 
 // sessionRenderWorkDir returns the cwd path advertised to the LLM through
