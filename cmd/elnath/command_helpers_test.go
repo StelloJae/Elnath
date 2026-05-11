@@ -294,6 +294,7 @@ func TestProviderCommandStatusJSON(t *testing.T) {
 		"openai:\n" +
 		"  api_key: test-key\n" +
 		"  model: gpt-5.5\n" +
+		"  timeout_seconds: 45\n" +
 		"reasoning:\n" +
 		"  effort_mode: auto\n" +
 		"  effort: medium\n" +
@@ -317,14 +318,15 @@ func TestProviderCommandStatusJSON(t *testing.T) {
 		t.Fatalf("stderr = %q, want empty", stderr)
 	}
 	var got struct {
-		Provider             string `json:"provider"`
-		Model                string `json:"model"`
-		ReasoningEffort      string `json:"reasoning_effort"`
-		ReasoningEffortMode  string `json:"reasoning_effort_mode"`
-		ConfiguredEffort     string `json:"configured_effort"`
-		ProviderEffort       string `json:"provider_effort"`
-		ProviderEffortNote   string `json:"provider_effort_note,omitempty"`
-		AutoEffortCompatible bool   `json:"auto_effort_compatible"`
+		Provider              string `json:"provider"`
+		Model                 string `json:"model"`
+		ReasoningEffort       string `json:"reasoning_effort"`
+		ReasoningEffortMode   string `json:"reasoning_effort_mode"`
+		ConfiguredEffort      string `json:"configured_effort"`
+		ProviderEffort        string `json:"provider_effort"`
+		ProviderEffortNote    string `json:"provider_effort_note,omitempty"`
+		AutoEffortCompatible  bool   `json:"auto_effort_compatible"`
+		RequestTimeoutSeconds int    `json:"request_timeout_seconds"`
 	}
 	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
 		t.Fatalf("provider status json: %v\n%s", err, stdout)
@@ -337,6 +339,43 @@ func TestProviderCommandStatusJSON(t *testing.T) {
 	}
 	if got.ReasoningEffortMode != "auto" || got.ConfiguredEffort != "medium" {
 		t.Fatalf("reasoning config = mode %q effort %q", got.ReasoningEffortMode, got.ConfiguredEffort)
+	}
+	if got.RequestTimeoutSeconds != 45 {
+		t.Fatalf("request timeout seconds = %d, want 45", got.RequestTimeoutSeconds)
+	}
+}
+
+func TestProviderCommandStatusShowsRequestTimeout(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	cfgData := "data_dir: " + filepath.Join(dir, "data") + "\n" +
+		"wiki_dir: " + filepath.Join(dir, "wiki") + "\n" +
+		"provider: openai_responses\n" +
+		"openai_responses:\n" +
+		"  api_key: test-key\n" +
+		"  model: kimi-k2-thinking\n" +
+		"  timeout_seconds: 77\n" +
+		"permission:\n  mode: default\n"
+	if err := os.WriteFile(cfgPath, []byte(cfgData), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	t.Setenv("ELNATH_PROVIDER", "")
+	t.Setenv("ELNATH_OPENAI_API_KEY", "")
+	t.Setenv("ELNATH_OPENAI_RESPONSES_API_KEY", "")
+	t.Setenv("ELNATH_ANTHROPIC_API_KEY", "")
+	withArgs(t, []string{"elnath", "--config", cfgPath})
+	resetLoadLocaleCache()
+
+	stdout, stderr := captureOutput(t, func() {
+		if err := executeCommand(context.Background(), "provider", []string{"status"}); err != nil {
+			t.Fatalf("executeCommand(provider status): %v", err)
+		}
+	})
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+	if !strings.Contains(stdout, "Request timeout: 77s") {
+		t.Fatalf("stdout = %q, want request timeout line", stdout)
 	}
 }
 

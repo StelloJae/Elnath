@@ -236,6 +236,7 @@ func (p *AnthropicProvider) Capabilities() ProviderCapabilities {
 		Name:                    p.Name(),
 		ReasoningEffort:         ReasoningEffortThinkingBudgetOnly,
 		ReasoningEffortFallback: "chat_request_reasoning_effort_not_mapped_to_anthropic_thinking_budget",
+		RequestTimeoutSeconds:   timeoutSecondsFromClient(p.client),
 	}
 }
 

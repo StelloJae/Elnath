@@ -34,3 +34,10 @@ func newHTTPClientWithPerHostCap(timeoutSeconds int) *http.Client {
 		Transport: transport,
 	}
 }
+
+func timeoutSecondsFromClient(client *http.Client) int {
+	if client == nil || client.Timeout <= 0 {
+		return 0
+	}
+	return int(client.Timeout / time.Second)
+}

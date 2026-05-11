@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 type capabilityTestProvider struct{}
@@ -60,38 +61,44 @@ func TestCapabilitiesOf(t *testing.T) {
 
 func TestProviderCapabilitiesByProvider(t *testing.T) {
 	tests := []struct {
-		name       string
-		provider   Provider
-		wantEffort string
-		wantNote   string
+		name        string
+		provider    Provider
+		wantEffort  string
+		wantNote    string
+		wantTimeout int
 	}{
 		{
-			name:       "responses",
-			provider:   NewResponsesProvider("key", "gpt-5.5", ""),
-			wantEffort: ReasoningEffortNativeWithUnsupportedRetry,
-			wantNote:   "retry_without_reasoning",
+			name:        "responses",
+			provider:    NewResponsesProvider("key", "gpt-5.5", "", WithResponsesTimeout(77*time.Second)),
+			wantEffort:  ReasoningEffortNativeWithUnsupportedRetry,
+			wantNote:    "retry_without_reasoning",
+			wantTimeout: 77,
 		},
 		{
-			name:       "codex",
-			provider:   NewCodexOAuthProvider("gpt-5.5"),
-			wantEffort: ReasoningEffortNativeWithUnsupportedRetry,
-			wantNote:   "retry_without_reasoning",
+			name:        "codex",
+			provider:    NewCodexOAuthProvider("gpt-5.5", WithCodexOAuthTimeout(42*time.Second)),
+			wantEffort:  ReasoningEffortNativeWithUnsupportedRetry,
+			wantNote:    "retry_without_reasoning",
+			wantTimeout: 42,
 		},
 		{
-			name:       "anthropic",
-			provider:   NewAnthropicProvider("key", "claude-sonnet-4-6"),
-			wantEffort: ReasoningEffortThinkingBudgetOnly,
-			wantNote:   "thinking_budget",
+			name:        "anthropic",
+			provider:    NewAnthropicProvider("key", "claude-sonnet-4-6", WithAnthropicTimeout(33*time.Second)),
+			wantEffort:  ReasoningEffortThinkingBudgetOnly,
+			wantNote:    "thinking_budget",
+			wantTimeout: 33,
 		},
 		{
-			name:       "openai",
-			provider:   NewOpenAIProvider("key", "gpt-5.5"),
-			wantEffort: ReasoningEffortIgnored,
+			name:        "openai",
+			provider:    NewOpenAIProvider("key", "gpt-5.5", WithOpenAITimeout(45*time.Second)),
+			wantEffort:  ReasoningEffortIgnored,
+			wantTimeout: 45,
 		},
 		{
-			name:       "ollama",
-			provider:   NewOllamaProvider("", "llama3.2"),
-			wantEffort: ReasoningEffortIgnored,
+			name:        "ollama",
+			provider:    NewOllamaProvider("", "llama3.2", WithOllamaTimeout(55*time.Second)),
+			wantEffort:  ReasoningEffortIgnored,
+			wantTimeout: 55,
 		},
 	}
 
@@ -106,6 +113,9 @@ func TestProviderCapabilitiesByProvider(t *testing.T) {
 			}
 			if tt.wantNote != "" && !strings.Contains(got.ReasoningEffortFallback, tt.wantNote) {
 				t.Fatalf("ReasoningEffortFallback = %q, want contains %q", got.ReasoningEffortFallback, tt.wantNote)
+			}
+			if got.RequestTimeoutSeconds != tt.wantTimeout {
+				t.Fatalf("RequestTimeoutSeconds = %d, want %d", got.RequestTimeoutSeconds, tt.wantTimeout)
 			}
 		})
 	}

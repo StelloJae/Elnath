@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // sseServer returns an httptest.Server that writes the given SSE lines to each request.
@@ -448,6 +449,13 @@ func TestOpenAIProviderMetadata(t *testing.T) {
 	}
 	if !found {
 		t.Error("Models() does not include gpt-5.5")
+	}
+}
+
+func TestOpenAIProviderTimeoutOption(t *testing.T) {
+	p := NewOpenAIProvider("key", "gpt-5.5", WithOpenAITimeout(45*time.Second))
+	if p.client.Timeout != defaultTimeout(45) {
+		t.Fatalf("client timeout = %v, want %v", p.client.Timeout, defaultTimeout(45))
 	}
 }
 
