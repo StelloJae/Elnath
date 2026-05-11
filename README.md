@@ -115,6 +115,7 @@ Recent hardening also closed two structural follow-ups behind this operator flow
 | `chaos run` | Execute a fault-injection scenario | `elnath chaos run tool-bash-transient-fail` |
 | `chaos report` | Render a chaos run as Markdown | `elnath chaos report latest` |
 | `errors` | Look up an ELN-XXX error code | `elnath errors ELN-001` or `elnath errors list` |
+| `provider status` | Inspect configured provider and effort support | `elnath provider status --json` |
 | `version` | Show version | `elnath version` |
 | `help` | Show command help | `elnath help` |
 
@@ -184,6 +185,10 @@ openai_responses:
 reasoning:
   effort_mode: auto # manual or auto
   effort: medium    # fallback/request effort when effort_mode is manual
+
+self_healing:
+  enabled: true
+  observe_only: true # set false to allow one bounded completion correction pass
 
 permission:
   mode: default
