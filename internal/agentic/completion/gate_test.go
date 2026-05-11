@@ -174,8 +174,11 @@ func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testi
 				EditObserved:         &observed,
 				ReasoningEffort:      "high",
 				ReasoningEffortMode:  "auto",
-				RetryDecision:        "retry_smaller_scope",
-				RetryReason:          "final_response_reports_incomplete",
+				ConditionalSkillMatches: []ConditionalSkillMatch{
+					{SkillName: "go-review", Pattern: "internal/**/*.go", Path: "internal/skill/skill.go"},
+				},
+				RetryDecision: "retry_smaller_scope",
+				RetryReason:   "final_response_reports_incomplete",
 			}, nil
 		},
 	)))
@@ -215,6 +218,10 @@ func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testi
 	}
 	if summary["reasoning_effort"] != "high" || summary["reasoning_effort_mode"] != "auto" {
 		t.Fatalf("reasoning fields missing: summary=%v", summary)
+	}
+	matches, ok := summary["conditional_skill_matches"].([]any)
+	if !ok || len(matches) != 1 {
+		t.Fatalf("conditional_skill_matches missing: summary=%v", summary)
 	}
 	if summary["retry_decision"] != "retry_smaller_scope" || summary["retry_reason"] != "final_response_reports_incomplete" {
 		t.Fatalf("retry fields missing: summary=%v", summary)

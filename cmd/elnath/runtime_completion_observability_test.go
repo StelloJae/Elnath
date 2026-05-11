@@ -160,6 +160,29 @@ func TestCompletionContractSummaryRecordsReasoningConfig(t *testing.T) {
 	}
 }
 
+func TestCompletionContractSummaryRecordsConditionalSkillMatches(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("review internal/skill/skill.go"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "skill-1", Name: "skill_catalog", Input: json.RawMessage(`{"action":"match_paths","paths":["internal/skill/skill.go"]}`)},
+			}},
+			llm.NewToolResultMessage("skill-1", `{"action":"match_paths","matches":[{"skill_name":"go-review","pattern":"internal/**/*.go","path":"internal/skill/skill.go"}]}`, false),
+			llm.NewAssistantMessage("Done."),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(nil, orchestrator.WorkflowConfig{}, result)
+
+	if len(summary.ConditionalSkillMatches) != 1 {
+		t.Fatalf("ConditionalSkillMatches = %#v, want one match", summary.ConditionalSkillMatches)
+	}
+	match := summary.ConditionalSkillMatches[0]
+	if match.SkillName != "go-review" || match.Pattern != "internal/**/*.go" || match.Path != "internal/skill/skill.go" {
+		t.Fatalf("match = %+v, want go-review/internal/**/*.go/internal/skill/skill.go", match)
+	}
+}
+
 func TestCompletionContractSummaryRecordsProviderCapabilities(t *testing.T) {
 	summary := withProviderCapabilities(completionContractSummary{}, &capabilityCountingProvider{})
 
@@ -205,6 +228,9 @@ func TestRecordOutcomePersistsCompletionObservability(t *testing.T) {
 			CorrectionFailureFamily: "workflow_error",
 			RetryDecision:           completionRetryDecisionRetrySmallerScope,
 			RetryReason:             "final_response_reports_incomplete",
+			ConditionalSkillMatches: []completionConditionalSkillMatch{
+				{SkillName: "go-review", Pattern: "internal/**/*.go", Path: "internal/skill/skill.go"},
+			},
 		},
 	})
 
@@ -228,19 +254,22 @@ func TestCompletionGateContextProviderConsumesRuntimeSummary(t *testing.T) {
 	observed := false
 
 	rt.rememberAgenticCompletionContext(42, completionContractSummary{
-		VerificationHint:        true,
-		VerificationObserved:    &observed,
-		VerificationCommand:     "go test ./cmd/elnath -count=1",
-		CompletionWarning:       "final_response_reports_incomplete",
-		EditIntent:              true,
-		EditObserved:            &observed,
-		ReasoningEffort:         "high",
-		ReasoningEffortMode:     "auto",
-		ReasoningEffortReason:   "work_keyword",
-		ProviderName:            "openai-responses",
-		ProviderEffort:          llm.ReasoningEffortNativeWithUnsupportedRetry,
-		ProviderEffortNote:      "retry_without_reasoning_on_400_or_422_unsupported_effort",
-		LoadedDeferredTools:     []string{"mcp_github_issue"},
+		VerificationHint:      true,
+		VerificationObserved:  &observed,
+		VerificationCommand:   "go test ./cmd/elnath -count=1",
+		CompletionWarning:     "final_response_reports_incomplete",
+		EditIntent:            true,
+		EditObserved:          &observed,
+		ReasoningEffort:       "high",
+		ReasoningEffortMode:   "auto",
+		ReasoningEffortReason: "work_keyword",
+		ProviderName:          "openai-responses",
+		ProviderEffort:        llm.ReasoningEffortNativeWithUnsupportedRetry,
+		ProviderEffortNote:    "retry_without_reasoning_on_400_or_422_unsupported_effort",
+		LoadedDeferredTools:   []string{"mcp_github_issue"},
+		ConditionalSkillMatches: []completionConditionalSkillMatch{
+			{SkillName: "go-review", Pattern: "internal/**/*.go", Path: "internal/skill/skill.go"},
+		},
 		CorrectionAttempted:     true,
 		CorrectionAttempts:      1,
 		CorrectionDecision:      completionRetryDecisionRetrySmallerScope,
@@ -281,6 +310,9 @@ func TestCompletionGateContextProviderConsumesRuntimeSummary(t *testing.T) {
 	}
 	if len(summary.LoadedDeferredTools) != 1 || summary.LoadedDeferredTools[0] != "mcp_github_issue" {
 		t.Fatalf("LoadedDeferredTools = %v", summary.LoadedDeferredTools)
+	}
+	if len(summary.ConditionalSkillMatches) != 1 || summary.ConditionalSkillMatches[0].SkillName != "go-review" {
+		t.Fatalf("ConditionalSkillMatches = %+v", summary.ConditionalSkillMatches)
 	}
 	if !summary.CorrectionAttempted || summary.CorrectionAttempts != 1 || summary.CorrectionDecision != completionRetryDecisionRetrySmallerScope || summary.CorrectionReason != "final_response_reports_incomplete" {
 		t.Fatalf("correction context = attempted %v attempts %d decision %q reason %q", summary.CorrectionAttempted, summary.CorrectionAttempts, summary.CorrectionDecision, summary.CorrectionReason)
@@ -455,6 +487,12 @@ func assertCompletionOutcome(t *testing.T, rec learning.OutcomeRecord) {
 	}
 	if len(rec.LoadedDeferredTools) != 1 || rec.LoadedDeferredTools[0] != "mcp_github_issue" {
 		t.Fatalf("LoadedDeferredTools = %v", rec.LoadedDeferredTools)
+	}
+	if len(rec.ConditionalSkillMatches) != 1 {
+		t.Fatalf("ConditionalSkillMatches = %#v, want one match", rec.ConditionalSkillMatches)
+	}
+	if rec.ConditionalSkillMatches[0].SkillName != "go-review" || rec.ConditionalSkillMatches[0].Path != "internal/skill/skill.go" {
+		t.Fatalf("ConditionalSkillMatches[0] = %+v", rec.ConditionalSkillMatches[0])
 	}
 	if !rec.CorrectionAttempted || rec.CorrectionAttempts != 1 || rec.CorrectionDecision != completionRetryDecisionRetrySmallerScope || rec.CorrectionReason != "final_response_reports_incomplete" {
 		t.Fatalf("correction = attempted %v attempts %d decision %q reason %q", rec.CorrectionAttempted, rec.CorrectionAttempts, rec.CorrectionDecision, rec.CorrectionReason)
