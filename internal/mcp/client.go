@@ -22,6 +22,28 @@ type ToolInfo struct {
 	InputSchema json.RawMessage `json:"inputSchema"`
 }
 
+// ResourceInfo describes a single resource advertised by an MCP server.
+type ResourceInfo struct {
+	URI         string `json:"uri"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	MIMEType    string `json:"mimeType,omitempty"`
+}
+
+// PromptArgument describes one named argument accepted by an MCP prompt.
+type PromptArgument struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Required    bool   `json:"required,omitempty"`
+}
+
+// PromptInfo describes a single prompt advertised by an MCP server.
+type PromptInfo struct {
+	Name        string           `json:"name"`
+	Description string           `json:"description,omitempty"`
+	Arguments   []PromptArgument `json:"arguments,omitempty"`
+}
+
 // Client manages a connection to an external MCP server over stdio.
 type Client struct {
 	cmd     *exec.Cmd
@@ -133,6 +155,46 @@ func (c *Client) ListTools(ctx context.Context) ([]ToolInfo, error) {
 		return nil, fmt.Errorf("mcp: parse tools/list result: %w", err)
 	}
 	return result.Tools, nil
+}
+
+// ListResources calls resources/list and returns all resources advertised by
+// the server. Reading a resource is intentionally separate from discovery.
+func (c *Client) ListResources(ctx context.Context) ([]ResourceInfo, error) {
+	resp, err := c.call(ctx, "resources/list", nil)
+	if err != nil {
+		return nil, fmt.Errorf("mcp: resources/list: %w", err)
+	}
+	if resp.Error != nil {
+		return nil, fmt.Errorf("mcp: resources/list: %w", resp.Error)
+	}
+
+	var result struct {
+		Resources []ResourceInfo `json:"resources"`
+	}
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		return nil, fmt.Errorf("mcp: parse resources/list result: %w", err)
+	}
+	return result.Resources, nil
+}
+
+// ListPrompts calls prompts/list and returns all prompts advertised by the
+// server. Prompt execution is intentionally not part of this metadata call.
+func (c *Client) ListPrompts(ctx context.Context) ([]PromptInfo, error) {
+	resp, err := c.call(ctx, "prompts/list", nil)
+	if err != nil {
+		return nil, fmt.Errorf("mcp: prompts/list: %w", err)
+	}
+	if resp.Error != nil {
+		return nil, fmt.Errorf("mcp: prompts/list: %w", resp.Error)
+	}
+
+	var result struct {
+		Prompts []PromptInfo `json:"prompts"`
+	}
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		return nil, fmt.Errorf("mcp: parse prompts/list result: %w", err)
+	}
+	return result.Prompts, nil
 }
 
 // CallTool invokes a named tool with the given JSON arguments.

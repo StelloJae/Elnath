@@ -65,7 +65,7 @@ func TestCommandCatalogToolListsCommandsAsJSON(t *testing.T) {
 			t.Fatalf("list exposed hidden command %q", entry.Name)
 		}
 	}
-	for _, name := range []string{"commands", "run", "skill", "/effort", "/model", "/provider"} {
+	for _, name := range []string{"commands", "run", "skill", "/effort", "/model", "/provider", "/skills"} {
 		if !seen[name] {
 			t.Fatalf("command list missing %q", name)
 		}

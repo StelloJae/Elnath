@@ -2490,13 +2490,93 @@ func TestExecutionRuntimeRunTaskCommandsSlashCommandListsCatalog(t *testing.T) {
 	if provider.streamCalls != 0 || provider.chatCalls != 0 {
 		t.Fatalf("provider calls = chat:%d stream:%d, want none for local commands command", provider.chatCalls, provider.streamCalls)
 	}
-	for _, want := range []string{"commands", "run", "skill", "/effort", "/model", "/provider", "/help"} {
+	for _, want := range []string{"commands", "run", "skill", "/effort", "/model", "/provider", "/help", "/skills"} {
 		if !strings.Contains(summary, want) || !strings.Contains(streamed.String(), want) {
 			t.Fatalf("summary=%q streamed=%q missing %q", summary, streamed.String(), want)
 		}
 	}
 	if len(messages) != 2 {
 		t.Fatalf("messages len = %d, want 2", len(messages))
+	}
+}
+
+func TestExecutionRuntimeRunTaskSkillsSlashCommandListsCatalog(t *testing.T) {
+	provider := &countingProvider{streamText: "runtime answer"}
+	rt := newTestExecutionRuntime(t, provider)
+	rt.skillReg = skill.NewRegistry()
+	rt.skillReg.Add(&skill.Skill{
+		Name:        "pr-review",
+		Description: "Review PR with security and quality focus",
+		Trigger:     "/pr-review <pr_number>",
+		Prompt:      "Review PR #{pr_number}",
+	})
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	var streamed strings.Builder
+	messages, summary, err := rt.runTask(context.Background(), sess, nil, "/skills", orchestrationOutput{
+		OnText: func(s string) { streamed.WriteString(s) },
+	})
+	if err != nil {
+		t.Fatalf("runTask /skills: %v", err)
+	}
+	if provider.streamCalls != 0 || provider.chatCalls != 0 {
+		t.Fatalf("provider calls = chat:%d stream:%d, want none for local skills command", provider.chatCalls, provider.streamCalls)
+	}
+	for _, want := range []string{
+		"Available skills:",
+		"/pr-review <pr_number> - Review PR with security and quality focus",
+	} {
+		if !strings.Contains(summary, want) || !strings.Contains(streamed.String(), want) {
+			t.Fatalf("summary=%q streamed=%q missing %q", summary, streamed.String(), want)
+		}
+	}
+	if len(messages) != 2 {
+		t.Fatalf("messages len = %d, want 2", len(messages))
+	}
+}
+
+func TestExecutionRuntimeRunTaskSkillsSlashCommandJSONListsCatalog(t *testing.T) {
+	provider := &countingProvider{streamText: "runtime answer"}
+	rt := newTestExecutionRuntime(t, provider)
+	rt.skillReg = skill.NewRegistry()
+	rt.skillReg.Add(&skill.Skill{
+		Name:        "pr-review",
+		Description: "Review PR with security and quality focus",
+		Trigger:     "/pr-review <pr_number>",
+		Prompt:      "Review PR #{pr_number}",
+	})
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	_, summary, err := rt.runTask(context.Background(), sess, nil, "/skills --json", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask /skills --json: %v", err)
+	}
+	if provider.streamCalls != 0 || provider.chatCalls != 0 {
+		t.Fatalf("provider calls = chat:%d stream:%d, want none for local skills command", provider.chatCalls, provider.streamCalls)
+	}
+
+	var out struct {
+		Action string `json:"action"`
+		Skills []struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+			Trigger     string `json:"trigger"`
+		} `json:"skills"`
+	}
+	if err := json.Unmarshal([]byte(summary), &out); err != nil {
+		t.Fatalf("summary is not JSON: %v\n%s", err, summary)
+	}
+	if out.Action != "list" || len(out.Skills) != 1 {
+		t.Fatalf("output = %+v, want one listed skill", out)
+	}
+	if got := out.Skills[0]; got.Name != "pr-review" || got.Trigger != "/pr-review <pr_number>" {
+		t.Fatalf("skill entry = %+v, want pr-review trigger metadata", got)
 	}
 }
 
@@ -2549,7 +2629,7 @@ func TestExecutionRuntimeRunTaskCommandsSlashCommandJSONIncludesRuntimeControls(
 	for _, entry := range entries {
 		seen[entry.Name] = entry
 	}
-	for _, want := range []string{"/effort", "/model", "/provider", "/help"} {
+	for _, want := range []string{"/effort", "/model", "/provider", "/help", "/skills"} {
 		entry, ok := seen[want]
 		if !ok {
 			t.Fatalf("missing runtime command %s in JSON catalog: %+v", want, entries)
@@ -2578,7 +2658,7 @@ func TestRuntimeLocalSlashCommandRegistry(t *testing.T) {
 		}
 		names[spec.Name] = true
 	}
-	for _, want := range []string{"/effort", "/model", "/provider", "/commands", "/help"} {
+	for _, want := range []string{"/effort", "/model", "/provider", "/commands", "/help", "/skills"} {
 		if !names[want] {
 			t.Fatalf("runtime local slash registry missing %s; got %+v", want, specs)
 		}

@@ -572,6 +572,9 @@ func registerMCPTools(ctx context.Context, reg *tools.Registry, servers []config
 			continue
 		}
 
+		reg.Register(mcp.NewCatalogTool(client, sc.Name))
+		app.Logger.Info("mcp: registered catalog", slog.String("server", sc.Name))
+
 		toolInfos, err := client.ListTools(ctx)
 		if err != nil {
 			app.Logger.Warn("mcp: failed to list tools", slog.String("name", sc.Name), slog.String("error", err.Error()))

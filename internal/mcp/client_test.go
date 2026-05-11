@@ -14,9 +14,9 @@ import (
 // mockServer simulates an MCP server over io.Pipe pairs.
 // It reads one JSON-RPC message per call to respond() and writes a reply.
 type mockServer struct {
-	t       *testing.T
-	reader  *bufio.Scanner // reads from client
-	writer  io.Writer      // writes to client
+	t      *testing.T
+	reader *bufio.Scanner // reads from client
+	writer io.Writer      // writes to client
 }
 
 func newMockServer(t *testing.T, clientIn io.Reader, clientOut io.Writer) *mockServer {
@@ -170,6 +170,127 @@ func TestClientListTools(t *testing.T) {
 	}
 	if got[0].Description != want[0].Description {
 		t.Errorf("tool description = %q, want %q", got[0].Description, want[0].Description)
+	}
+}
+
+func TestClientListResources(t *testing.T) {
+	client, srv := makePipedClient(t)
+
+	want := []ResourceInfo{
+		{
+			URI:         "file:///repo/README.md",
+			Name:        "README",
+			Description: "Project README",
+			MIMEType:    "text/markdown",
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		req := srv.readRequest()
+		srv.send(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      json.RawMessage(req["id"]),
+			"result": map[string]any{
+				"protocolVersion": "2025-03-26",
+				"capabilities":    map[string]any{},
+				"serverInfo":      map[string]any{"name": "test", "version": "1.0"},
+			},
+		})
+		srv.readRequest() // notifications/initialized
+
+		listReq := srv.readRequest()
+		method := strings.Trim(string(listReq["method"]), `"`)
+		if method != "resources/list" {
+			done <- fmt.Errorf("expected resources/list, got %q", method)
+			return
+		}
+		srv.send(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      json.RawMessage(listReq["id"]),
+			"result": map[string]any{
+				"resources": want,
+			},
+		})
+		done <- nil
+	}()
+
+	if err := client.Initialize(context.Background()); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	got, err := client.ListResources(context.Background())
+	if err != nil {
+		t.Fatalf("ListResources: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("ListResources returned %d resources, want %d", len(got), len(want))
+	}
+	if got[0].URI != want[0].URI || got[0].MIMEType != want[0].MIMEType {
+		t.Fatalf("resource = %+v, want %+v", got[0], want[0])
+	}
+}
+
+func TestClientListPrompts(t *testing.T) {
+	client, srv := makePipedClient(t)
+
+	want := []PromptInfo{
+		{
+			Name:        "review",
+			Description: "Review code",
+			Arguments: []PromptArgument{
+				{Name: "path", Description: "Path to review", Required: true},
+			},
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		req := srv.readRequest()
+		srv.send(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      json.RawMessage(req["id"]),
+			"result": map[string]any{
+				"protocolVersion": "2025-03-26",
+				"capabilities":    map[string]any{},
+				"serverInfo":      map[string]any{"name": "test", "version": "1.0"},
+			},
+		})
+		srv.readRequest() // notifications/initialized
+
+		listReq := srv.readRequest()
+		method := strings.Trim(string(listReq["method"]), `"`)
+		if method != "prompts/list" {
+			done <- fmt.Errorf("expected prompts/list, got %q", method)
+			return
+		}
+		srv.send(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      json.RawMessage(listReq["id"]),
+			"result": map[string]any{
+				"prompts": want,
+			},
+		})
+		done <- nil
+	}()
+
+	if err := client.Initialize(context.Background()); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	got, err := client.ListPrompts(context.Background())
+	if err != nil {
+		t.Fatalf("ListPrompts: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("ListPrompts returned %d prompts, want %d", len(got), len(want))
+	}
+	if got[0].Name != want[0].Name || len(got[0].Arguments) != 1 || !got[0].Arguments[0].Required {
+		t.Fatalf("prompt = %+v, want %+v", got[0], want[0])
 	}
 }
 
