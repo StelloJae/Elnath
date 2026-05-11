@@ -82,6 +82,16 @@ type recordingRuntimeTool struct {
 
 type stubWorkflow struct{ name string }
 
+type captureRetryWorkflow struct {
+	name  string
+	input orchestrator.WorkflowInput
+}
+
+type failingRetryWorkflow struct {
+	name string
+	err  error
+}
+
 type captureLearningWorkflow struct {
 	name        string
 	sawLearning bool
@@ -116,6 +126,26 @@ func (w *stubWorkflow) Run(_ context.Context, input orchestrator.WorkflowInput) 
 		Summary:  w.name + " workflow",
 		Workflow: w.name,
 	}, nil
+}
+
+func (w *captureRetryWorkflow) Name() string { return w.name }
+
+func (w *captureRetryWorkflow) Run(_ context.Context, input orchestrator.WorkflowInput) (*orchestrator.WorkflowResult, error) {
+	w.input = input
+	return &orchestrator.WorkflowResult{
+		Messages: append(input.Messages, llm.NewAssistantMessage(w.name+" workflow")),
+		Summary:  w.name + " workflow",
+		Workflow: w.name,
+	}, nil
+}
+
+func (w *failingRetryWorkflow) Name() string { return w.name }
+
+func (w *failingRetryWorkflow) Run(context.Context, orchestrator.WorkflowInput) (*orchestrator.WorkflowResult, error) {
+	if w.err != nil {
+		return nil, w.err
+	}
+	return nil, fmt.Errorf("retry workflow failed")
 }
 
 func (w *captureLearningWorkflow) Name() string { return w.name }
@@ -2489,6 +2519,82 @@ func TestExecutionRuntimeRunTaskSelfHealingObserveOnlyDoesNotRetryIncompleteFina
 	}
 	if provider.idx != 1 {
 		t.Fatalf("streamed responses = %d, want no correction retry in observe-only mode", provider.idx)
+	}
+}
+
+func TestCompletionRetryEscalatesAutoEffort(t *testing.T) {
+	rt := newTestExecutionRuntimeWithConfig(t, &countingProvider{}, false, func(cfg *config.Config) {
+		cfg.SelfHealing.Enabled = true
+		cfg.SelfHealing.ObserveOnly = false
+	})
+	rt.completionRetryMax = 1
+	wf := &captureRetryWorkflow{name: "single"}
+	result := &orchestrator.WorkflowResult{
+		Messages:              []llm.Message{llm.NewAssistantMessage("I could not finish the patch.")},
+		Summary:               "I could not finish the patch.",
+		FinishReason:          "stop",
+		Workflow:              "single",
+		ReasoningEffort:       "low",
+		ReasoningEffortMode:   "auto",
+		ReasoningEffortReason: "simple_keyword",
+	}
+	summary := completionContractSummary{
+		CompletionWarning:     "final_response_reports_incomplete",
+		ReasoningEffort:       "low",
+		ReasoningEffortMode:   "auto",
+		ReasoningEffortReason: "simple_keyword",
+		RetryDecision:         completionRetryDecisionRetrySmallerScope,
+		RetryReason:           "final_response_reports_incomplete",
+	}
+
+	_, gotSummary := rt.maybeRunCompletionRetry(context.Background(), wf, orchestrator.WorkflowInput{
+		Provider: rt.provider,
+		Config: orchestrator.WorkflowConfig{
+			ReasoningEffortMode: "auto",
+		},
+	}, result, summary)
+
+	if wf.input.Config.ReasoningEffortMode != "manual" || wf.input.Config.ReasoningEffort != "high" {
+		t.Fatalf("retry effort config = mode %q effort %q, want manual/high", wf.input.Config.ReasoningEffortMode, wf.input.Config.ReasoningEffort)
+	}
+	if gotSummary.ReasoningEffort != "high" || gotSummary.ReasoningEffortMode != "manual" || gotSummary.ReasoningEffortReason != "correction_retry_escalation" {
+		t.Fatalf("retry summary effort = effort %q mode %q reason %q", gotSummary.ReasoningEffort, gotSummary.ReasoningEffortMode, gotSummary.ReasoningEffortReason)
+	}
+}
+
+func TestCompletionRetryRecordsFailedCorrectionAttempt(t *testing.T) {
+	rt := newTestExecutionRuntimeWithConfig(t, &countingProvider{}, false, func(cfg *config.Config) {
+		cfg.SelfHealing.Enabled = true
+		cfg.SelfHealing.ObserveOnly = false
+	})
+	rt.completionRetryMax = 1
+	result := &orchestrator.WorkflowResult{
+		Messages:     []llm.Message{llm.NewAssistantMessage("I could not finish the patch.")},
+		Summary:      "I could not finish the patch.",
+		FinishReason: "stop",
+		Workflow:     "single",
+	}
+	summary := completionContractSummary{
+		CompletionWarning: "final_response_reports_incomplete",
+		RetryDecision:     completionRetryDecisionRetrySmallerScope,
+		RetryReason:       "final_response_reports_incomplete",
+	}
+
+	gotResult, gotSummary := rt.maybeRunCompletionRetry(context.Background(), &failingRetryWorkflow{name: "single"}, orchestrator.WorkflowInput{
+		Provider: rt.provider,
+	}, result, summary)
+
+	if gotResult != result {
+		t.Fatal("failed correction retry should preserve original workflow result")
+	}
+	if !gotSummary.CorrectionAttempted || gotSummary.CorrectionAttempts != 1 {
+		t.Fatalf("correction attempt = attempted %v attempts %d", gotSummary.CorrectionAttempted, gotSummary.CorrectionAttempts)
+	}
+	if gotSummary.CorrectionDecision != completionRetryDecisionRetrySmallerScope || gotSummary.CorrectionReason != "final_response_reports_incomplete" {
+		t.Fatalf("correction reason = decision %q reason %q", gotSummary.CorrectionDecision, gotSummary.CorrectionReason)
+	}
+	if gotSummary.CorrectionStatus != "failed" || gotSummary.CorrectionFailureFamily != "workflow_error" {
+		t.Fatalf("correction failure = status %q family %q", gotSummary.CorrectionStatus, gotSummary.CorrectionFailureFamily)
 	}
 }
 

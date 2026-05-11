@@ -68,13 +68,16 @@ func (w *SingleWorkflow) Run(ctx context.Context, input WorkflowInput) (*Workflo
 	summary := extractSummary(result.Messages)
 
 	return &WorkflowResult{
-		Messages:     result.Messages,
-		Summary:      summary,
-		Usage:        result.Usage,
-		ToolStats:    result.ToolStats,
-		Iterations:   result.Iterations,
-		FinishReason: string(result.FinishReason),
-		Workflow:     w.Name(),
+		Messages:              result.Messages,
+		Summary:               summary,
+		Usage:                 result.Usage,
+		ToolStats:             result.ToolStats,
+		Iterations:            result.Iterations,
+		FinishReason:          string(result.FinishReason),
+		Workflow:              w.Name(),
+		ReasoningEffort:       result.ReasoningEffort,
+		ReasoningEffortMode:   result.ReasoningEffortMode,
+		ReasoningEffortReason: result.ReasoningEffortReason,
 	}, nil
 }
 

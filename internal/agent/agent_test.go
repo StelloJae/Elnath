@@ -162,12 +162,15 @@ func TestAgentReasoningEffortManual(t *testing.T) {
 		WithReasoningEffort("high"),
 		WithReasoningEffortMode("manual"),
 	)
-	_, err := a.Run(context.Background(), []llm.Message{llm.NewUserMessage("hello")}, event.NopSink{})
+	result, err := a.Run(context.Background(), []llm.Message{llm.NewUserMessage("hello")}, event.NopSink{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if captured.ReasoningEffort != "high" {
 		t.Fatalf("ReasoningEffort = %q, want high", captured.ReasoningEffort)
+	}
+	if result.ReasoningEffort != "high" || result.ReasoningEffortMode != "manual" || result.ReasoningEffortReason != "manual" {
+		t.Fatalf("result reasoning = effort %q mode %q reason %q", result.ReasoningEffort, result.ReasoningEffortMode, result.ReasoningEffortReason)
 	}
 }
 
