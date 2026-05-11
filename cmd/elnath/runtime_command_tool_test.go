@@ -65,7 +65,7 @@ func TestCommandCatalogToolListsCommandsAsJSON(t *testing.T) {
 			t.Fatalf("list exposed hidden command %q", entry.Name)
 		}
 	}
-	for _, name := range []string{"commands", "run", "skill"} {
+	for _, name := range []string{"commands", "run", "skill", "/effort", "/model", "/provider"} {
 		if !seen[name] {
 			t.Fatalf("command list missing %q", name)
 		}
@@ -98,6 +98,29 @@ func TestCommandCatalogToolShowsCommandWithoutExecuting(t *testing.T) {
 	}
 }
 
+func TestCommandCatalogToolShowsRuntimeControlWithoutExecuting(t *testing.T) {
+	tool := newCommandCatalogTool()
+
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"show","command":"/effort"}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("Execute returned error result: %s", res.Output)
+	}
+
+	var out struct {
+		Action  string               `json:"action"`
+		Command *commandCatalogEntry `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, res.Output)
+	}
+	if out.Action != "show" || out.Command == nil || out.Command.Name != "/effort" || out.Command.Category != "runtime-control" {
+		t.Fatalf("output = %+v, want /effort runtime-control metadata", out)
+	}
+}
+
 func TestCommandCatalogToolRecommendsCommandsByQuery(t *testing.T) {
 	tool := newCommandCatalogTool()
 
@@ -126,6 +149,36 @@ func TestCommandCatalogToolRecommendsCommandsByQuery(t *testing.T) {
 	}
 	if got := out.Commands[0]; got.Name != "provider" || got.Score == 0 || len(got.MatchedFields) == 0 {
 		t.Fatalf("recommendation = %+v, want scored provider command", got)
+	}
+}
+
+func TestCommandCatalogToolRecommendsRuntimeControlByQuery(t *testing.T) {
+	tool := newCommandCatalogTool()
+
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"recommend","query":"reasoning effort status","max_results":1}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("Execute returned error result: %s", res.Output)
+	}
+
+	var out struct {
+		Action   string `json:"action"`
+		Commands []struct {
+			Name     string `json:"name"`
+			Category string `json:"category"`
+			Score    int    `json:"score"`
+		} `json:"commands"`
+	}
+	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, res.Output)
+	}
+	if len(out.Commands) != 1 {
+		t.Fatalf("commands = %+v, want one recommendation", out.Commands)
+	}
+	if got := out.Commands[0]; got.Name != "/effort" || got.Category != "runtime-control" || got.Score == 0 {
+		t.Fatalf("recommendation = %+v, want scored /effort runtime-control", got)
 	}
 }
 
