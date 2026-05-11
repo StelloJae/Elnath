@@ -715,6 +715,7 @@ V8-PY-TH-001 pytest approx guidance:
 - Check unsupported datetime/timedelta options before the successful tolerance comparison: if `nan_ok=True` or `rel` is supplied for datetime/timedelta, `ApproxScalar.__eq__` or `tolerance` must raise `TypeError` instead of returning a comparison result.
 - Retained failure evidence showed `test_datetime_nan_ok_raises` and `test_timedelta_nan_ok_raises` failing with "DID NOT RAISE TypeError"; explicitly cover and satisfy those two cases.
 - For unsupported `rel` / `nan_ok`, make the regression exercise comparison against a distinct actual datetime/timedelta value; exact equality can short-circuit before the TypeError path.
+- In recovery, finish the `ApproxScalar.tolerance` datetime/timedelta branch before rerunning tests; retained evidence showed recovery added tests first, hit `datetime.timedelta < int`, then stopped on budget before the tolerance patch.
 - Do not finish after adding the final datetime/timedelta implementation edits unless `python3 -m pytest -o minversion=0 testing/python/approx.py -q` has been rerun and passed.
 - Reuse the existing approx test style in `testing/python/approx.py`; small table-driven or class-local tests are preferred over new fixtures.
 - In no-change recovery, stop re-reading once `ApproxScalar`, the `approx()` factory, and the nearby `TestApprox` tests are identified; apply the two-file patch before further exploration.
@@ -792,6 +793,8 @@ V8-ALT-MIX-001 semantic-release channel guidance:
 - Reuse the existing `isSameChannel` helper from `lib/utils.js`; do not compare channels with raw `includes(branch.channel || null)` or raw lodash `intersection(...)` equality when deciding whether a version is already on the current branch or came from a higher branch.
 - A focused regression should cover a maintenance branch such as `2.x` receiving a version from a higher default-channel branch when the tag stores that default channel as `channels: [false]`, proving the version is added to the maintenance channel instead of being skipped.
 - Preserve the existing tests that all branches with `channel: false` do not add a channel.
+- Insert the focused regression as a complete standalone `test("...", (t) => { ... });` block; do not delete, detach, or leave outside the following `test("Return versions merged between release branches", (t) => { ... })` body.
+- Run `node --check test/get-release-to-add.test.js` after editing the regression and before the full verification command so syntax errors are caught cheaply.
 - Do not spend time on release credentials or broad integration setup during recovery; the focused unit target is `test/get-release-to-add.test.js`.
 - Run `npm run test:unit -- test/get-release-to-add.test.js && npm run test:integration` before the final answer.
 EOF
@@ -1488,8 +1491,14 @@ recover_passed_task_specific_failure() {
     printf -v TASK_SPECIFIC_PROMPT '%s\n\n%s\n\n%s\n\n%s' \
       "Task ID: ${TASK_ID}" \
       "The verification command '${VERIFY_CMD}' passed, but the benchmark guard rejected the patch: ${reason}" \
-      "Keep the existing production diff intact initially and immediately edit 'testing/python/approx.py' to add focused datetime/timedelta pytest.approx assertions. If those tests expose missing explicit timedelta tolerance handling, patch 'src/_pytest/python_api.py' narrowly in 'ApproxScalar.tolerance' before rerunning." \
+      "Keep the existing production diff intact, then finish the datetime/timedelta implementation before rerunning: patch 'src/_pytest/python_api.py' so 'ApproxScalar.tolerance' handles explicit 'datetime.timedelta' absolute tolerance before numeric '< 0' checks, rejects unsupported rel/nan_ok for datetime/timedelta, and returns a 'datetime.timedelta' for temporal comparisons." \
       "Add tests for datetime within tolerance, datetime outside tolerance, timedelta within/outside tolerance, and pytest.raises(TypeError) for unsupported rel / nan_ok. Use explicit timedelta tolerance such as 'abs=timedelta(seconds=2)' or 'abs=datetime.timedelta(seconds=2)', not a numeric 'abs=2'. Make rel/nan_ok tests compare against a distinct actual value so exact equality cannot short-circuit the TypeError path. Then run '${VERIFY_CMD}' and finish only if both 'src/_pytest/python_api.py' and 'testing/python/approx.py' are changed."
+  elif is_v8_alt_mix001_semantic_release_task; then
+    printf -v TASK_SPECIFIC_PROMPT '%s\n\n%s\n\n%s\n\n%s' \
+      "Task ID: ${TASK_ID}" \
+      "The verification command '${VERIFY_CMD}' passed, but the benchmark guard rejected the patch: ${reason}" \
+      "Keep the passing 'lib/get-release-to-add.js' channel comparison diff intact. Repair 'test/get-release-to-add.test.js' by adding one complete standalone regression test block for a maintenance branch such as '2.x' receiving a version whose tag stores the higher default channel as 'channels: [false]'. Do not remove or detach the existing 'test(\"Return versions merged between release branches\", (t) => {' block." \
+      "After editing the test, run 'node --check test/get-release-to-add.test.js' first. Only then run '${VERIFY_CMD}'. Finish only if the syntax check and full verification both pass and both 'lib/get-release-to-add.js' and 'test/get-release-to-add.test.js' remain changed."
   else
     printf -v TASK_SPECIFIC_PROMPT '%s\n\n%s\n\n%s' \
       "$BENCHMARK_PROMPT" \
