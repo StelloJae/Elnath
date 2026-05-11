@@ -15,6 +15,10 @@ required = [
     "`logger.go`",
     "Do not modify `gin.go` or the `Default()` middleware chain",
     "`TestCreateDefaultRouter` expects only the existing default logger/recovery handlers",
+    "Preserve `LogFormatterParams.BodySize`",
+    "Do not finish with only a `requestIDKey` constant or `RequestID` field",
+    "add an opt-in `RequestID()` middleware",
+    "set `param.RequestID` inside `LoggerWithConfig`",
     "GO-BF-002 graceful shutdown guidance:",
     "`caddy.go`",
     "`unsyncedStop(ctx Context)`",
@@ -159,6 +163,15 @@ package benchmark
 func WatchConfig() {}
 GO
     echo "Modified files: viper.go"
+    echo "Verification: go test ./... passed."
+    ;;
+  go_bf001_trivial_request_id_key)
+    cat > logger.go <<'GO'
+package benchmark
+
+const requestIDKey = "requestID"
+GO
+    echo "Modified files: logger.go"
     echo "Verification: go test ./... passed."
     ;;
   go_bug002_unbounded_wait_test)
@@ -362,6 +375,15 @@ assert data["success"] is False, data
 assert data["verification_passed"] is True, data
 assert data["failure_family"] == "incomplete_patch", data
 assert "viper.go" in data["changed_files"], data
+'
+
+run_wrapper_case go_bf001_trivial_request_id_key "$TMP_DIR/go-bf001-trivial-request-id-key.json" "$SOURCE_REPO" "GO-BF-001"
+assert_json_case "$TMP_DIR/go-bf001-trivial-request-id-key.json" '
+assert data["success"] is False, data
+assert data["verification_passed"] is True, data
+assert data["failure_family"] == "incomplete_patch", data
+assert "logger.go" in data["changed_files"], data
+assert "GO-BF-001" in data["notes"], data
 '
 
 run_wrapper_case go_bug002_unbounded_wait_test "$TMP_DIR/go-bug002-unbounded-wait-test.json" "$SOURCE_REPO" "GO-BUG-002"
