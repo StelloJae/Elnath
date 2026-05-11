@@ -51,6 +51,7 @@ func commandSpecs() []commandSpec {
 	return []commandSpec{
 		{Name: "version", Runner: cmdVersion, Description: "Print the Elnath version."},
 		{Name: "help", Runner: cmdHelp, Description: "Show the top-level Elnath help."},
+		{Name: "commands", Runner: cmdCommands, Description: "List the structured Elnath command catalog.", ArgumentHint: "[--json] [--all]"},
 		{Name: "chaos", Runner: cmdChaos, Description: "Run chaos and resilience probes."},
 		{Name: "run", Runner: cmdRun, Description: "Start an interactive or non-interactive agent session.", ArgumentHint: "[prompt]"},
 		{Name: "setup", Runner: cmdSetup, Description: "Create or update local Elnath configuration."},
@@ -163,6 +164,40 @@ func cmdVersion(_ context.Context, _ []string) error {
 func cmdHelp(_ context.Context, _ []string) error {
 	fmt.Println(onboarding.T(loadLocale(), "cli.help"))
 	return nil
+}
+
+func cmdCommands(_ context.Context, args []string) error {
+	includeHidden := hasFlag(args, "--all") || hasFlag(args, "--hidden")
+	if hasFlag(args, "--json") {
+		raw, err := json.MarshalIndent(commandCatalog(includeHidden), "", "  ")
+		if err != nil {
+			return fmt.Errorf("commands: marshal catalog: %w", err)
+		}
+		fmt.Println(string(raw))
+		return nil
+	}
+	fmt.Print(formatCommandCatalog(commandCatalog(includeHidden)))
+	return nil
+}
+
+func formatCommandCatalog(entries []commandCatalogEntry) string {
+	var b strings.Builder
+	b.WriteString("Elnath commands:\n")
+	for _, entry := range entries {
+		b.WriteString("  ")
+		b.WriteString(entry.Name)
+		if entry.ArgumentHint != "" {
+			b.WriteString(" ")
+			b.WriteString(entry.ArgumentHint)
+		}
+		b.WriteString(" - ")
+		b.WriteString(entry.Description)
+		if entry.Hidden {
+			b.WriteString(" [hidden]")
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
 // loadLocale reads the locale from the existing config, defaulting to English.

@@ -2382,6 +2382,34 @@ func TestExecutionRuntimeRunTaskProviderSlashCommandReportsCapabilities(t *testi
 	}
 }
 
+func TestExecutionRuntimeRunTaskCommandsSlashCommandListsCatalog(t *testing.T) {
+	provider := &countingProvider{streamText: "runtime answer"}
+	rt := newTestExecutionRuntime(t, provider)
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	var streamed strings.Builder
+	messages, summary, err := rt.runTask(context.Background(), sess, nil, "/commands", orchestrationOutput{
+		OnText: func(s string) { streamed.WriteString(s) },
+	})
+	if err != nil {
+		t.Fatalf("runTask /commands: %v", err)
+	}
+	if provider.streamCalls != 0 || provider.chatCalls != 0 {
+		t.Fatalf("provider calls = chat:%d stream:%d, want none for local commands command", provider.chatCalls, provider.streamCalls)
+	}
+	for _, want := range []string{"commands", "run", "skill"} {
+		if !strings.Contains(summary, want) || !strings.Contains(streamed.String(), want) {
+			t.Fatalf("summary=%q streamed=%q missing %q", summary, streamed.String(), want)
+		}
+	}
+	if len(messages) != 2 {
+		t.Fatalf("messages len = %d, want 2", len(messages))
+	}
+}
+
 func TestExecutionRuntimeRunTaskProviderSlashCommandRejectsRuntimeSwitch(t *testing.T) {
 	provider := &capabilityCountingProvider{}
 	rt := newTestExecutionRuntime(t, provider)

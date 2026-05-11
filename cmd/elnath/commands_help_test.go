@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -101,6 +102,33 @@ func TestCommandCatalog_IncludeHiddenShowsInternalCommands(t *testing.T) {
 		}
 		if !entry.Hidden {
 			t.Fatalf("internal command %q Hidden = false, want true", name)
+		}
+	}
+}
+
+func TestExecuteCommand_CommandsJSON(t *testing.T) {
+	stdout, stderr := captureOutput(t, func() {
+		if err := executeCommand(context.Background(), "commands", []string{"--json"}); err != nil {
+			t.Fatalf("executeCommand(commands --json) error = %v", err)
+		}
+	})
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+	var entries []commandCatalogEntry
+	if err := json.Unmarshal([]byte(stdout), &entries); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout)
+	}
+	seen := make(map[string]commandCatalogEntry)
+	for _, entry := range entries {
+		seen[entry.Name] = entry
+		if entry.Hidden {
+			t.Fatalf("commands --json exposed hidden command %q", entry.Name)
+		}
+	}
+	for _, name := range []string{"commands", "run", "skill"} {
+		if _, ok := seen[name]; !ok {
+			t.Fatalf("commands --json missing %q", name)
 		}
 	}
 }
