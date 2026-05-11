@@ -445,6 +445,9 @@ func buildExecutionRuntime(
 			app.Logger.Warn("skill registry load failed", "error", err)
 		}
 	}
+	if err := skillReg.LoadClaudeSkills(effectiveWorkDir); err != nil {
+		app.Logger.Warn("claude skill registry load failed", "error", err)
+	}
 	profiles := make(map[string]*profile.Profile)
 	if wikiStore != nil {
 		var err error
