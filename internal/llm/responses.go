@@ -64,6 +64,7 @@ func (p *ResponsesProvider) Capabilities() ProviderCapabilities {
 		Name:                    p.Name(),
 		ReasoningEffort:         ReasoningEffortNativeWithUnsupportedRetry,
 		ReasoningEffortFallback: "retry_without_reasoning_on_400_or_422_unsupported_effort",
+		RequestTimeoutSeconds:   timeoutSecondsFromClient(p.client),
 	}
 }
 

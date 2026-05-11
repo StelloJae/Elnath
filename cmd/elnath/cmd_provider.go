@@ -11,14 +11,15 @@ import (
 )
 
 type providerStatusView struct {
-	Provider             string `json:"provider"`
-	Model                string `json:"model"`
-	ReasoningEffort      string `json:"reasoning_effort"`
-	ReasoningEffortMode  string `json:"reasoning_effort_mode"`
-	ConfiguredEffort     string `json:"configured_effort"`
-	ProviderEffort       string `json:"provider_effort"`
-	ProviderEffortNote   string `json:"provider_effort_note,omitempty"`
-	AutoEffortCompatible bool   `json:"auto_effort_compatible"`
+	Provider              string `json:"provider"`
+	Model                 string `json:"model"`
+	ReasoningEffort       string `json:"reasoning_effort"`
+	ReasoningEffortMode   string `json:"reasoning_effort_mode"`
+	ConfiguredEffort      string `json:"configured_effort"`
+	ProviderEffort        string `json:"provider_effort"`
+	ProviderEffortNote    string `json:"provider_effort_note,omitempty"`
+	AutoEffortCompatible  bool   `json:"auto_effort_compatible"`
+	RequestTimeoutSeconds int    `json:"request_timeout_seconds"`
 }
 
 func cmdProvider(_ context.Context, args []string) error {
@@ -67,14 +68,15 @@ func providerStatus(args []string) error {
 	}
 	caps := llm.CapabilitiesOf(provider)
 	view := providerStatusView{
-		Provider:             caps.Name,
-		Model:                model,
-		ReasoningEffort:      caps.ReasoningEffort,
-		ReasoningEffortMode:  cfg.Reasoning.EffortMode,
-		ConfiguredEffort:     cfg.Reasoning.Effort,
-		ProviderEffort:       caps.ReasoningEffort,
-		ProviderEffortNote:   caps.ReasoningEffortFallback,
-		AutoEffortCompatible: autoEffortCompatible(caps.ReasoningEffort),
+		Provider:              caps.Name,
+		Model:                 model,
+		ReasoningEffort:       caps.ReasoningEffort,
+		ReasoningEffortMode:   cfg.Reasoning.EffortMode,
+		ConfiguredEffort:      cfg.Reasoning.Effort,
+		ProviderEffort:        caps.ReasoningEffort,
+		ProviderEffortNote:    caps.ReasoningEffortFallback,
+		AutoEffortCompatible:  autoEffortCompatible(caps.ReasoningEffort),
+		RequestTimeoutSeconds: caps.RequestTimeoutSeconds,
 	}
 	if jsonOut {
 		enc := json.NewEncoder(os.Stdout)
@@ -88,6 +90,7 @@ func providerStatus(args []string) error {
 	}
 	fmt.Fprintf(os.Stdout, "Configured reasoning: mode=%s effort=%s\n", view.ReasoningEffortMode, view.ConfiguredEffort)
 	fmt.Fprintf(os.Stdout, "Auto effort compatible: %t\n", view.AutoEffortCompatible)
+	fmt.Fprintf(os.Stdout, "Request timeout: %ds\n", view.RequestTimeoutSeconds)
 	return nil
 }
 

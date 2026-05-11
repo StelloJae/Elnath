@@ -140,6 +140,7 @@ type ProviderCapabilities struct {
 	Name                    string `json:"name"`
 	ReasoningEffort         string `json:"reasoning_effort"`
 	ReasoningEffortFallback string `json:"reasoning_effort_fallback,omitempty"`
+	RequestTimeoutSeconds   int    `json:"request_timeout_seconds,omitempty"`
 }
 
 type CapabilityProvider interface {

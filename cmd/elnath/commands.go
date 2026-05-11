@@ -307,6 +307,9 @@ func buildProvider(cfg *config.Config) (llm.Provider, string, error) {
 		if cfg.OpenAIResponses.ReasoningEffort != "" {
 			opts = append(opts, llm.WithCodexOAuthReasoningEffort(cfg.OpenAIResponses.ReasoningEffort))
 		}
+		if cfg.OpenAIResponses.Timeout > 0 {
+			opts = append(opts, llm.WithCodexOAuthTimeout(time.Duration(cfg.OpenAIResponses.Timeout)*time.Second))
+		}
 		reg.Register("codex", llm.NewCodexOAuthProvider(codexModel, opts...))
 		providerModels["codex"] = codexModel
 		if model == "" {
@@ -316,8 +319,14 @@ func buildProvider(cfg *config.Config) (llm.Provider, string, error) {
 		// Fallback: use access_token as static API key (no refresh).
 		codexToken, codexModel, codexAccountID := loadCodexAuth()
 		if codexToken != "" && !explicitResponses {
-			reg.Register("openai-responses", llm.NewResponsesProvider(codexToken, codexModel, codexAccountID,
-				llm.WithResponsesReasoningEffort(cfg.OpenAIResponses.ReasoningEffort)))
+			var opts []llm.ResponsesOption
+			if cfg.OpenAIResponses.ReasoningEffort != "" {
+				opts = append(opts, llm.WithResponsesReasoningEffort(cfg.OpenAIResponses.ReasoningEffort))
+			}
+			if cfg.OpenAIResponses.Timeout > 0 {
+				opts = append(opts, llm.WithResponsesTimeout(time.Duration(cfg.OpenAIResponses.Timeout)*time.Second))
+			}
+			reg.Register("openai-responses", llm.NewResponsesProvider(codexToken, codexModel, codexAccountID, opts...))
 			providerModels["openai-responses"] = codexModel
 			if model == "" {
 				model = codexModel
@@ -329,6 +338,9 @@ func buildProvider(cfg *config.Config) (llm.Provider, string, error) {
 		var opts []llm.OpenAIOption
 		if cfg.OpenAI.BaseURL != "" {
 			opts = append(opts, llm.WithOpenAIBaseURL(cfg.OpenAI.BaseURL))
+		}
+		if cfg.OpenAI.Timeout > 0 {
+			opts = append(opts, llm.WithOpenAITimeout(time.Duration(cfg.OpenAI.Timeout)*time.Second))
 		}
 		m := cfg.OpenAI.Model
 		if m == "" {

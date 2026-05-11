@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 const defaultOpenAIBaseURL = "https://api.openai.com/v1"
@@ -34,6 +35,11 @@ func WithOpenAIHTTPClient(c *http.Client) OpenAIOption {
 	return func(p *OpenAIProvider) { p.client = c }
 }
 
+// WithOpenAITimeout sets the HTTP client timeout.
+func WithOpenAITimeout(d time.Duration) OpenAIOption {
+	return func(p *OpenAIProvider) { p.client = newHTTPClientWithPerHostCap(int(d / time.Second)) }
+}
+
 // NewOpenAIProvider creates an OpenAIProvider.
 func NewOpenAIProvider(apiKey, model string, opts ...OpenAIOption) *OpenAIProvider {
 	p := &OpenAIProvider{
@@ -52,8 +58,9 @@ func (p *OpenAIProvider) Name() string { return "openai" }
 
 func (p *OpenAIProvider) Capabilities() ProviderCapabilities {
 	return ProviderCapabilities{
-		Name:            p.Name(),
-		ReasoningEffort: ReasoningEffortIgnored,
+		Name:                  p.Name(),
+		ReasoningEffort:       ReasoningEffortIgnored,
+		RequestTimeoutSeconds: timeoutSecondsFromClient(p.client),
 	}
 }
 

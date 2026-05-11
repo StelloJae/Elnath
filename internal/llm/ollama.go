@@ -48,8 +48,9 @@ func (p *OllamaProvider) Name() string { return "ollama" }
 
 func (p *OllamaProvider) Capabilities() ProviderCapabilities {
 	return ProviderCapabilities{
-		Name:            p.Name(),
-		ReasoningEffort: ReasoningEffortIgnored,
+		Name:                  p.Name(),
+		ReasoningEffort:       ReasoningEffortIgnored,
+		RequestTimeoutSeconds: timeoutSecondsFromClient(p.inner.client),
 	}
 }
 
