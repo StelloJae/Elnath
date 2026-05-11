@@ -422,6 +422,7 @@ func buildExecutionRuntime(
 	}
 	app.RegisterCloser("bash runner", bashRunnerCloser{runner: runner})
 	reg := buildToolRegistry(guard, provider, runner)
+	reg.Register(newCommandCatalogTool())
 	planModeController := agent.NewPlanModeController(perm)
 	reg.Register(agent.NewEnterPlanModeTool(planModeController))
 	reg.Register(agent.NewExitPlanModeTool(planModeController))
