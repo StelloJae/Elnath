@@ -509,6 +509,58 @@ func TestBuildToolDefsSearchFirstDefersMCPAndKeepsToolSearch(t *testing.T) {
 	}
 }
 
+func TestAgentSearchFirstLoadsSelectedDeferredToolNextTurn(t *testing.T) {
+	reg := tools.NewRegistry()
+	reg.Register(&mockTool{
+		name:        "read_file",
+		description: "Read files",
+		schema:      json.RawMessage(`{"type":"object"}`),
+	})
+	reg.Register(&mockTool{
+		name:        "mcp_github_issue",
+		description: "Create GitHub issues",
+		schema:      json.RawMessage(`{"type":"object","properties":{"title":{"type":"string"}}}`),
+	})
+	reg.Register(tools.NewToolSearchTool(reg))
+
+	var requests []llm.ChatRequest
+	provider := &mockProvider{
+		streamFn: func(_ context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
+			requests = append(requests, req)
+			switch len(requests) {
+			case 1:
+				cb(llm.StreamEvent{Type: llm.EventToolUseStart, ToolCall: &llm.ToolUseEvent{ID: "tool-search-1", Name: tools.ToolSearchName}})
+				cb(llm.StreamEvent{Type: llm.EventToolUseDone, ToolCall: &llm.ToolUseEvent{ID: "tool-search-1", Name: tools.ToolSearchName, Input: `{"query":"select:mcp_github_issue"}`}})
+				cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{InputTokens: 1, OutputTokens: 1}})
+			default:
+				cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: "done"})
+				cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{InputTokens: 1, OutputTokens: 1}})
+			}
+			return nil
+		},
+	}
+
+	a := New(provider, reg, WithToolExposureMode(ToolExposureSearchFirst), WithMaxIterations(3))
+	result, err := a.Run(context.Background(), []llm.Message{llm.NewUserMessage("create an issue")}, event.NopSink{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.FinishReason != FinishReasonStop {
+		t.Fatalf("FinishReason = %q, want stop", result.FinishReason)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("requests = %d, want 2", len(requests))
+	}
+	first := toolDefNames(requests[0].Tools)
+	if first["mcp_github_issue"] {
+		t.Fatalf("first request tools = %v, deferred tool should be hidden", first)
+	}
+	second := toolDefNames(requests[1].Tools)
+	if !second["mcp_github_issue"] {
+		t.Fatalf("second request tools = %v, want selected deferred tool loaded", second)
+	}
+}
+
 func TestBuildToolDefsSearchFirstFallsBackWithoutToolSearch(t *testing.T) {
 	reg := tools.NewRegistry()
 	reg.Register(&mockTool{
@@ -521,6 +573,14 @@ func TestBuildToolDefsSearchFirstFallsBackWithoutToolSearch(t *testing.T) {
 	if len(defs) != 1 || defs[0].Name != "mcp_github_issue" {
 		t.Fatalf("defs = %+v, want full exposure fallback without tool_search", defs)
 	}
+}
+
+func toolDefNames(defs []llm.ToolDef) map[string]bool {
+	names := make(map[string]bool, len(defs))
+	for _, def := range defs {
+		names[def.Name] = true
+	}
+	return names
 }
 
 // textOnlyStreamFn is a stream function that emits a single text event then done.

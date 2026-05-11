@@ -325,8 +325,7 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, sink event.Sink
 	if sink == nil {
 		sink = event.NopSink{}
 	}
-	// Build tool definitions from the registry.
-	toolDefs := buildToolDefs(a.tools, a.toolExposureMode)
+	loadedDeferredTools := make(map[string]struct{})
 
 	totalUsage := llm.UsageStats{}
 	ackRetries := 0
@@ -364,6 +363,7 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, sink event.Sink
 		// before sending. The circuit breaker inside tryCompress halts attempts
 		// after maxConsecutiveCompressFailures.
 		messages = a.maybeProactiveCompress(ctx, messages)
+		toolDefs := buildToolDefsWithLoaded(a.tools, a.toolExposureMode, loadedDeferredTools)
 
 		effortDecision := a.resolveReasoningEffortDecision(messages)
 		if effortDecision.Effort != "" && a.logger != nil {
@@ -456,6 +456,7 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, sink event.Sink
 		if err != nil {
 			return nil, err
 		}
+		updateLoadedDeferredTools(a.tools, loadedDeferredTools, toolCalls, messages)
 
 		// Truncate oversized tool results to keep context manageable.
 		truncateToolResults(messages)
@@ -846,20 +847,30 @@ func (a *Agent) appendToolResults(messages []llm.Message, results []toolExecResu
 
 // buildToolDefs converts the tools.Registry into []llm.ToolDef.
 func buildToolDefs(reg *tools.Registry, modes ...ToolExposureMode) []llm.ToolDef {
+	return buildToolDefsWithLoaded(reg, firstToolExposureMode(modes), nil)
+}
+
+func firstToolExposureMode(modes []ToolExposureMode) ToolExposureMode {
+	if len(modes) == 0 {
+		return ""
+	}
+	return modes[0]
+}
+
+func buildToolDefsWithLoaded(reg *tools.Registry, mode ToolExposureMode, loadedDeferred map[string]struct{}) []llm.ToolDef {
 	if reg == nil {
 		return nil
 	}
 	all := reg.List()
-	mode := ToolExposureStandard
-	if len(modes) > 0 && modes[0] != "" {
-		mode = modes[0]
+	if mode == "" {
+		mode = ToolExposureStandard
 	}
 	if mode == ToolExposureSearchFirst && !hasToolSearch(all) {
 		mode = ToolExposureStandard
 	}
 	defs := make([]llm.ToolDef, 0, len(all))
 	for _, t := range all {
-		if mode == ToolExposureSearchFirst && tools.ShouldDeferToolSchema(t) {
+		if mode == ToolExposureSearchFirst && shouldHideDeferredTool(t, loadedDeferred) {
 			continue
 		}
 		defs = append(defs, llm.ToolDef{
@@ -871,6 +882,17 @@ func buildToolDefs(reg *tools.Registry, modes ...ToolExposureMode) []llm.ToolDef
 	return defs
 }
 
+func shouldHideDeferredTool(tool tools.Tool, loadedDeferred map[string]struct{}) bool {
+	if !tools.ShouldDeferToolSchema(tool) {
+		return false
+	}
+	if loadedDeferred == nil {
+		return true
+	}
+	_, loaded := loadedDeferred[tool.Name()]
+	return !loaded
+}
+
 func hasToolSearch(all []tools.Tool) bool {
 	for _, t := range all {
 		if t != nil && t.Name() == tools.ToolSearchName {
@@ -878,6 +900,58 @@ func hasToolSearch(all []tools.Tool) bool {
 		}
 	}
 	return false
+}
+
+func updateLoadedDeferredTools(reg *tools.Registry, loaded map[string]struct{}, calls []llm.ToolUseBlock, messages []llm.Message) {
+	if reg == nil || loaded == nil || len(calls) == 0 || len(messages) == 0 {
+		return
+	}
+	toolSearchIDs := make(map[string]struct{})
+	for _, call := range calls {
+		if call.Name == tools.ToolSearchName {
+			toolSearchIDs[call.ID] = struct{}{}
+		}
+	}
+	if len(toolSearchIDs) == 0 {
+		return
+	}
+	for _, msg := range messages {
+		if msg.Role != llm.RoleUser {
+			continue
+		}
+		for _, block := range msg.Content {
+			result, ok := block.(llm.ToolResultBlock)
+			if !ok || result.IsError {
+				continue
+			}
+			if _, ok := toolSearchIDs[result.ToolUseID]; !ok {
+				continue
+			}
+			addDeferredToolSearchMatches(reg, loaded, result.Content)
+		}
+	}
+}
+
+func addDeferredToolSearchMatches(reg *tools.Registry, loaded map[string]struct{}, content string) {
+	var out struct {
+		Matches []struct {
+			Name string `json:"name"`
+		} `json:"matches"`
+	}
+	if err := json.Unmarshal([]byte(content), &out); err != nil {
+		return
+	}
+	for _, match := range out.Matches {
+		name := strings.TrimSpace(match.Name)
+		if name == "" {
+			continue
+		}
+		tool, ok := reg.Get(name)
+		if !ok || !tools.ShouldDeferToolSchema(tool) {
+			continue
+		}
+		loaded[tool.Name()] = struct{}{}
+	}
 }
 
 type statusCoder interface {
