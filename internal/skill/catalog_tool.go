@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/stello/elnath/internal/tools"
@@ -27,8 +28,10 @@ func (t *CatalogTool) Description() string {
 
 func (t *CatalogTool) Schema() json.RawMessage {
 	return tools.Object(map[string]tools.Property{
-		"action":         tools.StringEnum("Catalog action.", "list", "show"),
+		"action":         tools.StringEnum("Catalog action.", "list", "show", "recommend"),
 		"skill":          tools.String("Skill name for action=show."),
+		"query":          tools.String("Intent or task query for action=recommend."),
+		"max_results":    tools.Int("Maximum recommendations for action=recommend. Defaults to 5, max 20."),
 		"include_prompt": tools.Bool("Include the full skill prompt for action=show. Defaults to false."),
 	}, []string{"action"})
 }
@@ -44,6 +47,8 @@ func (t *CatalogTool) ShouldCancelSiblingsOnError() bool { return false }
 type catalogToolInput struct {
 	Action        string `json:"action"`
 	Skill         string `json:"skill"`
+	Query         string `json:"query"`
+	MaxResults    int    `json:"max_results"`
 	IncludePrompt bool   `json:"include_prompt"`
 }
 
@@ -56,6 +61,8 @@ type catalogSkillEntry struct {
 	Effort        string   `json:"effort,omitempty"`
 	Status        string   `json:"status,omitempty"`
 	Source        string   `json:"source,omitempty"`
+	Score         int      `json:"score,omitempty"`
+	MatchedFields []string `json:"matched_fields,omitempty"`
 	Prompt        string   `json:"prompt,omitempty"`
 }
 
@@ -87,8 +94,15 @@ func (t *CatalogTool) Execute(_ context.Context, params json.RawMessage) (*tools
 			"action": "show",
 			"skill":  skillCatalogEntry(sk, input.IncludePrompt),
 		})
+	case "recommend":
+		query := strings.TrimSpace(input.Query)
+		return marshalSkillCatalogOutput(map[string]any{
+			"action": "recommend",
+			"query":  query,
+			"skills": t.recommendedSkillEntries(query, normalizeSkillCatalogMax(input.MaxResults)),
+		})
 	default:
-		return tools.ErrorResult(fmt.Sprintf("skill_catalog: unsupported action %q; supported actions are list and show", input.Action)), nil
+		return tools.ErrorResult(fmt.Sprintf("skill_catalog: unsupported action %q; supported actions are list, show, and recommend", input.Action)), nil
 	}
 }
 
@@ -100,6 +114,45 @@ func (t *CatalogTool) skillEntries(includePrompt bool) []catalogSkillEntry {
 	out := make([]catalogSkillEntry, 0, len(skills))
 	for _, sk := range skills {
 		out = append(out, skillCatalogEntry(sk, includePrompt))
+	}
+	return out
+}
+
+func (t *CatalogTool) recommendedSkillEntries(query string, maxResults int) []catalogSkillEntry {
+	if t == nil || t.registry == nil {
+		return nil
+	}
+	terms := skillCatalogQueryTerms(query)
+	if len(terms) == 0 {
+		return firstSkillCatalogEntries(t.registry.List(), maxResults)
+	}
+	var matches []catalogSkillEntry
+	for _, sk := range t.registry.List() {
+		entry := skillCatalogEntry(sk, false)
+		entry.Score, entry.MatchedFields = scoreSkillCatalogEntry(sk, terms)
+		if entry.Score > 0 {
+			matches = append(matches, entry)
+		}
+	}
+	sort.SliceStable(matches, func(i, j int) bool {
+		if matches[i].Score == matches[j].Score {
+			return matches[i].Name < matches[j].Name
+		}
+		return matches[i].Score > matches[j].Score
+	})
+	if len(matches) > maxResults {
+		matches = matches[:maxResults]
+	}
+	return matches
+}
+
+func firstSkillCatalogEntries(skills []*Skill, maxResults int) []catalogSkillEntry {
+	if len(skills) > maxResults {
+		skills = skills[:maxResults]
+	}
+	out := make([]catalogSkillEntry, 0, len(skills))
+	for _, sk := range skills {
+		out = append(out, skillCatalogEntry(sk, false))
 	}
 	return out
 }
@@ -122,6 +175,70 @@ func skillCatalogEntry(sk *Skill, includePrompt bool) catalogSkillEntry {
 		entry.Prompt = sk.Prompt
 	}
 	return entry
+}
+
+func scoreSkillCatalogEntry(sk *Skill, terms []string) (int, []string) {
+	if sk == nil {
+		return 0, nil
+	}
+	fields := []struct {
+		name   string
+		text   string
+		weight int
+	}{
+		{name: "name", text: sk.Name, weight: 4},
+		{name: "description", text: sk.Description, weight: 3},
+		{name: "trigger", text: sk.Trigger, weight: 2},
+		{name: "required_tools", text: strings.Join(sk.RequiredTools, " "), weight: 1},
+		{name: "source", text: sk.Source, weight: 1},
+	}
+	score := 0
+	seen := map[string]struct{}{}
+	for _, term := range terms {
+		for _, field := range fields {
+			if strings.Contains(strings.ToLower(field.text), term) {
+				score += field.weight
+				seen[field.name] = struct{}{}
+			}
+		}
+	}
+	if len(seen) == 0 {
+		return score, nil
+	}
+	matched := make([]string, 0, len(seen))
+	for field := range seen {
+		matched = append(matched, field)
+	}
+	sort.Strings(matched)
+	return score, matched
+}
+
+func skillCatalogQueryTerms(query string) []string {
+	parts := strings.Fields(strings.ToLower(strings.TrimSpace(query)))
+	terms := make([]string, 0, len(parts))
+	seen := map[string]struct{}{}
+	for _, part := range parts {
+		part = strings.Trim(part, ".,;:()[]{}<>\"'`")
+		if len(part) < 2 {
+			continue
+		}
+		if _, ok := seen[part]; ok {
+			continue
+		}
+		seen[part] = struct{}{}
+		terms = append(terms, part)
+	}
+	return terms
+}
+
+func normalizeSkillCatalogMax(maxResults int) int {
+	if maxResults <= 0 {
+		return 5
+	}
+	if maxResults > 20 {
+		return 20
+	}
+	return maxResults
 }
 
 func marshalSkillCatalogOutput(output any) (*tools.Result, error) {
