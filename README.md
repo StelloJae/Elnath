@@ -29,10 +29,12 @@ make build
 ### Set API Key
 
 ```bash
-export ELNATH_ANTHROPIC_API_KEY=sk-ant-...
+export ELNATH_OPENAI_RESPONSES_API_KEY=...
+# or export ELNATH_ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-For OpenAI or other providers, see [Configuration](#configuration).
+For Anthropic, OpenAI Chat Completions, Ollama, or another Responses-compatible
+provider, see [Configuration](#configuration).
 
 ### Interactive Mode
 
