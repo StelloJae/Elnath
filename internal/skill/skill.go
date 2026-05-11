@@ -14,6 +14,7 @@ type Skill struct {
 	Trigger       string
 	RequiredTools []string
 	Model         string
+	Effort        string
 	Prompt        string
 	Status        string
 	Source        string
@@ -39,6 +40,7 @@ func FromPage(page *wiki.Page) *Skill {
 		Trigger:       extraString(page.Extra, "trigger"),
 		RequiredTools: extraStrings(page.Extra, "required_tools"),
 		Model:         extraString(page.Extra, "model"),
+		Effort:        extraString(page.Extra, "effort"),
 		Prompt:        page.Content,
 		Status:        status,
 		Source:        extraString(page.Extra, "source"),

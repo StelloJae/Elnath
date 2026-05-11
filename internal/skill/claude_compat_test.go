@@ -22,6 +22,7 @@ allowed-tools:
   - read_file
   - grep
 model: gpt-5.5
+effort: high
 ---
 Review the pull request using $ARGUMENTS.
 `
@@ -43,6 +44,7 @@ Review the pull request using $ARGUMENTS.
 		Trigger:       "/review-pr",
 		RequiredTools: []string{"read_file", "grep"},
 		Model:         "gpt-5.5",
+		Effort:        "high",
 		Prompt:        "Review the pull request using $ARGUMENTS.",
 		Status:        "active",
 		Source:        "claude-skill",

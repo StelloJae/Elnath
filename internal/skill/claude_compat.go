@@ -20,6 +20,7 @@ type claudeSkillFrontmatter struct {
 	RequiredTools          stringList `yaml:"required_tools"`
 	Tools                  stringList `yaml:"tools"`
 	Model                  string     `yaml:"model"`
+	Effort                 string     `yaml:"effort"`
 }
 
 type stringList []string
@@ -138,6 +139,7 @@ func parseClaudeSkill(nameHint string, raw []byte) (*Skill, error) {
 		Trigger:       "/" + name,
 		RequiredTools: collectClaudeSkillTools(fm),
 		Model:         strings.TrimSpace(fm.Model),
+		Effort:        strings.TrimSpace(fm.Effort),
 		Prompt:        prompt,
 		Status:        "active",
 		Source:        claudeSkillSource,
