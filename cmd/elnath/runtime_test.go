@@ -73,6 +73,13 @@ type runtimeMockTool struct {
 	output string
 }
 
+type recordingRuntimeTool struct {
+	name    string
+	output  string
+	calls   int
+	command string
+}
+
 type stubWorkflow struct{ name string }
 
 type captureLearningWorkflow struct {
@@ -329,6 +336,27 @@ func (t *runtimeMockTool) Reversible() bool                       { return false
 func (t *runtimeMockTool) Scope(json.RawMessage) tools.ToolScope  { return tools.ConservativeScope() }
 func (t *runtimeMockTool) ShouldCancelSiblingsOnError() bool      { return false }
 func (t *runtimeMockTool) Execute(context.Context, json.RawMessage) (*tools.Result, error) {
+	return tools.SuccessResult(t.output), nil
+}
+
+func (t *recordingRuntimeTool) Name() string                           { return t.name }
+func (t *recordingRuntimeTool) Description() string                    { return t.name }
+func (t *recordingRuntimeTool) Schema() json.RawMessage                { return json.RawMessage(`{"type":"object"}`) }
+func (t *recordingRuntimeTool) IsConcurrencySafe(json.RawMessage) bool { return false }
+func (t *recordingRuntimeTool) Reversible() bool                       { return false }
+func (t *recordingRuntimeTool) Scope(json.RawMessage) tools.ToolScope {
+	return tools.ConservativeScope()
+}
+func (t *recordingRuntimeTool) ShouldCancelSiblingsOnError() bool { return false }
+func (t *recordingRuntimeTool) Execute(_ context.Context, params json.RawMessage) (*tools.Result, error) {
+	t.calls++
+	var payload struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal(params, &payload); err != nil {
+		return tools.ErrorResult(err.Error()), nil
+	}
+	t.command = payload.Command
 	return tools.SuccessResult(t.output), nil
 }
 
@@ -2433,6 +2461,92 @@ func TestExecutionRuntimeRunTaskSelfHealingObserveOnlyDoesNotRetryIncompleteFina
 	}
 	if provider.idx != 1 {
 		t.Fatalf("streamed responses = %d, want no correction retry in observe-only mode", provider.idx)
+	}
+}
+
+func TestCompletionRetryRunsExplicitVerificationCommand(t *testing.T) {
+	rt := newTestExecutionRuntimeWithConfig(t, &countingProvider{}, false, func(cfg *config.Config) {
+		cfg.SelfHealing.Enabled = true
+		cfg.SelfHealing.ObserveOnly = false
+	})
+	rt.completionRetryMax = 1
+	reg := tools.NewRegistry()
+	bash := &recordingRuntimeTool{name: "bash", output: "PASS"}
+	reg.Register(bash)
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("fix the existing handler\n\ngo test ./cmd/elnath -count=1"),
+			llm.NewAssistantMessage("Done."),
+		},
+		Summary:      "Done.",
+		FinishReason: "stop",
+		Workflow:     "single",
+	}
+	observed := false
+	summary := completionContractSummary{
+		VerificationHint:     true,
+		VerificationObserved: &observed,
+		RetryDecision:        completionRetryDecisionRunVerification,
+		RetryReason:          "verification_hint_not_observed",
+	}
+
+	gotResult, gotSummary := rt.maybeRunCompletionRetry(context.Background(), &stubWorkflow{name: "single"}, orchestrator.WorkflowInput{
+		Session:  &agent.Session{ID: "verify-session"},
+		Tools:    reg,
+		Provider: rt.provider,
+	}, result, summary)
+
+	if gotResult != result {
+		t.Fatal("verification retry should preserve original workflow result")
+	}
+	if bash.calls != 1 || bash.command != "go test ./cmd/elnath -count=1" {
+		t.Fatalf("bash calls = %d command = %q, want explicit verification command", bash.calls, bash.command)
+	}
+	if gotSummary.VerificationObserved == nil || !*gotSummary.VerificationObserved || gotSummary.VerificationCommand != "go test ./cmd/elnath -count=1" {
+		t.Fatalf("verification summary = observed %v command %q", gotSummary.VerificationObserved, gotSummary.VerificationCommand)
+	}
+	if !gotSummary.CorrectionAttempted || gotSummary.CorrectionAttempts != 1 || gotSummary.CorrectionDecision != completionRetryDecisionRunVerification {
+		t.Fatalf("correction summary = %+v", gotSummary)
+	}
+}
+
+func TestCompletionRetryDoesNotInferVerificationFromProse(t *testing.T) {
+	rt := newTestExecutionRuntimeWithConfig(t, &countingProvider{}, false, func(cfg *config.Config) {
+		cfg.SelfHealing.Enabled = true
+		cfg.SelfHealing.ObserveOnly = false
+	})
+	rt.completionRetryMax = 1
+	reg := tools.NewRegistry()
+	bash := &recordingRuntimeTool{name: "bash", output: "PASS"}
+	reg.Register(bash)
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("fix the existing handler and run go test ./cmd/elnath -count=1"),
+			llm.NewAssistantMessage("Done."),
+		},
+		Summary:      "Done.",
+		FinishReason: "stop",
+		Workflow:     "single",
+	}
+	observed := false
+	summary := completionContractSummary{
+		VerificationHint:     true,
+		VerificationObserved: &observed,
+		RetryDecision:        completionRetryDecisionRunVerification,
+		RetryReason:          "verification_hint_not_observed",
+	}
+
+	_, gotSummary := rt.maybeRunCompletionRetry(context.Background(), &stubWorkflow{name: "single"}, orchestrator.WorkflowInput{
+		Session:  &agent.Session{ID: "verify-session"},
+		Tools:    reg,
+		Provider: rt.provider,
+	}, result, summary)
+
+	if bash.calls != 0 {
+		t.Fatalf("bash calls = %d, want no inferred verification execution", bash.calls)
+	}
+	if gotSummary.CorrectionAttempted {
+		t.Fatalf("correction attempted from prose-only command: %+v", gotSummary)
 	}
 }
 
