@@ -180,6 +180,15 @@ telegram:
 daemon:
   socket_path: ~/.elnath/daemon.sock
   max_workers: 3
+  max_recoveries: 3
+  inactivity_timeout_seconds: 600  # cancel a task after 10m without progress
+  wall_clock_timeout_seconds: 1800 # cancel any single task after 30m total
+  workspace_retention: immediate   # delete per-session workspace after task completion
+
+# Timeout policy:
+# - inactivity timeout tracks actual task progress and catches idle/hung runs.
+# - wall-clock timeout is a hard cap even if the task keeps emitting progress.
+# - recovered or timed-out tasks record timeout_class for later telemetry.
 
 research:
   max_rounds: 5

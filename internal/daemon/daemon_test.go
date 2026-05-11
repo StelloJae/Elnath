@@ -1857,6 +1857,9 @@ func TestDaemonInactivityTimeout(t *testing.T) {
 	if task.Status != StatusFailed {
 		t.Fatalf("status = %q, want failed after inactivity timeout", task.Status)
 	}
+	if task.TimeoutClass != TimeoutClassIdle {
+		t.Fatalf("timeout class = %q, want %q", task.TimeoutClass, TimeoutClassIdle)
+	}
 }
 
 // TestDaemonWallClockTimeout verifies that a task exceeding the wall-clock
@@ -1897,6 +1900,9 @@ func TestDaemonWallClockTimeout(t *testing.T) {
 	task := pollTaskStatus(t, q, taskID, StatusFailed, 15*time.Second)
 	if task.Status != StatusFailed {
 		t.Fatalf("status = %q, want failed after wall-clock timeout", task.Status)
+	}
+	if task.TimeoutClass != TimeoutClassActiveButKilled {
+		t.Fatalf("timeout class = %q, want %q", task.TimeoutClass, TimeoutClassActiveButKilled)
 	}
 }
 
