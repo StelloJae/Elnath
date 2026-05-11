@@ -10,7 +10,7 @@ import (
 	"github.com/stello/elnath/internal/llm"
 )
 
-const commandsCommandUsage = "Usage: /commands [--json] [--all]"
+const commandsCommandUsage = "Usage: /commands [--json] [--all] or /help [--json] [--all]"
 
 func (rt *executionRuntime) tryCommandsCommand(
 	sess *agent.Session,
@@ -19,7 +19,7 @@ func (rt *executionRuntime) tryCommandsCommand(
 	bus *event.Bus,
 ) ([]llm.Message, string, bool, error) {
 	fields := strings.Fields(input)
-	if len(fields) == 0 || fields[0] != "/commands" {
+	if len(fields) == 0 || (fields[0] != "/commands" && fields[0] != "/help") {
 		return nil, "", false, nil
 	}
 

@@ -977,7 +977,7 @@ func (rt *executionRuntime) runTask(
 			return result, summary, err
 		}
 	}
-	if strings.HasPrefix(userInput, "/commands") {
+	if strings.HasPrefix(userInput, "/commands") || strings.HasPrefix(userInput, "/help") {
 		result, summary, handled, err := rt.tryCommandsCommand(sess, messages, userInput, bus)
 		if handled {
 			return result, summary, err

@@ -2500,6 +2500,31 @@ func TestExecutionRuntimeRunTaskCommandsSlashCommandListsCatalog(t *testing.T) {
 	}
 }
 
+func TestExecutionRuntimeRunTaskHelpSlashCommandListsCatalog(t *testing.T) {
+	provider := &countingProvider{streamText: "runtime answer"}
+	rt := newTestExecutionRuntime(t, provider)
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	messages, summary, err := rt.runTask(context.Background(), sess, nil, "/help", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask /help: %v", err)
+	}
+	if provider.streamCalls != 0 || provider.chatCalls != 0 {
+		t.Fatalf("provider calls = chat:%d stream:%d, want none for local help command", provider.chatCalls, provider.streamCalls)
+	}
+	for _, want := range []string{"Elnath commands:", "commands", "run", "skill"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary=%q missing %q", summary, want)
+		}
+	}
+	if len(messages) != 2 {
+		t.Fatalf("messages len = %d, want 2", len(messages))
+	}
+}
+
 func TestExecutionRuntimeRunTaskProviderSlashCommandRejectsRuntimeSwitch(t *testing.T) {
 	provider := &capabilityCountingProvider{}
 	rt := newTestExecutionRuntime(t, provider)
