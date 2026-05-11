@@ -617,6 +617,8 @@ GO-BF-001 request-id logging guidance:
 - Preserve `LogFormatterParams.BodySize`; do not replace, delete, or reorder it into a compile failure while adding request-id fields.
 - Do not finish with only a `requestIDKey` constant or `RequestID` field. That is incomplete even if `go test ./...` passes.
 - A complete patch should add an opt-in `RequestID()` middleware, attach the id to the Gin context, and set `param.RequestID` inside `LoggerWithConfig`.
+- Do not assert a local `buffer.String()` after `LoggerWithFormatter(...)` unless the test redirects `DefaultWriter`; `LoggerWithFormatter` writes to the default writer.
+- Prefer `LoggerWithConfig(LoggerConfig{Formatter: ..., Output: buffer})` for focused request-id logger tests so the asserted buffer receives the formatted request id.
 - Remove unused imports before final verification; an unused `crypto/rand` import after recovery is still incomplete.
 - Run `go test ./...` before the final answer.
 EOF
@@ -1125,6 +1127,33 @@ PY
   )
 }
 
+go_bf001_unwired_logger_output_buffer() {
+  [[ "$TASK_ID" == "GO-BF-001" ]] || return 1
+  local test_path="$WORKTREE/logger_test.go"
+  [[ -f "$test_path" ]] || return 1
+  python3 - <<'PY' "$test_path"
+from pathlib import Path
+import sys
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="ignore")
+targets_request_id = "param.RequestID" in text or "RequestID" in text
+uses_formatter = "LoggerWithFormatter(" in text
+asserts_local_buffer = "buffer.String()" in text
+redirects_default_writer = "DefaultWriter = buffer" in text
+uses_config_output = "LoggerWithConfig(" in text and "Output: buffer" in text
+
+sys.exit(
+    0
+    if targets_request_id
+    and uses_formatter
+    and asserts_local_buffer
+    and not redirects_default_writer
+    and not uses_config_output
+    else 1
+)
+PY
+}
+
 ts_bf001_reported_tasks_fixture_mutation() {
   is_ts_bf001_vitest_task || return 1
   benchmark_changed_files_all | grep -Eq '^test/cli/fixtures/reported-tasks/.*\.ts$'
@@ -1455,6 +1484,10 @@ write_passed_verification_task_specific_failure() {
     write_result false true "incomplete_patch" "$recovery_attempted" false "$prefix, but GO-BF-001 changed request-id logging names without adding opt-in middleware, context attachment, and formatter threading"
     return 0
   fi
+  if go_bf001_unwired_logger_output_buffer; then
+    write_result false true "incomplete_patch" "$recovery_attempted" false "$prefix, but GO-BF-001 request-id logger test asserts a local logger output buffer that LoggerWithFormatter does not write to"
+    return 0
+  fi
   if go_bug002_missing_focused_regression; then
     write_result false true "incomplete_patch" "$recovery_attempted" false "$prefix, but GO-BUG-002 changed only viper.go without the focused TestWatchFile regression"
     return 0
@@ -1543,6 +1576,10 @@ task_specific_completion_failure_reason() {
     echo "GO-BF-001 changed request-id logging names without adding opt-in middleware, context attachment, and formatter threading."
     return 0
   fi
+  if go_bf001_unwired_logger_output_buffer; then
+    echo "GO-BF-001 request-id logger test asserts a local logger output buffer that LoggerWithFormatter does not write to."
+    return 0
+  fi
   if ts_bf002_production_diff_without_focused_regression; then
     echo "TS-BF-002 changed module-utils behavior without focused cancellation regression coverage."
     return 0
@@ -1626,6 +1663,10 @@ recover_passed_task_specific_failure() {
   fi
   if go_bf001_missing_request_id_behavior; then
     write_result false false "incomplete_patch" true false "task-specific recovery left GO-BF-001 request-id logging behavior incomplete"
+    exit 0
+  fi
+  if go_bf001_unwired_logger_output_buffer; then
+    write_result false false "incomplete_patch" true false "task-specific recovery left GO-BF-001 request-id logger output buffer unwired"
     exit 0
   fi
   if go_bug002_missing_focused_regression || go_bug002_unbounded_wait_regression; then
@@ -2601,6 +2642,11 @@ fi
 
 if go_bf001_missing_request_id_behavior; then
   write_result false false "incomplete_patch" true false "GO-BF-001 recovery left request-id logging behavior incomplete"
+  exit 0
+fi
+
+if go_bf001_unwired_logger_output_buffer; then
+  write_result false false "incomplete_patch" true false "GO-BF-001 recovery left request-id logger output buffer unwired"
   exit 0
 fi
 
