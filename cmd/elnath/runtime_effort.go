@@ -78,12 +78,23 @@ func (rt *executionRuntime) currentEffortMessage() string {
 	effort := strings.ToLower(strings.TrimSpace(rt.wfCfg.ReasoningEffort))
 	if mode == "auto" {
 		if effort != "" {
-			return fmt.Sprintf("Effort level: auto (fallback %s).", effort)
+			return fmt.Sprintf("Effort level: auto (fallback %s).\n%s", effort, autoEffortPolicyMessage())
 		}
-		return "Effort level: auto."
+		return fmt.Sprintf("Effort level: auto.\n%s", autoEffortPolicyMessage())
 	}
 	if effort == "" {
 		return "Effort level: provider default."
 	}
 	return fmt.Sprintf("Current effort level: %s.", effort)
+}
+
+func autoEffortPolicyMessage() string {
+	return strings.Join([]string{
+		"Auto routing policy:",
+		"- simple/status/summary -> low",
+		"- implementation/debug/benchmark/CI -> high",
+		"- root-cause/security/architecture/autonomous -> xhigh",
+		"- otherwise -> medium",
+		"Manual override: /effort <level>",
+	}, "\n")
 }

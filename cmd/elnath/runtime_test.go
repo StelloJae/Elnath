@@ -2319,6 +2319,37 @@ func TestExecutionRuntimeRunTaskEffortSlashCommandPinsManualEffort(t *testing.T)
 	}
 }
 
+func TestExecutionRuntimeEffortStatusExplainsAutoRoutingPolicy(t *testing.T) {
+	provider := &countingProvider{streamText: "runtime answer"}
+	rt := newTestExecutionRuntimeWithConfig(t, provider, false, func(cfg *config.Config) {
+		cfg.Reasoning.EffortMode = "auto"
+	})
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	_, summary, err := rt.runTask(context.Background(), sess, nil, "/effort status", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask /effort status: %v", err)
+	}
+	if provider.streamCalls != 0 {
+		t.Fatalf("streamCalls = %d, want 0 for local effort status command", provider.streamCalls)
+	}
+	for _, want := range []string{
+		"Effort level: auto.",
+		"Auto routing policy:",
+		"simple/status/summary -> low",
+		"implementation/debug/benchmark/CI -> high",
+		"root-cause/security/architecture/autonomous -> xhigh",
+		"Manual override: /effort <level>",
+	} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary = %q, want contains %q", summary, want)
+		}
+	}
+}
+
 func TestExecutionRuntimeRunTaskModelSlashCommandPinsModel(t *testing.T) {
 	provider := &countingProvider{streamText: "runtime answer"}
 	rt := newTestExecutionRuntime(t, provider)
