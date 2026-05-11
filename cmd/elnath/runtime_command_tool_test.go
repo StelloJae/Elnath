@@ -25,6 +25,18 @@ func TestExecutionRuntimeRegistersCommandCatalogTool(t *testing.T) {
 	}
 }
 
+func TestExecutionRuntimeRegistersSkillCatalogTool(t *testing.T) {
+	rt := newTestExecutionRuntime(t, &countingProvider{})
+
+	tool, ok := rt.reg.Get("skill_catalog")
+	if !ok {
+		t.Fatal("skill_catalog tool missing")
+	}
+	if !tool.IsConcurrencySafe(nil) || !tool.Reversible() {
+		t.Fatal("skill_catalog should be read-only and reversible")
+	}
+}
+
 func TestCommandCatalogToolListsCommandsAsJSON(t *testing.T) {
 	tool := newCommandCatalogTool()
 
