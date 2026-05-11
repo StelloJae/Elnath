@@ -12,10 +12,35 @@ type testToolSearchOutput struct {
 	Query      string `json:"query"`
 	TotalTools int    `json:"total_tools"`
 	Matches    []struct {
-		Name          string `json:"name"`
-		Description   string `json:"description"`
-		SchemaPreview string `json:"schema_preview"`
+		Name                  string `json:"name"`
+		Description           string `json:"description"`
+		SchemaPreview         string `json:"schema_preview"`
+		Deferred              bool   `json:"deferred"`
+		ConcurrencySafe       bool   `json:"concurrency_safe"`
+		Reversible            bool   `json:"reversible"`
+		CancelSiblingsOnError bool   `json:"cancel_siblings_on_error"`
 	} `json:"matches"`
+}
+
+type toolSearchMetadataTool struct {
+	name        string
+	description string
+	safe        bool
+	reversible  bool
+	cancel      bool
+}
+
+func (t *toolSearchMetadataTool) Name() string        { return t.name }
+func (t *toolSearchMetadataTool) Description() string { return t.description }
+func (t *toolSearchMetadataTool) Schema() json.RawMessage {
+	return json.RawMessage(`{"type":"object"}`)
+}
+func (t *toolSearchMetadataTool) IsConcurrencySafe(json.RawMessage) bool { return t.safe }
+func (t *toolSearchMetadataTool) Reversible() bool                       { return t.reversible }
+func (t *toolSearchMetadataTool) Scope(json.RawMessage) ToolScope        { return ConservativeScope() }
+func (t *toolSearchMetadataTool) ShouldCancelSiblingsOnError() bool      { return t.cancel }
+func (t *toolSearchMetadataTool) Execute(context.Context, json.RawMessage) (*Result, error) {
+	return SuccessResult("ok"), nil
 }
 
 func executeToolSearch(t *testing.T, tool *ToolSearchTool, input string) testToolSearchOutput {
@@ -104,6 +129,49 @@ func TestToolSearchEmptyQueryListsCompactCatalog(t *testing.T) {
 	}
 	if out.Matches[0].Name != "alpha" {
 		t.Fatalf("first match = %q, want alpha", out.Matches[0].Name)
+	}
+}
+
+func TestToolSearchReportsStableMetadata(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(&toolSearchMetadataTool{
+		name:        "mcp_github_issue",
+		description: "Create GitHub issues",
+		safe:        true,
+		reversible:  true,
+		cancel:      true,
+	})
+	search := NewToolSearchTool(reg)
+	reg.Register(search)
+
+	out := executeToolSearch(t, search, `{"query":"github","max_results":5}`)
+
+	if len(out.Matches) != 1 {
+		t.Fatalf("matches len = %d, want 1", len(out.Matches))
+	}
+	match := out.Matches[0]
+	if !match.Deferred {
+		t.Fatalf("Deferred = false, want true for mcp_* tool")
+	}
+	if !match.ConcurrencySafe || !match.Reversible || !match.CancelSiblingsOnError {
+		t.Fatalf("metadata = %+v, want safe/reversible/cancel true", match)
+	}
+}
+
+func TestToolSearchAllowNamesRestrictsCandidates(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(&mockTool{name: "grep", result: SuccessResult("")})
+	reg.Register(&mockTool{name: "web_fetch", result: SuccessResult("")})
+	search := NewToolSearchTool(reg)
+	reg.Register(search)
+
+	out := executeToolSearch(t, search, `{"query":"","allow_names":["web_fetch"],"max_results":5}`)
+
+	if out.TotalTools != 1 {
+		t.Fatalf("TotalTools = %d, want allowlisted candidate count 1", out.TotalTools)
+	}
+	if len(out.Matches) != 1 || out.Matches[0].Name != "web_fetch" {
+		t.Fatalf("matches = %+v, want only web_fetch", out.Matches)
 	}
 }
 

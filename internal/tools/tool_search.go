@@ -56,6 +56,7 @@ func (t *ToolSearchTool) Schema() json.RawMessage {
 	return Object(map[string]Property{
 		"query":       String(`Search query. Use "select:<tool_name>[,<tool_name>...]" for exact selection.`),
 		"max_results": Int("Maximum number of matches to return. Defaults to 5 and caps at 20."),
+		"allow_names": Array("Optional exact tool-name allowlist that restricts the searchable candidate set.", "string"),
 	}, []string{"query"})
 }
 
@@ -68,8 +69,9 @@ func (t *ToolSearchTool) Scope(json.RawMessage) ToolScope { return ToolScope{} }
 func (t *ToolSearchTool) ShouldCancelSiblingsOnError() bool { return false }
 
 type toolSearchInput struct {
-	Query      string `json:"query"`
-	MaxResults int    `json:"max_results"`
+	Query      string   `json:"query"`
+	MaxResults int      `json:"max_results"`
+	AllowNames []string `json:"allow_names"`
 }
 
 type toolSearchOutput struct {
@@ -79,9 +81,13 @@ type toolSearchOutput struct {
 }
 
 type toolSearchMatch struct {
-	Name          string `json:"name"`
-	Description   string `json:"description"`
-	SchemaPreview string `json:"schema_preview"`
+	Name                  string `json:"name"`
+	Description           string `json:"description"`
+	SchemaPreview         string `json:"schema_preview"`
+	Deferred              bool   `json:"deferred"`
+	ConcurrencySafe       bool   `json:"concurrency_safe"`
+	Reversible            bool   `json:"reversible"`
+	CancelSiblingsOnError bool   `json:"cancel_siblings_on_error"`
 }
 
 type toolSearchCandidate struct {
@@ -98,7 +104,7 @@ func (t *ToolSearchTool) Execute(_ context.Context, params json.RawMessage) (*Re
 	}
 
 	maxResults := normalizeToolSearchMax(input.MaxResults)
-	tools := t.searchableTools()
+	tools := filterToolSearchAllowNames(t.searchableTools(), input.AllowNames)
 	query := strings.TrimSpace(input.Query)
 
 	var matches []toolSearchMatch
@@ -250,10 +256,40 @@ func scoreToolSearchCandidate(tool Tool, required, optional []string) int {
 
 func buildToolSearchMatch(tool Tool) toolSearchMatch {
 	return toolSearchMatch{
-		Name:          tool.Name(),
-		Description:   tool.Description(),
-		SchemaPreview: compactSchemaPreview(tool.Schema()),
+		Name:                  tool.Name(),
+		Description:           tool.Description(),
+		SchemaPreview:         compactSchemaPreview(tool.Schema()),
+		Deferred:              ShouldDeferToolSchema(tool),
+		ConcurrencySafe:       tool.IsConcurrencySafe(nil),
+		Reversible:            tool.Reversible(),
+		CancelSiblingsOnError: tool.ShouldCancelSiblingsOnError(),
 	}
+}
+
+func filterToolSearchAllowNames(tools []Tool, allowNames []string) []Tool {
+	if len(allowNames) == 0 {
+		return tools
+	}
+	allowed := make(map[string]struct{}, len(allowNames))
+	for _, name := range allowNames {
+		name = strings.ToLower(strings.TrimSpace(name))
+		if name != "" {
+			allowed[name] = struct{}{}
+		}
+	}
+	if len(allowed) == 0 {
+		return tools
+	}
+	out := make([]Tool, 0, len(tools))
+	for _, tool := range tools {
+		if tool == nil {
+			continue
+		}
+		if _, ok := allowed[strings.ToLower(tool.Name())]; ok {
+			out = append(out, tool)
+		}
+	}
+	return out
 }
 
 func compactSchemaPreview(raw json.RawMessage) string {
