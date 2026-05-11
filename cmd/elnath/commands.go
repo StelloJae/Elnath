@@ -554,6 +554,7 @@ func buildToolRegistry(guard *tools.PathGuard, provider llm.Provider, runner too
 	reg.Register(tools.NewGrepTool(guard, tracker))
 	reg.Register(tools.NewGitToolWithRunner(guard, runner))
 	reg.Register(tools.NewWebFetchTool(tools.WithSecondaryCaller(llm.NewSecondaryModelCaller(provider))))
+	reg.Register(tools.NewTodoWriteTool())
 	reg.Register(tools.NewToolSearchTool(reg))
 	return reg
 }
