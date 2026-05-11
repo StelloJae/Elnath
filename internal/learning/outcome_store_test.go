@@ -173,6 +173,10 @@ func TestOutcomeRecordCompletionObservabilityJSONCompatibility(t *testing.T) {
 	rec.ProviderName = "openai-responses"
 	rec.ProviderEffort = "native_with_unsupported_retry"
 	rec.ProviderEffortNote = "retry_without_reasoning_on_400_or_422_unsupported_effort"
+	rec.CorrectionAttempted = true
+	rec.CorrectionAttempts = 1
+	rec.CorrectionDecision = "retry_smaller_scope"
+	rec.CorrectionReason = "final_response_reports_incomplete"
 	rec.RetryDecision = "retry_smaller_scope"
 	rec.RetryReason = "final_response_reports_incomplete"
 
@@ -189,6 +193,10 @@ func TestOutcomeRecordCompletionObservabilityJSONCompatibility(t *testing.T) {
 		`"provider_name":"openai-responses"`,
 		`"provider_effort":"native_with_unsupported_retry"`,
 		`"provider_effort_note":"retry_without_reasoning_on_400_or_422_unsupported_effort"`,
+		`"correction_attempted":true`,
+		`"correction_attempts":1`,
+		`"correction_decision":"retry_smaller_scope"`,
+		`"correction_reason":"final_response_reports_incomplete"`,
 		`"retry_decision":"retry_smaller_scope"`,
 		`"retry_reason":"final_response_reports_incomplete"`,
 	} {

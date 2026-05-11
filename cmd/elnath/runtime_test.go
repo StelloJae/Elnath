@@ -2374,6 +2374,68 @@ func TestExecutionRuntimeRunTaskProviderSlashCommandRejectsRuntimeSwitch(t *test
 	}
 }
 
+func TestExecutionRuntimeRunTaskSelfHealingCorrectionRetriesIncompleteFinal(t *testing.T) {
+	provider := &sequenceStreamProvider{responses: []string{
+		"I could not finish the patch.",
+		"Done now.",
+	}}
+	rt := newTestExecutionRuntimeWithConfig(t, provider, false, func(cfg *config.Config) {
+		cfg.SelfHealing.Enabled = true
+		cfg.SelfHealing.ObserveOnly = false
+	})
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	_, summary, err := rt.runTask(context.Background(), sess, nil, "fix the existing handler", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask: %v", err)
+	}
+	if summary != "Done now." {
+		t.Fatalf("summary = %q, want retry result", summary)
+	}
+	if provider.idx != 2 {
+		t.Fatalf("streamed responses = %d, want 2 correction attempts", provider.idx)
+	}
+	records, err := rt.outcomeStore.Recent(1)
+	if err != nil {
+		t.Fatalf("Recent outcomes: %v", err)
+	}
+	if len(records) != 1 || !records[0].CorrectionAttempted || records[0].CorrectionAttempts != 1 {
+		t.Fatalf("correction outcome = %+v, want one recorded correction attempt", records)
+	}
+	if records[0].CorrectionDecision != completionRetryDecisionRetrySmallerScope || records[0].CorrectionReason != "final_response_reports_incomplete" {
+		t.Fatalf("correction outcome reason = decision %q reason %q", records[0].CorrectionDecision, records[0].CorrectionReason)
+	}
+}
+
+func TestExecutionRuntimeRunTaskSelfHealingObserveOnlyDoesNotRetryIncompleteFinal(t *testing.T) {
+	provider := &sequenceStreamProvider{responses: []string{
+		"I could not finish the patch.",
+		"Done now.",
+	}}
+	rt := newTestExecutionRuntimeWithConfig(t, provider, false, func(cfg *config.Config) {
+		cfg.SelfHealing.Enabled = true
+		cfg.SelfHealing.ObserveOnly = true
+	})
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	_, summary, err := rt.runTask(context.Background(), sess, nil, "fix the existing handler", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask: %v", err)
+	}
+	if summary != "I could not finish the patch." {
+		t.Fatalf("summary = %q, want first attempt result", summary)
+	}
+	if provider.idx != 1 {
+		t.Fatalf("streamed responses = %d, want no correction retry in observe-only mode", provider.idx)
+	}
+}
+
 func TestExecutionRuntimeRunTaskPersistsFullSkillTranscript(t *testing.T) {
 	provider := &scriptedSkillProvider{}
 	rt := newTestExecutionRuntime(t, provider)

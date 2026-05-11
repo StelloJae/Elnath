@@ -43,6 +43,10 @@ type OutcomeRecord struct {
 	ProviderName         string `json:"provider_name,omitempty"`
 	ProviderEffort       string `json:"provider_effort,omitempty"`
 	ProviderEffortNote   string `json:"provider_effort_note,omitempty"`
+	CorrectionAttempted  bool   `json:"correction_attempted,omitempty"`
+	CorrectionAttempts   int    `json:"correction_attempts,omitempty"`
+	CorrectionDecision   string `json:"correction_decision,omitempty"`
+	CorrectionReason     string `json:"correction_reason,omitempty"`
 	RetryDecision        string `json:"retry_decision,omitempty"`
 	RetryReason          string `json:"retry_reason,omitempty"`
 }

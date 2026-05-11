@@ -229,6 +229,7 @@ type executionRuntime struct {
 	reflectModel       string
 	reflectMaxTurns    int
 	reflectTimeout     time.Duration
+	completionRetryMax int
 	completionCtxMu    sync.Mutex
 	completionCtxs     map[int64]completionContractSummary
 }
@@ -565,6 +566,10 @@ func buildExecutionRuntime(
 			"queue_size", queueSize,
 		)
 	}
+	completionRetryMax := 0
+	if cfg.SelfHealing.Enabled && !cfg.SelfHealing.ObserveOnly {
+		completionRetryMax = 1
+	}
 	hooks.Add(secret.NewSecretScanHook(secret.NewDetector(), auditTrail))
 	wrappedCtxWindow := newCompressionHookContextWindow(
 		ctxWindow,
@@ -689,6 +694,7 @@ func buildExecutionRuntime(
 		reflectModel:       reflectModel,
 		reflectMaxTurns:    reflectMaxTurns,
 		reflectTimeout:     reflectTimeout,
+		completionRetryMax: completionRetryMax,
 	}, nil
 }
 
@@ -1132,6 +1138,7 @@ func (rt *executionRuntime) runTask(
 	}
 
 	completionSummary := withProviderCapabilities(summarizeCompletionContract(routeCtx, cfg, result), rt.provider)
+	result, completionSummary = rt.maybeRunCompletionRetry(ctx, wf, input, result, completionSummary)
 	if hasAgenticTask {
 		rt.rememberAgenticCompletionContext(agenticTaskID, completionSummary)
 	}
@@ -1305,6 +1312,10 @@ func (rt *executionRuntime) recordOutcome(ctx context.Context, in outcomeInput) 
 		ProviderName:         in.completion.ProviderName,
 		ProviderEffort:       in.completion.ProviderEffort,
 		ProviderEffortNote:   in.completion.ProviderEffortNote,
+		CorrectionAttempted:  in.completion.CorrectionAttempted,
+		CorrectionAttempts:   in.completion.CorrectionAttempts,
+		CorrectionDecision:   in.completion.CorrectionDecision,
+		CorrectionReason:     in.completion.CorrectionReason,
 		RetryDecision:        in.completion.RetryDecision,
 		RetryReason:          in.completion.RetryReason,
 	}

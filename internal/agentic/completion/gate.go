@@ -40,6 +40,10 @@ type CompletionContext struct {
 	ProviderName         string
 	ProviderEffort       string
 	ProviderEffortNote   string
+	CorrectionAttempted  bool
+	CorrectionAttempts   int
+	CorrectionDecision   string
+	CorrectionReason     string
 	RetryDecision        string
 	RetryReason          string
 }
@@ -243,6 +247,18 @@ func encodeReceiptSummary(summary map[string]int, completionContext CompletionCo
 	}
 	if completionContext.ProviderEffortNote != "" {
 		payload["provider_effort_note"] = completionContext.ProviderEffortNote
+	}
+	if completionContext.CorrectionAttempted {
+		payload["correction_attempted"] = true
+	}
+	if completionContext.CorrectionAttempts > 0 {
+		payload["correction_attempts"] = completionContext.CorrectionAttempts
+	}
+	if completionContext.CorrectionDecision != "" {
+		payload["correction_decision"] = completionContext.CorrectionDecision
+	}
+	if completionContext.CorrectionReason != "" {
+		payload["correction_reason"] = completionContext.CorrectionReason
 	}
 	if completionContext.RetryDecision != "" {
 		payload["retry_decision"] = completionContext.RetryDecision

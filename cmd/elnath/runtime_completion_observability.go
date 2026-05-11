@@ -21,6 +21,10 @@ type completionContractSummary struct {
 	ProviderName         string
 	ProviderEffort       string
 	ProviderEffortNote   string
+	CorrectionAttempted  bool
+	CorrectionAttempts   int
+	CorrectionDecision   string
+	CorrectionReason     string
 	RetryDecision        string
 	RetryReason          string
 }
