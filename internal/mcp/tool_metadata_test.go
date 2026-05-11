@@ -62,3 +62,19 @@ func TestMCPToolMetadata(t *testing.T) {
 		})
 	}
 }
+
+func TestMCPCatalogToolMetadata(t *testing.T) {
+	tool := NewCatalogTool(nil, "github")
+	if got := tool.IsConcurrencySafe(nil); !got {
+		t.Fatal("catalog tool should be concurrency-safe")
+	}
+	if got := tool.Reversible(); !got {
+		t.Fatal("catalog tool should be reversible")
+	}
+	if got := tool.ShouldCancelSiblingsOnError(); got {
+		t.Fatal("catalog tool should not cancel sibling tools on error")
+	}
+	if got := tool.Scope(nil); !reflect.DeepEqual(got, toolspkg.ToolScope{}) {
+		t.Fatalf("Scope(nil) = %+v, want empty metadata-only scope", got)
+	}
+}
