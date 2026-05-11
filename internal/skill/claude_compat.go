@@ -60,6 +60,7 @@ type claudeSkillFrontmatter struct {
 	AllowedToolsUnderscore stringList `yaml:"allowed_tools"`
 	RequiredTools          stringList `yaml:"required_tools"`
 	Tools                  stringList `yaml:"tools"`
+	Paths                  stringList `yaml:"paths"`
 	Model                  string     `yaml:"model"`
 	Effort                 string     `yaml:"effort"`
 }
@@ -302,6 +303,7 @@ func parseCompatibleSkillWithSource(nameHint string, raw []byte, source, kind st
 		Description:   compatibleSkillDescription(fm, kind),
 		Trigger:       "/" + name,
 		RequiredTools: collectClaudeSkillTools(fm),
+		Paths:         normalizeSkillPaths(fm.Paths),
 		Model:         strings.TrimSpace(fm.Model),
 		Effort:        strings.TrimSpace(fm.Effort),
 		Prompt:        prompt,

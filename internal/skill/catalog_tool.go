@@ -28,9 +28,11 @@ func (t *CatalogTool) Description() string {
 
 func (t *CatalogTool) Schema() json.RawMessage {
 	return tools.Object(map[string]tools.Property{
-		"action":         tools.StringEnum("Catalog action.", "list", "show", "recommend"),
+		"action":         tools.StringEnum("Catalog action.", "list", "show", "recommend", "match_paths"),
 		"skill":          tools.String("Skill name for action=show."),
 		"query":          tools.String("Intent or task query for action=recommend."),
+		"paths":          tools.Array("File paths for action=match_paths.", "string"),
+		"cwd":            tools.String("Project root used to normalize absolute paths for action=match_paths."),
 		"max_results":    tools.Int("Maximum recommendations for action=recommend. Defaults to 5, max 20."),
 		"include_prompt": tools.Bool("Include the full skill prompt for action=show. Defaults to false."),
 	}, []string{"action"})
@@ -45,11 +47,13 @@ func (t *CatalogTool) Scope(json.RawMessage) tools.ToolScope { return tools.Tool
 func (t *CatalogTool) ShouldCancelSiblingsOnError() bool { return false }
 
 type catalogToolInput struct {
-	Action        string `json:"action"`
-	Skill         string `json:"skill"`
-	Query         string `json:"query"`
-	MaxResults    int    `json:"max_results"`
-	IncludePrompt bool   `json:"include_prompt"`
+	Action        string   `json:"action"`
+	Skill         string   `json:"skill"`
+	Query         string   `json:"query"`
+	Paths         []string `json:"paths"`
+	CWD           string   `json:"cwd"`
+	MaxResults    int      `json:"max_results"`
+	IncludePrompt bool     `json:"include_prompt"`
 }
 
 type catalogSkillEntry struct {
@@ -57,6 +61,7 @@ type catalogSkillEntry struct {
 	Description   string   `json:"description,omitempty"`
 	Trigger       string   `json:"trigger,omitempty"`
 	RequiredTools []string `json:"required_tools,omitempty"`
+	Paths         []string `json:"paths,omitempty"`
 	Model         string   `json:"model,omitempty"`
 	Effort        string   `json:"effort,omitempty"`
 	Status        string   `json:"status,omitempty"`
@@ -101,8 +106,13 @@ func (t *CatalogTool) Execute(_ context.Context, params json.RawMessage) (*tools
 			"query":  query,
 			"skills": t.recommendedSkillEntries(query, normalizeSkillCatalogMax(input.MaxResults)),
 		})
+	case "match_paths":
+		return marshalSkillCatalogOutput(map[string]any{
+			"action":  "match_paths",
+			"matches": t.registry.ConditionalMatchesForPaths(input.Paths, input.CWD),
+		})
 	default:
-		return tools.ErrorResult(fmt.Sprintf("skill_catalog: unsupported action %q; supported actions are list, show, and recommend", input.Action)), nil
+		return tools.ErrorResult(fmt.Sprintf("skill_catalog: unsupported action %q; supported actions are list, show, recommend, and match_paths", input.Action)), nil
 	}
 }
 
@@ -166,6 +176,7 @@ func skillCatalogEntry(sk *Skill, includePrompt bool) catalogSkillEntry {
 		Description:   sk.Description,
 		Trigger:       sk.Trigger,
 		RequiredTools: append([]string(nil), sk.RequiredTools...),
+		Paths:         append([]string(nil), sk.Paths...),
 		Model:         sk.Model,
 		Effort:        sk.Effort,
 		Status:        sk.Status,
@@ -189,6 +200,7 @@ func scoreSkillCatalogEntry(sk *Skill, terms []string) (int, []string) {
 		{name: "name", text: sk.Name, weight: 4},
 		{name: "description", text: sk.Description, weight: 3},
 		{name: "trigger", text: sk.Trigger, weight: 2},
+		{name: "paths", text: strings.Join(sk.Paths, " "), weight: 1},
 		{name: "required_tools", text: strings.Join(sk.RequiredTools, " "), weight: 1},
 		{name: "source", text: sk.Source, weight: 1},
 	}

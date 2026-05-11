@@ -3,6 +3,7 @@ package skill
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -16,6 +17,7 @@ func TestCatalogToolListsSkillsWithoutPromptsByDefault(t *testing.T) {
 		Description:   "Review pull requests",
 		Trigger:       "/review-pr",
 		RequiredTools: []string{"read_file", "grep"},
+		Paths:         []string{"internal/**/*.go"},
 		Model:         "gpt-5.5",
 		Effort:        "high",
 		Prompt:        "Secret detailed prompt",
@@ -42,6 +44,7 @@ func TestCatalogToolListsSkillsWithoutPromptsByDefault(t *testing.T) {
 			Description   string   `json:"description"`
 			Trigger       string   `json:"trigger"`
 			RequiredTools []string `json:"required_tools"`
+			Paths         []string `json:"paths"`
 			Model         string   `json:"model"`
 			Effort        string   `json:"effort"`
 			Status        string   `json:"status"`
@@ -58,6 +61,9 @@ func TestCatalogToolListsSkillsWithoutPromptsByDefault(t *testing.T) {
 	got := out.Skills[0]
 	if got.Name != "review-pr" || got.Description == "" || got.Trigger != "/review-pr" {
 		t.Fatalf("skill metadata = %+v, want review-pr metadata", got)
+	}
+	if len(got.Paths) != 1 || got.Paths[0] != "internal/**/*.go" {
+		t.Fatalf("paths = %v, want [internal/**/*.go]", got.Paths)
 	}
 	if got.Prompt != "" {
 		t.Fatalf("prompt = %q, want omitted by default", got.Prompt)
@@ -142,6 +148,58 @@ func TestCatalogToolRecommendsSkillsByQuery(t *testing.T) {
 	}
 	if out.Skills[0].Prompt != "" {
 		t.Fatalf("prompt = %q, want omitted", out.Skills[0].Prompt)
+	}
+}
+
+func TestCatalogToolMatchesConditionalSkillPaths(t *testing.T) {
+	reg := NewRegistry()
+	reg.Add(&Skill{Name: "go-review", Paths: []string{"internal/**/*.go"}, Status: "active"})
+	reg.Add(&Skill{Name: "docs-review", Paths: []string{"docs"}, Status: "active"})
+	reg.Add(&Skill{Name: "always-on", Status: "active"})
+
+	root := t.TempDir()
+	params := map[string]any{
+		"action": "match_paths",
+		"cwd":    root,
+		"paths": []string{
+			filepath.Join(root, "internal", "skill", "catalog_tool.go"),
+			filepath.Join(root, "docs", "roadmap.md"),
+			filepath.Join(root, "README.md"),
+		},
+	}
+	raw, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("Marshal params error = %v", err)
+	}
+
+	tool := NewCatalogTool(reg)
+	res, err := tool.Execute(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("Execute returned error result: %s", res.Output)
+	}
+
+	var out struct {
+		Action  string `json:"action"`
+		Matches []struct {
+			SkillName string `json:"skill_name"`
+			Pattern   string `json:"pattern"`
+			Path      string `json:"path"`
+		} `json:"matches"`
+	}
+	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, res.Output)
+	}
+	if out.Action != "match_paths" || len(out.Matches) != 2 {
+		t.Fatalf("output = %+v, want two path matches", out)
+	}
+	if out.Matches[0].SkillName != "docs-review" || out.Matches[0].Path != "docs/roadmap.md" {
+		t.Fatalf("first match = %+v, want docs-review docs/roadmap.md", out.Matches[0])
+	}
+	if out.Matches[1].SkillName != "go-review" || out.Matches[1].Path != "internal/skill/catalog_tool.go" {
+		t.Fatalf("second match = %+v, want go-review internal/skill/catalog_tool.go", out.Matches[1])
 	}
 }
 
