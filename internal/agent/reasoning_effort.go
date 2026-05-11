@@ -32,8 +32,6 @@ func autoReasoningEffort(messages []llm.Message) string {
 	}
 
 	if containsAny(text, []string{
-		"full benchmark",
-		"baseline comparison",
 		"root cause",
 		"security",
 		"threat model",
