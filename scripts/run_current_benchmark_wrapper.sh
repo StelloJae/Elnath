@@ -392,6 +392,12 @@ is_v8_mix_bug001_actions_toolkit_task() {
   }
 }
 
+is_v8_mix_bf001_kustomize_task() {
+  [[ "$TASK_ID" == "V8-MIX-BF-001" ]] || {
+    [[ "$TASK_REPO" == *"kubernetes-sigs/kustomize"* && "$TASK_PROMPT" == *"deterministic transformer"* ]]
+  }
+}
+
 is_v8_add_js001_yargs_task() {
   [[ "$TASK_ID" == "V8-ADD-JS-001" ]] || {
     [[ "$TASK_REPO" == *"yargs/yargs"* && "$TASK_PROMPT" == *"CLI option parsing edge case"* ]]
@@ -567,6 +573,8 @@ TS-BF-002 recovery guard:
 - Keep the production tracing implementation and regression assertion consistent: if the patch calls `Logger.error(err)`, assert the original error object; if it logs a fixed message plus stack, assert that exact implemented call shape.
 - Name the focused regression with cancellation language and use an error object whose name or message is explicitly cancellation-shaped, such as `AbortError`, `CanceledError`, or `CancelledError`; generic rejected-promise logging is not sufficient task evidence.
 - A focused regression must directly exercise the cancellation/error path through the options provider's `useFactory` or class factory provider and assert `Logger.error` receives the cancellation error.
+- Import/module-resolution fixes alone are incomplete. After any import fix, add or preserve an `it(...)` regression whose title includes cancellation wording and whose body asserts `Logger.error` receives the cancellation error.
+- Do not finish with only the existing five module-utils tests passing; the focused Mocha output must include the newly added cancellation regression.
 - If verification already passed and only the focused regression is missing, do not spend the recovery turn re-inspecting broad repo context; add the compact focused test in the existing module-utils spec.
 - In the focused test, select the options provider by `provider.provide === MODULE_OPTIONS_TOKEN`; do not assume the first provider is the options provider for both direct `useFactory` and `useClass` cases.
 - Rerun the exact TS-BF-002 Mocha verification command after final import/test edits: ./node_modules/.bin/mocha packages/common/test/module-utils/configurable-module.builder.spec.ts --require ts-node/register --require tsconfig-paths/register --require node_modules/reflect-metadata/Reflect.js --require hooks/mocha-init-hook.ts
@@ -701,12 +709,28 @@ V8-PY-TH-001 pytest approx guidance:
 - In `ApproxScalar.tolerance`, handle explicit `datetime.timedelta` absolute tolerance before numeric `< 0` tolerance checks; otherwise pytest will fail with `TypeError: '<' not supported between instances of 'datetime.timedelta' and 'int'`.
 - In `ApproxScalar.__eq__`, after validating datetime/timedelta type, compare `abs(actual - self.expected) <= self.tolerance` and return before the numeric `math.isnan(abs(self.expected))` path; datetime/timedelta must not fall through to numeric NaN handling.
 - If `self.expected` is `datetime.datetime` or `datetime.timedelta`, `self.tolerance` must return a `datetime.timedelta` and reject negative or non-timedelta explicit absolute tolerances with `TypeError`.
+- Check unsupported datetime/timedelta options before the successful tolerance comparison: if `nan_ok=True` or `rel` is supplied for datetime/timedelta, `ApproxScalar.__eq__` or `tolerance` must raise `TypeError` instead of returning a comparison result.
+- Retained failure evidence showed `test_datetime_nan_ok_raises` and `test_timedelta_nan_ok_raises` failing with "DID NOT RAISE TypeError"; explicitly cover and satisfy those two cases.
 - For unsupported `rel` / `nan_ok`, make the regression exercise comparison against a distinct actual datetime/timedelta value; exact equality can short-circuit before the TypeError path.
 - Do not finish after adding the final datetime/timedelta implementation edits unless `python3 -m pytest -o minversion=0 testing/python/approx.py -q` has been rerun and passed.
 - Reuse the existing approx test style in `testing/python/approx.py`; small table-driven or class-local tests are preferred over new fixtures.
 - In no-change recovery, stop re-reading once `ApproxScalar`, the `approx()` factory, and the nearby `TestApprox` tests are identified; apply the two-file patch before further exploration.
 - In task-specific recovery after production-only verification passes, edit `testing/python/approx.py` immediately; do not re-open production files before adding the missing datetime/timedelta assertions.
 - Run `python3 -m pytest -o minversion=0 testing/python/approx.py -q` before the final answer.
+EOF
+}
+
+v8_mix_bf001_kustomize_guidance() {
+  is_v8_mix_bf001_kustomize_task || return 0
+  cat <<'EOF'
+
+V8-MIX-BF-001 kustomize deterministic transformer guidance:
+- Start in `api/internal/accumulator/namereferencetransformer.go`.
+- The high-signal behavior is deterministic name-reference transformer application order. Preserve resource order from `m.Resources()` instead of iterating over a map.
+- Add focused regression coverage in the existing kyaml/name-reference test area before final verification; do not finish with a production-only diff.
+- Do not leave `go.work.sum` churn as the only non-production evidence. If tooling mutates `go.work.sum`, keep the behavioral test diff too or revert incidental checksum churn when it is not required.
+- Retained failure evidence showed `cd kyaml && go test ./...` passing but the final response self-reported incomplete regression evidence. Do not report incomplete work after verification; finish only after the focused regression exists and the exact command passes.
+- Run `cd kyaml && go test ./...` before the final answer.
 EOF
 }
 
@@ -1429,6 +1453,7 @@ recover_passed_task_specific_failure() {
     TASK_SPECIFIC_PROMPT+="$(v8_add_js001_yargs_guidance)"
     TASK_SPECIFIC_PROMPT+="$(v8_def_ts003_msw_guidance)"
     TASK_SPECIFIC_PROMPT+="$(v8_py_th001_pytest_guidance)"
+    TASK_SPECIFIC_PROMPT+="$(v8_mix_bf001_kustomize_guidance)"
     TASK_SPECIFIC_PROMPT+="$(v8_go_bug004_fsnotify_guidance)"
     TASK_SPECIFIC_PROMPT+="$(v8_go_bug003_cobra_guidance)"
     TASK_SPECIFIC_PROMPT+="$(v8_py_bug001_requests_guidance)"
@@ -2035,6 +2060,7 @@ BENCHMARK_PROMPT+="$(v8_mix_bug001_actions_toolkit_guidance)"
 BENCHMARK_PROMPT+="$(v8_add_js001_yargs_guidance)"
 BENCHMARK_PROMPT+="$(v8_def_ts003_msw_guidance)"
 BENCHMARK_PROMPT+="$(v8_py_th001_pytest_guidance)"
+BENCHMARK_PROMPT+="$(v8_mix_bf001_kustomize_guidance)"
 BENCHMARK_PROMPT+="$(v8_go_bug004_fsnotify_guidance)"
 BENCHMARK_PROMPT+="$(v8_go_bug003_cobra_guidance)"
 BENCHMARK_PROMPT+="$(v8_py_bug001_requests_guidance)"
@@ -2181,6 +2207,7 @@ if [[ "$HAS_CHANGES" == "false" ]]; then
   NO_CHANGE_PROMPT+="$(v8_add_js001_yargs_guidance)"
   NO_CHANGE_PROMPT+="$(v8_def_ts003_msw_guidance)"
   NO_CHANGE_PROMPT+="$(v8_py_th001_pytest_guidance)"
+  NO_CHANGE_PROMPT+="$(v8_mix_bf001_kustomize_guidance)"
   NO_CHANGE_PROMPT+="$(v8_go_bug004_fsnotify_guidance)"
   NO_CHANGE_PROMPT+="$(v8_go_bug003_cobra_guidance)"
   NO_CHANGE_PROMPT+="$(v8_py_bug001_requests_guidance)"
@@ -2257,6 +2284,7 @@ if run_verification_command "$VERIFY_LOG"; then
       VERIFIED_INCOMPLETE_PROMPT+="$(v8_add_js001_yargs_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(v8_def_ts003_msw_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(v8_py_th001_pytest_guidance)"
+      VERIFIED_INCOMPLETE_PROMPT+="$(v8_mix_bf001_kustomize_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(v8_go_bug004_fsnotify_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(v8_go_bug003_cobra_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(v8_py_bug001_requests_guidance)"
@@ -2336,6 +2364,7 @@ RECOVERY_PROMPT+="$(v8_mix_bug001_actions_toolkit_guidance)"
 RECOVERY_PROMPT+="$(v8_add_js001_yargs_guidance)"
 RECOVERY_PROMPT+="$(v8_def_ts003_msw_guidance)"
 RECOVERY_PROMPT+="$(v8_py_th001_pytest_guidance)"
+RECOVERY_PROMPT+="$(v8_mix_bf001_kustomize_guidance)"
 RECOVERY_PROMPT+="$(v8_go_bug004_fsnotify_guidance)"
 RECOVERY_PROMPT+="$(v8_go_bug003_cobra_guidance)"
 RECOVERY_PROMPT+="$(v8_py_bug001_requests_guidance)"
