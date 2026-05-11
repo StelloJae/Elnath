@@ -278,6 +278,17 @@ func (t *EditTool) Execute(ctx context.Context, params json.RawMessage) (*Result
 
 	count := strings.Count(original, p.OldString)
 	if count == 0 {
+		updated, errMsg, ok := indentInsensitiveReplacement(original, p.OldString, p.NewString, p.ReplaceAll)
+		if ok {
+			if err := os.WriteFile(abs, []byte(updated), 0o644); err != nil {
+				return ErrorResult(fmt.Sprintf("edit_file write: %v", err)), nil
+			}
+			t.tracker.RefreshPath(abs)
+			return SuccessResult(fmt.Sprintf("edited %s (indent-insensitive match)", p.FilePath)), nil
+		}
+		if errMsg != "" {
+			return ErrorResult(fmt.Sprintf("edit_file: %s in %s", errMsg, p.FilePath)), nil
+		}
 		return ErrorResult(fmt.Sprintf("edit_file: old_string not found in %s", p.FilePath)), nil
 	}
 	if !p.ReplaceAll && count > 1 {
@@ -298,6 +309,113 @@ func (t *EditTool) Execute(ctx context.Context, params json.RawMessage) (*Result
 	}
 	t.tracker.RefreshPath(abs)
 	return SuccessResult(fmt.Sprintf("edited %s", p.FilePath)), nil
+}
+
+func indentInsensitiveReplacement(original, oldString, newString string, replaceAll bool) (string, string, bool) {
+	if replaceAll || !strings.Contains(oldString, "\n") || strings.TrimSpace(oldString) == "" {
+		return "", "", false
+	}
+	originalLines := splitEditLines(original)
+	oldLines := splitEditLines(oldString)
+	if len(oldLines) < 2 || len(oldLines) > len(originalLines) {
+		return "", "", false
+	}
+
+	type match struct {
+		lineStart int
+		byteStart int
+		byteEnd   int
+	}
+	var matches []match
+	byteOffset := 0
+	for i := 0; i <= len(originalLines)-len(oldLines); i++ {
+		if linesMatchIgnoringIndent(originalLines[i:i+len(oldLines)], oldLines) {
+			end := byteOffset
+			for _, line := range originalLines[i : i+len(oldLines)] {
+				end += len(line)
+			}
+			matches = append(matches, match{lineStart: i, byteStart: byteOffset, byteEnd: end})
+		}
+		byteOffset += len(originalLines[i])
+	}
+	if len(matches) == 0 {
+		return "", "", false
+	}
+	if len(matches) > 1 {
+		return "", fmt.Sprintf("indent-insensitive old_string found %d times", len(matches)), false
+	}
+
+	m := matches[0]
+	oldBase := firstNonBlankIndent(oldLines)
+	targetBase := firstNonBlankIndent(originalLines[m.lineStart : m.lineStart+len(oldLines)])
+	adjusted := adjustReplacementIndent(newString, oldBase, targetBase)
+	if lastEnding := lineEnding(originalLines[m.lineStart+len(oldLines)-1]); lastEnding != "" && !strings.HasSuffix(adjusted, "\n") {
+		adjusted += lastEnding
+	}
+	return original[:m.byteStart] + adjusted + original[m.byteEnd:], "", true
+}
+
+func splitEditLines(s string) []string {
+	lines := strings.SplitAfter(s, "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return lines
+}
+
+func linesMatchIgnoringIndent(originalLines, oldLines []string) bool {
+	if len(originalLines) != len(oldLines) {
+		return false
+	}
+	for i := range oldLines {
+		if strings.TrimLeft(lineBody(originalLines[i]), " \t") != strings.TrimLeft(lineBody(oldLines[i]), " \t") {
+			return false
+		}
+	}
+	return true
+}
+
+func adjustReplacementIndent(newString, oldBase, targetBase string) string {
+	lines := splitEditLines(newString)
+	for i, line := range lines {
+		body := lineBody(line)
+		ending := lineEnding(line)
+		if strings.TrimSpace(body) == "" {
+			continue
+		}
+		if oldBase != "" && strings.HasPrefix(body, oldBase) {
+			lines[i] = targetBase + strings.TrimPrefix(body, oldBase) + ending
+		}
+	}
+	return strings.Join(lines, "")
+}
+
+func firstNonBlankIndent(lines []string) string {
+	for _, line := range lines {
+		body := lineBody(line)
+		if strings.TrimSpace(body) != "" {
+			return leadingWhitespace(body)
+		}
+	}
+	return ""
+}
+
+func leadingWhitespace(s string) string {
+	return s[:len(s)-len(strings.TrimLeft(s, " \t"))]
+}
+
+func lineBody(line string) string {
+	return strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
+}
+
+func lineEnding(line string) string {
+	if strings.HasSuffix(line, "\r\n") {
+		return "\r\n"
+	}
+	if strings.HasSuffix(line, "\n") {
+		return "\n"
+	}
+	return ""
 }
 
 // ---------------------------------------------------------------------------

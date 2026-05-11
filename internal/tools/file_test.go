@@ -286,6 +286,43 @@ func TestEditTool(t *testing.T) {
 		}
 	})
 
+	t.Run("multiline replacement tolerates shifted indentation", func(t *testing.T) {
+		dir, tool := setup(t, "\tif ok {\n\t\told()\n\t}\n")
+		res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{
+			"file_path":  "edit.txt",
+			"old_string": "\t\tif ok {\n\t\t\told()\n\t\t}",
+			"new_string": "\t\tif ok {\n\t\t\tnew()\n\t\t}",
+		}))
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		if res.IsError {
+			t.Fatalf("unexpected error: %s", res.Output)
+		}
+		data, _ := os.ReadFile(filepath.Join(dir, "edit.txt"))
+		if got, want := string(data), "\tif ok {\n\t\tnew()\n\t}\n"; got != want {
+			t.Errorf("file content = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("indent-tolerant replacement rejects ambiguous blocks", func(t *testing.T) {
+		_, tool := setup(t, "\tif ok {\n\t\told()\n\t}\n\tif ok {\n\t\told()\n\t}\n")
+		res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{
+			"file_path":  "edit.txt",
+			"old_string": "\t\tif ok {\n\t\t\told()\n\t\t}",
+			"new_string": "\t\tif ok {\n\t\t\tnew()\n\t\t}",
+		}))
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		if !res.IsError {
+			t.Fatalf("expected ambiguous indent-tolerant match to fail")
+		}
+		if !strings.Contains(res.Output, "indent-insensitive old_string found 2 times") {
+			t.Fatalf("error = %q, want ambiguous indent-insensitive match", res.Output)
+		}
+	})
+
 	t.Run("ambiguous match without replace_all", func(t *testing.T) {
 		_, tool := setup(t, "foo foo\n")
 		res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{
