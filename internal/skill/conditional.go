@@ -9,9 +9,9 @@ import (
 
 // ConditionalSkillMatch records why a conditional skill matched a file path.
 type ConditionalSkillMatch struct {
-	SkillName string
-	Pattern   string
-	Path      string
+	SkillName string `json:"skill_name"`
+	Pattern   string `json:"pattern"`
+	Path      string `json:"path"`
 }
 
 // ConditionalMatchesForPaths returns conditional skill matches for the given
