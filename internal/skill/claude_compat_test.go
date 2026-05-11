@@ -161,3 +161,47 @@ Audit carefully.
 		t.Fatalf("Source = %q, want claude-skill", sk.Source)
 	}
 }
+
+func TestRegistryLoadCompatibleSkillRootsIncludesCodexRoots(t *testing.T) {
+	t.Parallel()
+
+	projectRoot := t.TempDir()
+	homeDir := t.TempDir()
+	writeCompatSkill(t, filepath.Join(projectRoot, ".claude", "skills", "project-claude"), "Project Claude")
+	writeCompatSkill(t, filepath.Join(projectRoot, ".codex", "skills", "project-codex"), "Project Codex")
+	writeCompatSkill(t, filepath.Join(homeDir, ".codex", "skills", "user-codex"), "User Codex")
+	writeCompatSkill(t, filepath.Join(homeDir, ".agents", "skills", "agent-skill"), "Agent Skill")
+
+	reg := NewRegistry()
+	if err := reg.LoadCompatibleSkillRoots(DefaultCompatibleSkillRoots(projectRoot, homeDir)); err != nil {
+		t.Fatalf("LoadCompatibleSkillRoots: %v", err)
+	}
+
+	want := []string{"agent-skill", "project-claude", "project-codex", "user-codex"}
+	if got := reg.Names(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Names = %v, want %v", got, want)
+	}
+	project, _ := reg.Get("project-codex")
+	if project.Source != "codex-skill" {
+		t.Fatalf("project-codex source = %q, want codex-skill", project.Source)
+	}
+	claude, _ := reg.Get("project-claude")
+	if claude.Source != "claude-skill" {
+		t.Fatalf("project-claude source = %q, want claude-skill", claude.Source)
+	}
+}
+
+func writeCompatSkill(t *testing.T, dir, description string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	raw := `---
+description: ` + description + `
+---
+Do the work.
+`
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}

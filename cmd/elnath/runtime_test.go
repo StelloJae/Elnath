@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -2808,6 +2809,7 @@ func containsToolResult(messages []llm.Message) bool {
 
 func TestExecutionRuntimeBuildsSkillCatalogFromWiki(t *testing.T) {
 	root := t.TempDir()
+	t.Setenv("HOME", filepath.Join(root, "home"))
 	wikiDir := filepath.Join(root, "wiki")
 	if err := os.MkdirAll(filepath.Join(wikiDir, "skills"), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
@@ -2892,5 +2894,76 @@ Review PR #{pr_number}.`
 		if !strings.Contains(provider.lastSystem, want) {
 			t.Fatalf("system prompt missing %q\n%s", want, provider.lastSystem)
 		}
+	}
+}
+
+func TestExecutionRuntimeBuildsSkillCatalogFromCodexSkillRoots(t *testing.T) {
+	root := t.TempDir()
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	writeRuntimeCompatSkill(t, filepath.Join(root, ".codex", "skills", "project-codex"), "Project Codex")
+	writeRuntimeCompatSkill(t, filepath.Join(homeDir, ".codex", "skills", "user-codex"), "User Codex")
+	writeRuntimeCompatSkill(t, filepath.Join(homeDir, ".agents", "skills", "agent-skill"), "Agent Skill")
+
+	cfg := &config.Config{
+		DataDir:  filepath.Join(root, "data"),
+		WikiDir:  filepath.Join(root, "wiki"),
+		LogLevel: "error",
+		Permission: config.PermissionConfig{
+			Mode: "bypass",
+		},
+	}
+	app, err := core.New(cfg)
+	if err != nil {
+		t.Fatalf("core.New: %v", err)
+	}
+	db, err := core.OpenDB(cfg.DataDir)
+	if err != nil {
+		t.Fatalf("core.OpenDB: %v", err)
+	}
+	app.RegisterCloser("database", db)
+	t.Cleanup(func() {
+		if err := app.Close(); err != nil {
+			t.Fatalf("app.Close: %v", err)
+		}
+	})
+
+	rt, err := buildExecutionRuntime(
+		context.Background(),
+		cfg,
+		app,
+		db,
+		&countingProvider{streamText: "runtime answer"},
+		"mock-model",
+		self.New(cfg.DataDir),
+		"",
+		agent.NewPermission(agent.WithMode(agent.ModeBypass)),
+		root,
+		nil,
+		identity.LegacyPrincipal(),
+		false,
+	)
+	if err != nil {
+		t.Fatalf("buildExecutionRuntime: %v", err)
+	}
+	want := []string{"agent-skill", "project-codex", "user-codex"}
+	if got := rt.skillReg.Names(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("skillReg names = %v, want %v", got, want)
+	}
+}
+
+func writeRuntimeCompatSkill(t *testing.T, dir, description string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	raw := `---
+description: ` + description + `
+---
+Do the work.
+`
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
