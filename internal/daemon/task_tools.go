@@ -16,6 +16,7 @@ const (
 	TaskGetToolName        = "task_get"
 	TaskStopToolName       = "task_stop"
 	TaskOutputToolName     = "task_output"
+	TaskUpdateToolName     = "task_update"
 	defaultTaskListLimit   = 20
 	maxTaskListLimit       = 100
 	taskToolPreviewMaxRune = 240
@@ -467,6 +468,83 @@ func (t *TaskOutputTool) Execute(ctx context.Context, params json.RawMessage) (*
 	raw, err := json.Marshal(output)
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("task_output: marshal output: %v", err)), nil
+	}
+	return tools.SuccessResult(string(raw)), nil
+}
+
+type TaskUpdateTool struct {
+	queue *Queue
+}
+
+func NewTaskUpdateTool(queue *Queue) *TaskUpdateTool {
+	return &TaskUpdateTool{queue: queue}
+}
+
+func (t *TaskUpdateTool) Name() string { return TaskUpdateToolName }
+
+func (t *TaskUpdateTool) Description() string {
+	return "Update progress or summary annotations for a pending or running daemon task"
+}
+
+func (t *TaskUpdateTool) Schema() json.RawMessage {
+	return tools.Object(map[string]tools.Property{
+		"id":       tools.Int("Daemon task ID."),
+		"progress": tools.String("Optional progress annotation."),
+		"summary":  tools.String("Optional summary annotation."),
+	}, []string{"id"})
+}
+
+func (t *TaskUpdateTool) IsConcurrencySafe(json.RawMessage) bool { return false }
+
+func (t *TaskUpdateTool) Reversible() bool { return false }
+
+func (t *TaskUpdateTool) Scope(json.RawMessage) tools.ToolScope {
+	return tools.ToolScope{Persistent: true}
+}
+
+func (t *TaskUpdateTool) ShouldCancelSiblingsOnError() bool { return false }
+
+type taskUpdateToolInput struct {
+	ID       int64  `json:"id"`
+	Progress string `json:"progress"`
+	Summary  string `json:"summary"`
+}
+
+type taskUpdateToolOutput struct {
+	TaskID   int64      `json:"task_id"`
+	Status   TaskStatus `json:"status"`
+	Progress string     `json:"progress,omitempty"`
+	Summary  string     `json:"summary,omitempty"`
+	Updated  bool       `json:"updated"`
+}
+
+func (t *TaskUpdateTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
+	if t == nil || t.queue == nil {
+		return tools.ErrorResult("task_update: queue unavailable"), nil
+	}
+	var input taskUpdateToolInput
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &input); err != nil {
+			return tools.ErrorResult(fmt.Sprintf("invalid params: %v", err)), nil
+		}
+	}
+	if input.ID <= 0 {
+		return tools.ErrorResult("task_update: id must be positive"), nil
+	}
+	task, err := t.queue.UpdateAnnotation(ctx, input.ID, input.Progress, input.Summary)
+	if err != nil {
+		return tools.ErrorResult(fmt.Sprintf("task_update: %v", err)), nil
+	}
+	output := taskUpdateToolOutput{
+		TaskID:   task.ID,
+		Status:   task.Status,
+		Progress: task.Progress,
+		Summary:  task.Summary,
+		Updated:  true,
+	}
+	raw, err := json.Marshal(output)
+	if err != nil {
+		return tools.ErrorResult(fmt.Sprintf("task_update: marshal output: %v", err)), nil
 	}
 	return tools.SuccessResult(string(raw)), nil
 }

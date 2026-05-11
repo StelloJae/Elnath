@@ -431,6 +431,7 @@ func buildExecutionRuntime(
 	reg.Register(daemon.NewTaskGetTool(taskQueue))
 	reg.Register(daemon.NewTaskStopTool(taskQueue))
 	reg.Register(daemon.NewTaskOutputTool(taskQueue))
+	reg.Register(daemon.NewTaskUpdateTool(taskQueue))
 	gitSync, wikiIdx := registerWikiTools(reg, cfg.WikiDir, db.Wiki)
 	reg.Register(conversation.NewConversationSearchTool(historyStore))
 

@@ -325,6 +325,65 @@ func TestTaskOutputToolReadsProgressField(t *testing.T) {
 	}
 }
 
+func TestTaskUpdateToolAnnotatesPendingTask(t *testing.T) {
+	ctx := context.Background()
+	queue := newTaskToolTestQueue(t)
+	id, _, err := queue.Enqueue(ctx, "annotate me", "")
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	result, err := NewTaskUpdateTool(queue).Execute(ctx, json.RawMessage(`{"id":`+jsonInt(id)+`,"progress":"queued for review","summary":"waiting"}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute returned error result: %s", result.Output)
+	}
+
+	var output taskUpdateToolOutput
+	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if output.TaskID != id || output.Status != StatusPending || output.Progress != "queued for review" || output.Summary != "waiting" || !output.Updated {
+		t.Fatalf("output = %+v, want pending annotation", output)
+	}
+
+	task, err := queue.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get updated task: %v", err)
+	}
+	if task.Progress != "queued for review" || task.Summary != "waiting" || task.Status != StatusPending {
+		t.Fatalf("task = %+v, want annotated pending task", task)
+	}
+}
+
+func TestTaskUpdateToolRejectsTerminalTask(t *testing.T) {
+	ctx := context.Background()
+	queue := newTaskToolTestQueue(t)
+	if _, _, err := queue.Enqueue(ctx, "done task", ""); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	task, err := queue.Next(ctx)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if task == nil {
+		t.Fatal("Next returned nil")
+	}
+	if err := queue.MarkDone(ctx, task.ID, "finished", "done summary"); err != nil {
+		t.Fatalf("MarkDone: %v", err)
+	}
+
+	result, err := NewTaskUpdateTool(queue).Execute(ctx, json.RawMessage(`{"id":`+jsonInt(task.ID)+`,"summary":"rewrite history"}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if !result.IsError || !strings.Contains(result.Output, "only pending or running tasks can be updated") {
+		t.Fatalf("result = %+v, want terminal task rejection", result)
+	}
+}
+
 func TestTaskToolsRejectInvalidInput(t *testing.T) {
 	ctx := context.Background()
 	queue := newTaskToolTestQueue(t)
@@ -360,6 +419,14 @@ func TestTaskToolsRejectInvalidInput(t *testing.T) {
 	if !outputResult.IsError || !strings.Contains(outputResult.Output, "field must be") {
 		t.Fatalf("task_output result = %+v, want field error", outputResult)
 	}
+
+	updateResult, err := NewTaskUpdateTool(queue).Execute(ctx, json.RawMessage(`{"id":1}`))
+	if err != nil {
+		t.Fatalf("task_update Execute error = %v", err)
+	}
+	if !updateResult.IsError || !strings.Contains(updateResult.Output, "progress or summary is required") {
+		t.Fatalf("task_update result = %+v, want missing annotation error", updateResult)
+	}
 }
 
 func TestTaskToolsMetadata(t *testing.T) {
@@ -389,6 +456,20 @@ func TestTaskToolsMetadata(t *testing.T) {
 	}
 	if stopTool.ShouldCancelSiblingsOnError() {
 		t.Fatal("task_stop should not cancel siblings")
+	}
+
+	updateTool := NewTaskUpdateTool(nil)
+	if updateTool.IsConcurrencySafe(nil) {
+		t.Fatal("task_update should not be concurrency-safe")
+	}
+	if updateTool.Reversible() {
+		t.Fatal("task_update should not be reversible")
+	}
+	if got := updateTool.Scope(nil); !got.Persistent || got.Network || len(got.ReadPaths) != 0 || len(got.WritePaths) != 0 {
+		t.Fatalf("task_update Scope() = %+v, want persistent-only scope", got)
+	}
+	if updateTool.ShouldCancelSiblingsOnError() {
+		t.Fatal("task_update should not cancel siblings")
 	}
 
 	listTool := NewTaskListTool(nil)
