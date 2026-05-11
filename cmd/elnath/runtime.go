@@ -1296,6 +1296,8 @@ func (rt *executionRuntime) recordOutcome(ctx context.Context, in outcomeInput) 
 		CompletionWarning:    in.completion.CompletionWarning,
 		ReasoningEffort:      in.completion.ReasoningEffort,
 		ReasoningEffortMode:  in.completion.ReasoningEffortMode,
+		RetryDecision:        in.completion.RetryDecision,
+		RetryReason:          in.completion.RetryReason,
 	}
 	if appendErr := rt.outcomeStore.Append(record); appendErr != nil {
 		rt.app.Logger.Warn("outcome store: append failed", "error", appendErr)

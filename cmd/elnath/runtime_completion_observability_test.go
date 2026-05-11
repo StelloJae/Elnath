@@ -167,6 +167,8 @@ func TestRecordOutcomePersistsCompletionObservability(t *testing.T) {
 			CompletionWarning:    "final_response_reports_incomplete",
 			ReasoningEffort:      "high",
 			ReasoningEffortMode:  "auto",
+			RetryDecision:        completionRetryDecisionRetrySmallerScope,
+			RetryReason:          "final_response_reports_incomplete",
 		},
 	})
 
@@ -349,5 +351,8 @@ func assertCompletionOutcome(t *testing.T, rec learning.OutcomeRecord) {
 	}
 	if rec.ReasoningEffort != "high" || rec.ReasoningEffortMode != "auto" {
 		t.Fatalf("reasoning = effort %q mode %q", rec.ReasoningEffort, rec.ReasoningEffortMode)
+	}
+	if rec.RetryDecision != completionRetryDecisionRetrySmallerScope || rec.RetryReason != "final_response_reports_incomplete" {
+		t.Fatalf("retry = decision %q reason %q", rec.RetryDecision, rec.RetryReason)
 	}
 }

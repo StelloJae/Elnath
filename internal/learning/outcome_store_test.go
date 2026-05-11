@@ -170,6 +170,8 @@ func TestOutcomeRecordCompletionObservabilityJSONCompatibility(t *testing.T) {
 	rec.CompletionWarning = "final_response_reports_incomplete"
 	rec.ReasoningEffort = "high"
 	rec.ReasoningEffortMode = "auto"
+	rec.RetryDecision = "retry_smaller_scope"
+	rec.RetryReason = "final_response_reports_incomplete"
 
 	encoded, err := json.Marshal(rec)
 	if err != nil {
@@ -181,6 +183,8 @@ func TestOutcomeRecordCompletionObservabilityJSONCompatibility(t *testing.T) {
 		`"completion_warning":"final_response_reports_incomplete"`,
 		`"reasoning_effort":"high"`,
 		`"reasoning_effort_mode":"auto"`,
+		`"retry_decision":"retry_smaller_scope"`,
+		`"retry_reason":"final_response_reports_incomplete"`,
 	} {
 		if !strings.Contains(string(encoded), want) {
 			t.Fatalf("encoded outcome %s missing %s", encoded, want)
