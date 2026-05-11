@@ -152,6 +152,12 @@ func TestRenderPrompt(t *testing.T) {
 			args:  map[string]string{"issue_number": "42"},
 			want:  "Review PR #{pr_number}",
 		},
+		{
+			name:  "claude arguments placeholder",
+			skill: &Skill{Prompt: "Review $ARGUMENTS with {target}"},
+			args:  map[string]string{"ARGUMENTS": "PR 42", "target": "tests"},
+			want:  "Review PR 42 with tests",
+		},
 	}
 
 	for _, tt := range tests {

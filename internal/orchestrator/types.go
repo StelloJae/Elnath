@@ -92,6 +92,7 @@ type WorkflowConfig struct {
 	SystemPrompt         string
 	ReasoningEffort      string
 	ReasoningEffortMode  string
+	ToolExposureMode     string
 	Hooks                *agent.HookRegistry
 	Permission           *agent.Permission
 	ToolExecutor         tools.Executor

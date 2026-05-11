@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -59,6 +60,96 @@ func TestExecuteCommand_ErrorsHelp(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "Usage: elnath errors <code|list>") {
 		t.Fatalf("stdout = %q, want errors help text", stdout)
+	}
+}
+
+func TestCommandCatalog_DefaultHidesInternalCommands(t *testing.T) {
+	catalog := commandCatalog(false)
+	seen := make(map[string]commandCatalogEntry)
+	for _, entry := range catalog {
+		if entry.Hidden {
+			t.Fatalf("default catalog exposed hidden command %q", entry.Name)
+		}
+		if entry.Description == "" {
+			t.Fatalf("catalog entry %q has empty description", entry.Name)
+		}
+		seen[entry.Name] = entry
+	}
+
+	for _, name := range []string{"run", "skill", "daemon", "eval", "agentic"} {
+		if _, ok := seen[name]; !ok {
+			t.Fatalf("default catalog missing user command %q", name)
+		}
+	}
+	for _, name := range []string{"netproxy", "netproxy-bridge", "netproxy-bridge-spike"} {
+		if _, ok := seen[name]; ok {
+			t.Fatalf("default catalog includes internal command %q", name)
+		}
+	}
+}
+
+func TestCommandCatalog_IncludeHiddenShowsInternalCommands(t *testing.T) {
+	catalog := commandCatalog(true)
+	seen := make(map[string]commandCatalogEntry)
+	for _, entry := range catalog {
+		seen[entry.Name] = entry
+	}
+
+	for _, name := range []string{"netproxy", "netproxy-bridge", "netproxy-bridge-spike"} {
+		entry, ok := seen[name]
+		if !ok {
+			t.Fatalf("hidden catalog missing internal command %q", name)
+		}
+		if !entry.Hidden {
+			t.Fatalf("internal command %q Hidden = false, want true", name)
+		}
+	}
+}
+
+func TestExecuteCommand_CommandsJSON(t *testing.T) {
+	stdout, stderr := captureOutput(t, func() {
+		if err := executeCommand(context.Background(), "commands", []string{"--json"}); err != nil {
+			t.Fatalf("executeCommand(commands --json) error = %v", err)
+		}
+	})
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+	var entries []commandCatalogEntry
+	if err := json.Unmarshal([]byte(stdout), &entries); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout)
+	}
+	seen := make(map[string]commandCatalogEntry)
+	for _, entry := range entries {
+		seen[entry.Name] = entry
+		if entry.Hidden {
+			t.Fatalf("commands --json exposed hidden command %q", entry.Name)
+		}
+	}
+	for _, name := range []string{"commands", "run", "skill"} {
+		if _, ok := seen[name]; !ok {
+			t.Fatalf("commands --json missing %q", name)
+		}
+	}
+}
+
+func TestCommandRegistryBuiltFromSpecs(t *testing.T) {
+	registry := commandRegistry()
+	for _, spec := range commandSpecs() {
+		if spec.Name == "" {
+			t.Fatal("commandSpecs contains empty name")
+		}
+		if spec.Runner == nil {
+			t.Fatalf("command %q has nil runner", spec.Name)
+		}
+		if _, ok := registry[spec.Name]; !ok {
+			t.Fatalf("registry missing command %q", spec.Name)
+		}
+		for _, alias := range spec.Aliases {
+			if _, ok := registry[alias]; !ok {
+				t.Fatalf("registry missing alias %q for command %q", alias, spec.Name)
+			}
+		}
 	}
 }
 

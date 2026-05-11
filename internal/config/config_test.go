@@ -24,6 +24,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.LogLevel != "info" {
 		t.Errorf("expected LogLevel %q, got %q", "info", cfg.LogLevel)
 	}
+	if cfg.Provider != "" {
+		t.Errorf("expected Provider default empty, got %q", cfg.Provider)
+	}
 	if cfg.Anthropic.Model == "" {
 		t.Error("Anthropic.Model should not be empty")
 	}
@@ -42,8 +45,8 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Research.MaxRounds <= 0 {
 		t.Error("Research.MaxRounds should be positive")
 	}
-	if cfg.Reasoning.EffortMode != "manual" {
-		t.Errorf("expected Reasoning.EffortMode default %q, got %q", "manual", cfg.Reasoning.EffortMode)
+	if cfg.Reasoning.EffortMode != "auto" {
+		t.Errorf("expected Reasoning.EffortMode default %q, got %q", "auto", cfg.Reasoning.EffortMode)
 	}
 	if cfg.LLMExtraction.MinMessages != 5 {
 		t.Errorf("expected LLMExtraction.MinMessages %d, got %d", 5, cfg.LLMExtraction.MinMessages)
@@ -56,6 +59,9 @@ func TestDefaultConfig(t *testing.T) {
 	}
 	if cfg.FallbackModel != "gpt-5.5" {
 		t.Errorf("expected FallbackModel default %q, got %q", "gpt-5.5", cfg.FallbackModel)
+	}
+	if cfg.Tools.ExposureMode != ToolExposureModeStandard {
+		t.Errorf("expected Tools.ExposureMode default %q, got %q", ToolExposureModeStandard, cfg.Tools.ExposureMode)
 	}
 }
 
@@ -173,6 +179,28 @@ func TestLoad_OpenAIResponsesConfig(t *testing.T) {
 	}
 	if cfg.OpenAIResponses.ReasoningEffort != "high" {
 		t.Fatalf("OpenAIResponses.ReasoningEffort = %q, want high", cfg.OpenAIResponses.ReasoningEffort)
+	}
+}
+
+func TestLoad_ToolsExposureMode(t *testing.T) {
+	dir := t.TempDir()
+	wikiDir := filepath.Join(dir, "wiki")
+	if err := os.MkdirAll(wikiDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	yaml := "data_dir: " + dir + "\nwiki_dir: " + wikiDir + "\ntools:\n  exposure_mode: search_first\n"
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.Tools.ExposureMode != ToolExposureModeSearchFirst {
+		t.Fatalf("Tools.ExposureMode = %q, want %q", cfg.Tools.ExposureMode, ToolExposureModeSearchFirst)
 	}
 }
 
@@ -411,6 +439,13 @@ func TestApplyEnvOverrides(t *testing.T) {
 			want:   "debug",
 		},
 		{
+			name:   "ELNATH_PROVIDER",
+			envKey: "ELNATH_PROVIDER",
+			envVal: "openai_responses",
+			check:  func(c *Config) string { return c.Provider },
+			want:   "openai_responses",
+		},
+		{
 			name:   "ELNATH_ANTHROPIC_API_KEY",
 			envKey: "ELNATH_ANTHROPIC_API_KEY",
 			envVal: "anthro-key",
@@ -637,6 +672,21 @@ func TestValidate(t *testing.T) {
 			wantErr: "supported: en, ko, ja, zh, auto",
 		},
 		{
+			name:    "provider openai_responses alias is valid",
+			mutate:  func(c *Config) { c.Provider = "openai_responses" },
+			wantErr: "",
+		},
+		{
+			name:    "provider responses alias is valid",
+			mutate:  func(c *Config) { c.Provider = "responses" },
+			wantErr: "",
+		},
+		{
+			name:    "unsupported provider",
+			mutate:  func(c *Config) { c.Provider = "moonshot" },
+			wantErr: "provider",
+		},
+		{
 			name:    "unsupported openai responses reasoning effort",
 			mutate:  func(c *Config) { c.OpenAIResponses.ReasoningEffort = "huge" },
 			wantErr: "openai_responses.reasoning_effort",
@@ -660,6 +710,11 @@ func TestValidate(t *testing.T) {
 			name:    "unsupported request reasoning effort",
 			mutate:  func(c *Config) { c.Reasoning.Effort = "giant" },
 			wantErr: "reasoning.reasoning_effort",
+		},
+		{
+			name:    "unsupported tools exposure mode",
+			mutate:  func(c *Config) { c.Tools.ExposureMode = "all_at_once" },
+			wantErr: "tools.exposure_mode",
 		},
 		{
 			name: "openai responses base url requires api key",

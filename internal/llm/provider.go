@@ -126,3 +126,39 @@ type Provider interface {
 	// Models returns the list of models available from this provider.
 	Models() []ModelInfo
 }
+
+const (
+	ReasoningEffortUnsupported                = "unsupported"
+	ReasoningEffortIgnored                    = "ignored"
+	ReasoningEffortNative                     = "native"
+	ReasoningEffortNativeWithUnsupportedRetry = "native_with_unsupported_retry"
+	ReasoningEffortThinkingBudgetOnly         = "thinking_budget_only"
+	ReasoningEffortUnknown                    = "unknown"
+)
+
+type ProviderCapabilities struct {
+	Name                    string `json:"name"`
+	ReasoningEffort         string `json:"reasoning_effort"`
+	ReasoningEffortFallback string `json:"reasoning_effort_fallback,omitempty"`
+}
+
+type CapabilityProvider interface {
+	Capabilities() ProviderCapabilities
+}
+
+func CapabilitiesOf(provider Provider) ProviderCapabilities {
+	if provider == nil {
+		return ProviderCapabilities{Name: "unknown", ReasoningEffort: ReasoningEffortUnknown}
+	}
+	if capable, ok := provider.(CapabilityProvider); ok {
+		caps := capable.Capabilities()
+		if caps.Name == "" {
+			caps.Name = provider.Name()
+		}
+		if caps.ReasoningEffort == "" {
+			caps.ReasoningEffort = ReasoningEffortUnknown
+		}
+		return caps
+	}
+	return ProviderCapabilities{Name: provider.Name(), ReasoningEffort: ReasoningEffortUnknown}
+}

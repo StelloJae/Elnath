@@ -201,6 +201,40 @@ func TestSingleWorkflow_ReasoningEffortPropagated(t *testing.T) {
 	}
 }
 
+func TestSingleWorkflow_ToolExposureModePropagated(t *testing.T) {
+	provider := &reasoningCaptureProvider{}
+	reg := tools.NewRegistry()
+	reg.Register(&testTool{name: "read_file"})
+	reg.Register(&testTool{name: "mcp_github_issue"})
+	reg.Register(tools.NewToolSearchTool(reg))
+
+	result, err := NewSingleWorkflow().Run(context.Background(), WorkflowInput{
+		Message:  "hello",
+		Tools:    reg,
+		Provider: provider,
+		Config: WorkflowConfig{
+			MaxIterations:    1,
+			ToolExposureMode: string(agent.ToolExposureSearchFirst),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Summary != "done" {
+		t.Fatalf("Summary = %q, want done", result.Summary)
+	}
+	byName := make(map[string]bool, len(provider.lastReq.Tools))
+	for _, def := range provider.lastReq.Tools {
+		byName[def.Name] = true
+	}
+	if !byName["read_file"] || !byName["tool_search"] {
+		t.Fatalf("visible tools = %+v, want read_file and tool_search", provider.lastReq.Tools)
+	}
+	if byName["mcp_github_issue"] {
+		t.Fatalf("visible tools = %+v, mcp tool should be deferred", provider.lastReq.Tools)
+	}
+}
+
 func TestSingleWorkflow_Learning_Nil(t *testing.T) {
 	ctx := context.Background()
 	lessonPath := filepath.Join(t.TempDir(), "lessons.jsonl")

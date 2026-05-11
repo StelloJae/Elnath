@@ -25,6 +25,11 @@ type mockProvider struct {
 	modelsFn func() []llm.ModelInfo
 }
 
+type capabilityMockProvider struct {
+	mockProvider
+	reasoningEffort string
+}
+
 func (m *mockProvider) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
 	if m.chatFn != nil {
 		return m.chatFn(ctx, req)
@@ -45,6 +50,13 @@ func (m *mockProvider) Models() []llm.ModelInfo {
 		return m.modelsFn()
 	}
 	return nil
+}
+
+func (m *capabilityMockProvider) Capabilities() llm.ProviderCapabilities {
+	return llm.ProviderCapabilities{
+		Name:            m.Name(),
+		ReasoningEffort: m.reasoningEffort,
+	}
 }
 
 type statusCodeErr struct {
@@ -195,6 +207,105 @@ func TestAgentReasoningEffortAuto(t *testing.T) {
 			}
 			if captured.ReasoningEffort != tt.want {
 				t.Fatalf("ReasoningEffort = %q, want %q", captured.ReasoningEffort, tt.want)
+			}
+		})
+	}
+}
+
+func TestAgentReasoningEffortAutoSkipsKnownIgnoredProvider(t *testing.T) {
+	reg := tools.NewRegistry()
+	var captured llm.ChatRequest
+	provider := &capabilityMockProvider{
+		reasoningEffort: llm.ReasoningEffortIgnored,
+		mockProvider: mockProvider{
+			streamFn: func(_ context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
+				captured = req
+				cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: "done"})
+				cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{InputTokens: 1, OutputTokens: 1}})
+				return nil
+			},
+		},
+	}
+
+	a := New(provider, reg,
+		WithMaxIterations(1),
+		WithReasoningEffortMode("auto"),
+	)
+	_, err := a.Run(context.Background(), []llm.Message{llm.NewUserMessage("implement provider policy and run tests")}, event.NopSink{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if captured.ReasoningEffort != "" {
+		t.Fatalf("ReasoningEffort = %q, want empty for provider that ignores auto effort", captured.ReasoningEffort)
+	}
+	decision := a.resolveReasoningEffortDecision([]llm.Message{llm.NewUserMessage("implement provider policy and run tests")})
+	if decision.Reason != "provider_effort_ignored" {
+		t.Fatalf("decision reason = %q, want provider_effort_ignored", decision.Reason)
+	}
+}
+
+func TestAgentReasoningEffortManualPreservesExplicitEffortForIgnoredProvider(t *testing.T) {
+	provider := &capabilityMockProvider{reasoningEffort: llm.ReasoningEffortIgnored}
+	a := New(provider, tools.NewRegistry(),
+		WithReasoningEffortMode("manual"),
+		WithReasoningEffort("xhigh"),
+	)
+
+	decision := a.resolveReasoningEffortDecision([]llm.Message{llm.NewUserMessage("quick status")})
+	if decision.Effort != "xhigh" || decision.Reason != "manual" {
+		t.Fatalf("decision = %+v, want manual xhigh preserved", decision)
+	}
+}
+
+func TestAgentReasoningEffortDecisionReasons(t *testing.T) {
+	tests := []struct {
+		name       string
+		mode       string
+		fallback   string
+		messages   []llm.Message
+		wantEffort string
+		wantReason string
+	}{
+		{
+			name:       "auto critical keyword",
+			mode:       "auto",
+			messages:   []llm.Message{llm.NewUserMessage("diagnose root cause")},
+			wantEffort: "xhigh",
+			wantReason: "critical_keyword",
+		},
+		{
+			name:       "auto long task",
+			mode:       "auto",
+			messages:   []llm.Message{llm.NewUserMessage(strings.Repeat("x", 601))},
+			wantEffort: "high",
+			wantReason: "long_task",
+		},
+		{
+			name:       "auto configured fallback",
+			mode:       "auto",
+			fallback:   "low",
+			wantEffort: "low",
+			wantReason: "configured_fallback",
+		},
+		{
+			name:       "manual",
+			mode:       "manual",
+			fallback:   "high",
+			messages:   []llm.Message{llm.NewUserMessage("quick status")},
+			wantEffort: "high",
+			wantReason: "manual",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := New(&mockProvider{}, tools.NewRegistry(),
+				WithReasoningEffortMode(tt.mode),
+				WithReasoningEffort(tt.fallback),
+			)
+			got := a.resolveReasoningEffortDecision(tt.messages)
+			if got.Effort != tt.wantEffort || got.Reason != tt.wantReason {
+				t.Fatalf("decision = %+v, want effort=%q reason=%q", got, tt.wantEffort, tt.wantReason)
 			}
 		})
 	}
@@ -365,6 +476,111 @@ func TestBuildToolDefs(t *testing.T) {
 			t.Errorf("def.InputSchema = %s, want %s", def.InputSchema, tool.Schema())
 		}
 	}
+}
+
+func TestBuildToolDefsSearchFirstDefersMCPAndKeepsToolSearch(t *testing.T) {
+	reg := tools.NewRegistry()
+	reg.Register(&mockTool{
+		name:        "read_file",
+		description: "Read files",
+		schema:      json.RawMessage(`{"type":"object"}`),
+	})
+	reg.Register(&mockTool{
+		name:        "mcp_github_issue",
+		description: "Create GitHub issues",
+		schema:      json.RawMessage(`{"type":"object"}`),
+	})
+	reg.Register(tools.NewToolSearchTool(reg))
+
+	defs := buildToolDefs(reg, ToolExposureSearchFirst)
+	byName := make(map[string]llm.ToolDef, len(defs))
+	for _, def := range defs {
+		byName[def.Name] = def
+	}
+
+	if _, ok := byName["read_file"]; !ok {
+		t.Fatal("read_file should remain visible")
+	}
+	if _, ok := byName["tool_search"]; !ok {
+		t.Fatal("tool_search should remain visible")
+	}
+	if _, ok := byName["mcp_github_issue"]; ok {
+		t.Fatal("mcp_github_issue should be deferred in search_first mode")
+	}
+}
+
+func TestAgentSearchFirstLoadsSelectedDeferredToolNextTurn(t *testing.T) {
+	reg := tools.NewRegistry()
+	reg.Register(&mockTool{
+		name:        "read_file",
+		description: "Read files",
+		schema:      json.RawMessage(`{"type":"object"}`),
+	})
+	reg.Register(&mockTool{
+		name:        "mcp_github_issue",
+		description: "Create GitHub issues",
+		schema:      json.RawMessage(`{"type":"object","properties":{"title":{"type":"string"}}}`),
+	})
+	reg.Register(tools.NewToolSearchTool(reg))
+
+	var requests []llm.ChatRequest
+	provider := &mockProvider{
+		streamFn: func(_ context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
+			requests = append(requests, req)
+			switch len(requests) {
+			case 1:
+				cb(llm.StreamEvent{Type: llm.EventToolUseStart, ToolCall: &llm.ToolUseEvent{ID: "tool-search-1", Name: tools.ToolSearchName}})
+				cb(llm.StreamEvent{Type: llm.EventToolUseDone, ToolCall: &llm.ToolUseEvent{ID: "tool-search-1", Name: tools.ToolSearchName, Input: `{"query":"select:mcp_github_issue"}`}})
+				cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{InputTokens: 1, OutputTokens: 1}})
+			default:
+				cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: "done"})
+				cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{InputTokens: 1, OutputTokens: 1}})
+			}
+			return nil
+		},
+	}
+
+	a := New(provider, reg, WithToolExposureMode(ToolExposureSearchFirst), WithMaxIterations(3))
+	result, err := a.Run(context.Background(), []llm.Message{llm.NewUserMessage("create an issue")}, event.NopSink{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.FinishReason != FinishReasonStop {
+		t.Fatalf("FinishReason = %q, want stop", result.FinishReason)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("requests = %d, want 2", len(requests))
+	}
+	first := toolDefNames(requests[0].Tools)
+	if first["mcp_github_issue"] {
+		t.Fatalf("first request tools = %v, deferred tool should be hidden", first)
+	}
+	second := toolDefNames(requests[1].Tools)
+	if !second["mcp_github_issue"] {
+		t.Fatalf("second request tools = %v, want selected deferred tool loaded", second)
+	}
+}
+
+func TestBuildToolDefsSearchFirstFallsBackWithoutToolSearch(t *testing.T) {
+	reg := tools.NewRegistry()
+	reg.Register(&mockTool{
+		name:        "mcp_github_issue",
+		description: "Create GitHub issues",
+		schema:      json.RawMessage(`{"type":"object"}`),
+	})
+
+	defs := buildToolDefs(reg, ToolExposureSearchFirst)
+	if len(defs) != 1 || defs[0].Name != "mcp_github_issue" {
+		t.Fatalf("defs = %+v, want full exposure fallback without tool_search", defs)
+	}
+}
+
+func toolDefNames(defs []llm.ToolDef) map[string]bool {
+	names := make(map[string]bool, len(defs))
+	for _, def := range defs {
+		names[def.Name] = true
+	}
+	return names
 }
 
 // textOnlyStreamFn is a stream function that emits a single text event then done.

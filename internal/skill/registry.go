@@ -232,6 +232,12 @@ func (r *Registry) Execute(ctx context.Context, params ExecuteParams) (*ExecuteR
 		agent.WithModel(model),
 		agent.WithMaxIterations(30),
 	}
+	if skill.Effort != "" {
+		options = append(options,
+			agent.WithReasoningEffort(skill.Effort),
+			agent.WithReasoningEffortMode("manual"),
+		)
+	}
 	if params.Permission != nil {
 		options = append(options, agent.WithPermission(params.Permission))
 	}

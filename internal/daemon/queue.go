@@ -289,6 +289,46 @@ func (q *Queue) UpdateProgress(ctx context.Context, id int64, progress string) e
 	return nil
 }
 
+// UpdateAnnotation updates non-terminal task progress/summary fields without
+// changing lifecycle status or result evidence.
+func (q *Queue) UpdateAnnotation(ctx context.Context, id int64, progress, summary string) (*Task, error) {
+	if id <= 0 {
+		return nil, fmt.Errorf("queue: update annotation: id must be positive")
+	}
+	progress = strings.TrimSpace(progress)
+	summary = strings.TrimSpace(summary)
+	if progress == "" && summary == "" {
+		return nil, fmt.Errorf("queue: update annotation: progress or summary is required")
+	}
+	task, err := q.Get(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("queue: update annotation: %w", err)
+	}
+	if task.Status != StatusPending && task.Status != StatusRunning {
+		return nil, fmt.Errorf("queue: update annotation: task %d is %s; only pending or running tasks can be updated", id, task.Status)
+	}
+
+	res, err := q.db.ExecContext(ctx, `
+		UPDATE task_queue
+		SET progress = CASE WHEN ? != '' THEN ? ELSE progress END,
+		    summary = CASE WHEN ? != '' THEN ? ELSE summary END,
+		    updated_at = ?
+		WHERE id = ? AND status IN (?, ?)`,
+		progress, progress,
+		summary, summary,
+		time.Now().UnixMilli(),
+		id, string(StatusPending), string(StatusRunning),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("queue: update annotation: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return nil, fmt.Errorf("queue: update annotation: %w", core.ErrNotFound)
+	}
+	return q.Get(ctx, id)
+}
+
 // MarkDone sets a task to done with the given result.
 func (q *Queue) MarkDone(ctx context.Context, id int64, result, summary string) error {
 	completionJSON, err := q.buildCompletionJSON(ctx, id, StatusDone, summary, result)
@@ -528,6 +568,46 @@ func (q *Queue) CancelPendingTask(ctx context.Context, reason string) (int64, bo
 		return 0, false, nil
 	}
 	return taskID, true, nil
+}
+
+// CancelTask marks a specific pending task as failed/cancelled. Running tasks
+// require worker cancellation support and are deliberately not mutated here.
+func (q *Queue) CancelTask(ctx context.Context, id int64, reason string) error {
+	if id <= 0 {
+		return fmt.Errorf("queue: cancel task: id must be positive")
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "task cancelled"
+	}
+
+	task, err := q.Get(ctx, id)
+	if err != nil {
+		return fmt.Errorf("queue: cancel task: %w", err)
+	}
+	if task.Status != StatusPending {
+		return fmt.Errorf("queue: cancel task: task %d is %s; only pending tasks can be stopped", id, task.Status)
+	}
+
+	completionJSON, err := q.buildCompletionJSON(ctx, id, StatusFailed, "", reason)
+	if err != nil {
+		return fmt.Errorf("queue: cancel task: build completion: %w", err)
+	}
+	now := time.Now().UnixMilli()
+	res, err := q.db.ExecContext(ctx, `
+		UPDATE task_queue SET status = ?, progress = ?, summary = ?, result = ?, completion = ?, updated_at = ?, completed_at = ?
+		WHERE id = ? AND status = ?`,
+		string(StatusFailed), "cancelled", completionSummary(StatusFailed, "", reason), reason, completionJSON, now, now,
+		id, string(StatusPending),
+	)
+	if err != nil {
+		return fmt.Errorf("queue: cancel task: update: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("queue: cancel task: %w", core.ErrNotFound)
+	}
+	return nil
 }
 
 // RecoverStale resets tasks that have been in 'running' state longer than

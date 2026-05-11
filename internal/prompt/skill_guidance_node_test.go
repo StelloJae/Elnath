@@ -18,7 +18,9 @@ func TestSkillGuidanceNodeRender(t *testing.T) {
 		t.Fatal("Render() = empty string, want guidance")
 	}
 	checks := []string{
-		"You have a create_skill tool.",
+		"You have a skill tool for invoking available skills",
+		"Use the skill tool when an available skill matches the user's request.",
+		"Use create_skill when:",
 		"You notice a repeated pattern across sessions",
 		"The user says \"make this a skill\" or similar",
 		"Do not suggest skills for one-time tasks.",

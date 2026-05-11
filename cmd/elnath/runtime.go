@@ -34,11 +34,13 @@ import (
 	"github.com/stello/elnath/internal/profile"
 	"github.com/stello/elnath/internal/prompt"
 	"github.com/stello/elnath/internal/research"
+	"github.com/stello/elnath/internal/scheduler"
 	"github.com/stello/elnath/internal/secret"
 	"github.com/stello/elnath/internal/self"
 	"github.com/stello/elnath/internal/skill"
 	"github.com/stello/elnath/internal/tools"
 	"github.com/stello/elnath/internal/wiki"
+	"github.com/stello/elnath/internal/worktree"
 )
 
 // orchestrationOutput carries optional callbacks for event routing.
@@ -227,6 +229,7 @@ type executionRuntime struct {
 	reflectModel       string
 	reflectMaxTurns    int
 	reflectTimeout     time.Duration
+	completionRetryMax int
 	completionCtxMu    sync.Mutex
 	completionCtxs     map[int64]completionContractSummary
 }
@@ -419,6 +422,26 @@ func buildExecutionRuntime(
 	}
 	app.RegisterCloser("bash runner", bashRunnerCloser{runner: runner})
 	reg := buildToolRegistry(guard, provider, runner)
+	planModeController := agent.NewPlanModeController(perm)
+	reg.Register(agent.NewEnterPlanModeTool(planModeController))
+	reg.Register(agent.NewExitPlanModeTool(planModeController))
+	taskQueue, err := daemon.NewQueueNoRecover(db.Main)
+	if err != nil {
+		return nil, fmt.Errorf("open task queue tools: %w", err)
+	}
+	reg.Register(daemon.NewTaskCreateTool(taskQueue))
+	reg.Register(daemon.NewTaskListTool(taskQueue))
+	reg.Register(daemon.NewTaskGetTool(taskQueue))
+	reg.Register(daemon.NewTaskStopTool(taskQueue))
+	reg.Register(daemon.NewTaskOutputTool(taskQueue))
+	reg.Register(daemon.NewTaskUpdateTool(taskQueue))
+	schedulePath := resolveRuntimeScheduledTasksPath(cfg)
+	reg.Register(scheduler.NewScheduleCreateTool(schedulePath))
+	reg.Register(scheduler.NewScheduleListTool(schedulePath))
+	reg.Register(scheduler.NewScheduleDeleteTool(schedulePath))
+	worktreeManager := worktree.NewManager(effectiveWorkDir)
+	reg.Register(worktree.NewEnterTool(worktreeManager))
+	reg.Register(worktree.NewExitTool(worktreeManager))
 	gitSync, wikiIdx := registerWikiTools(reg, cfg.WikiDir, db.Wiki)
 	reg.Register(conversation.NewConversationSearchTool(historyStore))
 
@@ -444,6 +467,9 @@ func buildExecutionRuntime(
 		if err := skillReg.Load(wikiStore); err != nil {
 			app.Logger.Warn("skill registry load failed", "error", err)
 		}
+	}
+	if err := skillReg.LoadClaudeSkills(effectiveWorkDir); err != nil {
+		app.Logger.Warn("claude skill registry load failed", "error", err)
 	}
 	profiles := make(map[string]*profile.Profile)
 	if wikiStore != nil {
@@ -474,6 +500,15 @@ func buildExecutionRuntime(
 	if hooks == nil {
 		hooks = agent.NewHookRegistry()
 	}
+	reg.Register(skill.NewInvocationTool(skill.InvocationToolConfig{
+		Registry:   skillReg,
+		Provider:   provider,
+		Tools:      reg,
+		Model:      model,
+		Permission: perm,
+		Hooks:      hooks,
+		Locale:     string(loadLocale()),
+	}))
 
 	auditPath := filepath.Join(cfg.DataDir, "audit.jsonl")
 	auditTrail, err := audit.NewTrail(auditPath)
@@ -531,6 +566,10 @@ func buildExecutionRuntime(
 			"queue_size", queueSize,
 		)
 	}
+	completionRetryMax := 0
+	if cfg.SelfHealing.Enabled && !cfg.SelfHealing.ObserveOnly {
+		completionRetryMax = 1
+	}
 	hooks.Add(secret.NewSecretScanHook(secret.NewDetector(), auditTrail))
 	wrappedCtxWindow := newCompressionHookContextWindow(
 		ctxWindow,
@@ -547,6 +586,7 @@ func buildExecutionRuntime(
 		SystemPrompt:         "",
 		ReasoningEffort:      cfg.Reasoning.Effort,
 		ReasoningEffortMode:  cfg.Reasoning.EffortMode,
+		ToolExposureMode:     cfg.Tools.ExposureMode,
 		Hooks:                hooks,
 		Permission:           perm,
 		ContextWindow:        wrappedCtxWindow,
@@ -654,6 +694,7 @@ func buildExecutionRuntime(
 		reflectModel:       reflectModel,
 		reflectMaxTurns:    reflectMaxTurns,
 		reflectTimeout:     reflectTimeout,
+		completionRetryMax: completionRetryMax,
 	}, nil
 }
 
@@ -913,6 +954,30 @@ func (rt *executionRuntime) runTask(
 	}
 
 	userInput = normalizeSkillInput(userInput)
+	if strings.HasPrefix(userInput, "/effort") {
+		result, summary, handled, err := rt.tryEffortCommand(sess, messages, userInput, bus)
+		if handled {
+			return result, summary, err
+		}
+	}
+	if strings.HasPrefix(userInput, "/model") {
+		result, summary, handled, err := rt.tryModelCommand(sess, messages, userInput, bus)
+		if handled {
+			return result, summary, err
+		}
+	}
+	if strings.HasPrefix(userInput, "/provider") {
+		result, summary, handled, err := rt.tryProviderCommand(sess, messages, userInput, bus)
+		if handled {
+			return result, summary, err
+		}
+	}
+	if strings.HasPrefix(userInput, "/commands") {
+		result, summary, handled, err := rt.tryCommandsCommand(sess, messages, userInput, bus)
+		if handled {
+			return result, summary, err
+		}
+	}
 	if rt.skillReg != nil && strings.HasPrefix(userInput, "/") {
 		result, summary, handled, err := rt.trySkillExecution(ctx, sess, messages, userInput, bus, output)
 		if handled {
@@ -1078,7 +1143,8 @@ func (rt *executionRuntime) runTask(
 		return nil, "", fmt.Errorf("workflow %s: %w", wf.Name(), err)
 	}
 
-	completionSummary := summarizeCompletionContract(routeCtx, cfg, result)
+	completionSummary := withProviderCapabilities(summarizeCompletionContract(routeCtx, cfg, result), rt.provider)
+	result, completionSummary = rt.maybeRunCompletionRetry(ctx, wf, input, result, completionSummary)
 	if hasAgenticTask {
 		rt.rememberAgenticCompletionContext(agenticTaskID, completionSummary)
 	}
@@ -1127,6 +1193,20 @@ func (rt *executionRuntime) toolContextForSession(ctx context.Context, sess *age
 		return tools.WithRootSessionWorkDir(ctx)
 	}
 	return ctx
+}
+
+func resolveRuntimeScheduledTasksPath(cfg *config.Config) string {
+	if cfg == nil {
+		return "scheduled_tasks.yaml"
+	}
+	path := strings.TrimSpace(cfg.Daemon.ScheduledTasksPath)
+	if path == "" {
+		path = "scheduled_tasks.yaml"
+	}
+	if filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(cfg.DataDir, path)
 }
 
 // sessionRenderWorkDir returns the cwd path advertised to the LLM through
@@ -1235,6 +1315,15 @@ func (rt *executionRuntime) recordOutcome(ctx context.Context, in outcomeInput) 
 		CompletionWarning:    in.completion.CompletionWarning,
 		ReasoningEffort:      in.completion.ReasoningEffort,
 		ReasoningEffortMode:  in.completion.ReasoningEffortMode,
+		ProviderName:         in.completion.ProviderName,
+		ProviderEffort:       in.completion.ProviderEffort,
+		ProviderEffortNote:   in.completion.ProviderEffortNote,
+		CorrectionAttempted:  in.completion.CorrectionAttempted,
+		CorrectionAttempts:   in.completion.CorrectionAttempts,
+		CorrectionDecision:   in.completion.CorrectionDecision,
+		CorrectionReason:     in.completion.CorrectionReason,
+		RetryDecision:        in.completion.RetryDecision,
+		RetryReason:          in.completion.RetryReason,
 	}
 	if appendErr := rt.outcomeStore.Append(record); appendErr != nil {
 		rt.app.Logger.Warn("outcome store: append failed", "error", appendErr)

@@ -96,6 +96,9 @@ func agentOptions(cfg WorkflowConfig, session *agent.Session) []agent.Option {
 	if cfg.ReasoningEffortMode != "" {
 		opts = append(opts, agent.WithReasoningEffortMode(cfg.ReasoningEffortMode))
 	}
+	if cfg.ToolExposureMode != "" {
+		opts = append(opts, agent.WithToolExposureMode(agent.ToolExposureMode(cfg.ToolExposureMode)))
+	}
 	if cfg.MaxIterations > 0 {
 		opts = append(opts, agent.WithMaxIterations(cfg.MaxIterations))
 	}

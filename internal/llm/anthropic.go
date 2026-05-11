@@ -231,6 +231,14 @@ func (p *AnthropicProvider) recordPromptCacheEvent(ctx context.Context, sessionI
 
 func (p *AnthropicProvider) Name() string { return "anthropic" }
 
+func (p *AnthropicProvider) Capabilities() ProviderCapabilities {
+	return ProviderCapabilities{
+		Name:                    p.Name(),
+		ReasoningEffort:         ReasoningEffortThinkingBudgetOnly,
+		ReasoningEffortFallback: "chat_request_reasoning_effort_not_mapped_to_anthropic_thinking_budget",
+	}
+}
+
 // Stream sends a streaming request to Anthropic and calls cb for each event.
 func (p *AnthropicProvider) Stream(ctx context.Context, req Request, cb func(StreamEvent)) error {
 	body, err := buildAnthropicRequest(req, p.model)
@@ -373,10 +381,10 @@ type anthropicTool struct {
 	// Type labels server-side native tools (e.g. "web_search_20250305"); left
 	// empty for the default function-style tool path, in which case the
 	// Messages API infers a custom tool from {name, description, input_schema}.
-	Type         string          `json:"type,omitempty"`
-	Name         string          `json:"name"`
-	Description  string          `json:"description,omitempty"`
-	InputSchema  json.RawMessage `json:"input_schema,omitempty"`
+	Type        string          `json:"type,omitempty"`
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	InputSchema json.RawMessage `json:"input_schema,omitempty"`
 	// MaxUses caps server-side tool invocations (currently only native
 	// web_search, which Claude Code hardcodes to 8).
 	MaxUses      *int          `json:"max_uses,omitempty"`

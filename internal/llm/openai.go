@@ -50,6 +50,13 @@ func NewOpenAIProvider(apiKey, model string, opts ...OpenAIOption) *OpenAIProvid
 
 func (p *OpenAIProvider) Name() string { return "openai" }
 
+func (p *OpenAIProvider) Capabilities() ProviderCapabilities {
+	return ProviderCapabilities{
+		Name:            p.Name(),
+		ReasoningEffort: ReasoningEffortIgnored,
+	}
+}
+
 // Stream sends a chat completion request with streaming and calls cb for each event.
 func (p *OpenAIProvider) Stream(ctx context.Context, req Request, cb func(StreamEvent)) error {
 	msgs, err := toOpenAIMessages(req.Messages)
@@ -388,10 +395,10 @@ func (p *OpenAIProvider) Models() []ModelInfo {
 // ---- wire types ----
 
 type openAIMessage struct {
-	Role       string          `json:"role"`
-	Content    string          `json:"content,omitempty"`
+	Role       string           `json:"role"`
+	Content    string           `json:"content,omitempty"`
 	ToolCalls  []openAIToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string          `json:"tool_call_id,omitempty"`
+	ToolCallID string           `json:"tool_call_id,omitempty"`
 }
 
 type openAIToolCall struct {

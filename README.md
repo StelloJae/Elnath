@@ -115,8 +115,21 @@ Recent hardening also closed two structural follow-ups behind this operator flow
 | `chaos run` | Execute a fault-injection scenario | `elnath chaos run tool-bash-transient-fail` |
 | `chaos report` | Render a chaos run as Markdown | `elnath chaos report latest` |
 | `errors` | Look up an ELN-XXX error code | `elnath errors ELN-001` or `elnath errors list` |
+| `provider status` | Inspect configured provider and effort support | `elnath provider status --json` |
 | `version` | Show version | `elnath version` |
 | `help` | Show command help | `elnath help` |
+
+Interactive `elnath run` also supports session-local slash controls:
+
+- `/model status` shows the active provider and request model.
+- `/model <model-id>` pins the request model for the current session, for
+  example `/model kimi-k2` when `openai_responses` points at a compatible
+  provider.
+- `/model default` uses the configured provider's default model.
+- `/provider status` shows the active provider and reasoning-effort capability.
+- `/effort auto` lets Elnath choose request effort per task.
+- `/effort low|medium|high|xhigh` pins request effort for the current session
+  when the active provider supports it.
 
 ## Architecture
 
@@ -157,6 +170,7 @@ Create `~/.elnath/config.yaml`:
 data_dir: ~/.elnath/data
 wiki_dir: ~/.elnath/wiki
 log_level: info
+provider: openai_responses # optional: anthropic|openai|openai_responses|codex|ollama
 
 anthropic:
   api_key: ${ELNATH_ANTHROPIC_API_KEY}
@@ -171,6 +185,10 @@ openai_responses:
 reasoning:
   effort_mode: auto # manual or auto
   effort: medium    # fallback/request effort when effort_mode is manual
+
+self_healing:
+  enabled: true
+  observe_only: true # set false to allow one bounded completion correction pass
 
 permission:
   mode: default

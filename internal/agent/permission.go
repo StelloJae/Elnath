@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"sync"
 
 	"github.com/stello/elnath/internal/tools"
 )
@@ -35,6 +36,7 @@ type Prompter interface {
 //  5. No prompter → allow (non-interactive)
 //  6. Ask the prompter
 type Permission struct {
+	mu        sync.RWMutex
 	allowList []string
 	denyList  []string
 	prompter  Prompter
@@ -73,54 +75,92 @@ func NewPermission(opts ...PermissionOption) *Permission {
 	return p
 }
 
+func (m PermissionMode) String() string {
+	switch m {
+	case ModeAcceptEdits:
+		return "accept_edits"
+	case ModePlan:
+		return "plan"
+	case ModeBypass:
+		return "bypass"
+	default:
+		return "default"
+	}
+}
+
+func (p *Permission) Mode() PermissionMode {
+	if p == nil {
+		return ModeDefault
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.mode
+}
+
+func (p *Permission) SetMode(mode PermissionMode) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.mode = mode
+}
+
 // Check returns true if the named tool call should proceed.
 func (p *Permission) Check(ctx context.Context, toolName string, input json.RawMessage) (bool, error) {
+	p.mu.RLock()
+	allowList := append([]string(nil), p.allowList...)
+	denyList := append([]string(nil), p.denyList...)
+	prompter := p.prompter
+	mode := p.mode
+	p.mu.RUnlock()
+
 	// Step 1: deny list — always blocks.
-	for _, d := range p.denyList {
+	for _, d := range denyList {
 		if d == toolName {
 			return false, nil
 		}
 	}
 
 	// Explicit bypass mode still means bypass.
-	if p.mode == ModeBypass {
+	if mode == ModeBypass {
 		return true, nil
 	}
 
 	// Dangerous bash commands must not be auto-approved purely by tool name.
 	if toolName == "bash" && isDangerousBashInput(input) {
-		if p.prompter == nil {
+		if prompter == nil {
 			return false, nil
 		}
-		return p.prompter.Prompt(ctx, toolName, input)
+		return prompter.Prompt(ctx, toolName, input)
 	}
 
 	// Step 2: allow list — always permits.
-	for _, a := range p.allowList {
+	for _, a := range allowList {
 		if a == toolName {
 			return true, nil
 		}
 	}
 
 	// Step 3: mode shortcuts.
-	switch p.mode {
+	switch mode {
 	case ModePlan:
 		// Only read-only tools are permitted in plan mode.
 		return isReadOnly(toolName), nil
 	}
 
 	// Step 4: AcceptEdits auto-approves reads and edits.
-	if p.mode == ModeAcceptEdits && (isReadOnly(toolName) || isEditTool(toolName)) {
+	if mode == ModeAcceptEdits && (isReadOnly(toolName) || isEditTool(toolName)) {
 		return true, nil
 	}
 
 	// Step 5: no prompter — allow (non-interactive / scripted usage).
-	if p.prompter == nil {
+	if prompter == nil {
 		return true, nil
 	}
 
 	// Step 6: ask the prompter.
-	return p.prompter.Prompt(ctx, toolName, input)
+	return prompter.Prompt(ctx, toolName, input)
 }
 
 func isDangerousBashInput(input json.RawMessage) bool {
@@ -147,7 +187,8 @@ func isReadOnly(name string) bool {
 	switch name {
 	case "read_file", "glob", "grep", "web_fetch", "web_search",
 		"wiki_search", "wiki_read",
-		"conversation_search", "cross_project_search", "cross_project_conversation_search":
+		"conversation_search", "cross_project_search", "cross_project_conversation_search",
+		"tool_search", "todo_write", "task_list", "task_get", "task_output", "schedule_list", "enter_plan_mode", "exit_plan_mode":
 		return true
 	}
 	return false

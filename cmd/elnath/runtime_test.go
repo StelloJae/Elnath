@@ -33,10 +33,16 @@ import (
 )
 
 type countingProvider struct {
-	chatCalls   int
-	streamCalls int
-	streamText  string
-	lastSystem  string
+	chatCalls           int
+	streamCalls         int
+	streamText          string
+	lastSystem          string
+	lastModel           string
+	lastReasoningEffort string
+}
+
+type capabilityCountingProvider struct {
+	countingProvider
 }
 
 type sequenceStreamProvider struct {
@@ -65,6 +71,13 @@ type learningRuntimeProvider struct {
 type runtimeMockTool struct {
 	name   string
 	output string
+}
+
+type recordingRuntimeTool struct {
+	name    string
+	output  string
+	calls   int
+	command string
 }
 
 type stubWorkflow struct{ name string }
@@ -177,6 +190,16 @@ func (p *countingProvider) Name() string { return "mock" }
 
 func (p *countingProvider) Models() []llm.ModelInfo { return nil }
 
+func (p *capabilityCountingProvider) Name() string { return "openai-responses" }
+
+func (p *capabilityCountingProvider) Capabilities() llm.ProviderCapabilities {
+	return llm.ProviderCapabilities{
+		Name:                    p.Name(),
+		ReasoningEffort:         llm.ReasoningEffortNativeWithUnsupportedRetry,
+		ReasoningEffortFallback: "retry_without_reasoning_on_400_or_422_unsupported_effort",
+	}
+}
+
 func (p *countingProvider) Chat(_ context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
 	p.chatCalls++
 	if strings.Contains(req.System, "intent classifier") {
@@ -190,6 +213,8 @@ func (p *countingProvider) Chat(_ context.Context, req llm.ChatRequest) (*llm.Ch
 func (p *countingProvider) Stream(_ context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
 	p.streamCalls++
 	p.lastSystem = req.System
+	p.lastModel = req.Model
+	p.lastReasoningEffort = req.ReasoningEffort
 	if p.streamText != "" {
 		cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: p.streamText})
 	}
@@ -311,6 +336,27 @@ func (t *runtimeMockTool) Reversible() bool                       { return false
 func (t *runtimeMockTool) Scope(json.RawMessage) tools.ToolScope  { return tools.ConservativeScope() }
 func (t *runtimeMockTool) ShouldCancelSiblingsOnError() bool      { return false }
 func (t *runtimeMockTool) Execute(context.Context, json.RawMessage) (*tools.Result, error) {
+	return tools.SuccessResult(t.output), nil
+}
+
+func (t *recordingRuntimeTool) Name() string                           { return t.name }
+func (t *recordingRuntimeTool) Description() string                    { return t.name }
+func (t *recordingRuntimeTool) Schema() json.RawMessage                { return json.RawMessage(`{"type":"object"}`) }
+func (t *recordingRuntimeTool) IsConcurrencySafe(json.RawMessage) bool { return false }
+func (t *recordingRuntimeTool) Reversible() bool                       { return false }
+func (t *recordingRuntimeTool) Scope(json.RawMessage) tools.ToolScope {
+	return tools.ConservativeScope()
+}
+func (t *recordingRuntimeTool) ShouldCancelSiblingsOnError() bool { return false }
+func (t *recordingRuntimeTool) Execute(_ context.Context, params json.RawMessage) (*tools.Result, error) {
+	t.calls++
+	var payload struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal(params, &payload); err != nil {
+		return tools.ErrorResult(err.Error()), nil
+	}
+	t.command = payload.Command
 	return tools.SuccessResult(t.output), nil
 }
 
@@ -2166,6 +2212,369 @@ func TestExecutionRuntimeRunTaskExecutesSkillSlashCommand(t *testing.T) {
 	}
 	if got := reloaded.Messages[1].Text(); got != "skill output" {
 		t.Fatalf("reloaded assistant output = %q, want %q", got, "skill output")
+	}
+}
+
+func TestExecutionRuntimeRunTaskEffortSlashCommandSwitchesToAuto(t *testing.T) {
+	provider := &countingProvider{streamText: "runtime answer"}
+	rt := newTestExecutionRuntimeWithConfig(t, provider, false, func(cfg *config.Config) {
+		cfg.Reasoning.EffortMode = "manual"
+		cfg.Reasoning.Effort = "high"
+	})
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	var streamed strings.Builder
+	messages, summary, err := rt.runTask(context.Background(), sess, nil, "/effort auto", orchestrationOutput{
+		OnText: func(s string) { streamed.WriteString(s) },
+	})
+	if err != nil {
+		t.Fatalf("runTask /effort auto: %v", err)
+	}
+	if provider.streamCalls != 0 {
+		t.Fatalf("streamCalls = %d, want 0 for local effort command", provider.streamCalls)
+	}
+	if rt.wfCfg.ReasoningEffortMode != "auto" || rt.wfCfg.ReasoningEffort != "" {
+		t.Fatalf("reasoning config = mode %q effort %q, want auto/empty", rt.wfCfg.ReasoningEffortMode, rt.wfCfg.ReasoningEffort)
+	}
+	if !strings.Contains(summary, "auto") || !strings.Contains(streamed.String(), "auto") {
+		t.Fatalf("summary=%q streamed=%q, want auto message", summary, streamed.String())
+	}
+	if len(messages) != 2 {
+		t.Fatalf("messages len = %d, want 2", len(messages))
+	}
+
+	_, _, err = rt.runTask(context.Background(), sess, messages, "quick status summary", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask status: %v", err)
+	}
+	if provider.lastReasoningEffort != "low" {
+		t.Fatalf("ReasoningEffort = %q, want low", provider.lastReasoningEffort)
+	}
+}
+
+func TestExecutionRuntimeRunTaskEffortSlashCommandPinsManualEffort(t *testing.T) {
+	provider := &countingProvider{streamText: "runtime answer"}
+	rt := newTestExecutionRuntimeWithConfig(t, provider, false, func(cfg *config.Config) {
+		cfg.Reasoning.EffortMode = "auto"
+	})
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	messages, summary, err := rt.runTask(context.Background(), sess, nil, "/effort max", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask /effort max: %v", err)
+	}
+	if provider.streamCalls != 0 {
+		t.Fatalf("streamCalls = %d, want 0 for local effort command", provider.streamCalls)
+	}
+	if rt.wfCfg.ReasoningEffortMode != "manual" || rt.wfCfg.ReasoningEffort != "xhigh" {
+		t.Fatalf("reasoning config = mode %q effort %q, want manual/xhigh", rt.wfCfg.ReasoningEffortMode, rt.wfCfg.ReasoningEffort)
+	}
+	if !strings.Contains(summary, "xhigh") {
+		t.Fatalf("summary = %q, want xhigh", summary)
+	}
+
+	_, _, err = rt.runTask(context.Background(), sess, messages, "quick status summary", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask status: %v", err)
+	}
+	if provider.lastReasoningEffort != "xhigh" {
+		t.Fatalf("ReasoningEffort = %q, want xhigh", provider.lastReasoningEffort)
+	}
+}
+
+func TestExecutionRuntimeRunTaskModelSlashCommandPinsModel(t *testing.T) {
+	provider := &countingProvider{streamText: "runtime answer"}
+	rt := newTestExecutionRuntime(t, provider)
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	var streamed strings.Builder
+	messages, summary, err := rt.runTask(context.Background(), sess, nil, "/model kimi-k2", orchestrationOutput{
+		OnText: func(s string) { streamed.WriteString(s) },
+	})
+	if err != nil {
+		t.Fatalf("runTask /model: %v", err)
+	}
+	if provider.streamCalls != 0 {
+		t.Fatalf("streamCalls = %d, want 0 for local model command", provider.streamCalls)
+	}
+	if rt.wfCfg.Model != "kimi-k2" {
+		t.Fatalf("runtime model = %q, want kimi-k2", rt.wfCfg.Model)
+	}
+	if !strings.Contains(summary, "kimi-k2") || !strings.Contains(streamed.String(), "kimi-k2") {
+		t.Fatalf("summary=%q streamed=%q, want model message", summary, streamed.String())
+	}
+	if len(messages) != 2 {
+		t.Fatalf("messages len = %d, want 2", len(messages))
+	}
+
+	_, _, err = rt.runTask(context.Background(), sess, messages, "quick status summary", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask status: %v", err)
+	}
+	if provider.lastModel != "kimi-k2" {
+		t.Fatalf("Model = %q, want kimi-k2", provider.lastModel)
+	}
+}
+
+func TestExecutionRuntimeRunTaskModelSlashCommandCanUseProviderDefault(t *testing.T) {
+	provider := &countingProvider{streamText: "runtime answer"}
+	rt := newTestExecutionRuntime(t, provider)
+	rt.wfCfg.Model = "kimi-k2"
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	messages, summary, err := rt.runTask(context.Background(), sess, nil, "/model default", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask /model default: %v", err)
+	}
+	if rt.wfCfg.Model != "" {
+		t.Fatalf("runtime model = %q, want provider default", rt.wfCfg.Model)
+	}
+	if !strings.Contains(summary, "provider default") {
+		t.Fatalf("summary = %q, want provider default message", summary)
+	}
+
+	_, _, err = rt.runTask(context.Background(), sess, messages, "quick status summary", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask status: %v", err)
+	}
+	if provider.lastModel != "" {
+		t.Fatalf("Model = %q, want empty provider default request model", provider.lastModel)
+	}
+}
+
+func TestExecutionRuntimeRunTaskProviderSlashCommandReportsCapabilities(t *testing.T) {
+	provider := &capabilityCountingProvider{}
+	rt := newTestExecutionRuntime(t, provider)
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	var streamed strings.Builder
+	messages, summary, err := rt.runTask(context.Background(), sess, nil, "/provider status", orchestrationOutput{
+		OnText: func(s string) { streamed.WriteString(s) },
+	})
+	if err != nil {
+		t.Fatalf("runTask /provider status: %v", err)
+	}
+	if provider.streamCalls != 0 || provider.chatCalls != 0 {
+		t.Fatalf("provider calls = chat:%d stream:%d, want none for local provider command", provider.chatCalls, provider.streamCalls)
+	}
+	for _, want := range []string{"openai-responses", llm.ReasoningEffortNativeWithUnsupportedRetry, "retry_without_reasoning"} {
+		if !strings.Contains(summary, want) || !strings.Contains(streamed.String(), want) {
+			t.Fatalf("summary=%q streamed=%q missing %q", summary, streamed.String(), want)
+		}
+	}
+	if len(messages) != 2 {
+		t.Fatalf("messages len = %d, want 2", len(messages))
+	}
+}
+
+func TestExecutionRuntimeRunTaskCommandsSlashCommandListsCatalog(t *testing.T) {
+	provider := &countingProvider{streamText: "runtime answer"}
+	rt := newTestExecutionRuntime(t, provider)
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	var streamed strings.Builder
+	messages, summary, err := rt.runTask(context.Background(), sess, nil, "/commands", orchestrationOutput{
+		OnText: func(s string) { streamed.WriteString(s) },
+	})
+	if err != nil {
+		t.Fatalf("runTask /commands: %v", err)
+	}
+	if provider.streamCalls != 0 || provider.chatCalls != 0 {
+		t.Fatalf("provider calls = chat:%d stream:%d, want none for local commands command", provider.chatCalls, provider.streamCalls)
+	}
+	for _, want := range []string{"commands", "run", "skill"} {
+		if !strings.Contains(summary, want) || !strings.Contains(streamed.String(), want) {
+			t.Fatalf("summary=%q streamed=%q missing %q", summary, streamed.String(), want)
+		}
+	}
+	if len(messages) != 2 {
+		t.Fatalf("messages len = %d, want 2", len(messages))
+	}
+}
+
+func TestExecutionRuntimeRunTaskProviderSlashCommandRejectsRuntimeSwitch(t *testing.T) {
+	provider := &capabilityCountingProvider{}
+	rt := newTestExecutionRuntime(t, provider)
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	_, summary, err := rt.runTask(context.Background(), sess, nil, "/provider anthropic", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask /provider anthropic: %v", err)
+	}
+	if provider.streamCalls != 0 || provider.chatCalls != 0 {
+		t.Fatalf("provider calls = chat:%d stream:%d, want none for local provider command", provider.chatCalls, provider.streamCalls)
+	}
+	if !strings.Contains(summary, "Runtime provider switching is not available") {
+		t.Fatalf("summary = %q, want runtime-switch boundary", summary)
+	}
+}
+
+func TestExecutionRuntimeRunTaskSelfHealingCorrectionRetriesIncompleteFinal(t *testing.T) {
+	provider := &sequenceStreamProvider{responses: []string{
+		"I could not finish the patch.",
+		"Done now.",
+	}}
+	rt := newTestExecutionRuntimeWithConfig(t, provider, false, func(cfg *config.Config) {
+		cfg.SelfHealing.Enabled = true
+		cfg.SelfHealing.ObserveOnly = false
+	})
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	_, summary, err := rt.runTask(context.Background(), sess, nil, "fix the existing handler", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask: %v", err)
+	}
+	if summary != "Done now." {
+		t.Fatalf("summary = %q, want retry result", summary)
+	}
+	if provider.idx != 2 {
+		t.Fatalf("streamed responses = %d, want 2 correction attempts", provider.idx)
+	}
+	records, err := rt.outcomeStore.Recent(1)
+	if err != nil {
+		t.Fatalf("Recent outcomes: %v", err)
+	}
+	if len(records) != 1 || !records[0].CorrectionAttempted || records[0].CorrectionAttempts != 1 {
+		t.Fatalf("correction outcome = %+v, want one recorded correction attempt", records)
+	}
+	if records[0].CorrectionDecision != completionRetryDecisionRetrySmallerScope || records[0].CorrectionReason != "final_response_reports_incomplete" {
+		t.Fatalf("correction outcome reason = decision %q reason %q", records[0].CorrectionDecision, records[0].CorrectionReason)
+	}
+}
+
+func TestExecutionRuntimeRunTaskSelfHealingObserveOnlyDoesNotRetryIncompleteFinal(t *testing.T) {
+	provider := &sequenceStreamProvider{responses: []string{
+		"I could not finish the patch.",
+		"Done now.",
+	}}
+	rt := newTestExecutionRuntimeWithConfig(t, provider, false, func(cfg *config.Config) {
+		cfg.SelfHealing.Enabled = true
+		cfg.SelfHealing.ObserveOnly = true
+	})
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	_, summary, err := rt.runTask(context.Background(), sess, nil, "fix the existing handler", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask: %v", err)
+	}
+	if summary != "I could not finish the patch." {
+		t.Fatalf("summary = %q, want first attempt result", summary)
+	}
+	if provider.idx != 1 {
+		t.Fatalf("streamed responses = %d, want no correction retry in observe-only mode", provider.idx)
+	}
+}
+
+func TestCompletionRetryRunsExplicitVerificationCommand(t *testing.T) {
+	rt := newTestExecutionRuntimeWithConfig(t, &countingProvider{}, false, func(cfg *config.Config) {
+		cfg.SelfHealing.Enabled = true
+		cfg.SelfHealing.ObserveOnly = false
+	})
+	rt.completionRetryMax = 1
+	reg := tools.NewRegistry()
+	bash := &recordingRuntimeTool{name: "bash", output: "PASS"}
+	reg.Register(bash)
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("fix the existing handler\n\ngo test ./cmd/elnath -count=1"),
+			llm.NewAssistantMessage("Done."),
+		},
+		Summary:      "Done.",
+		FinishReason: "stop",
+		Workflow:     "single",
+	}
+	observed := false
+	summary := completionContractSummary{
+		VerificationHint:     true,
+		VerificationObserved: &observed,
+		RetryDecision:        completionRetryDecisionRunVerification,
+		RetryReason:          "verification_hint_not_observed",
+	}
+
+	gotResult, gotSummary := rt.maybeRunCompletionRetry(context.Background(), &stubWorkflow{name: "single"}, orchestrator.WorkflowInput{
+		Session:  &agent.Session{ID: "verify-session"},
+		Tools:    reg,
+		Provider: rt.provider,
+	}, result, summary)
+
+	if gotResult != result {
+		t.Fatal("verification retry should preserve original workflow result")
+	}
+	if bash.calls != 1 || bash.command != "go test ./cmd/elnath -count=1" {
+		t.Fatalf("bash calls = %d command = %q, want explicit verification command", bash.calls, bash.command)
+	}
+	if gotSummary.VerificationObserved == nil || !*gotSummary.VerificationObserved || gotSummary.VerificationCommand != "go test ./cmd/elnath -count=1" {
+		t.Fatalf("verification summary = observed %v command %q", gotSummary.VerificationObserved, gotSummary.VerificationCommand)
+	}
+	if !gotSummary.CorrectionAttempted || gotSummary.CorrectionAttempts != 1 || gotSummary.CorrectionDecision != completionRetryDecisionRunVerification {
+		t.Fatalf("correction summary = %+v", gotSummary)
+	}
+}
+
+func TestCompletionRetryDoesNotInferVerificationFromProse(t *testing.T) {
+	rt := newTestExecutionRuntimeWithConfig(t, &countingProvider{}, false, func(cfg *config.Config) {
+		cfg.SelfHealing.Enabled = true
+		cfg.SelfHealing.ObserveOnly = false
+	})
+	rt.completionRetryMax = 1
+	reg := tools.NewRegistry()
+	bash := &recordingRuntimeTool{name: "bash", output: "PASS"}
+	reg.Register(bash)
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("fix the existing handler and run go test ./cmd/elnath -count=1"),
+			llm.NewAssistantMessage("Done."),
+		},
+		Summary:      "Done.",
+		FinishReason: "stop",
+		Workflow:     "single",
+	}
+	observed := false
+	summary := completionContractSummary{
+		VerificationHint:     true,
+		VerificationObserved: &observed,
+		RetryDecision:        completionRetryDecisionRunVerification,
+		RetryReason:          "verification_hint_not_observed",
+	}
+
+	_, gotSummary := rt.maybeRunCompletionRetry(context.Background(), &stubWorkflow{name: "single"}, orchestrator.WorkflowInput{
+		Session:  &agent.Session{ID: "verify-session"},
+		Tools:    reg,
+		Provider: rt.provider,
+	}, result, summary)
+
+	if bash.calls != 0 {
+		t.Fatalf("bash calls = %d, want no inferred verification execution", bash.calls)
+	}
+	if gotSummary.CorrectionAttempted {
+		t.Fatalf("correction attempted from prose-only command: %+v", gotSummary)
 	}
 }
 

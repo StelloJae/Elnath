@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -149,6 +150,20 @@ func TestCompletionContractSummaryRecordsReasoningConfig(t *testing.T) {
 	}
 }
 
+func TestCompletionContractSummaryRecordsProviderCapabilities(t *testing.T) {
+	summary := withProviderCapabilities(completionContractSummary{}, &capabilityCountingProvider{})
+
+	if summary.ProviderName != "openai-responses" {
+		t.Fatalf("ProviderName = %q", summary.ProviderName)
+	}
+	if summary.ProviderEffort != llm.ReasoningEffortNativeWithUnsupportedRetry {
+		t.Fatalf("ProviderEffort = %q", summary.ProviderEffort)
+	}
+	if !strings.Contains(summary.ProviderEffortNote, "retry_without_reasoning") {
+		t.Fatalf("ProviderEffortNote = %q", summary.ProviderEffortNote)
+	}
+}
+
 func TestRecordOutcomePersistsCompletionObservability(t *testing.T) {
 	ctx := context.Background()
 	rt := newTestExecutionRuntime(t, &countingProvider{})
@@ -167,6 +182,15 @@ func TestRecordOutcomePersistsCompletionObservability(t *testing.T) {
 			CompletionWarning:    "final_response_reports_incomplete",
 			ReasoningEffort:      "high",
 			ReasoningEffortMode:  "auto",
+			ProviderName:         "openai-responses",
+			ProviderEffort:       llm.ReasoningEffortNativeWithUnsupportedRetry,
+			ProviderEffortNote:   "retry_without_reasoning_on_400_or_422_unsupported_effort",
+			CorrectionAttempted:  true,
+			CorrectionAttempts:   1,
+			CorrectionDecision:   completionRetryDecisionRetrySmallerScope,
+			CorrectionReason:     "final_response_reports_incomplete",
+			RetryDecision:        completionRetryDecisionRetrySmallerScope,
+			RetryReason:          "final_response_reports_incomplete",
 		},
 	})
 
@@ -198,6 +222,13 @@ func TestCompletionGateContextProviderConsumesRuntimeSummary(t *testing.T) {
 		EditObserved:         &observed,
 		ReasoningEffort:      "high",
 		ReasoningEffortMode:  "auto",
+		ProviderName:         "openai-responses",
+		ProviderEffort:       llm.ReasoningEffortNativeWithUnsupportedRetry,
+		ProviderEffortNote:   "retry_without_reasoning_on_400_or_422_unsupported_effort",
+		CorrectionAttempted:  true,
+		CorrectionAttempts:   1,
+		CorrectionDecision:   completionRetryDecisionRetrySmallerScope,
+		CorrectionReason:     "final_response_reports_incomplete",
 		RetryDecision:        completionRetryDecisionRetrySmallerScope,
 		RetryReason:          "final_response_reports_incomplete",
 	})
@@ -223,6 +254,12 @@ func TestCompletionGateContextProviderConsumesRuntimeSummary(t *testing.T) {
 	}
 	if summary.ReasoningEffort != "high" || summary.ReasoningEffortMode != "auto" {
 		t.Fatalf("reasoning = effort %q mode %q, want high/auto", summary.ReasoningEffort, summary.ReasoningEffortMode)
+	}
+	if summary.ProviderName != "openai-responses" || summary.ProviderEffort != llm.ReasoningEffortNativeWithUnsupportedRetry || !strings.Contains(summary.ProviderEffortNote, "retry_without_reasoning") {
+		t.Fatalf("provider context = name %q effort %q note %q", summary.ProviderName, summary.ProviderEffort, summary.ProviderEffortNote)
+	}
+	if !summary.CorrectionAttempted || summary.CorrectionAttempts != 1 || summary.CorrectionDecision != completionRetryDecisionRetrySmallerScope || summary.CorrectionReason != "final_response_reports_incomplete" {
+		t.Fatalf("correction context = attempted %v attempts %d decision %q reason %q", summary.CorrectionAttempted, summary.CorrectionAttempts, summary.CorrectionDecision, summary.CorrectionReason)
 	}
 	if summary.RetryDecision != completionRetryDecisionRetrySmallerScope || summary.RetryReason != "final_response_reports_incomplete" {
 		t.Fatalf("retry plan = %q/%q", summary.RetryDecision, summary.RetryReason)
@@ -281,6 +318,13 @@ func TestCompletionGateReceiptSummaryIncludesRuntimeContext(t *testing.T) {
 		EditObserved:         &observed,
 		ReasoningEffort:      "medium",
 		ReasoningEffortMode:  "manual",
+		ProviderName:         "openai-responses",
+		ProviderEffort:       llm.ReasoningEffortNativeWithUnsupportedRetry,
+		ProviderEffortNote:   "retry_without_reasoning_on_400_or_422_unsupported_effort",
+		CorrectionAttempted:  true,
+		CorrectionAttempts:   1,
+		CorrectionDecision:   completionRetryDecisionRetrySmallerScope,
+		CorrectionReason:     "final_response_reports_incomplete",
 		RetryDecision:        completionRetryDecisionRetrySmallerScope,
 		RetryReason:          "final_response_reports_incomplete",
 	})
@@ -328,6 +372,18 @@ func TestCompletionGateReceiptSummaryIncludesRuntimeContext(t *testing.T) {
 	if summary["reasoning_effort"] != "medium" || summary["reasoning_effort_mode"] != "manual" {
 		t.Fatalf("reasoning context missing from gate summary: %v", summary)
 	}
+	if summary["provider_name"] != "openai-responses" || summary["provider_effort"] != llm.ReasoningEffortNativeWithUnsupportedRetry {
+		t.Fatalf("provider context missing from gate summary: %v", summary)
+	}
+	if note, _ := summary["provider_effort_note"].(string); !strings.Contains(note, "retry_without_reasoning") {
+		t.Fatalf("provider note missing from gate summary: %v", summary)
+	}
+	if summary["correction_attempted"] != true || summary["correction_attempts"] != float64(1) {
+		t.Fatalf("correction attempt missing from gate summary: %v", summary)
+	}
+	if summary["correction_decision"] != completionRetryDecisionRetrySmallerScope || summary["correction_reason"] != "final_response_reports_incomplete" {
+		t.Fatalf("correction reason missing from gate summary: %v", summary)
+	}
 	if summary["retry_decision"] != completionRetryDecisionRetrySmallerScope || summary["retry_reason"] != "final_response_reports_incomplete" {
 		t.Fatalf("retry context missing from gate summary: %v", summary)
 	}
@@ -349,5 +405,14 @@ func assertCompletionOutcome(t *testing.T, rec learning.OutcomeRecord) {
 	}
 	if rec.ReasoningEffort != "high" || rec.ReasoningEffortMode != "auto" {
 		t.Fatalf("reasoning = effort %q mode %q", rec.ReasoningEffort, rec.ReasoningEffortMode)
+	}
+	if rec.ProviderName != "openai-responses" || rec.ProviderEffort != llm.ReasoningEffortNativeWithUnsupportedRetry || !strings.Contains(rec.ProviderEffortNote, "retry_without_reasoning") {
+		t.Fatalf("provider = name %q effort %q note %q", rec.ProviderName, rec.ProviderEffort, rec.ProviderEffortNote)
+	}
+	if !rec.CorrectionAttempted || rec.CorrectionAttempts != 1 || rec.CorrectionDecision != completionRetryDecisionRetrySmallerScope || rec.CorrectionReason != "final_response_reports_incomplete" {
+		t.Fatalf("correction = attempted %v attempts %d decision %q reason %q", rec.CorrectionAttempted, rec.CorrectionAttempts, rec.CorrectionDecision, rec.CorrectionReason)
+	}
+	if rec.RetryDecision != completionRetryDecisionRetrySmallerScope || rec.RetryReason != "final_response_reports_incomplete" {
+		t.Fatalf("retry = decision %q reason %q", rec.RetryDecision, rec.RetryReason)
 	}
 }

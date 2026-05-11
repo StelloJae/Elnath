@@ -86,6 +86,7 @@ type Agent struct {
 	systemPrompt        string
 	reasoningEffort     string
 	reasoningEffortMode string
+	toolExposureMode    ToolExposureMode
 	maxIterations       int
 	logger              *slog.Logger
 	compressFunc        CompressFunc
@@ -101,6 +102,13 @@ type Agent struct {
 // Option configures an Agent.
 type Option func(*Agent)
 
+type ToolExposureMode string
+
+const (
+	ToolExposureStandard    ToolExposureMode = "standard"
+	ToolExposureSearchFirst ToolExposureMode = "search_first"
+)
+
 // WithModel overrides the model string sent in each request.
 func WithModel(model string) Option {
 	return func(a *Agent) { a.model = model }
@@ -109,6 +117,10 @@ func WithModel(model string) Option {
 // WithSystemPrompt sets the system prompt for every request.
 func WithSystemPrompt(prompt string) Option {
 	return func(a *Agent) { a.systemPrompt = prompt }
+}
+
+func WithToolExposureMode(mode ToolExposureMode) Option {
+	return func(a *Agent) { a.toolExposureMode = mode }
 }
 
 // WithReasoningEffort sets a fixed request-level effort hint. Providers that
@@ -313,8 +325,7 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, sink event.Sink
 	if sink == nil {
 		sink = event.NopSink{}
 	}
-	// Build tool definitions from the registry.
-	toolDefs := buildToolDefs(a.tools)
+	loadedDeferredTools := make(map[string]struct{})
 
 	totalUsage := llm.UsageStats{}
 	ackRetries := 0
@@ -352,14 +363,23 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, sink event.Sink
 		// before sending. The circuit breaker inside tryCompress halts attempts
 		// after maxConsecutiveCompressFailures.
 		messages = a.maybeProactiveCompress(ctx, messages)
+		toolDefs := buildToolDefsWithLoaded(a.tools, a.toolExposureMode, loadedDeferredTools)
 
+		effortDecision := a.resolveReasoningEffortDecision(messages)
+		if effortDecision.Effort != "" && a.logger != nil {
+			a.logger.Debug("reasoning effort selected",
+				"mode", effortDecision.Mode,
+				"effort", effortDecision.Effort,
+				"reason", effortDecision.Reason,
+			)
+		}
 		req := llm.Request{
 			Model:           a.model,
 			Messages:        messages,
 			Tools:           toolDefs,
 			System:          a.systemPrompt,
 			MaxTokens:       defaultMaxTokens,
-			ReasoningEffort: a.resolveReasoningEffort(messages),
+			ReasoningEffort: effortDecision.Effort,
 			EnableCache:     a.provider.Name() == "anthropic",
 			SessionID:       a.sessionID,
 		}
@@ -436,6 +456,7 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, sink event.Sink
 		if err != nil {
 			return nil, err
 		}
+		updateLoadedDeferredTools(a.tools, loadedDeferredTools, toolCalls, messages)
 
 		// Truncate oversized tool results to keep context manageable.
 		truncateToolResults(messages)
@@ -825,10 +846,33 @@ func (a *Agent) appendToolResults(messages []llm.Message, results []toolExecResu
 }
 
 // buildToolDefs converts the tools.Registry into []llm.ToolDef.
-func buildToolDefs(reg *tools.Registry) []llm.ToolDef {
+func buildToolDefs(reg *tools.Registry, modes ...ToolExposureMode) []llm.ToolDef {
+	return buildToolDefsWithLoaded(reg, firstToolExposureMode(modes), nil)
+}
+
+func firstToolExposureMode(modes []ToolExposureMode) ToolExposureMode {
+	if len(modes) == 0 {
+		return ""
+	}
+	return modes[0]
+}
+
+func buildToolDefsWithLoaded(reg *tools.Registry, mode ToolExposureMode, loadedDeferred map[string]struct{}) []llm.ToolDef {
+	if reg == nil {
+		return nil
+	}
 	all := reg.List()
+	if mode == "" {
+		mode = ToolExposureStandard
+	}
+	if mode == ToolExposureSearchFirst && !hasToolSearch(all) {
+		mode = ToolExposureStandard
+	}
 	defs := make([]llm.ToolDef, 0, len(all))
 	for _, t := range all {
+		if mode == ToolExposureSearchFirst && shouldHideDeferredTool(t, loadedDeferred) {
+			continue
+		}
 		defs = append(defs, llm.ToolDef{
 			Name:        t.Name(),
 			Description: t.Description(),
@@ -836,6 +880,78 @@ func buildToolDefs(reg *tools.Registry) []llm.ToolDef {
 		})
 	}
 	return defs
+}
+
+func shouldHideDeferredTool(tool tools.Tool, loadedDeferred map[string]struct{}) bool {
+	if !tools.ShouldDeferToolSchema(tool) {
+		return false
+	}
+	if loadedDeferred == nil {
+		return true
+	}
+	_, loaded := loadedDeferred[tool.Name()]
+	return !loaded
+}
+
+func hasToolSearch(all []tools.Tool) bool {
+	for _, t := range all {
+		if t != nil && t.Name() == tools.ToolSearchName {
+			return true
+		}
+	}
+	return false
+}
+
+func updateLoadedDeferredTools(reg *tools.Registry, loaded map[string]struct{}, calls []llm.ToolUseBlock, messages []llm.Message) {
+	if reg == nil || loaded == nil || len(calls) == 0 || len(messages) == 0 {
+		return
+	}
+	toolSearchIDs := make(map[string]struct{})
+	for _, call := range calls {
+		if call.Name == tools.ToolSearchName {
+			toolSearchIDs[call.ID] = struct{}{}
+		}
+	}
+	if len(toolSearchIDs) == 0 {
+		return
+	}
+	for _, msg := range messages {
+		if msg.Role != llm.RoleUser {
+			continue
+		}
+		for _, block := range msg.Content {
+			result, ok := block.(llm.ToolResultBlock)
+			if !ok || result.IsError {
+				continue
+			}
+			if _, ok := toolSearchIDs[result.ToolUseID]; !ok {
+				continue
+			}
+			addDeferredToolSearchMatches(reg, loaded, result.Content)
+		}
+	}
+}
+
+func addDeferredToolSearchMatches(reg *tools.Registry, loaded map[string]struct{}, content string) {
+	var out struct {
+		Matches []struct {
+			Name string `json:"name"`
+		} `json:"matches"`
+	}
+	if err := json.Unmarshal([]byte(content), &out); err != nil {
+		return
+	}
+	for _, match := range out.Matches {
+		name := strings.TrimSpace(match.Name)
+		if name == "" {
+			continue
+		}
+		tool, ok := reg.Get(name)
+		if !ok || !tools.ShouldDeferToolSchema(tool) {
+			continue
+		}
+		loaded[tool.Name()] = struct{}{}
+	}
 }
 
 type statusCoder interface {

@@ -11,24 +11,58 @@ const (
 	reasoningEffortModeManual = "manual"
 )
 
+type reasoningEffortDecision struct {
+	Effort string
+	Mode   string
+	Reason string
+}
+
 func (a *Agent) resolveReasoningEffort(messages []llm.Message) string {
+	return a.resolveReasoningEffortDecision(messages).Effort
+}
+
+func (a *Agent) resolveReasoningEffortDecision(messages []llm.Message) reasoningEffortDecision {
 	mode := strings.ToLower(strings.TrimSpace(a.reasoningEffortMode))
 	if mode == reasoningEffortModeAuto {
-		if effort := autoReasoningEffort(messages); effort != "" {
-			return effort
+		if decision := autoReasoningEffortDecision(messages); decision.Effort != "" {
+			if unsupported := providerUnsupportedAutoEffort(a.provider); unsupported != "" {
+				return reasoningEffortDecision{Mode: reasoningEffortModeAuto, Reason: unsupported}
+			}
+			decision.Mode = reasoningEffortModeAuto
+			return decision
 		}
 		if effort := strings.TrimSpace(a.reasoningEffort); effort != "" {
-			return effort
+			if unsupported := providerUnsupportedAutoEffort(a.provider); unsupported != "" {
+				return reasoningEffortDecision{Mode: reasoningEffortModeAuto, Reason: unsupported}
+			}
+			return reasoningEffortDecision{Effort: effort, Mode: reasoningEffortModeAuto, Reason: "configured_fallback"}
 		}
-		return "medium"
+		return reasoningEffortDecision{Effort: "medium", Mode: reasoningEffortModeAuto, Reason: "empty_task_default"}
 	}
-	return strings.TrimSpace(a.reasoningEffort)
+	return reasoningEffortDecision{Effort: strings.TrimSpace(a.reasoningEffort), Mode: reasoningEffortModeManual, Reason: "manual"}
+}
+
+func providerUnsupportedAutoEffort(provider llm.Provider) string {
+	switch llm.CapabilitiesOf(provider).ReasoningEffort {
+	case llm.ReasoningEffortIgnored:
+		return "provider_effort_ignored"
+	case llm.ReasoningEffortUnsupported:
+		return "provider_effort_unsupported"
+	case llm.ReasoningEffortThinkingBudgetOnly:
+		return "provider_effort_thinking_budget_only"
+	default:
+		return ""
+	}
 }
 
 func autoReasoningEffort(messages []llm.Message) string {
+	return autoReasoningEffortDecision(messages).Effort
+}
+
+func autoReasoningEffortDecision(messages []llm.Message) reasoningEffortDecision {
 	text := strings.ToLower(strings.TrimSpace(userTaskText(messages)))
 	if text == "" {
-		return ""
+		return reasoningEffortDecision{Reason: "empty_task"}
 	}
 
 	if containsAny(text, []string{
@@ -40,10 +74,13 @@ func autoReasoningEffort(messages []llm.Message) string {
 		"critical",
 		"autonomous",
 	}) {
-		return "xhigh"
+		return reasoningEffortDecision{Effort: "xhigh", Reason: "critical_keyword"}
 	}
 
-	if len(text) > 600 || containsAny(text, []string{
+	if len(text) > 600 {
+		return reasoningEffortDecision{Effort: "high", Reason: "long_task"}
+	}
+	if containsAny(text, []string{
 		"implement",
 		"refactor",
 		"debug",
@@ -68,7 +105,7 @@ func autoReasoningEffort(messages []llm.Message) string {
 		"테스트",
 		"자율",
 	}) {
-		return "high"
+		return reasoningEffortDecision{Effort: "high", Reason: "work_keyword"}
 	}
 
 	if len(text) <= 160 && containsAny(text, []string{
@@ -86,10 +123,10 @@ func autoReasoningEffort(messages []llm.Message) string {
 		"요약",
 		"상태",
 	}) {
-		return "low"
+		return reasoningEffortDecision{Effort: "low", Reason: "simple_keyword"}
 	}
 
-	return "medium"
+	return reasoningEffortDecision{Effort: "medium", Reason: "default_medium"}
 }
 
 func userTaskText(messages []llm.Message) string {

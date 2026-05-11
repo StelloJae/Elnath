@@ -1,0 +1,174 @@
+package worktree
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/stello/elnath/internal/tools"
+)
+
+func TestEnterWorktreeCreatesRegistryAndReusesExisting(t *testing.T) {
+	repo := initGitRepo(t)
+	tool := NewEnterTool(NewManager(repo))
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"name":"feature/smoke"}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("enter returned error result: %s", result.Output)
+	}
+	var output EnterOutput
+	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
+		t.Fatalf("unmarshal enter output: %v", err)
+	}
+	if output.Name != "feature/smoke" || output.Slug != "feature+smoke" {
+		t.Fatalf("output = %+v, want normalized worktree names", output)
+	}
+	if output.Existing {
+		t.Fatalf("first enter Existing = true, want false")
+	}
+	repoRoot := gitOutput(t, repo, "rev-parse", "--show-toplevel")
+	if !strings.HasPrefix(output.Path, filepath.Join(repoRoot, ".elnath", "worktrees")+string(os.PathSeparator)) {
+		t.Fatalf("worktree path = %q, want under .elnath/worktrees", output.Path)
+	}
+	if got := gitOutput(t, output.Path, "rev-parse", "--show-toplevel"); got != output.Path {
+		t.Fatalf("worktree rev-parse = %q, want %q", got, output.Path)
+	}
+
+	registry, err := NewManager(repo).readRegistry(context.Background())
+	if err != nil {
+		t.Fatalf("readRegistry: %v", err)
+	}
+	if len(registry.Worktrees) != 1 || registry.Worktrees[0].Name != "feature/smoke" || registry.Worktrees[0].OriginalHead == "" {
+		t.Fatalf("registry = %+v, want one recorded worktree with original head", registry)
+	}
+
+	second, err := tool.Execute(context.Background(), json.RawMessage(`{"name":"feature/smoke"}`))
+	if err != nil {
+		t.Fatalf("second Execute error = %v", err)
+	}
+	if second.IsError {
+		t.Fatalf("second enter returned error result: %s", second.Output)
+	}
+	var secondOutput EnterOutput
+	if err := json.Unmarshal([]byte(second.Output), &secondOutput); err != nil {
+		t.Fatalf("unmarshal second output: %v", err)
+	}
+	if !secondOutput.Existing || secondOutput.Path != output.Path {
+		t.Fatalf("second output = %+v, want existing worktree reuse at %q", secondOutput, output.Path)
+	}
+}
+
+func TestEnterWorktreeRejectsUnsafeName(t *testing.T) {
+	result, err := NewEnterTool(NewManager(initGitRepo(t))).Execute(context.Background(), json.RawMessage(`{"name":"../escape"}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if !result.IsError || !strings.Contains(result.Output, "invalid name") {
+		t.Fatalf("result = %+v, want invalid name error", result)
+	}
+}
+
+func TestExitWorktreeRequiresCleanOrDiscard(t *testing.T) {
+	repo := initGitRepo(t)
+	enter := NewEnterTool(NewManager(repo))
+	exit := NewExitTool(NewManager(repo))
+
+	result, err := enter.Execute(context.Background(), json.RawMessage(`{"name":"fix"}`))
+	if err != nil {
+		t.Fatalf("enter Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("enter returned error result: %s", result.Output)
+	}
+	var enterOutput EnterOutput
+	if err := json.Unmarshal([]byte(result.Output), &enterOutput); err != nil {
+		t.Fatalf("unmarshal enter output: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(enterOutput.Path, "dirty.txt"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatalf("write dirty file: %v", err)
+	}
+
+	blocked, err := exit.Execute(context.Background(), json.RawMessage(`{"name":"fix","action":"remove"}`))
+	if err != nil {
+		t.Fatalf("blocked Execute error = %v", err)
+	}
+	if !blocked.IsError || !strings.Contains(blocked.Output, "uncommitted changes") {
+		t.Fatalf("blocked result = %+v, want dirty worktree guard", blocked)
+	}
+
+	removed, err := exit.Execute(context.Background(), json.RawMessage(`{"name":"fix","action":"remove","discard_changes":true}`))
+	if err != nil {
+		t.Fatalf("remove Execute error = %v", err)
+	}
+	if removed.IsError {
+		t.Fatalf("remove returned error result: %s", removed.Output)
+	}
+	var exitOutput ExitOutput
+	if err := json.Unmarshal([]byte(removed.Output), &exitOutput); err != nil {
+		t.Fatalf("unmarshal exit output: %v", err)
+	}
+	if !exitOutput.Removed || exitOutput.DirtyFiles != 1 {
+		t.Fatalf("exit output = %+v, want forced removal with dirty count", exitOutput)
+	}
+	if _, err := os.Stat(enterOutput.Path); !os.IsNotExist(err) {
+		t.Fatalf("worktree path still exists or stat failed unexpectedly: %v", err)
+	}
+}
+
+func TestWorktreeToolMetadata(t *testing.T) {
+	for _, tool := range []tools.Tool{NewEnterTool(nil), NewExitTool(nil)} {
+		if tool.IsConcurrencySafe(nil) {
+			t.Fatalf("%s should not be concurrency-safe", tool.Name())
+		}
+		if tool.Reversible() {
+			t.Fatalf("%s should not be reversible", tool.Name())
+		}
+		if got := tool.Scope(nil); !got.Persistent || got.Network || len(got.ReadPaths) != 0 || len(got.WritePaths) != 0 {
+			t.Fatalf("%s Scope() = %+v, want persistent-only scope", tool.Name(), got)
+		}
+		if tool.ShouldCancelSiblingsOnError() {
+			t.Fatalf("%s should not cancel siblings", tool.Name())
+		}
+	}
+}
+
+func initGitRepo(t *testing.T) string {
+	t.Helper()
+	repo := t.TempDir()
+	gitRun(t, repo, "init")
+	gitRun(t, repo, "config", "user.email", "test@example.com")
+	gitRun(t, repo, "config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("# test\n"), 0o644); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+	gitRun(t, repo, "add", "README.md")
+	gitRun(t, repo, "commit", "-m", "initial")
+	return repo
+}
+
+func gitRun(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
+	}
+}
+
+func gitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
+	}
+	return strings.TrimSpace(string(out))
+}

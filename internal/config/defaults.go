@@ -14,6 +14,7 @@ func DefaultConfig() *Config {
 		WikiDir:  filepath.Join(base, "wiki"),
 		Locale:   "en",
 		LogLevel: "info",
+		Provider: "",
 
 		FallbackModel: "gpt-5.5",
 
@@ -32,12 +33,16 @@ func DefaultConfig() *Config {
 		Permission: PermissionConfig{
 			Mode: "default",
 		},
+		Tools: ToolsConfig{
+			ExposureMode: ToolExposureModeStandard,
+		},
 		Daemon: DaemonConfig{
 			SocketPath:         filepath.Join(base, "daemon.sock"),
 			MaxWorkers:         3,
 			MaxRecoveries:      3,
 			InactivityTimeout:  600,
 			WallClockTimeout:   1800,
+			ScheduledTasksPath: "scheduled_tasks.yaml",
 			WorkDir:            filepath.Join(base, "workspace"),
 			WorkspaceRetention: "immediate",
 		},
@@ -51,7 +56,7 @@ func DefaultConfig() *Config {
 			CostCapUSD: 5.0,
 		},
 		Reasoning: ReasoningConfig{
-			EffortMode: "manual",
+			EffortMode: "auto",
 		},
 		LLMExtraction: LLMExtractionConfig{
 			Model:       "claude-haiku-4-5",

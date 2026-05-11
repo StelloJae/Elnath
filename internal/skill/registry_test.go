@@ -82,6 +82,7 @@ func TestRegistryLoad(t *testing.T) {
 			Extra: map[string]any{
 				"name":           "pr-review",
 				"required_tools": []string{"bash", "read_file"},
+				"effort":         "high",
 			},
 		},
 		{
@@ -116,6 +117,13 @@ func TestRegistryLoad(t *testing.T) {
 
 	if got := len(reg.List()); got != 2 {
 		t.Fatalf("len(List()) = %d, want 2", got)
+	}
+	sk, ok := reg.Get("pr-review")
+	if !ok {
+		t.Fatal("pr-review missing after Load()")
+	}
+	if sk.Effort != "high" {
+		t.Fatalf("Effort = %q, want high", sk.Effort)
 	}
 }
 
@@ -454,6 +462,34 @@ func TestExecutePrependsPipelinePrefix(t *testing.T) {
 	}
 	if pipeline.lastInvoke.UserInput != "/pipeline-skill" {
 		t.Fatalf("invocation.UserInput = %q, want %q", pipeline.lastInvoke.UserInput, "/pipeline-skill")
+	}
+}
+
+func TestExecuteUsesSkillReasoningEffort(t *testing.T) {
+	t.Parallel()
+
+	var captured llm.ChatRequest
+	provider := &mockProvider{streamFn: func(_ context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
+		captured = req
+		cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: "ok"})
+		cb(llm.StreamEvent{Type: llm.EventDone})
+		return nil
+	}}
+
+	reg := NewRegistry()
+	reg.Add(&Skill{Name: "deep-debug", Prompt: "Debug carefully.", Effort: "xhigh"})
+
+	_, err := reg.Execute(context.Background(), ExecuteParams{
+		SkillName: "deep-debug",
+		Provider:  provider,
+		ToolReg:   tools.NewRegistry(),
+		Model:     "gpt-5.5",
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if captured.ReasoningEffort != "xhigh" {
+		t.Fatalf("ReasoningEffort = %q, want xhigh", captured.ReasoningEffort)
 	}
 }
 

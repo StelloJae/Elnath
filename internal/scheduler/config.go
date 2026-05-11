@@ -10,13 +10,13 @@ import (
 
 type rawTask struct {
 	Name       string `yaml:"name"`
-	Type       string `yaml:"type"`
+	Type       string `yaml:"type,omitempty"`
 	Prompt     string `yaml:"prompt"`
 	Interval   string `yaml:"interval"`
-	RunOnStart bool   `yaml:"run_on_start"`
-	Enabled    *bool  `yaml:"enabled"`
-	SessionID  string `yaml:"session_id"`
-	Surface    string `yaml:"surface"`
+	RunOnStart bool   `yaml:"run_on_start,omitempty"`
+	Enabled    *bool  `yaml:"enabled,omitempty"`
+	SessionID  string `yaml:"session_id,omitempty"`
+	Surface    string `yaml:"surface,omitempty"`
 }
 
 type rawConfig struct {

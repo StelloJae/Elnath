@@ -15,6 +15,7 @@ type Config struct {
 	WikiDir  string `yaml:"wiki_dir"`
 	Locale   string `yaml:"locale"`
 	LogLevel string `yaml:"log_level"`
+	Provider string `yaml:"provider"`
 
 	Anthropic ProviderConfig `yaml:"anthropic"`
 	OpenAI    ProviderConfig `yaml:"openai"`
@@ -34,6 +35,7 @@ type Config struct {
 	FallbackModel string `yaml:"fallback_model"`
 
 	Permission     PermissionConfig     `yaml:"permission"`
+	Tools          ToolsConfig          `yaml:"tools"`
 	Sandbox        SandboxConfig        `yaml:"sandbox"`
 	Principal      PrincipalConfig      `yaml:"principal"`
 	Daemon         DaemonConfig         `yaml:"daemon"`
@@ -103,6 +105,10 @@ type ProviderConfig struct {
 	Timeout         int    `yaml:"timeout_seconds"`
 }
 
+type ToolsConfig struct {
+	ExposureMode string `yaml:"exposure_mode"`
+}
+
 type PermissionConfig struct {
 	Mode  string   `yaml:"mode"` // default, accept_edits, plan, bypass
 	Allow []string `yaml:"allow"`
@@ -142,6 +148,9 @@ type FaultInjectionConfig struct {
 }
 
 const (
+	ToolExposureModeStandard    = "standard"
+	ToolExposureModeSearchFirst = "search_first"
+
 	AgenticEnforcementModeObserve = "observe"
 	AgenticEnforcementModeGateway = "gateway"
 
@@ -251,6 +260,9 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("ELNATH_LOG_LEVEL"); v != "" {
 		cfg.LogLevel = v
 	}
+	if v := os.Getenv("ELNATH_PROVIDER"); v != "" {
+		cfg.Provider = v
+	}
 	if v := os.Getenv("ELNATH_ANTHROPIC_API_KEY"); v != "" {
 		cfg.Anthropic.APIKey = v
 	}
@@ -286,6 +298,9 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("ELNATH_PERMISSION_MODE"); v != "" {
 		cfg.Permission.Mode = v
+	}
+	if v := os.Getenv("ELNATH_TOOLS_EXPOSURE_MODE"); v != "" {
+		cfg.Tools.ExposureMode = v
 	}
 	if v := os.Getenv("ELNATH_LOCALE"); v != "" {
 		cfg.Locale = v
@@ -352,6 +367,9 @@ func validate(cfg *Config) error {
 	if err := validateProviderReasoningEffort("reasoning", cfg.Reasoning.Effort); err != nil {
 		return err
 	}
+	if err := validateProviderName(cfg.Provider); err != nil {
+		return err
+	}
 	if cfg.OpenAIResponses.APIKey == "" && (cfg.OpenAIResponses.BaseURL != "" || cfg.OpenAIResponses.Model != "") {
 		return fmt.Errorf("openai_responses.api_key is required when openai_responses base_url or model is set")
 	}
@@ -360,6 +378,12 @@ func validate(cfg *Config) error {
 	case "default", "accept_edits", "plan", "bypass":
 	default:
 		return fmt.Errorf("unknown permission mode: %q", cfg.Permission.Mode)
+	}
+
+	switch strings.ToLower(strings.TrimSpace(cfg.Tools.ExposureMode)) {
+	case "", ToolExposureModeStandard, ToolExposureModeSearchFirst:
+	default:
+		return fmt.Errorf("unsupported tools.exposure_mode: %q (supported: standard, search_first)", cfg.Tools.ExposureMode)
 	}
 
 	for i, s := range cfg.MCPServers {
@@ -410,5 +434,27 @@ func validateReasoningEffortMode(mode string) error {
 		return nil
 	default:
 		return fmt.Errorf("reasoning.effort_mode %q is invalid (supported: manual, auto)", mode)
+	}
+}
+
+func NormalizeProviderName(provider string) string {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "":
+		return ""
+	case "responses", "openai_responses", "openai-responses":
+		return "openai-responses"
+	case "anthropic", "openai", "codex", "ollama":
+		return strings.ToLower(strings.TrimSpace(provider))
+	default:
+		return strings.ToLower(strings.TrimSpace(provider))
+	}
+}
+
+func validateProviderName(provider string) error {
+	switch NormalizeProviderName(provider) {
+	case "", "anthropic", "openai", "openai-responses", "codex", "ollama":
+		return nil
+	default:
+		return fmt.Errorf("provider %q is invalid (supported: anthropic, openai, openai_responses, codex, ollama)", provider)
 	}
 }
