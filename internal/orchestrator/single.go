@@ -78,6 +78,7 @@ func (w *SingleWorkflow) Run(ctx context.Context, input WorkflowInput) (*Workflo
 		ReasoningEffort:       result.ReasoningEffort,
 		ReasoningEffortMode:   result.ReasoningEffortMode,
 		ReasoningEffortReason: result.ReasoningEffortReason,
+		LoadedDeferredTools:   result.LoadedDeferredTools,
 	}, nil
 }
 

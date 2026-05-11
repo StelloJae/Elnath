@@ -290,6 +290,7 @@ type RunResult struct {
 	ReasoningEffort       string
 	ReasoningEffortMode   string
 	ReasoningEffortReason string
+	LoadedDeferredTools   []string
 }
 
 // ToolStat aggregates execution outcomes for a single tool across one Run.
@@ -492,7 +493,20 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, sink event.Sink
 		ReasoningEffort:       lastEffortDecision.Effort,
 		ReasoningEffortMode:   lastEffortDecision.Mode,
 		ReasoningEffortReason: lastEffortDecision.Reason,
+		LoadedDeferredTools:   sortedLoadedDeferredTools(loadedDeferredTools),
 	}, nil
+}
+
+func sortedLoadedDeferredTools(loaded map[string]struct{}) []string {
+	if len(loaded) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(loaded))
+	for name := range loaded {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // reflectionSkipCategories mirrors reflection.skipCategories. Duplicated here

@@ -145,6 +145,7 @@ func TestCompletionContractSummaryRecordsReasoningConfig(t *testing.T) {
 		ReasoningEffort:       "low",
 		ReasoningEffortMode:   "auto",
 		ReasoningEffortReason: "simple_keyword",
+		LoadedDeferredTools:   []string{"mcp_github_issue"},
 	}
 	summary := summarizeCompletionContract(nil, orchestrator.WorkflowConfig{
 		ReasoningEffort:     "high",
@@ -153,6 +154,9 @@ func TestCompletionContractSummaryRecordsReasoningConfig(t *testing.T) {
 
 	if summary.ReasoningEffort != "low" || summary.ReasoningEffortMode != "auto" || summary.ReasoningEffortReason != "simple_keyword" {
 		t.Fatalf("reasoning = effort %q mode %q reason %q", summary.ReasoningEffort, summary.ReasoningEffortMode, summary.ReasoningEffortReason)
+	}
+	if len(summary.LoadedDeferredTools) != 1 || summary.LoadedDeferredTools[0] != "mcp_github_issue" {
+		t.Fatalf("LoadedDeferredTools = %v", summary.LoadedDeferredTools)
 	}
 }
 
@@ -192,6 +196,7 @@ func TestRecordOutcomePersistsCompletionObservability(t *testing.T) {
 			ProviderName:            "openai-responses",
 			ProviderEffort:          llm.ReasoningEffortNativeWithUnsupportedRetry,
 			ProviderEffortNote:      "retry_without_reasoning_on_400_or_422_unsupported_effort",
+			LoadedDeferredTools:     []string{"mcp_github_issue"},
 			CorrectionAttempted:     true,
 			CorrectionAttempts:      1,
 			CorrectionDecision:      completionRetryDecisionRetrySmallerScope,
@@ -235,6 +240,7 @@ func TestCompletionGateContextProviderConsumesRuntimeSummary(t *testing.T) {
 		ProviderName:            "openai-responses",
 		ProviderEffort:          llm.ReasoningEffortNativeWithUnsupportedRetry,
 		ProviderEffortNote:      "retry_without_reasoning_on_400_or_422_unsupported_effort",
+		LoadedDeferredTools:     []string{"mcp_github_issue"},
 		CorrectionAttempted:     true,
 		CorrectionAttempts:      1,
 		CorrectionDecision:      completionRetryDecisionRetrySmallerScope,
@@ -272,6 +278,9 @@ func TestCompletionGateContextProviderConsumesRuntimeSummary(t *testing.T) {
 	}
 	if summary.ProviderName != "openai-responses" || summary.ProviderEffort != llm.ReasoningEffortNativeWithUnsupportedRetry || !strings.Contains(summary.ProviderEffortNote, "retry_without_reasoning") {
 		t.Fatalf("provider context = name %q effort %q note %q", summary.ProviderName, summary.ProviderEffort, summary.ProviderEffortNote)
+	}
+	if len(summary.LoadedDeferredTools) != 1 || summary.LoadedDeferredTools[0] != "mcp_github_issue" {
+		t.Fatalf("LoadedDeferredTools = %v", summary.LoadedDeferredTools)
 	}
 	if !summary.CorrectionAttempted || summary.CorrectionAttempts != 1 || summary.CorrectionDecision != completionRetryDecisionRetrySmallerScope || summary.CorrectionReason != "final_response_reports_incomplete" {
 		t.Fatalf("correction context = attempted %v attempts %d decision %q reason %q", summary.CorrectionAttempted, summary.CorrectionAttempts, summary.CorrectionDecision, summary.CorrectionReason)
@@ -340,6 +349,7 @@ func TestCompletionGateReceiptSummaryIncludesRuntimeContext(t *testing.T) {
 		ProviderName:            "openai-responses",
 		ProviderEffort:          llm.ReasoningEffortNativeWithUnsupportedRetry,
 		ProviderEffortNote:      "retry_without_reasoning_on_400_or_422_unsupported_effort",
+		LoadedDeferredTools:     []string{"mcp_github_issue"},
 		CorrectionAttempted:     true,
 		CorrectionAttempts:      1,
 		CorrectionDecision:      completionRetryDecisionRetrySmallerScope,
@@ -402,6 +412,10 @@ func TestCompletionGateReceiptSummaryIncludesRuntimeContext(t *testing.T) {
 	if note, _ := summary["provider_effort_note"].(string); !strings.Contains(note, "retry_without_reasoning") {
 		t.Fatalf("provider note missing from gate summary: %v", summary)
 	}
+	loaded, ok := summary["loaded_deferred_tools"].([]any)
+	if !ok || len(loaded) != 1 || loaded[0] != "mcp_github_issue" {
+		t.Fatalf("loaded deferred tools missing from gate summary: %v", summary)
+	}
 	if summary["correction_attempted"] != true || summary["correction_attempts"] != float64(1) {
 		t.Fatalf("correction attempt missing from gate summary: %v", summary)
 	}
@@ -438,6 +452,9 @@ func assertCompletionOutcome(t *testing.T, rec learning.OutcomeRecord) {
 	}
 	if rec.ProviderName != "openai-responses" || rec.ProviderEffort != llm.ReasoningEffortNativeWithUnsupportedRetry || !strings.Contains(rec.ProviderEffortNote, "retry_without_reasoning") {
 		t.Fatalf("provider = name %q effort %q note %q", rec.ProviderName, rec.ProviderEffort, rec.ProviderEffortNote)
+	}
+	if len(rec.LoadedDeferredTools) != 1 || rec.LoadedDeferredTools[0] != "mcp_github_issue" {
+		t.Fatalf("LoadedDeferredTools = %v", rec.LoadedDeferredTools)
 	}
 	if !rec.CorrectionAttempted || rec.CorrectionAttempts != 1 || rec.CorrectionDecision != completionRetryDecisionRetrySmallerScope || rec.CorrectionReason != "final_response_reports_incomplete" {
 		t.Fatalf("correction = attempted %v attempts %d decision %q reason %q", rec.CorrectionAttempted, rec.CorrectionAttempts, rec.CorrectionDecision, rec.CorrectionReason)

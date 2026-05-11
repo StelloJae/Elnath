@@ -22,6 +22,7 @@ type completionContractSummary struct {
 	ProviderName            string
 	ProviderEffort          string
 	ProviderEffortNote      string
+	LoadedDeferredTools     []string
 	CorrectionAttempted     bool
 	CorrectionAttempts      int
 	CorrectionDecision      string
@@ -59,6 +60,7 @@ func summarizeCompletionContract(routeCtx *orchestrator.RoutingContext, cfg orch
 		summary.ReasoningEffortMode = mode
 	}
 	summary.ReasoningEffortReason = strings.TrimSpace(result.ReasoningEffortReason)
+	summary.LoadedDeferredTools = append([]string(nil), result.LoadedDeferredTools...)
 
 	verificationCommand := observedVerificationCommand(result.Messages)
 	observed := verificationCommand != ""

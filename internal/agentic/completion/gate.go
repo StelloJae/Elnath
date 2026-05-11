@@ -41,6 +41,7 @@ type CompletionContext struct {
 	ProviderName            string
 	ProviderEffort          string
 	ProviderEffortNote      string
+	LoadedDeferredTools     []string
 	CorrectionAttempted     bool
 	CorrectionAttempts      int
 	CorrectionDecision      string
@@ -253,6 +254,9 @@ func encodeReceiptSummary(summary map[string]int, completionContext CompletionCo
 	}
 	if completionContext.ProviderEffortNote != "" {
 		payload["provider_effort_note"] = completionContext.ProviderEffortNote
+	}
+	if len(completionContext.LoadedDeferredTools) > 0 {
+		payload["loaded_deferred_tools"] = completionContext.LoadedDeferredTools
 	}
 	if completionContext.CorrectionAttempted {
 		payload["correction_attempted"] = true

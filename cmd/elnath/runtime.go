@@ -1321,6 +1321,7 @@ func (rt *executionRuntime) recordOutcome(ctx context.Context, in outcomeInput) 
 		ProviderName:            in.completion.ProviderName,
 		ProviderEffort:          in.completion.ProviderEffort,
 		ProviderEffortNote:      in.completion.ProviderEffortNote,
+		LoadedDeferredTools:     append([]string(nil), in.completion.LoadedDeferredTools...),
 		CorrectionAttempted:     in.completion.CorrectionAttempted,
 		CorrectionAttempts:      in.completion.CorrectionAttempts,
 		CorrectionDecision:      in.completion.CorrectionDecision,
