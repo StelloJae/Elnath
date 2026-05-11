@@ -2350,6 +2350,34 @@ func TestExecutionRuntimeEffortStatusExplainsAutoRoutingPolicy(t *testing.T) {
 	}
 }
 
+func TestExecutionRuntimeEffortStatusReportsProviderCapability(t *testing.T) {
+	provider := &capabilityCountingProvider{}
+	rt := newTestExecutionRuntimeWithConfig(t, provider, false, func(cfg *config.Config) {
+		cfg.Reasoning.EffortMode = "auto"
+	})
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	_, summary, err := rt.runTask(context.Background(), sess, nil, "/effort status", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask /effort status: %v", err)
+	}
+	if provider.streamCalls != 0 || provider.chatCalls != 0 {
+		t.Fatalf("provider calls = chat:%d stream:%d, want none for local effort status command", provider.chatCalls, provider.streamCalls)
+	}
+	for _, want := range []string{
+		"Provider effort capability: native_with_unsupported_retry",
+		"Provider effort note: retry_without_reasoning",
+		"Auto effort compatible: true",
+	} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary = %q, want contains %q", summary, want)
+		}
+	}
+}
+
 func TestExecutionRuntimeRunTaskModelSlashCommandPinsModel(t *testing.T) {
 	provider := &countingProvider{streamText: "runtime answer"}
 	rt := newTestExecutionRuntime(t, provider)

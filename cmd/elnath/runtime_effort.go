@@ -77,10 +77,11 @@ func (rt *executionRuntime) currentEffortMessage() string {
 	mode := strings.ToLower(strings.TrimSpace(rt.wfCfg.ReasoningEffortMode))
 	effort := strings.ToLower(strings.TrimSpace(rt.wfCfg.ReasoningEffort))
 	if mode == "auto" {
+		policy := strings.Join([]string{autoEffortPolicyMessage(), rt.providerEffortStatusMessage()}, "\n")
 		if effort != "" {
-			return fmt.Sprintf("Effort level: auto (fallback %s).\n%s", effort, autoEffortPolicyMessage())
+			return fmt.Sprintf("Effort level: auto (fallback %s).\n%s", effort, policy)
 		}
-		return fmt.Sprintf("Effort level: auto.\n%s", autoEffortPolicyMessage())
+		return fmt.Sprintf("Effort level: auto.\n%s", policy)
 	}
 	if effort == "" {
 		return "Effort level: provider default."
@@ -97,4 +98,16 @@ func autoEffortPolicyMessage() string {
 		"- otherwise -> medium",
 		"Manual override: /effort <level>",
 	}, "\n")
+}
+
+func (rt *executionRuntime) providerEffortStatusMessage() string {
+	caps := llm.CapabilitiesOf(rt.provider)
+	lines := []string{
+		fmt.Sprintf("Provider effort capability: %s", caps.ReasoningEffort),
+	}
+	if strings.TrimSpace(caps.ReasoningEffortFallback) != "" {
+		lines = append(lines, fmt.Sprintf("Provider effort note: %s", caps.ReasoningEffortFallback))
+	}
+	lines = append(lines, fmt.Sprintf("Auto effort compatible: %t", autoEffortCompatible(caps.ReasoningEffort)))
+	return strings.Join(lines, "\n")
 }
