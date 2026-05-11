@@ -62,6 +62,69 @@ func TestExecuteCommand_ErrorsHelp(t *testing.T) {
 	}
 }
 
+func TestCommandCatalog_DefaultHidesInternalCommands(t *testing.T) {
+	catalog := commandCatalog(false)
+	seen := make(map[string]commandCatalogEntry)
+	for _, entry := range catalog {
+		if entry.Hidden {
+			t.Fatalf("default catalog exposed hidden command %q", entry.Name)
+		}
+		if entry.Description == "" {
+			t.Fatalf("catalog entry %q has empty description", entry.Name)
+		}
+		seen[entry.Name] = entry
+	}
+
+	for _, name := range []string{"run", "skill", "daemon", "eval", "agentic"} {
+		if _, ok := seen[name]; !ok {
+			t.Fatalf("default catalog missing user command %q", name)
+		}
+	}
+	for _, name := range []string{"netproxy", "netproxy-bridge", "netproxy-bridge-spike"} {
+		if _, ok := seen[name]; ok {
+			t.Fatalf("default catalog includes internal command %q", name)
+		}
+	}
+}
+
+func TestCommandCatalog_IncludeHiddenShowsInternalCommands(t *testing.T) {
+	catalog := commandCatalog(true)
+	seen := make(map[string]commandCatalogEntry)
+	for _, entry := range catalog {
+		seen[entry.Name] = entry
+	}
+
+	for _, name := range []string{"netproxy", "netproxy-bridge", "netproxy-bridge-spike"} {
+		entry, ok := seen[name]
+		if !ok {
+			t.Fatalf("hidden catalog missing internal command %q", name)
+		}
+		if !entry.Hidden {
+			t.Fatalf("internal command %q Hidden = false, want true", name)
+		}
+	}
+}
+
+func TestCommandRegistryBuiltFromSpecs(t *testing.T) {
+	registry := commandRegistry()
+	for _, spec := range commandSpecs() {
+		if spec.Name == "" {
+			t.Fatal("commandSpecs contains empty name")
+		}
+		if spec.Runner == nil {
+			t.Fatalf("command %q has nil runner", spec.Name)
+		}
+		if _, ok := registry[spec.Name]; !ok {
+			t.Fatalf("registry missing command %q", spec.Name)
+		}
+		for _, alias := range spec.Aliases {
+			if _, ok := registry[alias]; !ok {
+				t.Fatalf("registry missing alias %q for command %q", alias, spec.Name)
+			}
+		}
+	}
+}
+
 // TestPrintCommandHelp_DaemonMatchesDispatcher guards against help-text drift.
 // cmdDaemon accepts start/submit/status/stop/install; the extended help must
 // not advertise subcommands the dispatcher rejects (like "task submit",

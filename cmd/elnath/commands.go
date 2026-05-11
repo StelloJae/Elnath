@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -29,34 +30,51 @@ import (
 
 type commandRunner func(ctx context.Context, args []string) error
 
-func commandRegistry() map[string]commandRunner {
-	return map[string]commandRunner{
-		"version":     cmdVersion,
-		"help":        cmdHelp,
-		"chaos":       cmdChaos,
-		"run":         cmdRun,
-		"setup":       cmdSetup,
-		"sandbox":     cmdSandbox,
-		"errors":      cmdErrors,
-		"daemon":      cmdDaemon,
-		"portability": cmdPortability,
-		"research":    cmdResearch,
-		"telegram":    cmdTelegram,
-		"wiki":        cmdWiki,
-		"search":      cmdSearch,
-		"eval":        cmdEval,
-		"task":        cmdTask,
-		"agentic":     cmdAgentic,
-		"lessons":     cmdLessons,
-		"skill":       cmdSkill,
-		"profile":     cmdProfile,
-		"explain":     cmdExplain,
-		"debug":       cmdDebug,
+type commandSpec struct {
+	Name         string
+	Runner       commandRunner
+	Description  string
+	Aliases      []string
+	ArgumentHint string
+	Hidden       bool
+}
+
+type commandCatalogEntry struct {
+	Name         string   `json:"name"`
+	Description  string   `json:"description"`
+	Aliases      []string `json:"aliases,omitempty"`
+	ArgumentHint string   `json:"argument_hint,omitempty"`
+	Hidden       bool     `json:"hidden,omitempty"`
+}
+
+func commandSpecs() []commandSpec {
+	return []commandSpec{
+		{Name: "version", Runner: cmdVersion, Description: "Print the Elnath version."},
+		{Name: "help", Runner: cmdHelp, Description: "Show the top-level Elnath help."},
+		{Name: "chaos", Runner: cmdChaos, Description: "Run chaos and resilience probes."},
+		{Name: "run", Runner: cmdRun, Description: "Start an interactive or non-interactive agent session.", ArgumentHint: "[prompt]"},
+		{Name: "setup", Runner: cmdSetup, Description: "Create or update local Elnath configuration."},
+		{Name: "sandbox", Runner: cmdSandbox, Description: "Inspect or exercise sandbox execution support."},
+		{Name: "errors", Runner: cmdErrors, Description: "Inspect the user-facing error catalog.", ArgumentHint: "<code|list>"},
+		{Name: "daemon", Runner: cmdDaemon, Description: "Manage the local Elnath daemon.", ArgumentHint: "<start|submit|status|stop|install>"},
+		{Name: "portability", Runner: cmdPortability, Description: "Run portability checks."},
+		{Name: "research", Runner: cmdResearch, Description: "Run research and evidence helpers."},
+		{Name: "telegram", Runner: cmdTelegram, Description: "Manage Telegram operator shell integration."},
+		{Name: "wiki", Runner: cmdWiki, Description: "Manage the local LLM wiki."},
+		{Name: "search", Runner: cmdSearch, Description: "Search local project knowledge."},
+		{Name: "eval", Runner: cmdEval, Description: "Run evaluation and benchmark helpers."},
+		{Name: "task", Runner: cmdTask, Description: "Inspect and manage queued daemon tasks."},
+		{Name: "agentic", Runner: cmdAgentic, Description: "Inspect agentic ledger and execution evidence."},
+		{Name: "lessons", Runner: cmdLessons, Description: "Manage lessons learned from agent runs."},
+		{Name: "skill", Runner: cmdSkill, Description: "Manage Elnath skills."},
+		{Name: "profile", Runner: cmdProfile, Description: "Inspect runtime profile information."},
+		{Name: "explain", Runner: cmdExplain, Description: "Explain project or runtime state."},
+		{Name: "debug", Runner: cmdDebug, Description: "Run debugging helpers."},
 		// Hidden internal exec mode for the v41 / B3b-4-S0 Linux
 		// netns bridge spike. Not user-facing; the integration test
 		// at internal/tools/netproxy_bridge_spike_linux_test.go is
 		// the only caller. Omitted from `elnath help` on purpose.
-		"netproxy-bridge-spike": cmdNetproxyBridgeSpike,
+		{Name: "netproxy-bridge-spike", Runner: cmdNetproxyBridgeSpike, Description: "Run the internal netproxy bridge spike.", Hidden: true},
 		// Hidden internal exec mode for the v41 / B3b-4-2 macOS
 		// Seatbelt + future B3b-4-3 Linux bwrap substrate runners.
 		// SeatbeltRunner self-execs the elnath binary as
@@ -64,7 +82,7 @@ func commandRegistry() map[string]commandRunner {
 		// --allow ... --deny ...` so the proxy listeners run in
 		// their own process (per partner pin C4 forked-child
 		// self-exec model). Omitted from `elnath help` on purpose.
-		"netproxy": cmdNetproxy,
+		{Name: "netproxy", Runner: cmdNetproxy, Description: "Run the internal netproxy child process.", Hidden: true},
 		// Hidden internal exec mode for the v41 / B3b-4-3 Linux
 		// bwrap proxy wiring. BwrapRunner self-execs the elnath
 		// binary as `elnath netproxy-bridge --uds-http ... --uds-socks
@@ -74,8 +92,41 @@ func commandRegistry() map[string]commandRunner {
 		// forwards bytes between netns-internal TCP listeners and
 		// host UDS endpoints served by the netproxy proxy child.
 		// Omitted from `elnath help` on purpose.
-		"netproxy-bridge": cmdNetproxyBridge,
+		{Name: "netproxy-bridge", Runner: cmdNetproxyBridge, Description: "Run the internal bwrap netproxy bridge.", Hidden: true},
 	}
+}
+
+func commandRegistry() map[string]commandRunner {
+	registry := make(map[string]commandRunner)
+	for _, spec := range commandSpecs() {
+		registry[spec.Name] = spec.Runner
+		for _, alias := range spec.Aliases {
+			registry[alias] = spec.Runner
+		}
+	}
+	return registry
+}
+
+func commandCatalog(includeHidden bool) []commandCatalogEntry {
+	specs := commandSpecs()
+	entries := make([]commandCatalogEntry, 0, len(specs))
+	for _, spec := range specs {
+		if spec.Hidden && !includeHidden {
+			continue
+		}
+		entry := commandCatalogEntry{
+			Name:         spec.Name,
+			Description:  spec.Description,
+			Aliases:      append([]string(nil), spec.Aliases...),
+			ArgumentHint: spec.ArgumentHint,
+			Hidden:       spec.Hidden,
+		}
+		entries = append(entries, entry)
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Name < entries[j].Name
+	})
+	return entries
 }
 
 func executeCommand(ctx context.Context, name string, args []string) error {
