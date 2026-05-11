@@ -46,6 +46,13 @@ func NewOllamaProvider(apiKey, model string, opts ...OllamaOption) *OllamaProvid
 
 func (p *OllamaProvider) Name() string { return "ollama" }
 
+func (p *OllamaProvider) Capabilities() ProviderCapabilities {
+	return ProviderCapabilities{
+		Name:            p.Name(),
+		ReasoningEffort: ReasoningEffortIgnored,
+	}
+}
+
 func (p *OllamaProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
 	return p.inner.Chat(ctx, req)
 }

@@ -41,6 +41,10 @@ type countingProvider struct {
 	lastReasoningEffort string
 }
 
+type capabilityCountingProvider struct {
+	countingProvider
+}
+
 type sequenceStreamProvider struct {
 	chatCalls int
 	responses []string
@@ -178,6 +182,16 @@ func TestCompressionHookContextWindowFiresAfterDedupReset(t *testing.T) {
 func (p *countingProvider) Name() string { return "mock" }
 
 func (p *countingProvider) Models() []llm.ModelInfo { return nil }
+
+func (p *capabilityCountingProvider) Name() string { return "openai-responses" }
+
+func (p *capabilityCountingProvider) Capabilities() llm.ProviderCapabilities {
+	return llm.ProviderCapabilities{
+		Name:                    p.Name(),
+		ReasoningEffort:         llm.ReasoningEffortNativeWithUnsupportedRetry,
+		ReasoningEffortFallback: "retry_without_reasoning_on_400_or_422_unsupported_effort",
+	}
+}
 
 func (p *countingProvider) Chat(_ context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
 	p.chatCalls++
@@ -2309,6 +2323,54 @@ func TestExecutionRuntimeRunTaskModelSlashCommandCanUseProviderDefault(t *testin
 	}
 	if provider.lastModel != "" {
 		t.Fatalf("Model = %q, want empty provider default request model", provider.lastModel)
+	}
+}
+
+func TestExecutionRuntimeRunTaskProviderSlashCommandReportsCapabilities(t *testing.T) {
+	provider := &capabilityCountingProvider{}
+	rt := newTestExecutionRuntime(t, provider)
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	var streamed strings.Builder
+	messages, summary, err := rt.runTask(context.Background(), sess, nil, "/provider status", orchestrationOutput{
+		OnText: func(s string) { streamed.WriteString(s) },
+	})
+	if err != nil {
+		t.Fatalf("runTask /provider status: %v", err)
+	}
+	if provider.streamCalls != 0 || provider.chatCalls != 0 {
+		t.Fatalf("provider calls = chat:%d stream:%d, want none for local provider command", provider.chatCalls, provider.streamCalls)
+	}
+	for _, want := range []string{"openai-responses", llm.ReasoningEffortNativeWithUnsupportedRetry, "retry_without_reasoning"} {
+		if !strings.Contains(summary, want) || !strings.Contains(streamed.String(), want) {
+			t.Fatalf("summary=%q streamed=%q missing %q", summary, streamed.String(), want)
+		}
+	}
+	if len(messages) != 2 {
+		t.Fatalf("messages len = %d, want 2", len(messages))
+	}
+}
+
+func TestExecutionRuntimeRunTaskProviderSlashCommandRejectsRuntimeSwitch(t *testing.T) {
+	provider := &capabilityCountingProvider{}
+	rt := newTestExecutionRuntime(t, provider)
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	_, summary, err := rt.runTask(context.Background(), sess, nil, "/provider anthropic", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask /provider anthropic: %v", err)
+	}
+	if provider.streamCalls != 0 || provider.chatCalls != 0 {
+		t.Fatalf("provider calls = chat:%d stream:%d, want none for local provider command", provider.chatCalls, provider.streamCalls)
+	}
+	if !strings.Contains(summary, "Runtime provider switching is not available") {
+		t.Fatalf("summary = %q, want runtime-switch boundary", summary)
 	}
 }
 

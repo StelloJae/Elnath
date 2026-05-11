@@ -59,6 +59,14 @@ func WithResponsesBetaHeader(enabled bool) ResponsesOption {
 
 func (p *ResponsesProvider) Name() string { return "openai-responses" }
 
+func (p *ResponsesProvider) Capabilities() ProviderCapabilities {
+	return ProviderCapabilities{
+		Name:                    p.Name(),
+		ReasoningEffort:         ReasoningEffortNativeWithUnsupportedRetry,
+		ReasoningEffortFallback: "retry_without_reasoning_on_400_or_422_unsupported_effort",
+	}
+}
+
 func (p *ResponsesProvider) Models() []ModelInfo {
 	return []ModelInfo{{ID: p.model, Name: p.model, MaxTokens: 32768}}
 }

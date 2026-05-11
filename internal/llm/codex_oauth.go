@@ -88,6 +88,14 @@ func NewCodexOAuthProvider(model string, opts ...CodexOAuthOption) *CodexOAuthPr
 
 func (p *CodexOAuthProvider) Name() string { return "codex" }
 
+func (p *CodexOAuthProvider) Capabilities() ProviderCapabilities {
+	return ProviderCapabilities{
+		Name:                    p.Name(),
+		ReasoningEffort:         ReasoningEffortNativeWithUnsupportedRetry,
+		ReasoningEffortFallback: "retry_without_reasoning_on_400_or_422_unsupported_effort",
+	}
+}
+
 func (p *CodexOAuthProvider) Models() []ModelInfo {
 	return []ModelInfo{
 		{ID: "gpt-5.5", Name: "GPT-5.5", MaxTokens: 128_000, ContextWindow: 400_000, InputPricePerM: 5.0, OutputPricePerM: 30.0},
