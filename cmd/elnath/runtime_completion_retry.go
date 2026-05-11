@@ -44,6 +44,11 @@ func (rt *executionRuntime) runSmallerScopeCompletionRetry(
 	retryInput := input
 	retryInput.Messages = result.Messages
 	retryInput.Message = completionRetryPrompt(summary)
+	retryEffort, retryEffortReason := completionRetryEscalatedEffort(rt.provider, summary)
+	if retryEffort != "" {
+		retryInput.Config.ReasoningEffort = retryEffort
+		retryInput.Config.ReasoningEffortMode = "manual"
+	}
 	retryResult, err := wf.Run(ctx, retryInput)
 	if err != nil {
 		rt.app.Logger.Warn("completion correction retry failed",
@@ -58,7 +63,30 @@ func (rt *executionRuntime) runSmallerScopeCompletionRetry(
 	retrySummary.CorrectionAttempts = 1
 	retrySummary.CorrectionDecision = summary.RetryDecision
 	retrySummary.CorrectionReason = summary.RetryReason
+	if retryEffortReason != "" {
+		retrySummary.ReasoningEffort = retryEffort
+		retrySummary.ReasoningEffortMode = "manual"
+		retrySummary.ReasoningEffortReason = retryEffortReason
+	}
 	return retryResult, retrySummary
+}
+
+func completionRetryEscalatedEffort(provider llm.Provider, summary completionContractSummary) (string, string) {
+	if strings.EqualFold(strings.TrimSpace(summary.ReasoningEffortMode), "manual") {
+		return "", ""
+	}
+	switch llm.CapabilitiesOf(provider).ReasoningEffort {
+	case llm.ReasoningEffortIgnored, llm.ReasoningEffortUnsupported, llm.ReasoningEffortThinkingBudgetOnly:
+		return "", ""
+	}
+	switch strings.ToLower(strings.TrimSpace(summary.ReasoningEffort)) {
+	case "xhigh":
+		return "xhigh", "correction_retry_preserve_xhigh"
+	case "high":
+		return "xhigh", "correction_retry_escalation"
+	default:
+		return "high", "correction_retry_escalation"
+	}
 }
 
 func (rt *executionRuntime) runVerificationCompletionRetry(
