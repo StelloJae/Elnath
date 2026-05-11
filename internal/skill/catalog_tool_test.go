@@ -92,6 +92,59 @@ func TestCatalogToolShowsSkillPromptOnlyWhenRequested(t *testing.T) {
 	}
 }
 
+func TestCatalogToolRecommendsSkillsByQuery(t *testing.T) {
+	reg := NewRegistry()
+	reg.Add(&Skill{
+		Name:        "review-pr",
+		Description: "Review pull requests and CI failures",
+		Trigger:     "/review-pr",
+		Prompt:      "Detailed review prompt",
+		Status:      "active",
+	})
+	reg.Add(&Skill{
+		Name:        "deploy-check",
+		Description: "Prepare a deployment checklist",
+		Trigger:     "/deploy-check",
+		Prompt:      "Detailed deploy prompt",
+		Status:      "active",
+	})
+
+	tool := NewCatalogTool(reg)
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"recommend","query":"pull request review","max_results":1}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("Execute returned error result: %s", res.Output)
+	}
+	if strings.Contains(res.Output, "Detailed review prompt") || strings.Contains(res.Output, "Detailed deploy prompt") {
+		t.Fatalf("recommend output leaked prompt: %s", res.Output)
+	}
+
+	var out struct {
+		Action string `json:"action"`
+		Query  string `json:"query"`
+		Skills []struct {
+			Name          string   `json:"name"`
+			Score         int      `json:"score"`
+			MatchedFields []string `json:"matched_fields"`
+			Prompt        string   `json:"prompt,omitempty"`
+		} `json:"skills"`
+	}
+	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, res.Output)
+	}
+	if out.Action != "recommend" || out.Query != "pull request review" || len(out.Skills) != 1 {
+		t.Fatalf("output = %+v, want one recommendation for query", out)
+	}
+	if out.Skills[0].Name != "review-pr" || out.Skills[0].Score <= 0 || len(out.Skills[0].MatchedFields) == 0 {
+		t.Fatalf("recommendation = %+v, want scored review-pr match", out.Skills[0])
+	}
+	if out.Skills[0].Prompt != "" {
+		t.Fatalf("prompt = %q, want omitted", out.Skills[0].Prompt)
+	}
+}
+
 func TestCatalogToolRejectsUnknownSkill(t *testing.T) {
 	tool := NewCatalogTool(NewRegistry())
 	res, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"show","skill":"missing"}`))
