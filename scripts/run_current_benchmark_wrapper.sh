@@ -11,7 +11,7 @@ Usage:
 Environment:
   ELNATH_BIN       Path to the Elnath binary (default: ./elnath at repo root)
   ELNATH_CONFIG    Optional explicit config path
-  ELNATH_TIMEOUT   Optional timeout seconds for each Elnath run (default: 180)
+  ELNATH_TIMEOUT   Optional timeout seconds for each Elnath run (default: 300)
   ELNATH_VERIFY_TIMEOUT
                   Optional timeout seconds for each verification command (default: ELNATH_TIMEOUT)
   ELNATH_BENCHMARK_PERMISSION_MODE
