@@ -31,6 +31,15 @@ type OutcomeRecord struct {
 	OutputTokens  int             `json:"output_tokens,omitempty"`
 	ToolStats     []AgentToolStat `json:"tool_stats,omitempty"`
 	SessionID     string          `json:"session_id,omitempty"`
+
+	// Completion observability is intentionally advisory. These fields let the
+	// runtime record verification/completion gaps before any blocking retry
+	// policy is introduced.
+	VerificationHint     bool   `json:"verification_hint,omitempty"`
+	VerificationObserved *bool  `json:"verification_observed,omitempty"`
+	CompletionWarning    string `json:"completion_warning,omitempty"`
+	ReasoningEffort      string `json:"reasoning_effort,omitempty"`
+	ReasoningEffortMode  string `json:"reasoning_effort_mode,omitempty"`
 }
 
 // IsSuccessful returns true for workflow outcomes that count as completion in

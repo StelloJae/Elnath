@@ -1,8 +1,10 @@
 package learning
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -149,6 +151,40 @@ func TestOutcomeStoreDefaults(t *testing.T) {
 	}
 	if got[0].Timestamp.IsZero() {
 		t.Error("Timestamp should be auto-set")
+	}
+}
+
+func TestOutcomeRecordCompletionObservabilityJSONCompatibility(t *testing.T) {
+	raw := []byte(`{"project_id":"proj","intent":"code","workflow":"single","finish_reason":"stop","success":true}`)
+	var rec OutcomeRecord
+	if err := json.Unmarshal(raw, &rec); err != nil {
+		t.Fatalf("unmarshal legacy outcome: %v", err)
+	}
+	if rec.ProjectID != "proj" || rec.VerificationObserved != nil || rec.CompletionWarning != "" {
+		t.Fatalf("legacy outcome decoded unexpectedly: %+v", rec)
+	}
+
+	observed := false
+	rec.VerificationHint = true
+	rec.VerificationObserved = &observed
+	rec.CompletionWarning = "final_response_reports_incomplete"
+	rec.ReasoningEffort = "high"
+	rec.ReasoningEffortMode = "auto"
+
+	encoded, err := json.Marshal(rec)
+	if err != nil {
+		t.Fatalf("marshal outcome: %v", err)
+	}
+	for _, want := range []string{
+		`"verification_hint":true`,
+		`"verification_observed":false`,
+		`"completion_warning":"final_response_reports_incomplete"`,
+		`"reasoning_effort":"high"`,
+		`"reasoning_effort_mode":"auto"`,
+	} {
+		if !strings.Contains(string(encoded), want) {
+			t.Fatalf("encoded outcome %s missing %s", encoded, want)
+		}
 	}
 }
 
