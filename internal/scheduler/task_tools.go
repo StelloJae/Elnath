@@ -99,6 +99,8 @@ func (t *ScheduleCreateTool) Scope(json.RawMessage) tools.ToolScope {
 
 func (t *ScheduleCreateTool) ShouldCancelSiblingsOnError() bool { return false }
 
+func (t *ScheduleCreateTool) DeferInitialToolSchema() bool { return true }
+
 type scheduleCreateToolInput struct {
 	Name       string `json:"name"`
 	Prompt     string `json:"prompt"`
@@ -186,6 +188,8 @@ func (t *ScheduleListTool) Scope(json.RawMessage) tools.ToolScope { return tools
 
 func (t *ScheduleListTool) ShouldCancelSiblingsOnError() bool { return false }
 
+func (t *ScheduleListTool) DeferInitialToolSchema() bool { return true }
+
 type scheduleListToolOutput struct {
 	Path  string             `json:"path"`
 	Total int                `json:"total"`
@@ -238,6 +242,8 @@ func (t *ScheduleDeleteTool) Scope(json.RawMessage) tools.ToolScope {
 }
 
 func (t *ScheduleDeleteTool) ShouldCancelSiblingsOnError() bool { return false }
+
+func (t *ScheduleDeleteTool) DeferInitialToolSchema() bool { return true }
 
 type scheduleDeleteToolInput struct {
 	Name string `json:"name"`

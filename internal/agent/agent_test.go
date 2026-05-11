@@ -12,10 +12,13 @@ import (
 
 	"github.com/stello/elnath/internal/agent/errorclass"
 	"github.com/stello/elnath/internal/core"
+	"github.com/stello/elnath/internal/daemon"
 	"github.com/stello/elnath/internal/event"
 	"github.com/stello/elnath/internal/llm"
+	"github.com/stello/elnath/internal/scheduler"
 	"github.com/stello/elnath/internal/tools"
 	"github.com/stello/elnath/internal/userfacingerr"
+	"github.com/stello/elnath/internal/worktree"
 )
 
 // mockProvider implements llm.Provider for testing.
@@ -509,6 +512,42 @@ func TestBuildToolDefsSearchFirstDefersMCPAndKeepsToolSearch(t *testing.T) {
 	}
 	if _, ok := byName["mcp_github_issue"]; ok {
 		t.Fatal("mcp_github_issue should be deferred in search_first mode")
+	}
+}
+
+func TestBuildToolDefsSearchFirstDefersControlSurfaceTools(t *testing.T) {
+	reg := tools.NewRegistry()
+	reg.Register(&mockTool{
+		name:        "read_file",
+		description: "Read files",
+		schema:      json.RawMessage(`{"type":"object"}`),
+	})
+	reg.Register(daemon.NewTaskCreateTool(nil))
+	reg.Register(daemon.NewTaskListTool(nil))
+	reg.Register(scheduler.NewScheduleCreateTool(""))
+	reg.Register(scheduler.NewScheduleListTool(""))
+	reg.Register(worktree.NewEnterTool(nil))
+	reg.Register(worktree.NewExitTool(nil))
+	reg.Register(tools.NewToolSearchTool(reg))
+
+	defs := buildToolDefs(reg, ToolExposureSearchFirst)
+	byName := toolDefNames(defs)
+	for _, name := range []string{"read_file", "tool_search"} {
+		if !byName[name] {
+			t.Fatalf("%s should remain visible in search_first mode; got %v", name, byName)
+		}
+	}
+	for _, name := range []string{"task_create", "task_list", "schedule_create", "schedule_list", "enter_worktree", "exit_worktree"} {
+		if byName[name] {
+			t.Fatalf("%s should be deferred in search_first mode; got %v", name, byName)
+		}
+		tool, ok := reg.Get(name)
+		if !ok {
+			t.Fatalf("registered tool %s not found", name)
+		}
+		if !tools.ShouldDeferToolSchema(tool) {
+			t.Fatalf("%s should report deferred metadata", name)
+		}
 	}
 }
 
