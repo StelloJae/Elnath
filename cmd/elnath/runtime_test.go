@@ -37,6 +37,7 @@ type countingProvider struct {
 	streamCalls         int
 	streamText          string
 	lastSystem          string
+	lastModel           string
 	lastReasoningEffort string
 }
 
@@ -191,6 +192,7 @@ func (p *countingProvider) Chat(_ context.Context, req llm.ChatRequest) (*llm.Ch
 func (p *countingProvider) Stream(_ context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
 	p.streamCalls++
 	p.lastSystem = req.System
+	p.lastModel = req.Model
 	p.lastReasoningEffort = req.ReasoningEffort
 	if p.streamText != "" {
 		cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: p.streamText})
@@ -2241,6 +2243,72 @@ func TestExecutionRuntimeRunTaskEffortSlashCommandPinsManualEffort(t *testing.T)
 	}
 	if provider.lastReasoningEffort != "xhigh" {
 		t.Fatalf("ReasoningEffort = %q, want xhigh", provider.lastReasoningEffort)
+	}
+}
+
+func TestExecutionRuntimeRunTaskModelSlashCommandPinsModel(t *testing.T) {
+	provider := &countingProvider{streamText: "runtime answer"}
+	rt := newTestExecutionRuntime(t, provider)
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	var streamed strings.Builder
+	messages, summary, err := rt.runTask(context.Background(), sess, nil, "/model kimi-k2", orchestrationOutput{
+		OnText: func(s string) { streamed.WriteString(s) },
+	})
+	if err != nil {
+		t.Fatalf("runTask /model: %v", err)
+	}
+	if provider.streamCalls != 0 {
+		t.Fatalf("streamCalls = %d, want 0 for local model command", provider.streamCalls)
+	}
+	if rt.wfCfg.Model != "kimi-k2" {
+		t.Fatalf("runtime model = %q, want kimi-k2", rt.wfCfg.Model)
+	}
+	if !strings.Contains(summary, "kimi-k2") || !strings.Contains(streamed.String(), "kimi-k2") {
+		t.Fatalf("summary=%q streamed=%q, want model message", summary, streamed.String())
+	}
+	if len(messages) != 2 {
+		t.Fatalf("messages len = %d, want 2", len(messages))
+	}
+
+	_, _, err = rt.runTask(context.Background(), sess, messages, "quick status summary", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask status: %v", err)
+	}
+	if provider.lastModel != "kimi-k2" {
+		t.Fatalf("Model = %q, want kimi-k2", provider.lastModel)
+	}
+}
+
+func TestExecutionRuntimeRunTaskModelSlashCommandCanUseProviderDefault(t *testing.T) {
+	provider := &countingProvider{streamText: "runtime answer"}
+	rt := newTestExecutionRuntime(t, provider)
+	rt.wfCfg.Model = "kimi-k2"
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	messages, summary, err := rt.runTask(context.Background(), sess, nil, "/model default", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask /model default: %v", err)
+	}
+	if rt.wfCfg.Model != "" {
+		t.Fatalf("runtime model = %q, want provider default", rt.wfCfg.Model)
+	}
+	if !strings.Contains(summary, "provider default") {
+		t.Fatalf("summary = %q, want provider default message", summary)
+	}
+
+	_, _, err = rt.runTask(context.Background(), sess, messages, "quick status summary", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask status: %v", err)
+	}
+	if provider.lastModel != "" {
+		t.Fatalf("Model = %q, want empty provider default request model", provider.lastModel)
 	}
 }
 

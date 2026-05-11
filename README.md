@@ -118,6 +118,17 @@ Recent hardening also closed two structural follow-ups behind this operator flow
 | `version` | Show version | `elnath version` |
 | `help` | Show command help | `elnath help` |
 
+Interactive `elnath run` also supports session-local slash controls:
+
+- `/model status` shows the active provider and request model.
+- `/model <model-id>` pins the request model for the current session, for
+  example `/model kimi-k2` when `openai_responses` points at a compatible
+  provider.
+- `/model default` uses the configured provider's default model.
+- `/effort auto` lets Elnath choose request effort per task.
+- `/effort low|medium|high|xhigh` pins request effort for the current session
+  when the active provider supports it.
+
 ## Architecture
 
 ```

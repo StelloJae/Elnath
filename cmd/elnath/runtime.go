@@ -954,6 +954,12 @@ func (rt *executionRuntime) runTask(
 			return result, summary, err
 		}
 	}
+	if strings.HasPrefix(userInput, "/model") {
+		result, summary, handled, err := rt.tryModelCommand(sess, messages, userInput, bus)
+		if handled {
+			return result, summary, err
+		}
+	}
 	if rt.skillReg != nil && strings.HasPrefix(userInput, "/") {
 		result, summary, handled, err := rt.trySkillExecution(ctx, sess, messages, userInput, bus, output)
 		if handled {
