@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/stello/elnath/internal/agent"
@@ -54,12 +55,28 @@ func applyCommandsCommand(args []string) string {
 		}
 	}
 	includeHidden := hasFlag(args, "--all") || hasFlag(args, "--hidden")
+	catalog := runtimeCommandCatalog(includeHidden)
 	if hasFlag(args, "--json") {
-		raw, err := json.MarshalIndent(commandCatalog(includeHidden), "", "  ")
+		raw, err := json.MarshalIndent(catalog, "", "  ")
 		if err != nil {
 			return fmt.Sprintf("commands: marshal catalog: %v", err)
 		}
 		return string(raw)
 	}
-	return strings.TrimSpace(formatCommandCatalog(commandCatalog(includeHidden)))
+	return strings.TrimSpace(formatCommandCatalog(catalog))
+}
+
+func runtimeCommandCatalog(includeHidden bool) []commandCatalogEntry {
+	entries := commandCatalog(includeHidden)
+	for _, spec := range runtimeLocalSlashCommandSpecs() {
+		entries = append(entries, commandCatalogEntry{
+			Name:        spec.Name,
+			Description: spec.Description,
+			Category:    "runtime-control",
+		})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Name < entries[j].Name
+	})
+	return entries
 }

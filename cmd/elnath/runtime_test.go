@@ -2490,7 +2490,7 @@ func TestExecutionRuntimeRunTaskCommandsSlashCommandListsCatalog(t *testing.T) {
 	if provider.streamCalls != 0 || provider.chatCalls != 0 {
 		t.Fatalf("provider calls = chat:%d stream:%d, want none for local commands command", provider.chatCalls, provider.streamCalls)
 	}
-	for _, want := range []string{"commands", "run", "skill"} {
+	for _, want := range []string{"commands", "run", "skill", "/effort", "/model", "/provider", "/help"} {
 		if !strings.Contains(summary, want) || !strings.Contains(streamed.String(), want) {
 			t.Fatalf("summary=%q streamed=%q missing %q", summary, streamed.String(), want)
 		}
@@ -2522,6 +2522,41 @@ func TestExecutionRuntimeRunTaskHelpSlashCommandListsCatalog(t *testing.T) {
 	}
 	if len(messages) != 2 {
 		t.Fatalf("messages len = %d, want 2", len(messages))
+	}
+}
+
+func TestExecutionRuntimeRunTaskCommandsSlashCommandJSONIncludesRuntimeControls(t *testing.T) {
+	provider := &countingProvider{streamText: "runtime answer"}
+	rt := newTestExecutionRuntime(t, provider)
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	_, summary, err := rt.runTask(context.Background(), sess, nil, "/commands --json", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask /commands --json: %v", err)
+	}
+	if provider.streamCalls != 0 || provider.chatCalls != 0 {
+		t.Fatalf("provider calls = chat:%d stream:%d, want none for local commands command", provider.chatCalls, provider.streamCalls)
+	}
+
+	var entries []commandCatalogEntry
+	if err := json.Unmarshal([]byte(summary), &entries); err != nil {
+		t.Fatalf("summary is not JSON: %v\n%s", err, summary)
+	}
+	seen := map[string]commandCatalogEntry{}
+	for _, entry := range entries {
+		seen[entry.Name] = entry
+	}
+	for _, want := range []string{"/effort", "/model", "/provider", "/help"} {
+		entry, ok := seen[want]
+		if !ok {
+			t.Fatalf("missing runtime command %s in JSON catalog: %+v", want, entries)
+		}
+		if entry.Category != "runtime-control" {
+			t.Fatalf("runtime command %s category = %q, want runtime-control", want, entry.Category)
+		}
 	}
 }
 
