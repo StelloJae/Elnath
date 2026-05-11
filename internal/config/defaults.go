@@ -32,6 +32,9 @@ func DefaultConfig() *Config {
 		Permission: PermissionConfig{
 			Mode: "default",
 		},
+		Tools: ToolsConfig{
+			ExposureMode: ToolExposureModeStandard,
+		},
 		Daemon: DaemonConfig{
 			SocketPath:         filepath.Join(base, "daemon.sock"),
 			MaxWorkers:         3,

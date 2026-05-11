@@ -57,6 +57,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.FallbackModel != "gpt-5.5" {
 		t.Errorf("expected FallbackModel default %q, got %q", "gpt-5.5", cfg.FallbackModel)
 	}
+	if cfg.Tools.ExposureMode != ToolExposureModeStandard {
+		t.Errorf("expected Tools.ExposureMode default %q, got %q", ToolExposureModeStandard, cfg.Tools.ExposureMode)
+	}
 }
 
 func TestDefaultConfig_SandboxConfigIsDirectZeroValue(t *testing.T) {
@@ -173,6 +176,28 @@ func TestLoad_OpenAIResponsesConfig(t *testing.T) {
 	}
 	if cfg.OpenAIResponses.ReasoningEffort != "high" {
 		t.Fatalf("OpenAIResponses.ReasoningEffort = %q, want high", cfg.OpenAIResponses.ReasoningEffort)
+	}
+}
+
+func TestLoad_ToolsExposureMode(t *testing.T) {
+	dir := t.TempDir()
+	wikiDir := filepath.Join(dir, "wiki")
+	if err := os.MkdirAll(wikiDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	yaml := "data_dir: " + dir + "\nwiki_dir: " + wikiDir + "\ntools:\n  exposure_mode: search_first\n"
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.Tools.ExposureMode != ToolExposureModeSearchFirst {
+		t.Fatalf("Tools.ExposureMode = %q, want %q", cfg.Tools.ExposureMode, ToolExposureModeSearchFirst)
 	}
 }
 
@@ -660,6 +685,11 @@ func TestValidate(t *testing.T) {
 			name:    "unsupported request reasoning effort",
 			mutate:  func(c *Config) { c.Reasoning.Effort = "giant" },
 			wantErr: "reasoning.reasoning_effort",
+		},
+		{
+			name:    "unsupported tools exposure mode",
+			mutate:  func(c *Config) { c.Tools.ExposureMode = "all_at_once" },
+			wantErr: "tools.exposure_mode",
 		},
 		{
 			name: "openai responses base url requires api key",

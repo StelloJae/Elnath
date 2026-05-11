@@ -86,6 +86,7 @@ type Agent struct {
 	systemPrompt        string
 	reasoningEffort     string
 	reasoningEffortMode string
+	toolExposureMode    ToolExposureMode
 	maxIterations       int
 	logger              *slog.Logger
 	compressFunc        CompressFunc
@@ -101,6 +102,13 @@ type Agent struct {
 // Option configures an Agent.
 type Option func(*Agent)
 
+type ToolExposureMode string
+
+const (
+	ToolExposureStandard    ToolExposureMode = "standard"
+	ToolExposureSearchFirst ToolExposureMode = "search_first"
+)
+
 // WithModel overrides the model string sent in each request.
 func WithModel(model string) Option {
 	return func(a *Agent) { a.model = model }
@@ -109,6 +117,10 @@ func WithModel(model string) Option {
 // WithSystemPrompt sets the system prompt for every request.
 func WithSystemPrompt(prompt string) Option {
 	return func(a *Agent) { a.systemPrompt = prompt }
+}
+
+func WithToolExposureMode(mode ToolExposureMode) Option {
+	return func(a *Agent) { a.toolExposureMode = mode }
 }
 
 // WithReasoningEffort sets a fixed request-level effort hint. Providers that
@@ -314,7 +326,7 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, sink event.Sink
 		sink = event.NopSink{}
 	}
 	// Build tool definitions from the registry.
-	toolDefs := buildToolDefs(a.tools)
+	toolDefs := buildToolDefs(a.tools, a.toolExposureMode)
 
 	totalUsage := llm.UsageStats{}
 	ackRetries := 0
@@ -825,10 +837,23 @@ func (a *Agent) appendToolResults(messages []llm.Message, results []toolExecResu
 }
 
 // buildToolDefs converts the tools.Registry into []llm.ToolDef.
-func buildToolDefs(reg *tools.Registry) []llm.ToolDef {
+func buildToolDefs(reg *tools.Registry, modes ...ToolExposureMode) []llm.ToolDef {
+	if reg == nil {
+		return nil
+	}
 	all := reg.List()
+	mode := ToolExposureStandard
+	if len(modes) > 0 && modes[0] != "" {
+		mode = modes[0]
+	}
+	if mode == ToolExposureSearchFirst && !hasToolSearch(all) {
+		mode = ToolExposureStandard
+	}
 	defs := make([]llm.ToolDef, 0, len(all))
 	for _, t := range all {
+		if mode == ToolExposureSearchFirst && tools.ShouldDeferToolSchema(t) {
+			continue
+		}
 		defs = append(defs, llm.ToolDef{
 			Name:        t.Name(),
 			Description: t.Description(),
@@ -836,6 +861,15 @@ func buildToolDefs(reg *tools.Registry) []llm.ToolDef {
 		})
 	}
 	return defs
+}
+
+func hasToolSearch(all []tools.Tool) bool {
+	for _, t := range all {
+		if t != nil && t.Name() == tools.ToolSearchName {
+			return true
+		}
+	}
+	return false
 }
 
 type statusCoder interface {

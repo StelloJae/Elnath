@@ -34,6 +34,7 @@ type Config struct {
 	FallbackModel string `yaml:"fallback_model"`
 
 	Permission     PermissionConfig     `yaml:"permission"`
+	Tools          ToolsConfig          `yaml:"tools"`
 	Sandbox        SandboxConfig        `yaml:"sandbox"`
 	Principal      PrincipalConfig      `yaml:"principal"`
 	Daemon         DaemonConfig         `yaml:"daemon"`
@@ -103,6 +104,10 @@ type ProviderConfig struct {
 	Timeout         int    `yaml:"timeout_seconds"`
 }
 
+type ToolsConfig struct {
+	ExposureMode string `yaml:"exposure_mode"`
+}
+
 type PermissionConfig struct {
 	Mode  string   `yaml:"mode"` // default, accept_edits, plan, bypass
 	Allow []string `yaml:"allow"`
@@ -142,6 +147,9 @@ type FaultInjectionConfig struct {
 }
 
 const (
+	ToolExposureModeStandard    = "standard"
+	ToolExposureModeSearchFirst = "search_first"
+
 	AgenticEnforcementModeObserve = "observe"
 	AgenticEnforcementModeGateway = "gateway"
 
@@ -287,6 +295,9 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("ELNATH_PERMISSION_MODE"); v != "" {
 		cfg.Permission.Mode = v
 	}
+	if v := os.Getenv("ELNATH_TOOLS_EXPOSURE_MODE"); v != "" {
+		cfg.Tools.ExposureMode = v
+	}
 	if v := os.Getenv("ELNATH_LOCALE"); v != "" {
 		cfg.Locale = v
 	}
@@ -360,6 +371,12 @@ func validate(cfg *Config) error {
 	case "default", "accept_edits", "plan", "bypass":
 	default:
 		return fmt.Errorf("unknown permission mode: %q", cfg.Permission.Mode)
+	}
+
+	switch strings.ToLower(strings.TrimSpace(cfg.Tools.ExposureMode)) {
+	case "", ToolExposureModeStandard, ToolExposureModeSearchFirst:
+	default:
+		return fmt.Errorf("unsupported tools.exposure_mode: %q (supported: standard, search_first)", cfg.Tools.ExposureMode)
 	}
 
 	for i, s := range cfg.MCPServers {

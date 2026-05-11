@@ -10,10 +10,31 @@ import (
 )
 
 const (
+	ToolSearchName              = "tool_search"
 	defaultToolSearchMaxResults = 5
 	maxToolSearchResults        = 20
 	toolSearchSchemaPreviewLen  = 600
 )
+
+type SchemaDeferralProvider interface {
+	DeferInitialToolSchema() bool
+}
+
+func ShouldDeferToolSchema(tool Tool) bool {
+	if tool == nil {
+		return false
+	}
+	if tool.Name() == ToolSearchName {
+		return false
+	}
+	if strings.HasPrefix(tool.Name(), "mcp_") {
+		return true
+	}
+	if deferrable, ok := tool.(SchemaDeferralProvider); ok {
+		return deferrable.DeferInitialToolSchema()
+	}
+	return false
+}
 
 // ToolSearchTool searches the current registry without changing which tools
 // are exposed to the model. Deferred exposure is a separate runtime policy.
@@ -25,7 +46,7 @@ func NewToolSearchTool(registry *Registry) *ToolSearchTool {
 	return &ToolSearchTool{registry: registry}
 }
 
-func (t *ToolSearchTool) Name() string { return "tool_search" }
+func (t *ToolSearchTool) Name() string { return ToolSearchName }
 
 func (t *ToolSearchTool) Description() string {
 	return "Search registered tools by name and description"

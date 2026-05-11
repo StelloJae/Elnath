@@ -367,6 +367,51 @@ func TestBuildToolDefs(t *testing.T) {
 	}
 }
 
+func TestBuildToolDefsSearchFirstDefersMCPAndKeepsToolSearch(t *testing.T) {
+	reg := tools.NewRegistry()
+	reg.Register(&mockTool{
+		name:        "read_file",
+		description: "Read files",
+		schema:      json.RawMessage(`{"type":"object"}`),
+	})
+	reg.Register(&mockTool{
+		name:        "mcp_github_issue",
+		description: "Create GitHub issues",
+		schema:      json.RawMessage(`{"type":"object"}`),
+	})
+	reg.Register(tools.NewToolSearchTool(reg))
+
+	defs := buildToolDefs(reg, ToolExposureSearchFirst)
+	byName := make(map[string]llm.ToolDef, len(defs))
+	for _, def := range defs {
+		byName[def.Name] = def
+	}
+
+	if _, ok := byName["read_file"]; !ok {
+		t.Fatal("read_file should remain visible")
+	}
+	if _, ok := byName["tool_search"]; !ok {
+		t.Fatal("tool_search should remain visible")
+	}
+	if _, ok := byName["mcp_github_issue"]; ok {
+		t.Fatal("mcp_github_issue should be deferred in search_first mode")
+	}
+}
+
+func TestBuildToolDefsSearchFirstFallsBackWithoutToolSearch(t *testing.T) {
+	reg := tools.NewRegistry()
+	reg.Register(&mockTool{
+		name:        "mcp_github_issue",
+		description: "Create GitHub issues",
+		schema:      json.RawMessage(`{"type":"object"}`),
+	})
+
+	defs := buildToolDefs(reg, ToolExposureSearchFirst)
+	if len(defs) != 1 || defs[0].Name != "mcp_github_issue" {
+		t.Fatalf("defs = %+v, want full exposure fallback without tool_search", defs)
+	}
+}
+
 // textOnlyStreamFn is a stream function that emits a single text event then done.
 func textOnlyStreamFn(text string) func(ctx context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
 	return func(ctx context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {

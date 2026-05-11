@@ -547,6 +547,7 @@ func buildExecutionRuntime(
 		SystemPrompt:         "",
 		ReasoningEffort:      cfg.Reasoning.Effort,
 		ReasoningEffortMode:  cfg.Reasoning.EffortMode,
+		ToolExposureMode:     cfg.Tools.ExposureMode,
 		Hooks:                hooks,
 		Permission:           perm,
 		ContextWindow:        wrappedCtxWindow,
