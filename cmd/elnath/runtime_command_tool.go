@@ -69,7 +69,7 @@ func (t *commandCatalogTool) Execute(_ context.Context, params json.RawMessage) 
 	case "", "list":
 		return marshalCommandCatalogToolOutput(map[string]any{
 			"action":   "list",
-			"commands": commandCatalog(input.IncludeHidden),
+			"commands": runtimeCommandCatalog(input.IncludeHidden),
 		})
 	case "show":
 		name := strings.TrimSpace(input.Command)
@@ -97,7 +97,7 @@ func (t *commandCatalogTool) Execute(_ context.Context, params json.RawMessage) 
 }
 
 func findCommandCatalogEntry(name string, includeHidden bool) (commandCatalogEntry, bool) {
-	for _, entry := range commandCatalog(includeHidden) {
+	for _, entry := range runtimeCommandCatalog(includeHidden) {
 		if entry.Name == name {
 			return entry, true
 		}
@@ -111,7 +111,7 @@ func findCommandCatalogEntry(name string, includeHidden bool) (commandCatalogEnt
 }
 
 func recommendedCommandCatalogEntries(query string, includeHidden bool, maxResults int) []commandCatalogRecommendation {
-	commands := commandCatalog(includeHidden)
+	commands := runtimeCommandCatalog(includeHidden)
 	terms := commandCatalogQueryTerms(query)
 	if len(terms) == 0 {
 		if len(commands) > maxResults {
