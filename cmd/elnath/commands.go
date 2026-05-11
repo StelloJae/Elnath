@@ -256,7 +256,7 @@ func buildProvider(cfg *config.Config) (llm.Provider, string, error) {
 	}
 
 	if len(reg.List()) == 0 {
-		inner := fmt.Errorf("no LLM provider configured: set ELNATH_ANTHROPIC_API_KEY, ELNATH_OPENAI_API_KEY, or ELNATH_OPENAI_RESPONSES_API_KEY")
+		inner := fmt.Errorf("no LLM provider configured: set ELNATH_OPENAI_RESPONSES_API_KEY, ELNATH_OPENAI_API_KEY, or ELNATH_ANTHROPIC_API_KEY")
 		return nil, "", userfacingerr.Wrap(userfacingerr.ELN001, inner, "build provider")
 	}
 

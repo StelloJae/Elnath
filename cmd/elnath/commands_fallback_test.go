@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stello/elnath/internal/config"
@@ -68,5 +69,27 @@ func TestBuildProviderOpenAIResponsesUsesFallbackModel(t *testing.T) {
 	}
 	if model != "gpt-5.5" {
 		t.Fatalf("model = %q, want gpt-5.5", model)
+	}
+}
+
+func TestBuildProviderNoProviderMessagePrefersResponses(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := config.DefaultConfig()
+	cfg.Anthropic.APIKey = ""
+	cfg.OpenAI.APIKey = ""
+	cfg.OpenAIResponses.APIKey = ""
+
+	_, _, err := buildProvider(cfg)
+	if err == nil {
+		t.Fatal("buildProvider error = nil, want no-provider error")
+	}
+	msg := err.Error()
+	responses := strings.Index(msg, "ELNATH_OPENAI_RESPONSES_API_KEY")
+	anthropic := strings.Index(msg, "ELNATH_ANTHROPIC_API_KEY")
+	if responses < 0 || anthropic < 0 {
+		t.Fatalf("error %q missing provider guidance", msg)
+	}
+	if responses > anthropic {
+		t.Fatalf("error %q should mention Responses before Anthropic", msg)
 	}
 }
