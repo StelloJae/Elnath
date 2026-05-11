@@ -200,6 +200,60 @@ func TestAgentReasoningEffortAuto(t *testing.T) {
 	}
 }
 
+func TestAgentReasoningEffortDecisionReasons(t *testing.T) {
+	tests := []struct {
+		name       string
+		mode       string
+		fallback   string
+		messages   []llm.Message
+		wantEffort string
+		wantReason string
+	}{
+		{
+			name:       "auto critical keyword",
+			mode:       "auto",
+			messages:   []llm.Message{llm.NewUserMessage("diagnose root cause")},
+			wantEffort: "xhigh",
+			wantReason: "critical_keyword",
+		},
+		{
+			name:       "auto long task",
+			mode:       "auto",
+			messages:   []llm.Message{llm.NewUserMessage(strings.Repeat("x", 601))},
+			wantEffort: "high",
+			wantReason: "long_task",
+		},
+		{
+			name:       "auto configured fallback",
+			mode:       "auto",
+			fallback:   "low",
+			wantEffort: "low",
+			wantReason: "configured_fallback",
+		},
+		{
+			name:       "manual",
+			mode:       "manual",
+			fallback:   "high",
+			messages:   []llm.Message{llm.NewUserMessage("quick status")},
+			wantEffort: "high",
+			wantReason: "manual",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := New(&mockProvider{}, tools.NewRegistry(),
+				WithReasoningEffortMode(tt.mode),
+				WithReasoningEffort(tt.fallback),
+			)
+			got := a.resolveReasoningEffortDecision(tt.messages)
+			if got.Effort != tt.wantEffort || got.Reason != tt.wantReason {
+				t.Fatalf("decision = %+v, want effort=%q reason=%q", got, tt.wantEffort, tt.wantReason)
+			}
+		})
+	}
+}
+
 func TestIsRetryable(t *testing.T) {
 	cases := []struct {
 		name string

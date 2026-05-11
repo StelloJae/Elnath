@@ -365,13 +365,21 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, sink event.Sink
 		// after maxConsecutiveCompressFailures.
 		messages = a.maybeProactiveCompress(ctx, messages)
 
+		effortDecision := a.resolveReasoningEffortDecision(messages)
+		if effortDecision.Effort != "" && a.logger != nil {
+			a.logger.Debug("reasoning effort selected",
+				"mode", effortDecision.Mode,
+				"effort", effortDecision.Effort,
+				"reason", effortDecision.Reason,
+			)
+		}
 		req := llm.Request{
 			Model:           a.model,
 			Messages:        messages,
 			Tools:           toolDefs,
 			System:          a.systemPrompt,
 			MaxTokens:       defaultMaxTokens,
-			ReasoningEffort: a.resolveReasoningEffort(messages),
+			ReasoningEffort: effortDecision.Effort,
 			EnableCache:     a.provider.Name() == "anthropic",
 			SessionID:       a.sessionID,
 		}
