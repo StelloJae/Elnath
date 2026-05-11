@@ -188,7 +188,8 @@ func cmdDaemonStart(ctx context.Context) error {
 
 	d := daemon.New(queue, cfg.Daemon.SocketPath, cfg.Daemon.MaxWorkers, rt.newDaemonTaskRunner(), app.Logger)
 	d.WithTaskEnvelope(agenticruntime.NewDaemonEnvelope(agenticStore))
-	d.WithCompletionGate(agenticcompletion.NewGate(agenticStore, agenticCompletionGateConfigMode(cfg)))
+	d.WithCompletionGate(agenticcompletion.NewGate(agenticStore, agenticCompletionGateConfigMode(cfg),
+		agenticcompletion.WithCompletionContextProvider(rt)))
 	d.WithSubmitSignalBridge(signalBridge)
 	d.WithFaultGuardConfig(fault.GuardConfig{Enabled: cfg.FaultInjection.Enabled})
 	d.MarkFaultGuardChecked()
