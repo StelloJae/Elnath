@@ -56,19 +56,31 @@ func (rt *executionRuntime) runSmallerScopeCompletionRetry(
 			"reason", summary.RetryReason,
 			"error", err,
 		)
-		return result, summary
+		return result, completionCorrectionFailedSummary(summary, "workflow_error")
 	}
 	retrySummary := withProviderCapabilities(summarizeCompletionContract(nil, retryInput.Config, retryResult), rt.provider)
 	retrySummary.CorrectionAttempted = true
 	retrySummary.CorrectionAttempts = 1
 	retrySummary.CorrectionDecision = summary.RetryDecision
 	retrySummary.CorrectionReason = summary.RetryReason
+	retrySummary.CorrectionStatus = "succeeded"
 	if retryEffortReason != "" {
 		retrySummary.ReasoningEffort = retryEffort
 		retrySummary.ReasoningEffortMode = "manual"
 		retrySummary.ReasoningEffortReason = retryEffortReason
 	}
 	return retryResult, retrySummary
+}
+
+func completionCorrectionFailedSummary(summary completionContractSummary, failureFamily string) completionContractSummary {
+	updated := summary
+	updated.CorrectionAttempted = true
+	updated.CorrectionAttempts = 1
+	updated.CorrectionDecision = summary.RetryDecision
+	updated.CorrectionReason = summary.RetryReason
+	updated.CorrectionStatus = "failed"
+	updated.CorrectionFailureFamily = failureFamily
+	return updated
 }
 
 func completionRetryEscalatedEffort(provider llm.Provider, summary completionContractSummary) (string, string) {
@@ -116,7 +128,7 @@ func (rt *executionRuntime) runVerificationCompletionRetry(
 			"reason", summary.RetryReason,
 			"error", err,
 		)
-		return result, summary
+		return result, completionCorrectionFailedSummary(summary, "verification_executor_error")
 	}
 	if toolResult == nil || toolResult.IsError {
 		rt.app.Logger.Warn("completion verification correction returned error",
@@ -124,7 +136,7 @@ func (rt *executionRuntime) runVerificationCompletionRetry(
 			"reason", summary.RetryReason,
 			"command", command,
 		)
-		return result, summary
+		return result, completionCorrectionFailedSummary(summary, "verification_command_failed")
 	}
 
 	observed := true
@@ -135,6 +147,7 @@ func (rt *executionRuntime) runVerificationCompletionRetry(
 	updated.CorrectionAttempts = 1
 	updated.CorrectionDecision = summary.RetryDecision
 	updated.CorrectionReason = summary.RetryReason
+	updated.CorrectionStatus = "succeeded"
 	updated.RetryDecision = ""
 	updated.RetryReason = ""
 	return result, updated

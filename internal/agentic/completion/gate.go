@@ -29,24 +29,26 @@ type Store interface {
 }
 
 type CompletionContext struct {
-	VerificationHint      bool
-	VerificationObserved  *bool
-	VerificationCommand   string
-	CompletionWarning     string
-	EditIntent            bool
-	EditObserved          *bool
-	ReasoningEffort       string
-	ReasoningEffortMode   string
-	ReasoningEffortReason string
-	ProviderName          string
-	ProviderEffort        string
-	ProviderEffortNote    string
-	CorrectionAttempted   bool
-	CorrectionAttempts    int
-	CorrectionDecision    string
-	CorrectionReason      string
-	RetryDecision         string
-	RetryReason           string
+	VerificationHint        bool
+	VerificationObserved    *bool
+	VerificationCommand     string
+	CompletionWarning       string
+	EditIntent              bool
+	EditObserved            *bool
+	ReasoningEffort         string
+	ReasoningEffortMode     string
+	ReasoningEffortReason   string
+	ProviderName            string
+	ProviderEffort          string
+	ProviderEffortNote      string
+	CorrectionAttempted     bool
+	CorrectionAttempts      int
+	CorrectionDecision      string
+	CorrectionReason        string
+	CorrectionStatus        string
+	CorrectionFailureFamily string
+	RetryDecision           string
+	RetryReason             string
 }
 
 type CompletionContextProvider interface {
@@ -263,6 +265,12 @@ func encodeReceiptSummary(summary map[string]int, completionContext CompletionCo
 	}
 	if completionContext.CorrectionReason != "" {
 		payload["correction_reason"] = completionContext.CorrectionReason
+	}
+	if completionContext.CorrectionStatus != "" {
+		payload["correction_status"] = completionContext.CorrectionStatus
+	}
+	if completionContext.CorrectionFailureFamily != "" {
+		payload["correction_failure_family"] = completionContext.CorrectionFailureFamily
 	}
 	if completionContext.RetryDecision != "" {
 		payload["retry_decision"] = completionContext.RetryDecision

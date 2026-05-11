@@ -35,21 +35,23 @@ type OutcomeRecord struct {
 	// Completion observability is intentionally advisory. These fields let the
 	// runtime record verification/completion gaps before any blocking retry
 	// policy is introduced.
-	VerificationHint      bool   `json:"verification_hint,omitempty"`
-	VerificationObserved  *bool  `json:"verification_observed,omitempty"`
-	CompletionWarning     string `json:"completion_warning,omitempty"`
-	ReasoningEffort       string `json:"reasoning_effort,omitempty"`
-	ReasoningEffortMode   string `json:"reasoning_effort_mode,omitempty"`
-	ReasoningEffortReason string `json:"reasoning_effort_reason,omitempty"`
-	ProviderName          string `json:"provider_name,omitempty"`
-	ProviderEffort        string `json:"provider_effort,omitempty"`
-	ProviderEffortNote    string `json:"provider_effort_note,omitempty"`
-	CorrectionAttempted   bool   `json:"correction_attempted,omitempty"`
-	CorrectionAttempts    int    `json:"correction_attempts,omitempty"`
-	CorrectionDecision    string `json:"correction_decision,omitempty"`
-	CorrectionReason      string `json:"correction_reason,omitempty"`
-	RetryDecision         string `json:"retry_decision,omitempty"`
-	RetryReason           string `json:"retry_reason,omitempty"`
+	VerificationHint        bool   `json:"verification_hint,omitempty"`
+	VerificationObserved    *bool  `json:"verification_observed,omitempty"`
+	CompletionWarning       string `json:"completion_warning,omitempty"`
+	ReasoningEffort         string `json:"reasoning_effort,omitempty"`
+	ReasoningEffortMode     string `json:"reasoning_effort_mode,omitempty"`
+	ReasoningEffortReason   string `json:"reasoning_effort_reason,omitempty"`
+	ProviderName            string `json:"provider_name,omitempty"`
+	ProviderEffort          string `json:"provider_effort,omitempty"`
+	ProviderEffortNote      string `json:"provider_effort_note,omitempty"`
+	CorrectionAttempted     bool   `json:"correction_attempted,omitempty"`
+	CorrectionAttempts      int    `json:"correction_attempts,omitempty"`
+	CorrectionDecision      string `json:"correction_decision,omitempty"`
+	CorrectionReason        string `json:"correction_reason,omitempty"`
+	CorrectionStatus        string `json:"correction_status,omitempty"`
+	CorrectionFailureFamily string `json:"correction_failure_family,omitempty"`
+	RetryDecision           string `json:"retry_decision,omitempty"`
+	RetryReason             string `json:"retry_reason,omitempty"`
 }
 
 // IsSuccessful returns true for workflow outcomes that count as completion in

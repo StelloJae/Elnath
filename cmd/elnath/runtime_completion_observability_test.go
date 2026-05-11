@@ -183,21 +183,23 @@ func TestRecordOutcomePersistsCompletionObservability(t *testing.T) {
 		success:      true,
 		userInput:    "fix regression and run tests",
 		completion: completionContractSummary{
-			VerificationHint:      true,
-			VerificationObserved:  &observed,
-			CompletionWarning:     "final_response_reports_incomplete",
-			ReasoningEffort:       "high",
-			ReasoningEffortMode:   "auto",
-			ReasoningEffortReason: "work_keyword",
-			ProviderName:          "openai-responses",
-			ProviderEffort:        llm.ReasoningEffortNativeWithUnsupportedRetry,
-			ProviderEffortNote:    "retry_without_reasoning_on_400_or_422_unsupported_effort",
-			CorrectionAttempted:   true,
-			CorrectionAttempts:    1,
-			CorrectionDecision:    completionRetryDecisionRetrySmallerScope,
-			CorrectionReason:      "final_response_reports_incomplete",
-			RetryDecision:         completionRetryDecisionRetrySmallerScope,
-			RetryReason:           "final_response_reports_incomplete",
+			VerificationHint:        true,
+			VerificationObserved:    &observed,
+			CompletionWarning:       "final_response_reports_incomplete",
+			ReasoningEffort:         "high",
+			ReasoningEffortMode:     "auto",
+			ReasoningEffortReason:   "work_keyword",
+			ProviderName:            "openai-responses",
+			ProviderEffort:          llm.ReasoningEffortNativeWithUnsupportedRetry,
+			ProviderEffortNote:      "retry_without_reasoning_on_400_or_422_unsupported_effort",
+			CorrectionAttempted:     true,
+			CorrectionAttempts:      1,
+			CorrectionDecision:      completionRetryDecisionRetrySmallerScope,
+			CorrectionReason:        "final_response_reports_incomplete",
+			CorrectionStatus:        "failed",
+			CorrectionFailureFamily: "workflow_error",
+			RetryDecision:           completionRetryDecisionRetrySmallerScope,
+			RetryReason:             "final_response_reports_incomplete",
 		},
 	})
 
@@ -221,24 +223,26 @@ func TestCompletionGateContextProviderConsumesRuntimeSummary(t *testing.T) {
 	observed := false
 
 	rt.rememberAgenticCompletionContext(42, completionContractSummary{
-		VerificationHint:      true,
-		VerificationObserved:  &observed,
-		VerificationCommand:   "go test ./cmd/elnath -count=1",
-		CompletionWarning:     "final_response_reports_incomplete",
-		EditIntent:            true,
-		EditObserved:          &observed,
-		ReasoningEffort:       "high",
-		ReasoningEffortMode:   "auto",
-		ReasoningEffortReason: "work_keyword",
-		ProviderName:          "openai-responses",
-		ProviderEffort:        llm.ReasoningEffortNativeWithUnsupportedRetry,
-		ProviderEffortNote:    "retry_without_reasoning_on_400_or_422_unsupported_effort",
-		CorrectionAttempted:   true,
-		CorrectionAttempts:    1,
-		CorrectionDecision:    completionRetryDecisionRetrySmallerScope,
-		CorrectionReason:      "final_response_reports_incomplete",
-		RetryDecision:         completionRetryDecisionRetrySmallerScope,
-		RetryReason:           "final_response_reports_incomplete",
+		VerificationHint:        true,
+		VerificationObserved:    &observed,
+		VerificationCommand:     "go test ./cmd/elnath -count=1",
+		CompletionWarning:       "final_response_reports_incomplete",
+		EditIntent:              true,
+		EditObserved:            &observed,
+		ReasoningEffort:         "high",
+		ReasoningEffortMode:     "auto",
+		ReasoningEffortReason:   "work_keyword",
+		ProviderName:            "openai-responses",
+		ProviderEffort:          llm.ReasoningEffortNativeWithUnsupportedRetry,
+		ProviderEffortNote:      "retry_without_reasoning_on_400_or_422_unsupported_effort",
+		CorrectionAttempted:     true,
+		CorrectionAttempts:      1,
+		CorrectionDecision:      completionRetryDecisionRetrySmallerScope,
+		CorrectionReason:        "final_response_reports_incomplete",
+		CorrectionStatus:        "failed",
+		CorrectionFailureFamily: "workflow_error",
+		RetryDecision:           completionRetryDecisionRetrySmallerScope,
+		RetryReason:             "final_response_reports_incomplete",
 	})
 
 	summary, err := rt.CompletionContext(ctx, daemon.Task{ID: 7}, 42)
@@ -271,6 +275,9 @@ func TestCompletionGateContextProviderConsumesRuntimeSummary(t *testing.T) {
 	}
 	if !summary.CorrectionAttempted || summary.CorrectionAttempts != 1 || summary.CorrectionDecision != completionRetryDecisionRetrySmallerScope || summary.CorrectionReason != "final_response_reports_incomplete" {
 		t.Fatalf("correction context = attempted %v attempts %d decision %q reason %q", summary.CorrectionAttempted, summary.CorrectionAttempts, summary.CorrectionDecision, summary.CorrectionReason)
+	}
+	if summary.CorrectionStatus != "failed" || summary.CorrectionFailureFamily != "workflow_error" {
+		t.Fatalf("correction failure context = status %q family %q", summary.CorrectionStatus, summary.CorrectionFailureFamily)
 	}
 	if summary.RetryDecision != completionRetryDecisionRetrySmallerScope || summary.RetryReason != "final_response_reports_incomplete" {
 		t.Fatalf("retry plan = %q/%q", summary.RetryDecision, summary.RetryReason)
@@ -321,24 +328,26 @@ func TestCompletionGateReceiptSummaryIncludesRuntimeContext(t *testing.T) {
 	}
 	observed := false
 	rt.rememberAgenticCompletionContext(task.ID, completionContractSummary{
-		VerificationHint:      true,
-		VerificationObserved:  &observed,
-		VerificationCommand:   "go test ./cmd/elnath -count=1",
-		CompletionWarning:     "final_response_reports_incomplete",
-		EditIntent:            true,
-		EditObserved:          &observed,
-		ReasoningEffort:       "medium",
-		ReasoningEffortMode:   "manual",
-		ReasoningEffortReason: "manual",
-		ProviderName:          "openai-responses",
-		ProviderEffort:        llm.ReasoningEffortNativeWithUnsupportedRetry,
-		ProviderEffortNote:    "retry_without_reasoning_on_400_or_422_unsupported_effort",
-		CorrectionAttempted:   true,
-		CorrectionAttempts:    1,
-		CorrectionDecision:    completionRetryDecisionRetrySmallerScope,
-		CorrectionReason:      "final_response_reports_incomplete",
-		RetryDecision:         completionRetryDecisionRetrySmallerScope,
-		RetryReason:           "final_response_reports_incomplete",
+		VerificationHint:        true,
+		VerificationObserved:    &observed,
+		VerificationCommand:     "go test ./cmd/elnath -count=1",
+		CompletionWarning:       "final_response_reports_incomplete",
+		EditIntent:              true,
+		EditObserved:            &observed,
+		ReasoningEffort:         "medium",
+		ReasoningEffortMode:     "manual",
+		ReasoningEffortReason:   "manual",
+		ProviderName:            "openai-responses",
+		ProviderEffort:          llm.ReasoningEffortNativeWithUnsupportedRetry,
+		ProviderEffortNote:      "retry_without_reasoning_on_400_or_422_unsupported_effort",
+		CorrectionAttempted:     true,
+		CorrectionAttempts:      1,
+		CorrectionDecision:      completionRetryDecisionRetrySmallerScope,
+		CorrectionReason:        "final_response_reports_incomplete",
+		CorrectionStatus:        "failed",
+		CorrectionFailureFamily: "workflow_error",
+		RetryDecision:           completionRetryDecisionRetrySmallerScope,
+		RetryReason:             "final_response_reports_incomplete",
 	})
 
 	gate := agenticcompletion.NewGate(rt.agenticStore, agenticcompletion.ModeVerification,
@@ -399,6 +408,9 @@ func TestCompletionGateReceiptSummaryIncludesRuntimeContext(t *testing.T) {
 	if summary["correction_decision"] != completionRetryDecisionRetrySmallerScope || summary["correction_reason"] != "final_response_reports_incomplete" {
 		t.Fatalf("correction reason missing from gate summary: %v", summary)
 	}
+	if summary["correction_status"] != "failed" || summary["correction_failure_family"] != "workflow_error" {
+		t.Fatalf("correction failure missing from gate summary: %v", summary)
+	}
 	if summary["retry_decision"] != completionRetryDecisionRetrySmallerScope || summary["retry_reason"] != "final_response_reports_incomplete" {
 		t.Fatalf("retry context missing from gate summary: %v", summary)
 	}
@@ -429,6 +441,9 @@ func assertCompletionOutcome(t *testing.T, rec learning.OutcomeRecord) {
 	}
 	if !rec.CorrectionAttempted || rec.CorrectionAttempts != 1 || rec.CorrectionDecision != completionRetryDecisionRetrySmallerScope || rec.CorrectionReason != "final_response_reports_incomplete" {
 		t.Fatalf("correction = attempted %v attempts %d decision %q reason %q", rec.CorrectionAttempted, rec.CorrectionAttempts, rec.CorrectionDecision, rec.CorrectionReason)
+	}
+	if rec.CorrectionStatus != "failed" || rec.CorrectionFailureFamily != "workflow_error" {
+		t.Fatalf("correction failure = status %q family %q", rec.CorrectionStatus, rec.CorrectionFailureFamily)
 	}
 	if rec.RetryDecision != completionRetryDecisionRetrySmallerScope || rec.RetryReason != "final_response_reports_incomplete" {
 		t.Fatalf("retry = decision %q reason %q", rec.RetryDecision, rec.RetryReason)
