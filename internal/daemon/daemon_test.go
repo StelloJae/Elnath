@@ -424,6 +424,42 @@ func TestDaemonSubmitAndStatus(t *testing.T) {
 	}
 }
 
+func TestDaemonStatusReportsTimeoutPolicy(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+
+	socketPath := shortDaemonSocketPath("elnath-timeout-policy")
+	d := New(q, socketPath, 1, mockTaskRunner{text: "ok"}.run, nil)
+	d.WithTimeouts(2*time.Second, 3*time.Second)
+	startDaemonInstance(t, d, socketPath)
+
+	statusResp := sendIPC(t, socketPath, IPCRequest{Command: "status"})
+	if !statusResp.OK {
+		t.Fatalf("status: not OK: %s", statusResp.Err)
+	}
+	m, ok := statusResp.Data.(map[string]interface{})
+	if !ok {
+		t.Fatalf("status response Data is not a map: %T", statusResp.Data)
+	}
+	idleRaw, ok := m["inactivity_timeout_seconds"].(float64)
+	if !ok {
+		t.Fatalf("inactivity_timeout_seconds = %T, want number", m["inactivity_timeout_seconds"])
+	}
+	if got := int(idleRaw); got != 2 {
+		t.Fatalf("inactivity_timeout_seconds = %d, want 2", got)
+	}
+	wallRaw, ok := m["wall_clock_timeout_seconds"].(float64)
+	if !ok {
+		t.Fatalf("wall_clock_timeout_seconds = %T, want number", m["wall_clock_timeout_seconds"])
+	}
+	if got := int(wallRaw); got != 3 {
+		t.Fatalf("wall_clock_timeout_seconds = %d, want 3", got)
+	}
+}
+
 func TestDaemonTaskEnvelopeDoesNotChangeQueueCompletion(t *testing.T) {
 	db := openTestDB(t)
 	q, err := NewQueue(db)

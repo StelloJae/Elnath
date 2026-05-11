@@ -49,7 +49,9 @@ type TaskStatusView struct {
 
 // StatusResponse is the payload returned by daemon status.
 type StatusResponse struct {
-	Tasks []TaskStatusView `json:"tasks"`
+	Tasks                    []TaskStatusView `json:"tasks"`
+	InactivityTimeoutSeconds int64            `json:"inactivity_timeout_seconds"`
+	WallClockTimeoutSeconds  int64            `json:"wall_clock_timeout_seconds"`
 }
 
 // TaskResult is the outcome of executing one queued daemon task.
@@ -406,8 +408,12 @@ func (d *Daemon) handleStatus(ctx context.Context, conn net.Conn) {
 	}
 
 	d.writeResponse(conn, IPCResponse{
-		OK:   true,
-		Data: StatusResponse{Tasks: views},
+		OK: true,
+		Data: StatusResponse{
+			Tasks:                    views,
+			InactivityTimeoutSeconds: int64(d.inactivityTimeout / time.Second),
+			WallClockTimeoutSeconds:  int64(d.wallClockTimeout / time.Second),
+		},
 	})
 }
 
