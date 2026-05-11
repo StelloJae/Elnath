@@ -72,6 +72,65 @@ func TestBuildProviderOpenAIResponsesUsesFallbackModel(t *testing.T) {
 	}
 }
 
+func TestBuildProviderHonorsExplicitProvider(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := config.DefaultConfig()
+	cfg.Provider = "anthropic"
+	cfg.Anthropic.APIKey = "anthropic-key"
+	cfg.Anthropic.Model = "claude-sonnet-4-6"
+	cfg.OpenAIResponses.APIKey = "responses-key"
+	cfg.OpenAIResponses.Model = "kimi-k2"
+
+	provider, model, err := buildProvider(cfg)
+	if err != nil {
+		t.Fatalf("buildProvider: %v", err)
+	}
+	if provider.Name() != "anthropic" {
+		t.Fatalf("provider.Name() = %q, want anthropic", provider.Name())
+	}
+	if model != "claude-sonnet-4-6" {
+		t.Fatalf("model = %q, want claude-sonnet-4-6", model)
+	}
+}
+
+func TestBuildProviderHonorsOpenAIResponsesProviderAlias(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := config.DefaultConfig()
+	cfg.Provider = "responses"
+	cfg.Anthropic.APIKey = "anthropic-key"
+	cfg.OpenAIResponses.APIKey = "responses-key"
+	cfg.OpenAIResponses.BaseURL = "https://api.minimax.io/v1"
+	cfg.OpenAIResponses.Model = "minimax-m2.7"
+
+	provider, model, err := buildProvider(cfg)
+	if err != nil {
+		t.Fatalf("buildProvider: %v", err)
+	}
+	if provider.Name() != "openai-responses" {
+		t.Fatalf("provider.Name() = %q, want openai-responses", provider.Name())
+	}
+	if model != "minimax-m2.7" {
+		t.Fatalf("model = %q, want minimax-m2.7", model)
+	}
+}
+
+func TestBuildProviderRejectsUnconfiguredExplicitProvider(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := config.DefaultConfig()
+	cfg.Provider = "openai"
+	cfg.Anthropic.APIKey = "anthropic-key"
+	cfg.OpenAI.APIKey = ""
+	cfg.OpenAIResponses.APIKey = ""
+
+	_, _, err := buildProvider(cfg)
+	if err == nil {
+		t.Fatal("buildProvider error = nil, want unconfigured provider error")
+	}
+	if !strings.Contains(err.Error(), "selected but not configured") {
+		t.Fatalf("error = %q, want selected-but-not-configured", err)
+	}
+}
+
 func TestBuildProviderNoProviderMessagePrefersResponses(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	cfg := config.DefaultConfig()

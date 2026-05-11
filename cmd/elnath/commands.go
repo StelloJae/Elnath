@@ -201,6 +201,7 @@ func summarizeToolUses(stats []agent.ToolStat) (calls, errors int) {
 func buildProvider(cfg *config.Config) (llm.Provider, string, error) {
 	reg := llm.NewRegistry()
 	var model string
+	providerModels := make(map[string]string)
 	explicitResponses := cfg.OpenAIResponses.APIKey != ""
 
 	if explicitResponses {
@@ -222,6 +223,7 @@ func buildProvider(cfg *config.Config) (llm.Provider, string, error) {
 			m = resolveFallbackModel(cfg)
 		}
 		reg.Register("openai-responses", llm.NewResponsesProvider(cfg.OpenAIResponses.APIKey, m, "", opts...))
+		providerModels["openai-responses"] = m
 		if model == "" {
 			model = m
 		}
@@ -248,6 +250,7 @@ func buildProvider(cfg *config.Config) (llm.Provider, string, error) {
 			m = "claude-sonnet-4-6"
 		}
 		reg.Register("anthropic", llm.NewAnthropicProvider(cfg.Anthropic.APIKey, m, opts...))
+		providerModels["anthropic"] = m
 		if model == "" {
 			model = m
 		}
@@ -261,6 +264,7 @@ func buildProvider(cfg *config.Config) (llm.Provider, string, error) {
 			opts = append(opts, llm.WithCodexOAuthReasoningEffort(cfg.OpenAIResponses.ReasoningEffort))
 		}
 		reg.Register("codex", llm.NewCodexOAuthProvider(codexModel, opts...))
+		providerModels["codex"] = codexModel
 		if model == "" {
 			model = codexModel
 		}
@@ -270,6 +274,7 @@ func buildProvider(cfg *config.Config) (llm.Provider, string, error) {
 		if codexToken != "" && !explicitResponses {
 			reg.Register("openai-responses", llm.NewResponsesProvider(codexToken, codexModel, codexAccountID,
 				llm.WithResponsesReasoningEffort(cfg.OpenAIResponses.ReasoningEffort)))
+			providerModels["openai-responses"] = codexModel
 			if model == "" {
 				model = codexModel
 			}
@@ -286,6 +291,7 @@ func buildProvider(cfg *config.Config) (llm.Provider, string, error) {
 			m = resolveFallbackModel(cfg)
 		}
 		reg.Register("openai", llm.NewOpenAIProvider(cfg.OpenAI.APIKey, m, opts...))
+		providerModels["openai"] = m
 		if model == "" {
 			model = m
 		}
@@ -301,6 +307,7 @@ func buildProvider(cfg *config.Config) (llm.Provider, string, error) {
 			m = "llama3.2"
 		}
 		reg.Register("ollama", llm.NewOllamaProvider(cfg.Ollama.APIKey, m, opts...))
+		providerModels["ollama"] = m
 		if model == "" {
 			model = m
 		}
@@ -309,6 +316,18 @@ func buildProvider(cfg *config.Config) (llm.Provider, string, error) {
 	if len(reg.List()) == 0 {
 		inner := fmt.Errorf("no LLM provider configured: set ELNATH_OPENAI_RESPONSES_API_KEY, ELNATH_OPENAI_API_KEY, or ELNATH_ANTHROPIC_API_KEY")
 		return nil, "", userfacingerr.Wrap(userfacingerr.ELN001, inner, "build provider")
+	}
+
+	if selected := config.NormalizeProviderName(cfg.Provider); selected != "" {
+		p, err := reg.Get(selected)
+		if err != nil {
+			return nil, "", fmt.Errorf("provider %q selected but not configured", cfg.Provider)
+		}
+		selectedModel := providerModels[selected]
+		if selectedModel == "" {
+			selectedModel = model
+		}
+		return p, llm.ResolveModel(selectedModel), nil
 	}
 
 	canonical := llm.ResolveModel(model)

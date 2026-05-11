@@ -168,6 +168,7 @@ Create `~/.elnath/config.yaml`:
 data_dir: ~/.elnath/data
 wiki_dir: ~/.elnath/wiki
 log_level: info
+provider: openai_responses # optional: anthropic|openai|openai_responses|codex|ollama
 
 anthropic:
   api_key: ${ELNATH_ANTHROPIC_API_KEY}

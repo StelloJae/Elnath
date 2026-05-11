@@ -14,6 +14,7 @@ func DefaultConfig() *Config {
 		WikiDir:  filepath.Join(base, "wiki"),
 		Locale:   "en",
 		LogLevel: "info",
+		Provider: "",
 
 		FallbackModel: "gpt-5.5",
 

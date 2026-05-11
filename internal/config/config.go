@@ -15,6 +15,7 @@ type Config struct {
 	WikiDir  string `yaml:"wiki_dir"`
 	Locale   string `yaml:"locale"`
 	LogLevel string `yaml:"log_level"`
+	Provider string `yaml:"provider"`
 
 	Anthropic ProviderConfig `yaml:"anthropic"`
 	OpenAI    ProviderConfig `yaml:"openai"`
@@ -259,6 +260,9 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("ELNATH_LOG_LEVEL"); v != "" {
 		cfg.LogLevel = v
 	}
+	if v := os.Getenv("ELNATH_PROVIDER"); v != "" {
+		cfg.Provider = v
+	}
 	if v := os.Getenv("ELNATH_ANTHROPIC_API_KEY"); v != "" {
 		cfg.Anthropic.APIKey = v
 	}
@@ -363,6 +367,9 @@ func validate(cfg *Config) error {
 	if err := validateProviderReasoningEffort("reasoning", cfg.Reasoning.Effort); err != nil {
 		return err
 	}
+	if err := validateProviderName(cfg.Provider); err != nil {
+		return err
+	}
 	if cfg.OpenAIResponses.APIKey == "" && (cfg.OpenAIResponses.BaseURL != "" || cfg.OpenAIResponses.Model != "") {
 		return fmt.Errorf("openai_responses.api_key is required when openai_responses base_url or model is set")
 	}
@@ -427,5 +434,27 @@ func validateReasoningEffortMode(mode string) error {
 		return nil
 	default:
 		return fmt.Errorf("reasoning.effort_mode %q is invalid (supported: manual, auto)", mode)
+	}
+}
+
+func NormalizeProviderName(provider string) string {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "":
+		return ""
+	case "responses", "openai_responses", "openai-responses":
+		return "openai-responses"
+	case "anthropic", "openai", "codex", "ollama":
+		return strings.ToLower(strings.TrimSpace(provider))
+	default:
+		return strings.ToLower(strings.TrimSpace(provider))
+	}
+}
+
+func validateProviderName(provider string) error {
+	switch NormalizeProviderName(provider) {
+	case "", "anthropic", "openai", "openai-responses", "codex", "ollama":
+		return nil
+	default:
+		return fmt.Errorf("provider %q is invalid (supported: anthropic, openai, openai_responses, codex, ollama)", provider)
 	}
 }

@@ -24,6 +24,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.LogLevel != "info" {
 		t.Errorf("expected LogLevel %q, got %q", "info", cfg.LogLevel)
 	}
+	if cfg.Provider != "" {
+		t.Errorf("expected Provider default empty, got %q", cfg.Provider)
+	}
 	if cfg.Anthropic.Model == "" {
 		t.Error("Anthropic.Model should not be empty")
 	}
@@ -436,6 +439,13 @@ func TestApplyEnvOverrides(t *testing.T) {
 			want:   "debug",
 		},
 		{
+			name:   "ELNATH_PROVIDER",
+			envKey: "ELNATH_PROVIDER",
+			envVal: "openai_responses",
+			check:  func(c *Config) string { return c.Provider },
+			want:   "openai_responses",
+		},
+		{
 			name:   "ELNATH_ANTHROPIC_API_KEY",
 			envKey: "ELNATH_ANTHROPIC_API_KEY",
 			envVal: "anthro-key",
@@ -660,6 +670,21 @@ func TestValidate(t *testing.T) {
 			name:    "unsupported locale",
 			mutate:  func(c *Config) { c.Locale = "fr" },
 			wantErr: "supported: en, ko, ja, zh, auto",
+		},
+		{
+			name:    "provider openai_responses alias is valid",
+			mutate:  func(c *Config) { c.Provider = "openai_responses" },
+			wantErr: "",
+		},
+		{
+			name:    "provider responses alias is valid",
+			mutate:  func(c *Config) { c.Provider = "responses" },
+			wantErr: "",
+		},
+		{
+			name:    "unsupported provider",
+			mutate:  func(c *Config) { c.Provider = "moonshot" },
+			wantErr: "provider",
 		},
 		{
 			name:    "unsupported openai responses reasoning effort",
