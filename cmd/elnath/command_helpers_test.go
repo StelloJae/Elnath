@@ -19,6 +19,7 @@ import (
 	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/core"
 	"github.com/stello/elnath/internal/daemon"
+	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/onboarding"
 	"github.com/stello/elnath/internal/telegram"
 	"github.com/stello/elnath/internal/tools"
@@ -277,10 +278,65 @@ func openTelegramCommandTestShell(t *testing.T, bot telegram.BotClient) (*telegr
 
 func TestCommandRegistryContainsExpectedCommands(t *testing.T) {
 	reg := commandRegistry()
-	for _, name := range []string{"version", "help", "run", "setup", "daemon", "telegram", "wiki", "search", "eval", "lessons"} {
+	for _, name := range []string{"version", "help", "run", "setup", "daemon", "telegram", "wiki", "search", "eval", "lessons", "provider"} {
 		if _, ok := reg[name]; !ok {
 			t.Fatalf("missing command %q", name)
 		}
+	}
+}
+
+func TestProviderCommandStatusJSON(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	cfgData := "data_dir: " + filepath.Join(dir, "data") + "\n" +
+		"wiki_dir: " + filepath.Join(dir, "wiki") + "\n" +
+		"provider: openai\n" +
+		"openai:\n" +
+		"  api_key: test-key\n" +
+		"  model: gpt-5.5\n" +
+		"reasoning:\n" +
+		"  effort_mode: auto\n" +
+		"  effort: medium\n" +
+		"permission:\n  mode: default\n"
+	if err := os.WriteFile(cfgPath, []byte(cfgData), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	t.Setenv("ELNATH_PROVIDER", "")
+	t.Setenv("ELNATH_OPENAI_API_KEY", "")
+	t.Setenv("ELNATH_OPENAI_RESPONSES_API_KEY", "")
+	t.Setenv("ELNATH_ANTHROPIC_API_KEY", "")
+	withArgs(t, []string{"elnath", "--config", cfgPath})
+	resetLoadLocaleCache()
+
+	stdout, stderr := captureOutput(t, func() {
+		if err := executeCommand(context.Background(), "provider", []string{"status", "--json"}); err != nil {
+			t.Fatalf("executeCommand(provider status --json): %v", err)
+		}
+	})
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+	var got struct {
+		Provider             string `json:"provider"`
+		Model                string `json:"model"`
+		ReasoningEffort      string `json:"reasoning_effort"`
+		ReasoningEffortMode  string `json:"reasoning_effort_mode"`
+		ConfiguredEffort     string `json:"configured_effort"`
+		ProviderEffort       string `json:"provider_effort"`
+		ProviderEffortNote   string `json:"provider_effort_note,omitempty"`
+		AutoEffortCompatible bool   `json:"auto_effort_compatible"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatalf("provider status json: %v\n%s", err, stdout)
+	}
+	if got.Provider != "openai" || got.Model != "gpt-5.5" {
+		t.Fatalf("provider/model = %q/%q, want openai/gpt-5.5", got.Provider, got.Model)
+	}
+	if got.ProviderEffort != llm.ReasoningEffortIgnored || got.AutoEffortCompatible {
+		t.Fatalf("provider effort = %q compatible=%v, want ignored/false", got.ProviderEffort, got.AutoEffortCompatible)
+	}
+	if got.ReasoningEffortMode != "auto" || got.ConfiguredEffort != "medium" {
+		t.Fatalf("reasoning config = mode %q effort %q", got.ReasoningEffortMode, got.ConfiguredEffort)
 	}
 }
 
