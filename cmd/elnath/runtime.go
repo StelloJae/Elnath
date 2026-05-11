@@ -419,6 +419,12 @@ func buildExecutionRuntime(
 	}
 	app.RegisterCloser("bash runner", bashRunnerCloser{runner: runner})
 	reg := buildToolRegistry(guard, provider, runner)
+	taskQueue, err := daemon.NewQueueNoRecover(db.Main)
+	if err != nil {
+		return nil, fmt.Errorf("open task queue tools: %w", err)
+	}
+	reg.Register(daemon.NewTaskListTool(taskQueue))
+	reg.Register(daemon.NewTaskGetTool(taskQueue))
 	gitSync, wikiIdx := registerWikiTools(reg, cfg.WikiDir, db.Wiki)
 	reg.Register(conversation.NewConversationSearchTool(historyStore))
 
