@@ -428,6 +428,18 @@ is_v8_py_bug001_requests_task() {
   }
 }
 
+is_v8_alt_mix001_semantic_release_task() {
+  [[ "$TASK_ID" == "V8-ALT-MIX-001" ]] || {
+    [[ "$TASK_REPO" == *"semantic-release/semantic-release"* && "$TASK_PROMPT" == *"release-tooling configuration edge case"* ]]
+  }
+}
+
+is_v8_py_bf001_flask_context_task() {
+  [[ "$TASK_ID" == "V8-PY-BF-001" ]] || {
+    [[ "$TASK_REPO" == *"pallets/flask"* && "$TASK_PROMPT" == *"request or app context behavior"* ]]
+  }
+}
+
 typescript_recovery_checklist() {
   is_typescript_canary_task || return 0
   cat <<'EOF'
@@ -465,11 +477,19 @@ EOF
 }
 
 task_recovery_timeout() {
-  if is_ts_bf001_vitest_task || is_ts_bf002_nestjs_task || is_v8_py_th001_pytest_task || is_v8_go_bug004_fsnotify_task || is_v8_go_bug003_cobra_task || is_v8_go_bf004_gorm_context_task || is_v8_mix_bug001_actions_toolkit_task || is_v8_add_js001_yargs_task || is_v8_def_ts003_msw_task || is_v8_py_bug001_requests_task; then
+  if is_ts_bf001_vitest_task || is_ts_bf002_nestjs_task || is_v8_py_th001_pytest_task || is_v8_go_bug004_fsnotify_task || is_v8_go_bug003_cobra_task || is_v8_go_bf004_gorm_context_task || is_v8_mix_bug001_actions_toolkit_task || is_v8_add_js001_yargs_task || is_v8_def_ts003_msw_task || is_v8_py_bug001_requests_task || is_v8_alt_mix001_semantic_release_task || is_v8_py_bf001_flask_context_task; then
     printf '%s\n' "$ELNATH_TIMEOUT"
     return 0
   fi
   printf '%s\n' $(( ELNATH_TIMEOUT / 2 ))
+}
+
+task_max_iterations() {
+  if is_v8_go_bug004_fsnotify_task; then
+    printf '%s\n' 28
+    return 0
+  fi
+  printf '%s\n' 20
 }
 
 ts_bf001_recovery_guidance() {
@@ -684,8 +704,13 @@ v8_go_bug004_fsnotify_guidance() {
 V8-GO-BUG-004 fsnotify inotify guidance:
 - Start in `backend_inotify.go`, especially `handleEvent`, `IN_MOVE_SELF`, `IN_DELETE_SELF`, and watch descriptor bookkeeping.
 - Use `backend_inotify_test.go` for focused Linux regression coverage when adding a new test; do not create a broad timing-heavy test harness.
-- The expected patch is small and should preserve normal watcher behavior while fixing rename/remove event sequencing.
-- If no-change recovery starts, stop re-reading after the event conversion and existing rename/remove tests are identified; patch `backend_inotify.go` before further exploration.
+- The expected patch is small and should preserve normal watcher behavior while fixing rename/remove event sequencing. Do not finish with findings only.
+- Do not run `go test ./...` before a diff exists. First leave a working-tree diff in `backend_inotify.go`, then add or update the focused regression in `backend_inotify_test.go`, then verify.
+- In `handleEvent`, prefer direct watch bookkeeping for self-move/self-delete events once the kernel has already reported the watch target moved or deleted; avoid treating the self event as a user `Remove()` call that can race with inotify's implicit watch invalidation.
+- If touching `IN_MOVE_SELF`, keep the emitted `Rename` event for user-added non-recursive watches and keep recursive child behavior intact.
+- Add focused coverage in `backend_inotify_test.go` proving the self move/remove sequence does not emit an unexpected backend error and leaves watch bookkeeping consistent.
+- If no-change recovery starts, stop re-reading after `handleEvent`, `w.remove`, and the existing inotify delete/rename tests are identified; patch `backend_inotify.go` and `backend_inotify_test.go` before any more exploration.
+- If you are about to say "Applying the targeted code change" or "I will apply the patch", apply the patch in that turn before any final answer.
 - Run `go test ./...` before the final answer.
 EOF
 }
@@ -714,6 +739,36 @@ V8-PY-BUG-001 requests option propagation guidance:
 - Do not chase direct `Session.send` or proxy behavior unless `merge_environment_settings` evidence disproves the verify/env path.
 - In no-change recovery, patch `src/requests/sessions.py` and add the focused `tests/test_requests.py` regression before verification.
 - Run `python3 -m pytest tests/test_requests.py -q` before the final answer.
+EOF
+}
+
+v8_alt_mix001_semantic_release_guidance() {
+  is_v8_alt_mix001_semantic_release_task || return 0
+  cat <<'EOF'
+
+V8-ALT-MIX-001 semantic-release channel guidance:
+- Start in `lib/get-release-to-add.js` and `test/get-release-to-add.test.js`.
+- The edge case is mixed channel representations in release-add decisions. `false`, `null`, `undefined`, and `""` are default-channel equivalents, while named channels such as `"next"` and `"2.x"` remain distinct.
+- Reuse the existing `isSameChannel` helper from `lib/utils.js`; do not compare channels with raw `includes(branch.channel || null)` or raw lodash `intersection(...)` equality when deciding whether a version is already on the current branch or came from a higher branch.
+- A focused regression should cover a maintenance branch such as `2.x` receiving a version from a higher default-channel branch when the tag stores that default channel as `channels: [false]`, proving the version is added to the maintenance channel instead of being skipped.
+- Preserve the existing tests that all branches with `channel: false` do not add a channel.
+- Do not spend time on release credentials or broad integration setup during recovery; the focused unit target is `test/get-release-to-add.test.js`.
+- Run `npm run test:unit -- test/get-release-to-add.test.js && npm run test:integration` before the final answer.
+EOF
+}
+
+v8_py_bf001_flask_context_guidance() {
+  is_v8_py_bf001_flask_context_task || return 0
+  cat <<'EOF'
+
+V8-PY-BF-001 Flask context guidance:
+- Start in `src/flask/app.py` around `_got_first_request`, `full_dispatch_request`, `request_context`, and `wsgi_app`, then add focused coverage in `tests/test_basic.py`.
+- Do not stop after a helper-only refactor in `src/flask/app.py`. A valid patch must include observable behavior coverage in `tests/test_basic.py`.
+- The observed incomplete path extracted `_mark_first_request()` but only called it from the same dispatch path and added no test. That is not sufficient evidence.
+- Keep route semantics intact: a normal `client.get(...)` route should still return the same response, and setup-after-first-request behavior should remain guarded.
+- A focused regression can assert that first-request state is marked through the request dispatch path and that a setup method such as `@app.route(...)` is rejected after the first request while still allowing route behavior before that request.
+- If recovery starts from no diff, patch `src/flask/app.py` and `tests/test_basic.py` before running pytest. Do not keep re-reading `ctx.py` unless `app.py` evidence disproves the first-request/setup guard seam.
+- Run `python3 -m pytest tests/test_basic.py -q` before the final answer.
 EOF
 }
 
@@ -902,6 +957,42 @@ v8_py_th001_missing_behavior_or_regression() {
   grep -Eq '^\+.*timedelta' <<<"$test_diff" || return 0
   grep -Eq '^\+.*abs[[:space:]]*=[[:space:]]*([A-Za-z_][A-Za-z0-9_]*\.)?timedelta\(' <<<"$test_diff" || return 0
   grep -Eq '^\+.*pytest\.raises\(TypeError' <<<"$test_diff" || return 0
+  return 1
+}
+
+v8_go_bug004_missing_behavior_or_regression() {
+  is_v8_go_bug004_fsnotify_task || return 1
+  benchmark_changed_files_all | grep -qx 'backend_inotify.go' || return 0
+  benchmark_changed_files_all | grep -qx 'backend_inotify_test.go' || return 0
+  local impl_diff test_diff
+  impl_diff="$(git -C "$WORKTREE" diff -- backend_inotify.go)"
+  test_diff="$(git -C "$WORKTREE" diff -- backend_inotify_test.go)"
+  grep -Eq 'IN_MOVE_SELF|IN_DELETE_SELF|handleEvent|remove|watches|wd' <<<"$impl_diff" || return 0
+  grep -Eq 'IN_MOVE_SELF|IN_DELETE_SELF|Rename|Remove|backend error|Errors|watches|wd' <<<"$test_diff" || return 0
+  return 1
+}
+
+v8_alt_mix001_missing_behavior_or_regression() {
+  is_v8_alt_mix001_semantic_release_task || return 1
+  benchmark_changed_files_all | grep -qx 'lib/get-release-to-add.js' || return 0
+  benchmark_changed_files_all | grep -qx 'test/get-release-to-add.test.js' || return 0
+  local impl_diff test_diff
+  impl_diff="$(git -C "$WORKTREE" diff -- lib/get-release-to-add.js)"
+  test_diff="$(git -C "$WORKTREE" diff -- test/get-release-to-add.test.js)"
+  grep -Eq 'isSameChannel|sameChannel|higherChannels.*some|channels.*some' <<<"$impl_diff" || return 0
+  grep -Eq 'channel:[[:space:]]*false|channels:[[:space:]]*\[false\]|default channel|2\.x|maintenance' <<<"$test_diff" || return 0
+  return 1
+}
+
+v8_py_bf001_missing_behavior_or_regression() {
+  is_v8_py_bf001_flask_context_task || return 1
+  benchmark_changed_files_all | grep -qx 'src/flask/app.py' || return 0
+  benchmark_changed_files_all | grep -qx 'tests/test_basic.py' || return 0
+  local impl_diff test_diff
+  impl_diff="$(git -C "$WORKTREE" diff -- src/flask/app.py)"
+  test_diff="$(git -C "$WORKTREE" diff -- tests/test_basic.py)"
+  grep -Eq '_got_first_request|_mark_first_request|full_dispatch_request|request_context|wsgi_app' <<<"$impl_diff" || return 0
+  grep -Eq '_got_first_request|first request|setup method|route|client\.get|test_client' <<<"$test_diff" || return 0
   return 1
 }
 
@@ -1215,6 +1306,18 @@ write_passed_verification_task_specific_failure() {
     write_result false true "incomplete_patch" "$recovery_attempted" false "$prefix, but V8-PY-TH-001 lacks the required pytest approx behavior diff plus focused datetime/timedelta regression coverage pair"
     return 0
   fi
+  if v8_go_bug004_missing_behavior_or_regression; then
+    write_result false true "incomplete_patch" "$recovery_attempted" false "$prefix, but V8-GO-BUG-004 lacks the required fsnotify inotify behavior diff plus focused backend_inotify_test.go regression"
+    return 0
+  fi
+  if v8_alt_mix001_missing_behavior_or_regression; then
+    write_result false true "incomplete_patch" "$recovery_attempted" false "$prefix, but V8-ALT-MIX-001 lacks the required channel comparison diff plus focused release-add regression"
+    return 0
+  fi
+  if v8_py_bf001_missing_behavior_or_regression; then
+    write_result false true "incomplete_patch" "$recovery_attempted" false "$prefix, but V8-PY-BF-001 lacks the required Flask context behavior diff plus focused tests/test_basic.py regression"
+    return 0
+  fi
   if ts_bf002_production_diff_without_focused_regression; then
     write_result false true "incomplete_patch" "$recovery_attempted" false "$prefix, but TS-BF-002 changed module-utils behavior without focused cancellation regression coverage"
     return 0
@@ -1241,6 +1344,18 @@ task_specific_completion_failure_reason() {
   fi
   if v8_py_th001_missing_behavior_or_regression; then
     echo "V8-PY-TH-001 lacks the required pytest approx behavior diff plus focused datetime/timedelta regression coverage pair."
+    return 0
+  fi
+  if v8_go_bug004_missing_behavior_or_regression; then
+    echo "V8-GO-BUG-004 lacks the required fsnotify inotify behavior diff plus focused backend_inotify_test.go regression."
+    return 0
+  fi
+  if v8_alt_mix001_missing_behavior_or_regression; then
+    echo "V8-ALT-MIX-001 lacks the required channel comparison diff plus focused release-add regression."
+    return 0
+  fi
+  if v8_py_bf001_missing_behavior_or_regression; then
+    echo "V8-PY-BF-001 lacks the required Flask context behavior diff plus focused tests/test_basic.py regression."
     return 0
   fi
   if ts_bf002_production_diff_without_focused_regression; then
@@ -1280,6 +1395,8 @@ recover_passed_task_specific_failure() {
     TASK_SPECIFIC_PROMPT+="$(v8_go_bug004_fsnotify_guidance)"
     TASK_SPECIFIC_PROMPT+="$(v8_go_bug003_cobra_guidance)"
     TASK_SPECIFIC_PROMPT+="$(v8_py_bug001_requests_guidance)"
+    TASK_SPECIFIC_PROMPT+="$(v8_alt_mix001_semantic_release_guidance)"
+    TASK_SPECIFIC_PROMPT+="$(v8_py_bf001_flask_context_guidance)"
     TASK_SPECIFIC_PROMPT+="$(v8_ts_bug003_axios_guidance)"
     TASK_SPECIFIC_PROMPT+="$(v8_ts_bug004_undici_guidance)"
     TASK_SPECIFIC_PROMPT+="$(go_bf002_recovery_guidance)"
@@ -1764,7 +1881,7 @@ run_elnath() {
     cd "$WORKTREE"
     export ELNATH_EVAL_AUDIT_LOG="$AUDIT_LOG"
     export ELNATH_BENCHMARK_MODE=1
-    export ELNATH_MAX_ITERATIONS=20
+    export ELNATH_MAX_ITERATIONS="$(task_max_iterations)"
     export ELNATH_TASK_LANGUAGE="$TASK_LANGUAGE"
     export ELNATH_PERMISSION_MODE="${ELNATH_BENCHMARK_PERMISSION_MODE:-bypass}"
     export ELNATH_DATA_DIR="$BENCHMARK_DATA_DIR"
@@ -1880,6 +1997,8 @@ BENCHMARK_PROMPT+="$(v8_py_th001_pytest_guidance)"
 BENCHMARK_PROMPT+="$(v8_go_bug004_fsnotify_guidance)"
 BENCHMARK_PROMPT+="$(v8_go_bug003_cobra_guidance)"
 BENCHMARK_PROMPT+="$(v8_py_bug001_requests_guidance)"
+BENCHMARK_PROMPT+="$(v8_alt_mix001_semantic_release_guidance)"
+BENCHMARK_PROMPT+="$(v8_py_bf001_flask_context_guidance)"
 BENCHMARK_PROMPT+="$(v8_ts_bug003_axios_guidance)"
 BENCHMARK_PROMPT+="$(v8_ts_bug004_undici_guidance)"
 BENCHMARK_PROMPT+="$(go_bf002_recovery_guidance)"
@@ -2025,6 +2144,8 @@ if [[ "$HAS_CHANGES" == "false" ]]; then
   NO_CHANGE_PROMPT+="$(v8_go_bug004_fsnotify_guidance)"
   NO_CHANGE_PROMPT+="$(v8_go_bug003_cobra_guidance)"
   NO_CHANGE_PROMPT+="$(v8_py_bug001_requests_guidance)"
+  NO_CHANGE_PROMPT+="$(v8_alt_mix001_semantic_release_guidance)"
+  NO_CHANGE_PROMPT+="$(v8_py_bf001_flask_context_guidance)"
   NO_CHANGE_PROMPT+="$(v8_ts_bug003_axios_guidance)"
   NO_CHANGE_PROMPT+="$(v8_ts_bug004_undici_guidance)"
   NO_CHANGE_PROMPT+="$(go_bf002_recovery_guidance)"
@@ -2099,6 +2220,8 @@ if run_verification_command "$VERIFY_LOG"; then
       VERIFIED_INCOMPLETE_PROMPT+="$(v8_go_bug004_fsnotify_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(v8_go_bug003_cobra_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(v8_py_bug001_requests_guidance)"
+      VERIFIED_INCOMPLETE_PROMPT+="$(v8_alt_mix001_semantic_release_guidance)"
+      VERIFIED_INCOMPLETE_PROMPT+="$(v8_py_bf001_flask_context_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(v8_ts_bug003_axios_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(v8_ts_bug004_undici_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(go_bf002_recovery_guidance)"
@@ -2176,6 +2299,8 @@ RECOVERY_PROMPT+="$(v8_py_th001_pytest_guidance)"
 RECOVERY_PROMPT+="$(v8_go_bug004_fsnotify_guidance)"
 RECOVERY_PROMPT+="$(v8_go_bug003_cobra_guidance)"
 RECOVERY_PROMPT+="$(v8_py_bug001_requests_guidance)"
+RECOVERY_PROMPT+="$(v8_alt_mix001_semantic_release_guidance)"
+RECOVERY_PROMPT+="$(v8_py_bf001_flask_context_guidance)"
 RECOVERY_PROMPT+="$(v8_ts_bug003_axios_guidance)"
 RECOVERY_PROMPT+="$(v8_ts_bug004_undici_guidance)"
 RECOVERY_PROMPT+="$(go_bf002_recovery_guidance)"
@@ -2272,6 +2397,21 @@ fi
 
 if go_bug002_brittle_internal_state_assertion; then
   write_result false false "incomplete_patch" true false "GO-BUG-002 regression asserts brittle internal configFile state after ReadInConfig"
+  exit 0
+fi
+
+if v8_go_bug004_missing_behavior_or_regression; then
+  write_result false false "incomplete_patch" true false "V8-GO-BUG-004 lacks the required fsnotify inotify behavior diff plus focused backend_inotify_test.go regression"
+  exit 0
+fi
+
+if v8_alt_mix001_missing_behavior_or_regression; then
+  write_result false false "incomplete_patch" true false "V8-ALT-MIX-001 lacks the required channel comparison diff plus focused release-add regression"
+  exit 0
+fi
+
+if v8_py_bf001_missing_behavior_or_regression; then
+  write_result false false "incomplete_patch" true false "V8-PY-BF-001 lacks the required Flask context behavior diff plus focused tests/test_basic.py regression"
   exit 0
 fi
 
