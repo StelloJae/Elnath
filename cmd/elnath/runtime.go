@@ -1076,6 +1076,7 @@ func (rt *executionRuntime) runTask(
 		return nil, "", fmt.Errorf("workflow %s: %w", wf.Name(), err)
 	}
 
+	completionSummary := summarizeCompletionContract(routeCtx, cfg, result)
 	if learning.ShouldRecord(result.FinishReason) {
 		rt.recordOutcome(ctx, outcomeInput{
 			agenticTaskID:  agenticTaskID,
@@ -1093,6 +1094,7 @@ func (rt *executionRuntime) runTask(
 			inputTokens:    result.Usage.InputTokens,
 			outputTokens:   result.Usage.OutputTokens,
 			toolStats:      result.ToolStats,
+			completion:     completionSummary,
 		})
 	}
 
@@ -1195,6 +1197,7 @@ type outcomeInput struct {
 	inputTokens    int
 	outputTokens   int
 	toolStats      []agent.ToolStat
+	completion     completionContractSummary
 }
 
 func (rt *executionRuntime) recordOutcome(ctx context.Context, in outcomeInput) {
@@ -1205,23 +1208,28 @@ func (rt *executionRuntime) recordOutcome(ctx context.Context, in outcomeInput) 
 		return
 	}
 	record := learning.OutcomeRecord{
-		ProjectID:      in.routeCtx.ProjectID,
-		Intent:         string(in.intent),
-		Workflow:       in.workflow,
-		FinishReason:   in.finishReason,
-		Success:        in.success,
-		Duration:       in.elapsed.Seconds(),
-		Cost:           0,
-		Iterations:     in.iterations,
-		InputSnippet:   runeSnippet(in.userInput, 100),
-		EstimatedFiles: in.routeCtx.EstimatedFiles,
-		ExistingCode:   in.routeCtx.ExistingCode,
-		PreferenceUsed: in.preferenceUsed,
-		SessionID:      in.sessionID,
-		MaxIterations:  in.maxIterations,
-		InputTokens:    in.inputTokens,
-		OutputTokens:   in.outputTokens,
-		ToolStats:      agentToolStatsToLearning(in.toolStats),
+		ProjectID:            in.routeCtx.ProjectID,
+		Intent:               string(in.intent),
+		Workflow:             in.workflow,
+		FinishReason:         in.finishReason,
+		Success:              in.success,
+		Duration:             in.elapsed.Seconds(),
+		Cost:                 0,
+		Iterations:           in.iterations,
+		InputSnippet:         runeSnippet(in.userInput, 100),
+		EstimatedFiles:       in.routeCtx.EstimatedFiles,
+		ExistingCode:         in.routeCtx.ExistingCode,
+		PreferenceUsed:       in.preferenceUsed,
+		SessionID:            in.sessionID,
+		MaxIterations:        in.maxIterations,
+		InputTokens:          in.inputTokens,
+		OutputTokens:         in.outputTokens,
+		ToolStats:            agentToolStatsToLearning(in.toolStats),
+		VerificationHint:     in.completion.VerificationHint,
+		VerificationObserved: in.completion.VerificationObserved,
+		CompletionWarning:    in.completion.CompletionWarning,
+		ReasoningEffort:      in.completion.ReasoningEffort,
+		ReasoningEffortMode:  in.completion.ReasoningEffortMode,
 	}
 	if appendErr := rt.outcomeStore.Append(record); appendErr != nil {
 		rt.app.Logger.Warn("outcome store: append failed", "error", appendErr)
