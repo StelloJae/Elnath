@@ -167,6 +167,7 @@ func TestAgentReasoningEffortAuto(t *testing.T) {
 	}{
 		{name: "simple status", message: "quick status summary", want: "low"},
 		{name: "implementation", message: "implement provider policy and run tests", want: "high"},
+		{name: "benchmark execution", message: "run full benchmark current-only and report status", want: "high"},
 		{name: "root cause benchmark", message: "diagnose root cause for full benchmark baseline comparison", want: "xhigh"},
 		{name: "default medium", message: "think through this product idea", want: "medium"},
 	}
