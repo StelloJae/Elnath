@@ -47,6 +47,13 @@ required = [
     "Use a bounded wait",
     "Do not add a bare `wg.Wait()`",
     "A `viper.go`-only diff is incomplete",
+    "V8-PY-BUG-002 click parser guidance:",
+    "`src/click/parser.py`",
+    "`tests/test_parser.py`",
+    "Do not spend the recovery turn re-reading broad Click internals after identifying `_Option` prefix handling",
+    "Use the known-good focused regression shape: `++foo` must not make `+value` look like an option",
+    "Do not chase the optional-value negative-number path first",
+    "Run `python3 -m pytest tests/test_parser.py -q` before the final answer",
 ]
 missing = [snippet for snippet in required if snippet not in text]
 if missing:

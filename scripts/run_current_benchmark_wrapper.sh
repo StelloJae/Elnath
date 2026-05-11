@@ -734,6 +734,23 @@ V8-PY-TH-001 pytest approx guidance:
 EOF
 }
 
+v8_py_bug002_click_guidance() {
+  [[ "$TASK_ID" == "V8-PY-BUG-002" ]] || return 0
+  cat <<'EOF'
+
+V8-PY-BUG-002 click parser guidance:
+- Start in `src/click/parser.py` and `tests/test_parser.py`; do not broaden into unrelated command/help modules unless this seam is disproven.
+- The known compact parser edge is option prefix collection: an option declared with a long custom prefix such as `++foo` must not make a positional value like `+value` look like an option.
+- In `_Option`, preserve the full option prefix in parser prefix tracking. Avoid a broad parser rewrite.
+- Use the known-good focused regression shape: `++foo` must not make `+value` look like an option.
+- Add the focused regression to `tests/test_parser.py`, not only to `tests/test_options.py`, because the corpus verification target is `tests/test_parser.py`.
+- Do not spend the recovery turn re-reading broad Click internals after identifying `_Option` prefix handling.
+- Do not chase the optional-value negative-number path first; retained full-run evidence showed that path led to budget exhaustion and no diff.
+- If you say you will patch `src/click/parser.py` or `tests/test_parser.py`, apply that patch before any more broad inspection.
+- Run `python3 -m pytest tests/test_parser.py -q` before the final answer.
+EOF
+}
+
 v8_mix_bf001_kustomize_guidance() {
   is_v8_mix_bf001_kustomize_task || return 0
   cat <<'EOF'
@@ -1624,6 +1641,7 @@ recover_passed_task_specific_failure() {
     TASK_SPECIFIC_PROMPT+="$(v8_add_js001_yargs_guidance)"
     TASK_SPECIFIC_PROMPT+="$(v8_def_ts003_msw_guidance)"
     TASK_SPECIFIC_PROMPT+="$(v8_py_th001_pytest_guidance)"
+    TASK_SPECIFIC_PROMPT+="$(v8_py_bug002_click_guidance)"
     TASK_SPECIFIC_PROMPT+="$(v8_mix_bf001_kustomize_guidance)"
     TASK_SPECIFIC_PROMPT+="$(v8_go_bug004_fsnotify_guidance)"
     TASK_SPECIFIC_PROMPT+="$(v8_go_bug003_cobra_guidance)"
@@ -2239,6 +2257,7 @@ BENCHMARK_PROMPT+="$(v8_mix_bug001_actions_toolkit_guidance)"
 BENCHMARK_PROMPT+="$(v8_add_js001_yargs_guidance)"
 BENCHMARK_PROMPT+="$(v8_def_ts003_msw_guidance)"
 BENCHMARK_PROMPT+="$(v8_py_th001_pytest_guidance)"
+BENCHMARK_PROMPT+="$(v8_py_bug002_click_guidance)"
 BENCHMARK_PROMPT+="$(v8_mix_bf001_kustomize_guidance)"
 BENCHMARK_PROMPT+="$(v8_go_bug004_fsnotify_guidance)"
 BENCHMARK_PROMPT+="$(v8_go_bug003_cobra_guidance)"
@@ -2393,6 +2412,7 @@ if [[ "$HAS_CHANGES" == "false" ]]; then
   NO_CHANGE_PROMPT+="$(v8_add_js001_yargs_guidance)"
   NO_CHANGE_PROMPT+="$(v8_def_ts003_msw_guidance)"
   NO_CHANGE_PROMPT+="$(v8_py_th001_pytest_guidance)"
+  NO_CHANGE_PROMPT+="$(v8_py_bug002_click_guidance)"
   NO_CHANGE_PROMPT+="$(v8_mix_bf001_kustomize_guidance)"
   NO_CHANGE_PROMPT+="$(v8_go_bug004_fsnotify_guidance)"
   NO_CHANGE_PROMPT+="$(v8_go_bug003_cobra_guidance)"
@@ -2470,6 +2490,7 @@ if run_verification_command "$VERIFY_LOG"; then
       VERIFIED_INCOMPLETE_PROMPT+="$(v8_add_js001_yargs_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(v8_def_ts003_msw_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(v8_py_th001_pytest_guidance)"
+      VERIFIED_INCOMPLETE_PROMPT+="$(v8_py_bug002_click_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(v8_mix_bf001_kustomize_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(v8_go_bug004_fsnotify_guidance)"
       VERIFIED_INCOMPLETE_PROMPT+="$(v8_go_bug003_cobra_guidance)"
@@ -2550,6 +2571,7 @@ RECOVERY_PROMPT+="$(v8_mix_bug001_actions_toolkit_guidance)"
 RECOVERY_PROMPT+="$(v8_add_js001_yargs_guidance)"
 RECOVERY_PROMPT+="$(v8_def_ts003_msw_guidance)"
 RECOVERY_PROMPT+="$(v8_py_th001_pytest_guidance)"
+RECOVERY_PROMPT+="$(v8_py_bug002_click_guidance)"
 RECOVERY_PROMPT+="$(v8_mix_bf001_kustomize_guidance)"
 RECOVERY_PROMPT+="$(v8_go_bug004_fsnotify_guidance)"
 RECOVERY_PROMPT+="$(v8_go_bug003_cobra_guidance)"
