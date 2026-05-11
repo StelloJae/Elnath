@@ -1325,6 +1325,7 @@ func (rt *executionRuntime) recordOutcome(ctx context.Context, in outcomeInput) 
 		ProviderEffort:          in.completion.ProviderEffort,
 		ProviderEffortNote:      in.completion.ProviderEffortNote,
 		LoadedDeferredTools:     append([]string(nil), in.completion.LoadedDeferredTools...),
+		ConditionalSkillMatches: completionSkillMatchesToLearning(in.completion.ConditionalSkillMatches),
 		CorrectionAttempted:     in.completion.CorrectionAttempted,
 		CorrectionAttempts:      in.completion.CorrectionAttempts,
 		CorrectionDecision:      in.completion.CorrectionDecision,
@@ -1353,6 +1354,21 @@ func (rt *executionRuntime) recordOutcome(ctx context.Context, in outcomeInput) 
 	if saveErr := wiki.SaveWorkflowPreference(rt.wikiStore, in.routeCtx.ProjectID, advPref); saveErr != nil {
 		rt.app.Logger.Warn("routing advisor: wiki save failed", "error", saveErr)
 	}
+}
+
+func completionSkillMatchesToLearning(src []completionConditionalSkillMatch) []learning.ConditionalSkillMatch {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]learning.ConditionalSkillMatch, 0, len(src))
+	for _, match := range src {
+		out = append(out, learning.ConditionalSkillMatch{
+			SkillName: match.SkillName,
+			Pattern:   match.Pattern,
+			Path:      match.Path,
+		})
+	}
+	return out
 }
 
 func (rt *executionRuntime) agenticOutcomeVerified(ctx context.Context, taskID int64) bool {

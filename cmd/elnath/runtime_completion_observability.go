@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/stello/elnath/internal/llm"
@@ -23,6 +24,7 @@ type completionContractSummary struct {
 	ProviderEffort          string
 	ProviderEffortNote      string
 	LoadedDeferredTools     []string
+	ConditionalSkillMatches []completionConditionalSkillMatch
 	CorrectionAttempted     bool
 	CorrectionAttempts      int
 	CorrectionDecision      string
@@ -31,6 +33,12 @@ type completionContractSummary struct {
 	CorrectionFailureFamily string
 	RetryDecision           string
 	RetryReason             string
+}
+
+type completionConditionalSkillMatch struct {
+	SkillName string `json:"skill_name"`
+	Pattern   string `json:"pattern"`
+	Path      string `json:"path"`
 }
 
 const (
@@ -61,6 +69,7 @@ func summarizeCompletionContract(routeCtx *orchestrator.RoutingContext, cfg orch
 	}
 	summary.ReasoningEffortReason = strings.TrimSpace(result.ReasoningEffortReason)
 	summary.LoadedDeferredTools = append([]string(nil), result.LoadedDeferredTools...)
+	summary.ConditionalSkillMatches = observedConditionalSkillMatches(result.Messages)
 
 	verificationCommand := observedVerificationCommand(result.Messages)
 	observed := verificationCommand != ""
@@ -82,6 +91,63 @@ func summarizeCompletionContract(routeCtx *orchestrator.RoutingContext, cfg orch
 	}
 	summary.RetryDecision, summary.RetryReason = completionRetryPlan(summary)
 	return summary
+}
+
+func observedConditionalSkillMatches(messages []llm.Message) []completionConditionalSkillMatch {
+	toolNamesByID := make(map[string]string)
+	var matches []completionConditionalSkillMatch
+	for _, msg := range messages {
+		for _, block := range msg.Content {
+			switch b := block.(type) {
+			case llm.ToolUseBlock:
+				if b.ID != "" {
+					toolNamesByID[b.ID] = b.Name
+				}
+			case llm.ToolResultBlock:
+				if b.IsError || toolNamesByID[b.ToolUseID] != "skill_catalog" {
+					continue
+				}
+				matches = append(matches, conditionalSkillMatchesFromCatalogOutput(b.Content)...)
+			}
+		}
+	}
+	if len(matches) == 0 {
+		return nil
+	}
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].SkillName != matches[j].SkillName {
+			return matches[i].SkillName < matches[j].SkillName
+		}
+		if matches[i].Pattern != matches[j].Pattern {
+			return matches[i].Pattern < matches[j].Pattern
+		}
+		return matches[i].Path < matches[j].Path
+	})
+	return matches
+}
+
+func conditionalSkillMatchesFromCatalogOutput(output string) []completionConditionalSkillMatch {
+	var parsed struct {
+		Action  string                            `json:"action"`
+		Matches []completionConditionalSkillMatch `json:"matches"`
+	}
+	if err := json.Unmarshal([]byte(output), &parsed); err != nil {
+		return nil
+	}
+	if parsed.Action != "match_paths" || len(parsed.Matches) == 0 {
+		return nil
+	}
+	out := make([]completionConditionalSkillMatch, 0, len(parsed.Matches))
+	for _, match := range parsed.Matches {
+		match.SkillName = strings.TrimSpace(match.SkillName)
+		match.Pattern = strings.TrimSpace(match.Pattern)
+		match.Path = strings.TrimSpace(match.Path)
+		if match.SkillName == "" || match.Pattern == "" || match.Path == "" {
+			continue
+		}
+		out = append(out, match)
+	}
+	return out
 }
 
 func withProviderCapabilities(summary completionContractSummary, provider llm.Provider) completionContractSummary {

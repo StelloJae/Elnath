@@ -46,6 +46,7 @@ func (rt *executionRuntime) CompletionContext(_ context.Context, _ daemon.Task, 
 		ProviderEffort:          summary.ProviderEffort,
 		ProviderEffortNote:      summary.ProviderEffortNote,
 		LoadedDeferredTools:     append([]string(nil), summary.LoadedDeferredTools...),
+		ConditionalSkillMatches: completionSkillMatchesToAgentic(summary.ConditionalSkillMatches),
 		CorrectionAttempted:     summary.CorrectionAttempted,
 		CorrectionAttempts:      summary.CorrectionAttempts,
 		CorrectionDecision:      summary.CorrectionDecision,
@@ -55,4 +56,19 @@ func (rt *executionRuntime) CompletionContext(_ context.Context, _ daemon.Task, 
 		RetryDecision:           summary.RetryDecision,
 		RetryReason:             summary.RetryReason,
 	}, nil
+}
+
+func completionSkillMatchesToAgentic(src []completionConditionalSkillMatch) []agenticcompletion.ConditionalSkillMatch {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]agenticcompletion.ConditionalSkillMatch, 0, len(src))
+	for _, match := range src {
+		out = append(out, agenticcompletion.ConditionalSkillMatch{
+			SkillName: match.SkillName,
+			Pattern:   match.Pattern,
+			Path:      match.Path,
+		})
+	}
+	return out
 }

@@ -42,6 +42,7 @@ type CompletionContext struct {
 	ProviderEffort          string
 	ProviderEffortNote      string
 	LoadedDeferredTools     []string
+	ConditionalSkillMatches []ConditionalSkillMatch
 	CorrectionAttempted     bool
 	CorrectionAttempts      int
 	CorrectionDecision      string
@@ -50,6 +51,12 @@ type CompletionContext struct {
 	CorrectionFailureFamily string
 	RetryDecision           string
 	RetryReason             string
+}
+
+type ConditionalSkillMatch struct {
+	SkillName string `json:"skill_name"`
+	Pattern   string `json:"pattern"`
+	Path      string `json:"path"`
 }
 
 type CompletionContextProvider interface {
@@ -257,6 +264,9 @@ func encodeReceiptSummary(summary map[string]int, completionContext CompletionCo
 	}
 	if len(completionContext.LoadedDeferredTools) > 0 {
 		payload["loaded_deferred_tools"] = completionContext.LoadedDeferredTools
+	}
+	if len(completionContext.ConditionalSkillMatches) > 0 {
+		payload["conditional_skill_matches"] = completionContext.ConditionalSkillMatches
 	}
 	if completionContext.CorrectionAttempted {
 		payload["correction_attempted"] = true

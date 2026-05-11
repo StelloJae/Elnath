@@ -55,6 +55,28 @@ func TestSkillCatalogNodeRenderListsSkills(t *testing.T) {
 	}
 }
 
+func TestSkillCatalogNodeRenderHidesConditionalSkills(t *testing.T) {
+	t.Parallel()
+
+	reg := skill.NewRegistry()
+	reg.Add(&skill.Skill{Name: "always-on", Description: "Always available"})
+	reg.Add(&skill.Skill{Name: "go-review", Description: "Review Go files", Paths: []string{"internal/**/*.go"}})
+
+	got, err := NewSkillCatalogNode(65, reg).Render(context.Background(), &RenderState{})
+	if err != nil {
+		t.Fatalf("Render error: %v", err)
+	}
+	if !strings.Contains(got, "/always-on — Always available") {
+		t.Fatalf("Render missing unconditional skill:\n%s", got)
+	}
+	if strings.Contains(got, "/go-review") {
+		t.Fatalf("Render exposed conditional skill before path match:\n%s", got)
+	}
+	if !strings.Contains(got, "skill_catalog match_paths") {
+		t.Fatalf("Render missing conditional discovery guidance:\n%s", got)
+	}
+}
+
 func TestSkillCatalogNodeRenderBenchmarkMode(t *testing.T) {
 	t.Parallel()
 
