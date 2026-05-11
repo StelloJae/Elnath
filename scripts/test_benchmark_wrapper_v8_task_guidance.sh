@@ -57,6 +57,9 @@ required_current = [
     "datetime within tolerance, datetime outside tolerance, timedelta comparisons",
     "`pytest.raises(TypeError)` for unsupported `rel` / `nan_ok` arguments",
     "In `ApproxScalar.tolerance`, handle explicit `datetime.timedelta` absolute tolerance before numeric `< 0` tolerance checks",
+    "datetime/timedelta must not fall through to numeric NaN handling",
+    "`self.tolerance` must return a `datetime.timedelta`",
+    "Do not finish after adding the final datetime/timedelta implementation edits unless",
     "comparison against a distinct actual datetime/timedelta value",
     "In no-change recovery, stop re-reading once `ApproxScalar`, the `approx()` factory, and the nearby `TestApprox` tests are identified",
     "is_v8_py_th001_pytest_task",
@@ -113,6 +116,15 @@ required_current = [
     "Make rel/nan_ok tests compare against a distinct actual value",
     "finish only if both 'src/_pytest/python_api.py' and 'testing/python/approx.py' are changed",
     "V8-PY-TH-001 lacks the required pytest approx behavior diff plus focused datetime/timedelta regression coverage pair",
+    "Name the focused regression with cancellation language",
+    "AbortError",
+    "A focused regression must directly exercise the cancellation/error path",
+    "A production-only diff is an automatic benchmark failure even if Mocha passes",
+    "replace runtime barrel-directory imports used by the focused spec with direct-file runtime imports",
+    "task-specific recovery left TS-BF-002 import, public-option, or focused-regression completion incomplete",
+    "printf '%s\\n' 30",
+    "Do not manually reset internal state with `v.configFile = \"\"`",
+    "GO-BUG-002 regression manually resets internal configFile state instead of using public watcher setup",
 ]
 missing_current = [snippet for snippet in required_current if snippet not in current]
 if missing_current:
