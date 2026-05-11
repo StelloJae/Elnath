@@ -14,6 +14,7 @@ const (
 	TaskCreateToolName     = "task_create"
 	TaskListToolName       = "task_list"
 	TaskGetToolName        = "task_get"
+	TaskStopToolName       = "task_stop"
 	defaultTaskListLimit   = 20
 	maxTaskListLimit       = 100
 	taskToolPreviewMaxRune = 240
@@ -289,6 +290,93 @@ func (t *TaskGetTool) Execute(ctx context.Context, params json.RawMessage) (*too
 	raw, err := json.Marshal(output)
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("task_get: marshal output: %v", err)), nil
+	}
+	return tools.SuccessResult(string(raw)), nil
+}
+
+type TaskStopTool struct {
+	queue *Queue
+}
+
+func NewTaskStopTool(queue *Queue) *TaskStopTool {
+	return &TaskStopTool{queue: queue}
+}
+
+func (t *TaskStopTool) Name() string { return TaskStopToolName }
+
+func (t *TaskStopTool) Description() string {
+	return "Stop a pending daemon queue task by ID"
+}
+
+func (t *TaskStopTool) Schema() json.RawMessage {
+	return tools.Object(map[string]tools.Property{
+		"id":     tools.Int("Daemon task ID."),
+		"reason": tools.String("Optional cancellation reason."),
+	}, []string{"id"})
+}
+
+func (t *TaskStopTool) IsConcurrencySafe(json.RawMessage) bool { return false }
+
+func (t *TaskStopTool) Reversible() bool { return false }
+
+func (t *TaskStopTool) Scope(json.RawMessage) tools.ToolScope {
+	return tools.ToolScope{Persistent: true}
+}
+
+func (t *TaskStopTool) ShouldCancelSiblingsOnError() bool { return false }
+
+type taskStopToolInput struct {
+	ID     int64  `json:"id"`
+	Reason string `json:"reason"`
+}
+
+type taskStopToolOutput struct {
+	TaskID         int64      `json:"task_id"`
+	Stopped        bool       `json:"stopped"`
+	PreviousStatus TaskStatus `json:"previous_status"`
+	Status         TaskStatus `json:"status"`
+	Reason         string     `json:"reason"`
+}
+
+func (t *TaskStopTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
+	if t == nil || t.queue == nil {
+		return tools.ErrorResult("task_stop: queue unavailable"), nil
+	}
+	var input taskStopToolInput
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &input); err != nil {
+			return tools.ErrorResult(fmt.Sprintf("invalid params: %v", err)), nil
+		}
+	}
+	if input.ID <= 0 {
+		return tools.ErrorResult("task_stop: id must be positive"), nil
+	}
+	reason := strings.TrimSpace(input.Reason)
+	if reason == "" {
+		reason = "task_stop requested"
+	}
+
+	task, err := t.queue.Get(ctx, input.ID)
+	if err != nil {
+		return tools.ErrorResult(fmt.Sprintf("task_stop: %v", err)), nil
+	}
+	if task.Status != StatusPending {
+		return tools.ErrorResult(fmt.Sprintf("task_stop: task %d is %s; only pending tasks can be stopped", input.ID, task.Status)), nil
+	}
+	if err := t.queue.CancelTask(ctx, input.ID, reason); err != nil {
+		return tools.ErrorResult(fmt.Sprintf("task_stop: %v", err)), nil
+	}
+
+	output := taskStopToolOutput{
+		TaskID:         input.ID,
+		Stopped:        true,
+		PreviousStatus: task.Status,
+		Status:         StatusFailed,
+		Reason:         reason,
+	}
+	raw, err := json.Marshal(output)
+	if err != nil {
+		return tools.ErrorResult(fmt.Sprintf("task_stop: marshal output: %v", err)), nil
 	}
 	return tools.SuccessResult(string(raw)), nil
 }

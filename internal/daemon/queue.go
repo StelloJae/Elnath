@@ -530,6 +530,46 @@ func (q *Queue) CancelPendingTask(ctx context.Context, reason string) (int64, bo
 	return taskID, true, nil
 }
 
+// CancelTask marks a specific pending task as failed/cancelled. Running tasks
+// require worker cancellation support and are deliberately not mutated here.
+func (q *Queue) CancelTask(ctx context.Context, id int64, reason string) error {
+	if id <= 0 {
+		return fmt.Errorf("queue: cancel task: id must be positive")
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "task cancelled"
+	}
+
+	task, err := q.Get(ctx, id)
+	if err != nil {
+		return fmt.Errorf("queue: cancel task: %w", err)
+	}
+	if task.Status != StatusPending {
+		return fmt.Errorf("queue: cancel task: task %d is %s; only pending tasks can be stopped", id, task.Status)
+	}
+
+	completionJSON, err := q.buildCompletionJSON(ctx, id, StatusFailed, "", reason)
+	if err != nil {
+		return fmt.Errorf("queue: cancel task: build completion: %w", err)
+	}
+	now := time.Now().UnixMilli()
+	res, err := q.db.ExecContext(ctx, `
+		UPDATE task_queue SET status = ?, progress = ?, summary = ?, result = ?, completion = ?, updated_at = ?, completed_at = ?
+		WHERE id = ? AND status = ?`,
+		string(StatusFailed), "cancelled", completionSummary(StatusFailed, "", reason), reason, completionJSON, now, now,
+		id, string(StatusPending),
+	)
+	if err != nil {
+		return fmt.Errorf("queue: cancel task: update: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("queue: cancel task: %w", core.ErrNotFound)
+	}
+	return nil
+}
+
 // RecoverStale resets tasks that have been in 'running' state longer than
 // the given timeout back to 'pending'. Tasks that have already been recovered
 // maxRecoveries times are marked as failed instead. Returns the number of

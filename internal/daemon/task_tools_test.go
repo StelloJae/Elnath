@@ -201,6 +201,62 @@ func TestTaskGetToolReturnsDetails(t *testing.T) {
 	}
 }
 
+func TestTaskStopToolCancelsPendingTask(t *testing.T) {
+	ctx := context.Background()
+	queue := newTaskToolTestQueue(t)
+	id, _, err := queue.Enqueue(ctx, "cancel me", "")
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	result, err := NewTaskStopTool(queue).Execute(ctx, json.RawMessage(`{"id":`+jsonInt(id)+`,"reason":"not needed"}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute returned error result: %s", result.Output)
+	}
+
+	var output taskStopToolOutput
+	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if output.TaskID != id || !output.Stopped || output.PreviousStatus != StatusPending || output.Status != StatusFailed {
+		t.Fatalf("output = %+v, want stopped pending->failed", output)
+	}
+
+	task, err := queue.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get stopped task: %v", err)
+	}
+	if task.Status != StatusFailed || task.Progress != "cancelled" || !strings.Contains(task.Result, "not needed") {
+		t.Fatalf("task = %+v, want failed cancelled with reason", task)
+	}
+}
+
+func TestTaskStopToolRejectsRunningTask(t *testing.T) {
+	ctx := context.Background()
+	queue := newTaskToolTestQueue(t)
+	if _, _, err := queue.Enqueue(ctx, "running task", ""); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	task, err := queue.Next(ctx)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if task == nil {
+		t.Fatal("Next returned nil")
+	}
+
+	result, err := NewTaskStopTool(queue).Execute(ctx, json.RawMessage(`{"id":`+jsonInt(task.ID)+`}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if !result.IsError || !strings.Contains(result.Output, "only pending tasks can be stopped") {
+		t.Fatalf("result = %+v, want running unsupported error", result)
+	}
+}
+
 func TestTaskToolsRejectInvalidInput(t *testing.T) {
 	ctx := context.Background()
 	queue := newTaskToolTestQueue(t)
@@ -220,6 +276,14 @@ func TestTaskToolsRejectInvalidInput(t *testing.T) {
 	if !getResult.IsError || !strings.Contains(getResult.Output, "id must be positive") {
 		t.Fatalf("task_get result = %+v, want id error", getResult)
 	}
+
+	stopResult, err := NewTaskStopTool(queue).Execute(ctx, json.RawMessage(`{"id":0}`))
+	if err != nil {
+		t.Fatalf("task_stop Execute error = %v", err)
+	}
+	if !stopResult.IsError || !strings.Contains(stopResult.Output, "id must be positive") {
+		t.Fatalf("task_stop result = %+v, want id error", stopResult)
+	}
 }
 
 func TestTaskToolsMetadata(t *testing.T) {
@@ -235,6 +299,20 @@ func TestTaskToolsMetadata(t *testing.T) {
 	}
 	if createTool.ShouldCancelSiblingsOnError() {
 		t.Fatal("task_create should not cancel siblings")
+	}
+
+	stopTool := NewTaskStopTool(nil)
+	if stopTool.IsConcurrencySafe(nil) {
+		t.Fatal("task_stop should not be concurrency-safe")
+	}
+	if stopTool.Reversible() {
+		t.Fatal("task_stop should not be reversible")
+	}
+	if got := stopTool.Scope(nil); !got.Persistent || got.Network || len(got.ReadPaths) != 0 || len(got.WritePaths) != 0 {
+		t.Fatalf("task_stop Scope() = %+v, want persistent-only scope", got)
+	}
+	if stopTool.ShouldCancelSiblingsOnError() {
+		t.Fatal("task_stop should not cancel siblings")
 	}
 
 	listTool := NewTaskListTool(nil)
