@@ -11,6 +11,34 @@ import (
 
 const claudeSkillSource = "claude-skill"
 
+var claudeToolNameMap = map[string]string{
+	"bash":          "bash",
+	"read":          "read_file",
+	"write":         "write_file",
+	"edit":          "edit_file",
+	"multiedit":     "edit_file",
+	"glob":          "glob",
+	"grep":          "grep",
+	"webfetch":      "web_fetch",
+	"websearch":     "web_search",
+	"todowrite":     "todo_write",
+	"toolsearch":    "tool_search",
+	"skill":         "skill",
+	"taskcreate":    "task_create",
+	"taskget":       "task_get",
+	"tasklist":      "task_list",
+	"taskoutput":    "task_output",
+	"taskstop":      "task_stop",
+	"taskupdate":    "task_update",
+	"croncreate":    "schedule_create",
+	"crondelete":    "schedule_delete",
+	"cronlist":      "schedule_list",
+	"enterplanmode": "enter_plan_mode",
+	"exitplanmode":  "exit_plan_mode",
+	"enterworktree": "enter_worktree",
+	"exitworktree":  "exit_worktree",
+}
+
 type claudeSkillFrontmatter struct {
 	Name                   string     `yaml:"name"`
 	Description            string     `yaml:"description"`
@@ -191,7 +219,7 @@ func collectClaudeSkillTools(fm claudeSkillFrontmatter) []string {
 		fm.Tools,
 	} {
 		for _, value := range values {
-			value = strings.TrimSpace(value)
+			value = normalizeClaudeToolName(value)
 			if value == "" {
 				continue
 			}
@@ -205,12 +233,35 @@ func collectClaudeSkillTools(fm claudeSkillFrontmatter) []string {
 	return out
 }
 
+func normalizeClaudeToolName(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if idx := strings.Index(value, "("); idx >= 0 {
+		value = strings.TrimSpace(value[:idx])
+	}
+	if strings.Contains(value, "__") {
+		return value
+	}
+	if strings.Contains(value, "_") {
+		return strings.ToLower(value)
+	}
+	key := strings.ToLower(strings.ReplaceAll(value, "-", ""))
+	if mapped, ok := claudeToolNameMap[key]; ok {
+		return mapped
+	}
+	return strings.ToLower(value)
+}
+
 func splitStringList(raw string) []string {
 	var out []string
-	for _, value := range strings.Split(raw, ",") {
-		value = strings.TrimSpace(value)
-		if value != "" {
-			out = append(out, value)
+	for _, chunk := range strings.Split(raw, ",") {
+		for _, value := range strings.Fields(chunk) {
+			value = strings.TrimSpace(value)
+			if value != "" {
+				out = append(out, value)
+			}
 		}
 	}
 	return out
