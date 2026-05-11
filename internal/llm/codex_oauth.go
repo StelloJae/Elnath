@@ -44,6 +44,7 @@ func (e codexOAuthStatusError) Error() string { return e.msg }
 // CodexOAuthProvider implements Provider using ChatGPT Backend OAuth tokens.
 type CodexOAuthProvider struct {
 	authPath        string
+	baseURL         string
 	model           string
 	reasoningEffort string
 	client          *http.Client
@@ -61,6 +62,10 @@ func WithCodexOAuthReasoningEffort(effort string) CodexOAuthOption {
 	return func(p *CodexOAuthProvider) { p.reasoningEffort = strings.TrimSpace(effort) }
 }
 
+func WithCodexOAuthBaseURL(url string) CodexOAuthOption {
+	return func(p *CodexOAuthProvider) { p.baseURL = strings.TrimRight(url, "/") }
+}
+
 // DefaultCodexAuthPath returns the default path to the Codex CLI auth file.
 func DefaultCodexAuthPath() string {
 	home, _ := os.UserHomeDir()
@@ -71,6 +76,7 @@ func DefaultCodexAuthPath() string {
 func NewCodexOAuthProvider(model string, opts ...CodexOAuthOption) *CodexOAuthProvider {
 	p := &CodexOAuthProvider{
 		authPath: DefaultCodexAuthPath(),
+		baseURL:  codexOAuthBaseURL,
 		model:    model,
 		client:   &http.Client{Timeout: codexOAuthTimeout},
 	}
@@ -154,7 +160,7 @@ func (p *CodexOAuthProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRe
 
 // streamWithRefresh tries the request; on 401, refreshes the token and retries.
 func (p *CodexOAuthProvider) streamWithRefresh(ctx context.Context, auth codexOAuthAuthFile, req ChatRequest, cb func(StreamEvent)) error {
-	err := p.streamOnce(ctx, auth, req, cb)
+	err := p.streamOnce(ctx, auth, req, false, cb)
 	if err == nil {
 		return nil
 	}
@@ -166,19 +172,26 @@ func (p *CodexOAuthProvider) streamWithRefresh(ctx context.Context, auth codexOA
 			inner := fmt.Errorf("codex: refresh failed (re-run `codex auth` to re-authenticate): %w", refreshErr)
 			return userfacingerr.Wrap(userfacingerr.ELN002, inner, "codex refresh")
 		}
-		return p.streamOnce(ctx, refreshed, req, cb)
+		auth = refreshed
+		err = p.streamOnce(ctx, auth, req, false, cb)
+		if err == nil {
+			return nil
+		}
+	}
+	if p.shouldRetryWithoutReasoning(req, err) {
+		return p.streamOnce(ctx, auth, req, true, cb)
 	}
 	return err
 }
 
 // streamOnce makes a single SSE-streaming POST to the Codex responses endpoint.
-func (p *CodexOAuthProvider) streamOnce(ctx context.Context, auth codexOAuthAuthFile, req ChatRequest, cb func(StreamEvent)) error {
-	body, err := buildCodexRequestWithEffort(req, p.model, p.reasoningEffort)
+func (p *CodexOAuthProvider) streamOnce(ctx context.Context, auth codexOAuthAuthFile, req ChatRequest, suppressReasoning bool, cb func(StreamEvent)) error {
+	body, err := buildCodexRequestWithEffortControl(req, p.model, p.reasoningEffort, !suppressReasoning)
 	if err != nil {
 		return fmt.Errorf("codex: build request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, codexOAuthBaseURL, bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("codex: new request: %w", err)
 	}
@@ -205,12 +218,37 @@ func (p *CodexOAuthProvider) streamOnce(ctx context.Context, auth codexOAuthAuth
 	return parseCodexSSE(resp.Body, cb)
 }
 
+func (p *CodexOAuthProvider) shouldRetryWithoutReasoning(req ChatRequest, err error) bool {
+	if effectiveResponsesReasoningEffort(req.ReasoningEffort, p.reasoningEffort) == "" {
+		return false
+	}
+	var statusErr codexOAuthStatusError
+	if !errors.As(err, &statusErr) {
+		return false
+	}
+	if statusErr.code != http.StatusBadRequest && statusErr.code != http.StatusUnprocessableEntity {
+		return false
+	}
+	msg := strings.ToLower(statusErr.msg)
+	if !strings.Contains(msg, "reason") && !strings.Contains(msg, "effort") {
+		return false
+	}
+	return strings.Contains(msg, "unsupported") ||
+		strings.Contains(msg, "not supported") ||
+		strings.Contains(msg, "invalid") ||
+		strings.Contains(msg, "unknown")
+}
+
 // buildCodexRequest constructs the Codex Responses API payload.
 func buildCodexRequest(req ChatRequest, defaultModel string) ([]byte, error) {
 	return buildCodexRequestWithEffort(req, defaultModel, "")
 }
 
 func buildCodexRequestWithEffort(req ChatRequest, defaultModel, defaultReasoningEffort string) ([]byte, error) {
+	return buildCodexRequestWithEffortControl(req, defaultModel, defaultReasoningEffort, true)
+}
+
+func buildCodexRequestWithEffortControl(req ChatRequest, defaultModel, defaultReasoningEffort string, includeReasoning bool) ([]byte, error) {
 	model := req.Model
 	if model == "" {
 		model = defaultModel
@@ -222,7 +260,9 @@ func buildCodexRequestWithEffort(req ChatRequest, defaultModel, defaultReasoning
 		"store":  false,
 	}
 	if effort := effectiveResponsesReasoningEffort(req.ReasoningEffort, defaultReasoningEffort); effort != "" {
-		payload["reasoning"] = map[string]any{"effort": effort}
+		if includeReasoning {
+			payload["reasoning"] = map[string]any{"effort": effort}
+		}
 	}
 
 	instructions := req.System

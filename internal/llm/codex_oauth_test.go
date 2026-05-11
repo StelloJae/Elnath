@@ -1,8 +1,11 @@
 package llm
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -185,6 +188,66 @@ func TestBuildCodexRequestReasoningEffort(t *testing.T) {
 			t.Fatalf("reasoning.effort = %v, want low", got)
 		}
 	})
+}
+
+func TestCodexOAuthUnsupportedReasoningEffortFallback(t *testing.T) {
+	var requests []map[string]any
+	events := []map[string]interface{}{
+		{"type": "response.output_text.delta", "delta": "fallback ok"},
+		{
+			"type": "response.completed",
+			"response": map[string]interface{}{
+				"usage": map[string]interface{}{"input_tokens": 12, "output_tokens": 2},
+			},
+		},
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		requests = append(requests, body)
+		if len(requests) == 1 {
+			http.Error(w, `{"error":{"message":"reasoning.effort value is unsupported"}}`, http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, sseLines(events))
+	}))
+	defer srv.Close()
+
+	p := NewCodexOAuthProvider("gpt-5.5",
+		WithCodexOAuthBaseURL(srv.URL),
+		WithCodexOAuthReasoningEffort("xhigh"))
+	auth := codexOAuthAuthFile{}
+	auth.Tokens.AccessToken = "test-token"
+	auth.Tokens.AccountID = "acct-1"
+
+	var textParts []string
+	err := p.streamWithRefresh(context.Background(), auth, ChatRequest{
+		Messages: []Message{NewUserMessage("hi")},
+	}, func(ev StreamEvent) {
+		if ev.Type == EventTextDelta {
+			textParts = append(textParts, ev.Content)
+		}
+	})
+	if err != nil {
+		t.Fatalf("streamWithRefresh: %v", err)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("request count = %d, want 2", len(requests))
+	}
+	if _, hasReasoning := requests[0]["reasoning"]; !hasReasoning {
+		t.Fatalf("first request missing reasoning: %v", requests[0])
+	}
+	if _, hasReasoning := requests[1]["reasoning"]; hasReasoning {
+		t.Fatalf("fallback request still has reasoning: %v", requests[1])
+	}
+	if got := strings.Join(textParts, ""); got != "fallback ok" {
+		t.Fatalf("text = %q, want fallback ok", got)
+	}
 }
 
 func TestNewHTTPClientWithPerHostCap_DefaultsAndCallerContracts(t *testing.T) {
