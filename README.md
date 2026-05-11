@@ -7,7 +7,7 @@ Elnath is a standalone Go daemon and interactive CLI that brings Claude Code-lev
 ## Features
 
 - **Interactive CLI and background daemon modes** — Use `elnath run` for interactive chat or `elnath daemon` for background job processing
-- **Model-agnostic LLM support** — Anthropic Claude (primary), OpenAI, Ollama with pluggable provider interface
+- **Model-agnostic LLM support** — OpenAI Responses-compatible providers, Anthropic Claude, OpenAI Chat Completions, and Ollama through one pluggable provider interface
 - **Native wiki with FTS5 hybrid search** — Markdown pages + SQLite full-text search index for Karpathy-style knowledge base
 - **Intent classification and automatic workflow routing** — Message intent determines execution strategy: single agent, team, autopilot, ralph (verify loop), or research
 - **5 workflow execution modes** — single (immediate), team (coordinated agents), autopilot (full autonomy), ralph (loop until verified), research (hypothesis-driven)
@@ -159,6 +159,16 @@ log_level: info
 anthropic:
   api_key: ${ELNATH_ANTHROPIC_API_KEY}
   model: claude-sonnet-4-20250514
+
+openai_responses:
+  api_key: ${ELNATH_OPENAI_RESPONSES_API_KEY}
+  base_url: https://api.openai.com/v1 # or any Responses-compatible provider
+  model: gpt-5.5
+  reasoning_effort: medium # none|minimal|low|medium|high|xhigh when supported
+
+reasoning:
+  effort_mode: auto # manual or auto
+  effort: medium    # fallback/request effort when effort_mode is manual
 
 permission:
   mode: default
@@ -371,7 +381,7 @@ Hypothesis-driven investigation: propose hypothesis -> design experiment -> exec
 
 - **Go 1.25+** — Uses modernc.org/sqlite for pure Go SQLite (no CGo required)
 - **macOS or Linux** — Tested on both platforms
-- **API key** — At least one LLM provider: Anthropic Claude, OpenAI, or Ollama (local)
+- **API key** — At least one LLM provider: OpenAI Responses-compatible, Anthropic Claude, OpenAI Chat Completions, or Ollama (local)
 
 ## Building from Source
 
