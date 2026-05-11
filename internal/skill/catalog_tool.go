@@ -57,6 +57,7 @@ type catalogSkillEntry struct {
 	Description   string   `json:"description,omitempty"`
 	Trigger       string   `json:"trigger,omitempty"`
 	RequiredTools []string `json:"required_tools,omitempty"`
+	Paths         []string `json:"paths,omitempty"`
 	Model         string   `json:"model,omitempty"`
 	Effort        string   `json:"effort,omitempty"`
 	Status        string   `json:"status,omitempty"`
@@ -166,6 +167,7 @@ func skillCatalogEntry(sk *Skill, includePrompt bool) catalogSkillEntry {
 		Description:   sk.Description,
 		Trigger:       sk.Trigger,
 		RequiredTools: append([]string(nil), sk.RequiredTools...),
+		Paths:         append([]string(nil), sk.Paths...),
 		Model:         sk.Model,
 		Effort:        sk.Effort,
 		Status:        sk.Status,
@@ -189,6 +191,7 @@ func scoreSkillCatalogEntry(sk *Skill, terms []string) (int, []string) {
 		{name: "name", text: sk.Name, weight: 4},
 		{name: "description", text: sk.Description, weight: 3},
 		{name: "trigger", text: sk.Trigger, weight: 2},
+		{name: "paths", text: strings.Join(sk.Paths, " "), weight: 1},
 		{name: "required_tools", text: strings.Join(sk.RequiredTools, " "), weight: 1},
 		{name: "source", text: sk.Source, weight: 1},
 	}

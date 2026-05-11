@@ -16,6 +16,7 @@ func TestCatalogToolListsSkillsWithoutPromptsByDefault(t *testing.T) {
 		Description:   "Review pull requests",
 		Trigger:       "/review-pr",
 		RequiredTools: []string{"read_file", "grep"},
+		Paths:         []string{"internal/**/*.go"},
 		Model:         "gpt-5.5",
 		Effort:        "high",
 		Prompt:        "Secret detailed prompt",
@@ -42,6 +43,7 @@ func TestCatalogToolListsSkillsWithoutPromptsByDefault(t *testing.T) {
 			Description   string   `json:"description"`
 			Trigger       string   `json:"trigger"`
 			RequiredTools []string `json:"required_tools"`
+			Paths         []string `json:"paths"`
 			Model         string   `json:"model"`
 			Effort        string   `json:"effort"`
 			Status        string   `json:"status"`
@@ -58,6 +60,9 @@ func TestCatalogToolListsSkillsWithoutPromptsByDefault(t *testing.T) {
 	got := out.Skills[0]
 	if got.Name != "review-pr" || got.Description == "" || got.Trigger != "/review-pr" {
 		t.Fatalf("skill metadata = %+v, want review-pr metadata", got)
+	}
+	if len(got.Paths) != 1 || got.Paths[0] != "internal/**/*.go" {
+		t.Fatalf("paths = %v, want [internal/**/*.go]", got.Paths)
 	}
 	if got.Prompt != "" {
 		t.Fatalf("prompt = %q, want omitted by default", got.Prompt)

@@ -132,6 +132,40 @@ Ship the PR.
 	}
 }
 
+func TestLoadClaudeSkillDirParsesConditionalPaths(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	skillDir := filepath.Join(root, ".claude", "skills", "go-review")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	raw := `---
+description: Review Go files
+paths:
+  - internal/**/*.go
+  - docs/**
+  - "**"
+---
+Review Go changes.
+`
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	skills, err := LoadClaudeSkillDir(root)
+	if err != nil {
+		t.Fatalf("LoadClaudeSkillDir: %v", err)
+	}
+	if len(skills) != 1 {
+		t.Fatalf("len(skills) = %d, want 1", len(skills))
+	}
+	want := []string{"internal/**/*.go", "docs"}
+	if !reflect.DeepEqual(skills[0].Paths, want) {
+		t.Fatalf("Paths = %#v, want %#v", skills[0].Paths, want)
+	}
+}
+
 func TestRegistryLoadClaudeSkills(t *testing.T) {
 	t.Parallel()
 

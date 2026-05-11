@@ -13,6 +13,7 @@ type Skill struct {
 	Description   string
 	Trigger       string
 	RequiredTools []string
+	Paths         []string
 	Model         string
 	Effort        string
 	Prompt        string
@@ -39,6 +40,7 @@ func FromPage(page *wiki.Page) *Skill {
 		Description:   extraString(page.Extra, "description"),
 		Trigger:       extraString(page.Extra, "trigger"),
 		RequiredTools: extraStrings(page.Extra, "required_tools"),
+		Paths:         normalizeSkillPaths(extraStrings(page.Extra, "paths")),
 		Model:         extraString(page.Extra, "model"),
 		Effort:        extraString(page.Extra, "effort"),
 		Prompt:        page.Content,
@@ -117,4 +119,26 @@ func extraStrings(extra map[string]any, key string) []string {
 	default:
 		return nil
 	}
+}
+
+func normalizeSkillPaths(paths []string) []string {
+	if len(paths) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(paths))
+	for _, path := range paths {
+		path = strings.TrimSpace(path)
+		if path == "" || path == "**" {
+			continue
+		}
+		path = strings.TrimSuffix(path, "/**")
+		if path == "" || path == "**" {
+			continue
+		}
+		out = append(out, path)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
