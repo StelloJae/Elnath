@@ -257,6 +257,74 @@ func TestTaskStopToolRejectsRunningTask(t *testing.T) {
 	}
 }
 
+func TestTaskOutputToolReturnsBoundedResultTail(t *testing.T) {
+	ctx := context.Background()
+	queue := newTaskToolTestQueue(t)
+	if _, _, err := queue.Enqueue(ctx, "task payload", ""); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	task, err := queue.Next(ctx)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if task == nil {
+		t.Fatal("Next returned nil")
+	}
+	if err := queue.MarkDone(ctx, task.ID, "abcdef", "done summary"); err != nil {
+		t.Fatalf("MarkDone: %v", err)
+	}
+
+	result, err := NewTaskOutputTool(queue).Execute(ctx, json.RawMessage(`{"id":`+jsonInt(task.ID)+`,"max_chars":3}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute returned error result: %s", result.Output)
+	}
+
+	var output taskOutputToolOutput
+	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if output.Field != "result" || output.Content != "def" || output.TotalChars != 6 || !output.Truncated {
+		t.Fatalf("output = %+v, want result tail def", output)
+	}
+}
+
+func TestTaskOutputToolReadsProgressField(t *testing.T) {
+	ctx := context.Background()
+	queue := newTaskToolTestQueue(t)
+	if _, _, err := queue.Enqueue(ctx, "task payload", ""); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	task, err := queue.Next(ctx)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if task == nil {
+		t.Fatal("Next returned nil")
+	}
+	if err := queue.UpdateProgress(ctx, task.ID, "still working"); err != nil {
+		t.Fatalf("UpdateProgress: %v", err)
+	}
+
+	result, err := NewTaskOutputTool(queue).Execute(ctx, json.RawMessage(`{"id":`+jsonInt(task.ID)+`,"field":"progress"}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute returned error result: %s", result.Output)
+	}
+
+	var output taskOutputToolOutput
+	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if output.Field != "progress" || output.Content != "still working" || output.Truncated {
+		t.Fatalf("output = %+v, want progress content", output)
+	}
+}
+
 func TestTaskToolsRejectInvalidInput(t *testing.T) {
 	ctx := context.Background()
 	queue := newTaskToolTestQueue(t)
@@ -283,6 +351,14 @@ func TestTaskToolsRejectInvalidInput(t *testing.T) {
 	}
 	if !stopResult.IsError || !strings.Contains(stopResult.Output, "id must be positive") {
 		t.Fatalf("task_stop result = %+v, want id error", stopResult)
+	}
+
+	outputResult, err := NewTaskOutputTool(queue).Execute(ctx, json.RawMessage(`{"id":1,"field":"log"}`))
+	if err != nil {
+		t.Fatalf("task_output Execute error = %v", err)
+	}
+	if !outputResult.IsError || !strings.Contains(outputResult.Output, "field must be") {
+		t.Fatalf("task_output result = %+v, want field error", outputResult)
 	}
 }
 
@@ -317,7 +393,8 @@ func TestTaskToolsMetadata(t *testing.T) {
 
 	listTool := NewTaskListTool(nil)
 	getTool := NewTaskGetTool(nil)
-	for _, tool := range []tools.Tool{listTool, getTool} {
+	outputTool := NewTaskOutputTool(nil)
+	for _, tool := range []tools.Tool{listTool, getTool, outputTool} {
 		if !tool.IsConcurrencySafe(nil) {
 			t.Fatalf("%s should be concurrency-safe", tool.Name())
 		}

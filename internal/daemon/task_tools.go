@@ -15,9 +15,12 @@ const (
 	TaskListToolName       = "task_list"
 	TaskGetToolName        = "task_get"
 	TaskStopToolName       = "task_stop"
+	TaskOutputToolName     = "task_output"
 	defaultTaskListLimit   = 20
 	maxTaskListLimit       = 100
 	taskToolPreviewMaxRune = 240
+	defaultTaskOutputRunes = 4000
+	maxTaskOutputRunes     = 20000
 )
 
 type TaskCreateTool struct {
@@ -381,6 +384,93 @@ func (t *TaskStopTool) Execute(ctx context.Context, params json.RawMessage) (*to
 	return tools.SuccessResult(string(raw)), nil
 }
 
+type TaskOutputTool struct {
+	queue *Queue
+}
+
+func NewTaskOutputTool(queue *Queue) *TaskOutputTool {
+	return &TaskOutputTool{queue: queue}
+}
+
+func (t *TaskOutputTool) Name() string { return TaskOutputToolName }
+
+func (t *TaskOutputTool) Description() string {
+	return "Read a bounded tail of a daemon task output field"
+}
+
+func (t *TaskOutputTool) Schema() json.RawMessage {
+	return tools.Object(map[string]tools.Property{
+		"id":        tools.Int("Daemon task ID."),
+		"field":     tools.StringEnum("Output field to read. Defaults to result.", "result", "progress", "summary", "payload"),
+		"max_chars": tools.Int("Maximum trailing characters to return. Defaults to 4000 and caps at 20000."),
+	}, []string{"id"})
+}
+
+func (t *TaskOutputTool) IsConcurrencySafe(json.RawMessage) bool { return true }
+
+func (t *TaskOutputTool) Reversible() bool { return true }
+
+func (t *TaskOutputTool) Scope(json.RawMessage) tools.ToolScope { return tools.ToolScope{} }
+
+func (t *TaskOutputTool) ShouldCancelSiblingsOnError() bool { return false }
+
+type taskOutputToolInput struct {
+	ID       int64  `json:"id"`
+	Field    string `json:"field"`
+	MaxChars int    `json:"max_chars"`
+}
+
+type taskOutputToolOutput struct {
+	TaskID     int64      `json:"task_id"`
+	Status     TaskStatus `json:"status"`
+	Field      string     `json:"field"`
+	MaxChars   int        `json:"max_chars"`
+	TotalChars int        `json:"total_chars"`
+	Truncated  bool       `json:"truncated"`
+	Content    string     `json:"content"`
+}
+
+func (t *TaskOutputTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
+	if t == nil || t.queue == nil {
+		return tools.ErrorResult("task_output: queue unavailable"), nil
+	}
+	var input taskOutputToolInput
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &input); err != nil {
+			return tools.ErrorResult(fmt.Sprintf("invalid params: %v", err)), nil
+		}
+	}
+	if input.ID <= 0 {
+		return tools.ErrorResult("task_output: id must be positive"), nil
+	}
+	field, ok := normalizeTaskOutputField(input.Field)
+	if !ok {
+		return tools.ErrorResult("task_output: field must be result, progress, summary, or payload"), nil
+	}
+	limit := normalizeTaskOutputLimit(input.MaxChars)
+
+	task, err := t.queue.Get(ctx, input.ID)
+	if err != nil {
+		return tools.ErrorResult(fmt.Sprintf("task_output: %v", err)), nil
+	}
+	content := taskOutputField(task, field)
+	tail, total, truncated := tailTaskOutput(content, limit)
+	output := taskOutputToolOutput{
+		TaskID:     task.ID,
+		Status:     task.Status,
+		Field:      field,
+		MaxChars:   limit,
+		TotalChars: total,
+		Truncated:  truncated,
+		Content:    tail,
+	}
+	raw, err := json.Marshal(output)
+	if err != nil {
+		return tools.ErrorResult(fmt.Sprintf("task_output: marshal output: %v", err)), nil
+	}
+	return tools.SuccessResult(string(raw)), nil
+}
+
 func normalizeTaskListLimit(limit int) int {
 	if limit <= 0 {
 		return defaultTaskListLimit
@@ -399,6 +489,54 @@ func normalizeTaskToolStatus(status string) (TaskStatus, bool) {
 	default:
 		return "", false
 	}
+}
+
+func normalizeTaskOutputField(field string) (string, bool) {
+	field = strings.ToLower(strings.TrimSpace(field))
+	switch field {
+	case "":
+		return "result", true
+	case "result", "progress", "summary", "payload":
+		return field, true
+	default:
+		return "", false
+	}
+}
+
+func normalizeTaskOutputLimit(limit int) int {
+	if limit <= 0 {
+		return defaultTaskOutputRunes
+	}
+	if limit > maxTaskOutputRunes {
+		return maxTaskOutputRunes
+	}
+	return limit
+}
+
+func taskOutputField(task *Task, field string) string {
+	if task == nil {
+		return ""
+	}
+	switch field {
+	case "progress":
+		return task.Progress
+	case "summary":
+		return task.Summary
+	case "payload":
+		return task.Payload
+	default:
+		return task.Result
+	}
+}
+
+func tailTaskOutput(s string, maxRunes int) (string, int, bool) {
+	s = strings.TrimSpace(s)
+	runes := []rune(s)
+	total := len(runes)
+	if maxRunes <= 0 || total <= maxRunes {
+		return s, total, false
+	}
+	return string(runes[total-maxRunes:]), total, true
 }
 
 func taskToolItemFromTask(task Task) taskToolItem {
