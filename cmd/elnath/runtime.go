@@ -419,6 +419,9 @@ func buildExecutionRuntime(
 	}
 	app.RegisterCloser("bash runner", bashRunnerCloser{runner: runner})
 	reg := buildToolRegistry(guard, provider, runner)
+	planModeController := agent.NewPlanModeController(perm)
+	reg.Register(agent.NewEnterPlanModeTool(planModeController))
+	reg.Register(agent.NewExitPlanModeTool(planModeController))
 	taskQueue, err := daemon.NewQueueNoRecover(db.Main)
 	if err != nil {
 		return nil, fmt.Errorf("open task queue tools: %w", err)
