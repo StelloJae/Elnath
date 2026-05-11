@@ -34,6 +34,7 @@ type commandSpec struct {
 	Name         string
 	Runner       commandRunner
 	Description  string
+	Category     string
 	Aliases      []string
 	ArgumentHint string
 	Hidden       bool
@@ -42,6 +43,7 @@ type commandSpec struct {
 type commandCatalogEntry struct {
 	Name         string   `json:"name"`
 	Description  string   `json:"description"`
+	Category     string   `json:"category"`
 	Aliases      []string `json:"aliases,omitempty"`
 	ArgumentHint string   `json:"argument_hint,omitempty"`
 	Hidden       bool     `json:"hidden,omitempty"`
@@ -49,34 +51,34 @@ type commandCatalogEntry struct {
 
 func commandSpecs() []commandSpec {
 	return []commandSpec{
-		{Name: "version", Runner: cmdVersion, Description: "Print the Elnath version."},
-		{Name: "help", Runner: cmdHelp, Description: "Show the top-level Elnath help."},
-		{Name: "commands", Runner: cmdCommands, Description: "List the structured Elnath command catalog.", ArgumentHint: "[--json] [--all]"},
-		{Name: "chaos", Runner: cmdChaos, Description: "Run chaos and resilience probes."},
-		{Name: "run", Runner: cmdRun, Description: "Start an interactive or non-interactive agent session.", ArgumentHint: "[prompt]"},
-		{Name: "setup", Runner: cmdSetup, Description: "Create or update local Elnath configuration."},
-		{Name: "sandbox", Runner: cmdSandbox, Description: "Inspect or exercise sandbox execution support."},
-		{Name: "errors", Runner: cmdErrors, Description: "Inspect the user-facing error catalog.", ArgumentHint: "<code|list>"},
-		{Name: "daemon", Runner: cmdDaemon, Description: "Manage the local Elnath daemon.", ArgumentHint: "<start|submit|status|stop|install>"},
-		{Name: "portability", Runner: cmdPortability, Description: "Run portability checks."},
-		{Name: "research", Runner: cmdResearch, Description: "Run research and evidence helpers."},
-		{Name: "telegram", Runner: cmdTelegram, Description: "Manage Telegram operator shell integration."},
-		{Name: "wiki", Runner: cmdWiki, Description: "Manage the local LLM wiki."},
-		{Name: "search", Runner: cmdSearch, Description: "Search local project knowledge."},
-		{Name: "eval", Runner: cmdEval, Description: "Run evaluation and benchmark helpers."},
-		{Name: "task", Runner: cmdTask, Description: "Inspect and manage queued daemon tasks."},
-		{Name: "agentic", Runner: cmdAgentic, Description: "Inspect agentic ledger and execution evidence."},
-		{Name: "lessons", Runner: cmdLessons, Description: "Manage lessons learned from agent runs."},
-		{Name: "skill", Runner: cmdSkill, Description: "Manage Elnath skills."},
-		{Name: "profile", Runner: cmdProfile, Description: "Inspect runtime profile information."},
-		{Name: "provider", Runner: cmdProvider, Description: "Inspect configured LLM provider capability.", ArgumentHint: "status [--json]"},
-		{Name: "explain", Runner: cmdExplain, Description: "Explain project or runtime state."},
-		{Name: "debug", Runner: cmdDebug, Description: "Run debugging helpers."},
+		{Name: "version", Runner: cmdVersion, Description: "Print the Elnath version.", Category: "core"},
+		{Name: "help", Runner: cmdHelp, Description: "Show the top-level Elnath help.", Category: "core"},
+		{Name: "commands", Runner: cmdCommands, Description: "List the structured Elnath command catalog.", Category: "core", ArgumentHint: "[--json] [--all]"},
+		{Name: "chaos", Runner: cmdChaos, Description: "Run chaos and resilience probes.", Category: "verification"},
+		{Name: "run", Runner: cmdRun, Description: "Start an interactive or non-interactive agent session.", Category: "runtime", ArgumentHint: "[prompt]"},
+		{Name: "setup", Runner: cmdSetup, Description: "Create or update local Elnath configuration.", Category: "configuration"},
+		{Name: "sandbox", Runner: cmdSandbox, Description: "Inspect or exercise sandbox execution support.", Category: "runtime"},
+		{Name: "errors", Runner: cmdErrors, Description: "Inspect the user-facing error catalog.", Category: "debugging", ArgumentHint: "<code|list>"},
+		{Name: "daemon", Runner: cmdDaemon, Description: "Manage the local Elnath daemon.", Category: "automation", ArgumentHint: "<start|submit|status|stop|install>"},
+		{Name: "portability", Runner: cmdPortability, Description: "Run portability checks.", Category: "verification"},
+		{Name: "research", Runner: cmdResearch, Description: "Run research and evidence helpers.", Category: "evidence"},
+		{Name: "telegram", Runner: cmdTelegram, Description: "Manage Telegram operator shell integration.", Category: "integration"},
+		{Name: "wiki", Runner: cmdWiki, Description: "Manage the local LLM wiki.", Category: "knowledge"},
+		{Name: "search", Runner: cmdSearch, Description: "Search local project knowledge.", Category: "knowledge"},
+		{Name: "eval", Runner: cmdEval, Description: "Run evaluation and benchmark helpers.", Category: "evaluation"},
+		{Name: "task", Runner: cmdTask, Description: "Inspect and manage queued daemon tasks.", Category: "automation"},
+		{Name: "agentic", Runner: cmdAgentic, Description: "Inspect agentic ledger and execution evidence.", Category: "agentic"},
+		{Name: "lessons", Runner: cmdLessons, Description: "Manage lessons learned from agent runs.", Category: "knowledge"},
+		{Name: "skill", Runner: cmdSkill, Description: "Manage Elnath skills.", Category: "skills"},
+		{Name: "profile", Runner: cmdProfile, Description: "Inspect runtime profile information.", Category: "runtime"},
+		{Name: "provider", Runner: cmdProvider, Description: "Inspect configured LLM provider capability.", Category: "provider", ArgumentHint: "status [--json]"},
+		{Name: "explain", Runner: cmdExplain, Description: "Explain project or runtime state.", Category: "knowledge"},
+		{Name: "debug", Runner: cmdDebug, Description: "Run debugging helpers.", Category: "debugging"},
 		// Hidden internal exec mode for the v41 / B3b-4-S0 Linux
 		// netns bridge spike. Not user-facing; the integration test
 		// at internal/tools/netproxy_bridge_spike_linux_test.go is
 		// the only caller. Omitted from `elnath help` on purpose.
-		{Name: "netproxy-bridge-spike", Runner: cmdNetproxyBridgeSpike, Description: "Run the internal netproxy bridge spike.", Hidden: true},
+		{Name: "netproxy-bridge-spike", Runner: cmdNetproxyBridgeSpike, Description: "Run the internal netproxy bridge spike.", Category: "internal", Hidden: true},
 		// Hidden internal exec mode for the v41 / B3b-4-2 macOS
 		// Seatbelt + future B3b-4-3 Linux bwrap substrate runners.
 		// SeatbeltRunner self-execs the elnath binary as
@@ -84,7 +86,7 @@ func commandSpecs() []commandSpec {
 		// --allow ... --deny ...` so the proxy listeners run in
 		// their own process (per partner pin C4 forked-child
 		// self-exec model). Omitted from `elnath help` on purpose.
-		{Name: "netproxy", Runner: cmdNetproxy, Description: "Run the internal netproxy child process.", Hidden: true},
+		{Name: "netproxy", Runner: cmdNetproxy, Description: "Run the internal netproxy child process.", Category: "internal", Hidden: true},
 		// Hidden internal exec mode for the v41 / B3b-4-3 Linux
 		// bwrap proxy wiring. BwrapRunner self-execs the elnath
 		// binary as `elnath netproxy-bridge --uds-http ... --uds-socks
@@ -94,7 +96,7 @@ func commandSpecs() []commandSpec {
 		// forwards bytes between netns-internal TCP listeners and
 		// host UDS endpoints served by the netproxy proxy child.
 		// Omitted from `elnath help` on purpose.
-		{Name: "netproxy-bridge", Runner: cmdNetproxyBridge, Description: "Run the internal bwrap netproxy bridge.", Hidden: true},
+		{Name: "netproxy-bridge", Runner: cmdNetproxyBridge, Description: "Run the internal bwrap netproxy bridge.", Category: "internal", Hidden: true},
 	}
 }
 
@@ -119,6 +121,7 @@ func commandCatalog(includeHidden bool) []commandCatalogEntry {
 		entry := commandCatalogEntry{
 			Name:         spec.Name,
 			Description:  spec.Description,
+			Category:     spec.Category,
 			Aliases:      append([]string(nil), spec.Aliases...),
 			ArgumentHint: spec.ArgumentHint,
 			Hidden:       spec.Hidden,
@@ -192,6 +195,11 @@ func formatCommandCatalog(entries []commandCatalogEntry) string {
 		}
 		b.WriteString(" - ")
 		b.WriteString(entry.Description)
+		if entry.Category != "" {
+			b.WriteString(" [")
+			b.WriteString(entry.Category)
+			b.WriteString("]")
+		}
 		if entry.Hidden {
 			b.WriteString(" [hidden]")
 		}
