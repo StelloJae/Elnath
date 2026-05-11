@@ -44,8 +44,20 @@ func (n *SkillCatalogNode) Render(_ context.Context, state *RenderState) (string
 		return "", nil
 	}
 	var b strings.Builder
-	b.WriteString("Available skills (invoke via /name):\n")
+	var conditionalCount int
 	for _, sk := range skills {
+		if sk != nil && len(sk.Paths) > 0 {
+			conditionalCount++
+		}
+	}
+	unconditionalCount := len(skills) - conditionalCount
+	if unconditionalCount > 0 {
+		b.WriteString("Available skills (invoke via /name):\n")
+	}
+	for _, sk := range skills {
+		if sk == nil || len(sk.Paths) > 0 {
+			continue
+		}
 		fmt.Fprintf(&b, "\n- /%s", sk.Name)
 		if sk.Trigger != "" {
 			parts := strings.SplitN(sk.Trigger, " ", 2)
@@ -58,6 +70,12 @@ func (n *SkillCatalogNode) Render(_ context.Context, state *RenderState) (string
 			b.WriteString(" — ")
 			b.WriteString(sk.Description)
 		}
+	}
+	if conditionalCount > 0 {
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString("Conditional skills are hidden from the static prompt; use skill_catalog match_paths with touched file paths to discover matching skills.")
 	}
 	return b.String(), nil
 }
