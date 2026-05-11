@@ -614,6 +614,10 @@ GO-BF-001 request-id logging guidance:
 - Do not modify `gin.go` or the `Default()` middleware chain; `TestCreateDefaultRouter` expects only the existing default logger/recovery handlers.
 - Keep request-id middleware opt-in, for example `router.Use(RequestID(), LoggerWithWriter(buffer))` in focused tests.
 - If threading the request id into logs, read it from the Gin context inside `LoggerWithConfig` and preserve existing formatter behavior when no request id is present.
+- Preserve `LogFormatterParams.BodySize`; do not replace, delete, or reorder it into a compile failure while adding request-id fields.
+- Do not finish with only a `requestIDKey` constant or `RequestID` field. That is incomplete even if `go test ./...` passes.
+- A complete patch should add an opt-in `RequestID()` middleware, attach the id to the Gin context, and set `param.RequestID` inside `LoggerWithConfig`.
+- Remove unused imports before final verification; an unused `crypto/rand` import after recovery is still incomplete.
 - Run `go test ./...` before the final answer.
 EOF
 }
@@ -1089,6 +1093,38 @@ ts_bf001_generic_retry_title_target() {
     && grep -Eq "['\"]retries a test['\"]" "$test_path"
 }
 
+go_bf001_missing_request_id_behavior() {
+  [[ "$TASK_ID" == "GO-BF-001" ]] || return 1
+  benchmark_changed_files_all | grep -Eq '^(logger\.go|logger_test\.go)$' || return 1
+  (
+    cd "$WORKTREE"
+    python3 - <<'PY'
+import sys
+from pathlib import Path
+
+parts = []
+for name in ("logger.go", "logger_test.go"):
+    path = Path(name)
+    if path.exists():
+        parts.append(path.read_text(encoding="utf-8", errors="ignore"))
+joined = "\n".join(parts)
+mentions_request_id = (
+    "RequestID" in joined or "requestID" in joined or "request-id" in joined
+)
+if not mentions_request_id:
+    sys.exit(1)
+
+has_middleware = "func RequestID(" in joined or "func RequestID() HandlerFunc" in joined
+has_context_set = ".Set(" in joined and (
+    "requestID" in joined or "RequestID" in joined
+)
+has_formatter_threading = "param.RequestID" in joined or "RequestID:" in joined
+
+sys.exit(1 if (has_middleware and has_context_set and has_formatter_threading) else 0)
+PY
+  )
+}
+
 ts_bf001_reported_tasks_fixture_mutation() {
   is_ts_bf001_vitest_task || return 1
   benchmark_changed_files_all | grep -Eq '^test/cli/fixtures/reported-tasks/.*\.ts$'
@@ -1415,6 +1451,10 @@ write_passed_verification_task_specific_failure() {
     write_result false true "incomplete_patch" "$recovery_attempted" false "$prefix, but TS-BF-001 regression collects packs from non-target retry events"
     return 0
   fi
+  if go_bf001_missing_request_id_behavior; then
+    write_result false true "incomplete_patch" "$recovery_attempted" false "$prefix, but GO-BF-001 changed request-id logging names without adding opt-in middleware, context attachment, and formatter threading"
+    return 0
+  fi
   if go_bug002_missing_focused_regression; then
     write_result false true "incomplete_patch" "$recovery_attempted" false "$prefix, but GO-BUG-002 changed only viper.go without the focused TestWatchFile regression"
     return 0
@@ -1499,6 +1539,10 @@ task_specific_completion_failure_reason() {
     echo "V8-PY-BF-001 lacks the required Flask context behavior diff plus focused tests/test_basic.py regression."
     return 0
   fi
+  if go_bf001_missing_request_id_behavior; then
+    echo "GO-BF-001 changed request-id logging names without adding opt-in middleware, context attachment, and formatter threading."
+    return 0
+  fi
   if ts_bf002_production_diff_without_focused_regression; then
     echo "TS-BF-002 changed module-utils behavior without focused cancellation regression coverage."
     return 0
@@ -1578,6 +1622,10 @@ recover_passed_task_specific_failure() {
   fi
   if detect_final_incomplete || detect_failed_recovery_incomplete_admission; then
     write_result false false "incomplete_patch" true false "task-specific recovery self-reported incomplete work and verification still fails" true
+    exit 0
+  fi
+  if go_bf001_missing_request_id_behavior; then
+    write_result false false "incomplete_patch" true false "task-specific recovery left GO-BF-001 request-id logging behavior incomplete"
     exit 0
   fi
   if go_bug002_missing_focused_regression || go_bug002_unbounded_wait_regression; then
@@ -2548,6 +2596,11 @@ fi
 
 if ts_bf001_generic_retry_title_target; then
   write_result false false "incomplete_patch" true false "TS-BF-001 focused retry telemetry regression selected a generic retry title instead of the intended target task"
+  exit 0
+fi
+
+if go_bf001_missing_request_id_behavior; then
+  write_result false false "incomplete_patch" true false "GO-BF-001 recovery left request-id logging behavior incomplete"
   exit 0
 fi
 
