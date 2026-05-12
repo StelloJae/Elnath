@@ -2950,6 +2950,7 @@ func TestExecutionRuntimeRunTaskSkillsSlashCommandListsCatalog(t *testing.T) {
 		Description: "Review PR with security and quality focus",
 		Trigger:     "/pr-review <pr_number>",
 		BaseDir:     "/tmp/elnath-skills/pr-review",
+		Source:      "codex-plugin-skill",
 		Prompt:      "Review PR #{pr_number}",
 	})
 	sess, err := rt.mgr.NewSession()
@@ -2989,6 +2990,7 @@ func TestExecutionRuntimeRunTaskSkillsSlashCommandJSONListsCatalog(t *testing.T)
 		Description: "Review PR with security and quality focus",
 		Trigger:     "/pr-review <pr_number>",
 		BaseDir:     "/tmp/elnath-skills/pr-review",
+		Source:      "codex-plugin-skill",
 		Prompt:      "Review PR #{pr_number}",
 	})
 	sess, err := rt.mgr.NewSession()
@@ -3011,6 +3013,9 @@ func TestExecutionRuntimeRunTaskSkillsSlashCommandJSONListsCatalog(t *testing.T)
 			Description string `json:"description"`
 			Trigger     string `json:"trigger"`
 			BaseDir     string `json:"base_dir"`
+			Source      string `json:"source"`
+			TrustLevel  string `json:"trust_level"`
+			External    bool   `json:"external"`
 		} `json:"skills"`
 	}
 	if err := json.Unmarshal([]byte(summary), &out); err != nil {
@@ -3021,6 +3026,9 @@ func TestExecutionRuntimeRunTaskSkillsSlashCommandJSONListsCatalog(t *testing.T)
 	}
 	if got := out.Skills[0]; got.Name != "pr-review" || got.Trigger != "/pr-review <pr_number>" || got.BaseDir != "/tmp/elnath-skills/pr-review" {
 		t.Fatalf("skill entry = %+v, want pr-review trigger metadata", got)
+	}
+	if got := out.Skills[0]; got.Source != "codex-plugin-skill" || got.TrustLevel != "plugin_cache" || !got.External {
+		t.Fatalf("trust metadata = %+v, want plugin_cache external", got)
 	}
 }
 

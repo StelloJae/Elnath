@@ -24,6 +24,8 @@ type runtimeSkillCatalogEntry struct {
 	BaseDir       string   `json:"base_dir,omitempty"`
 	Status        string   `json:"status,omitempty"`
 	Source        string   `json:"source,omitempty"`
+	TrustLevel    string   `json:"trust_level,omitempty"`
+	External      bool     `json:"external"`
 }
 
 func (rt *executionRuntime) trySkillsCommand(
@@ -100,6 +102,8 @@ func runtimeSkillCatalog(reg *skill.Registry) []runtimeSkillCatalogEntry {
 			BaseDir:       sk.BaseDir,
 			Status:        sk.Status,
 			Source:        sk.Source,
+			TrustLevel:    sk.TrustLevel(),
+			External:      sk.External(),
 		})
 	}
 	return entries

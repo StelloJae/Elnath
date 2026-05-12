@@ -67,6 +67,8 @@ type catalogSkillEntry struct {
 	BaseDir       string   `json:"base_dir,omitempty"`
 	Status        string   `json:"status,omitempty"`
 	Source        string   `json:"source,omitempty"`
+	TrustLevel    string   `json:"trust_level,omitempty"`
+	External      bool     `json:"external"`
 	Score         int      `json:"score,omitempty"`
 	MatchedFields []string `json:"matched_fields,omitempty"`
 	Prompt        string   `json:"prompt,omitempty"`
@@ -183,6 +185,8 @@ func skillCatalogEntry(sk *Skill, includePrompt bool) catalogSkillEntry {
 		BaseDir:       sk.BaseDir,
 		Status:        sk.Status,
 		Source:        sk.Source,
+		TrustLevel:    sk.TrustLevel(),
+		External:      sk.External(),
 	}
 	if includePrompt {
 		entry.Prompt = sk.Prompt
