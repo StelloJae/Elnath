@@ -194,11 +194,32 @@ func TestTaskGetToolReturnsDetails(t *testing.T) {
 	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
 		t.Fatalf("unmarshal output: %v", err)
 	}
+	if !output.Found || output.Task == nil {
+		t.Fatalf("output = %+v, want found task", output)
+	}
 	if output.Task.ID != id {
 		t.Fatalf("ID = %d, want %d", output.Task.ID, id)
 	}
 	if output.Task.Payload != "inspect me" {
 		t.Fatalf("Payload = %q, want inspect me", output.Task.Payload)
+	}
+}
+
+func TestTaskGetToolReturnsStructuredNotFound(t *testing.T) {
+	result, err := NewTaskGetTool(newTaskToolTestQueue(t)).Execute(context.Background(), json.RawMessage(`{"id":404}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute returned error result: %s", result.Output)
+	}
+
+	var output taskGetToolOutput
+	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if output.Found || output.Task != nil {
+		t.Fatalf("output = %+v, want structured not found", output)
 	}
 }
 

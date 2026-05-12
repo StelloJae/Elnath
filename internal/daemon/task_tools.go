@@ -3,10 +3,12 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/stello/elnath/internal/core"
 	"github.com/stello/elnath/internal/tools"
 )
 
@@ -273,7 +275,8 @@ type taskGetToolInput struct {
 }
 
 type taskGetToolOutput struct {
-	Task taskToolDetail `json:"task"`
+	Found bool            `json:"found"`
+	Task  *taskToolDetail `json:"task"`
 }
 
 type taskToolDetail struct {
@@ -298,11 +301,19 @@ func (t *TaskGetTool) Execute(ctx context.Context, params json.RawMessage) (*too
 
 	task, err := t.queue.Get(ctx, input.ID)
 	if err != nil {
+		if errors.Is(err, core.ErrNotFound) {
+			raw, marshalErr := json.Marshal(taskGetToolOutput{})
+			if marshalErr != nil {
+				return tools.ErrorResult(fmt.Sprintf("task_get: marshal output: %v", marshalErr)), nil
+			}
+			return tools.SuccessResult(string(raw)), nil
+		}
 		return tools.ErrorResult(fmt.Sprintf("task_get: %v", err)), nil
 	}
 	item := taskToolItemFromTask(*task)
 	output := taskGetToolOutput{
-		Task: taskToolDetail{
+		Found: true,
+		Task: &taskToolDetail{
 			taskToolItem: item,
 			Payload:      task.Payload,
 			Result:       task.Result,
