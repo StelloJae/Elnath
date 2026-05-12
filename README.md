@@ -119,6 +119,7 @@ Recent hardening also closed two structural follow-ups behind this operator flow
 | `provider candidates` | List configured provider candidates | `elnath provider candidates --json` |
 | `provider check` | Validate one provider candidate without switching | `elnath provider check openai_responses --json` |
 | `skill list` | List wiki-native skills, optionally with compatible SKILL.md roots | `elnath skill list --compatible --json` |
+| `explain timeouts` | Inspect configured provider, daemon, and self-healing timeouts | `elnath explain timeouts --json` |
 | `version` | Show version | `elnath version` |
 | `help` | Show command help | `elnath help` |
 

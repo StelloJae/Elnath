@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -52,6 +53,8 @@ func cmdExplain(_ context.Context, args []string) error {
 			n = parsed
 		}
 		return explainHistory(outcomeStore, n)
+	case "timeouts":
+		return explainTimeouts(cfg, args[1:])
 	default:
 		return fmt.Errorf("explain: unknown subcommand %q (try: elnath explain help)", args[0])
 	}
@@ -61,11 +64,117 @@ func printExplainUsage() error {
 	fmt.Fprintf(os.Stdout, `Usage: elnath explain <subcommand>
 
 Subcommands:
-  last           Show the most recent routing decision
-  history [n]    Show recent n routing decisions (default 10)
-  help           Show this help
+  last              Show the most recent routing decision
+  history [n]       Show recent n routing decisions (default 10)
+  timeouts [--json] Show configured timeout and retry policy
+  help              Show this help
 `)
 	return nil
+}
+
+type timeoutPolicyView struct {
+	ProviderRequestTimeouts []providerTimeoutPolicyView  `json:"provider_request_timeouts"`
+	Daemon                  daemonTimeoutPolicyView      `json:"daemon"`
+	SelfHealing             selfHealingTimeoutPolicyView `json:"self_healing"`
+	Telegram                telegramTimeoutPolicyView    `json:"telegram"`
+}
+
+type providerTimeoutPolicyView struct {
+	Provider       string `json:"provider"`
+	ConfigKey      string `json:"config_key"`
+	TimeoutSeconds int    `json:"timeout_seconds"`
+}
+
+type daemonTimeoutPolicyView struct {
+	InactivityTimeoutSeconds int    `json:"inactivity_timeout_seconds"`
+	WallClockTimeoutSeconds  int    `json:"wall_clock_timeout_seconds"`
+	MaxRecoveries            int    `json:"max_recoveries"`
+	WorkspaceRetention       string `json:"workspace_retention"`
+}
+
+type selfHealingTimeoutPolicyView struct {
+	Enabled            bool `json:"enabled"`
+	ObserveOnly        bool `json:"observe_only"`
+	TimeoutSeconds     int  `json:"timeout_seconds"`
+	CompletionRetryMax int  `json:"completion_retry_max"`
+}
+
+type telegramTimeoutPolicyView struct {
+	PollTimeoutSeconds int `json:"poll_timeout_seconds"`
+}
+
+func explainTimeouts(cfg *config.Config, args []string) error {
+	jsonOut := false
+	for _, arg := range args {
+		switch arg {
+		case "--json":
+			jsonOut = true
+		case "help", "-h", "--help":
+			return printExplainUsage()
+		default:
+			return fmt.Errorf("explain: timeouts: unknown flag %q", arg)
+		}
+	}
+
+	view := timeoutPolicyViewForConfig(cfg)
+	if jsonOut {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(view)
+	}
+
+	fmt.Fprintln(os.Stdout, "Timeout policy:")
+	fmt.Fprintln(os.Stdout, "  Provider request timeouts:")
+	for _, entry := range view.ProviderRequestTimeouts {
+		fmt.Fprintf(os.Stdout, "    - %s: %ds (%s)\n", entry.Provider, entry.TimeoutSeconds, entry.ConfigKey)
+	}
+	fmt.Fprintf(os.Stdout, "  Daemon: inactivity=%ds wall_clock=%ds max_recoveries=%d workspace_retention=%s\n",
+		view.Daemon.InactivityTimeoutSeconds,
+		view.Daemon.WallClockTimeoutSeconds,
+		view.Daemon.MaxRecoveries,
+		view.Daemon.WorkspaceRetention,
+	)
+	fmt.Fprintf(os.Stdout, "  Self-healing: enabled=%t observe_only=%t timeout=%ds completion_retry_max=%d\n",
+		view.SelfHealing.Enabled,
+		view.SelfHealing.ObserveOnly,
+		view.SelfHealing.TimeoutSeconds,
+		view.SelfHealing.CompletionRetryMax,
+	)
+	fmt.Fprintf(os.Stdout, "  Telegram: poll_timeout=%ds\n", view.Telegram.PollTimeoutSeconds)
+	return nil
+}
+
+func timeoutPolicyViewForConfig(cfg *config.Config) timeoutPolicyView {
+	if cfg == nil {
+		cfg = config.DefaultConfig()
+	}
+	workspaceRetention := strings.TrimSpace(cfg.Daemon.WorkspaceRetention)
+	if workspaceRetention == "" {
+		workspaceRetention = "immediate"
+	}
+	return timeoutPolicyView{
+		ProviderRequestTimeouts: []providerTimeoutPolicyView{
+			{Provider: "anthropic", ConfigKey: "anthropic.timeout_seconds", TimeoutSeconds: cfg.Anthropic.Timeout},
+			{Provider: "openai", ConfigKey: "openai.timeout_seconds", TimeoutSeconds: cfg.OpenAI.Timeout},
+			{Provider: "openai_responses", ConfigKey: "openai_responses.timeout_seconds", TimeoutSeconds: cfg.OpenAIResponses.Timeout},
+			{Provider: "codex_oauth", ConfigKey: "openai_responses.timeout_seconds", TimeoutSeconds: cfg.OpenAIResponses.Timeout},
+		},
+		Daemon: daemonTimeoutPolicyView{
+			InactivityTimeoutSeconds: cfg.Daemon.InactivityTimeout,
+			WallClockTimeoutSeconds:  cfg.Daemon.WallClockTimeout,
+			MaxRecoveries:            cfg.Daemon.MaxRecoveries,
+			WorkspaceRetention:       workspaceRetention,
+		},
+		SelfHealing: selfHealingTimeoutPolicyView{
+			Enabled:            cfg.SelfHealing.Enabled,
+			ObserveOnly:        cfg.SelfHealing.ObserveOnly,
+			TimeoutSeconds:     cfg.SelfHealing.TimeoutSeconds,
+			CompletionRetryMax: cfg.SelfHealing.CompletionRetryMax,
+		},
+		Telegram: telegramTimeoutPolicyView{
+			PollTimeoutSeconds: cfg.Telegram.PollTimeoutSeconds,
+		},
+	}
 }
 
 func explainLast(outcomeStore *learning.OutcomeStore, wikiStore *wiki.Store, advisor *learning.RoutingAdvisor) error {
