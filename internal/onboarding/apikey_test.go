@@ -1,6 +1,7 @@
 package onboarding
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -89,5 +90,15 @@ func TestAPIKeyModel_ViewKorean(t *testing.T) {
 	view := m.View()
 	if !strings.Contains(view, "API 키 설정") {
 		t.Error("view missing Korean API key title")
+	}
+}
+
+func TestValidateOnboardingKeySkipsAnthropicProbeForResponsesKeys(t *testing.T) {
+	result := validateOnboardingKey(context.Background(), "sk-responses-compatible")
+	if !result.Valid {
+		t.Fatalf("Valid = false, want true for Responses-compatible key")
+	}
+	if result.Error == nil || !strings.Contains(result.Error.Error(), "not remotely validated") {
+		t.Fatalf("Error = %v, want non-fatal not remotely validated note", result.Error)
 	}
 }

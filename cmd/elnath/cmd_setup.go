@@ -87,14 +87,22 @@ func cmdSetupQuickstart(ctx context.Context, cfgPath string) error {
 
 	demoRan := false
 	if promptYN("Try a demo task? [Y/n] ", true) {
-		demoCfg := &config.Config{
-			DataDir: cfgResult.DataDir,
-			WikiDir: cfgResult.WikiDir,
-			Locale:  cfgResult.Locale,
-			Anthropic: config.ProviderConfig{
-				APIKey: cfgResult.APIKey,
-			},
-			Permission: config.PermissionConfig{Mode: cfgResult.PermissionMode},
+		demoCfg := config.DefaultConfig()
+		demoCfg.DataDir = cfgResult.DataDir
+		demoCfg.WikiDir = cfgResult.WikiDir
+		demoCfg.Locale = cfgResult.Locale
+		demoCfg.Provider = cfgResult.Provider
+		demoCfg.Permission = config.PermissionConfig{Mode: cfgResult.PermissionMode}
+		if cfgResult.Provider == "openai_responses" || cfgResult.OpenAIResponsesAPIKey != "" {
+			demoCfg.OpenAIResponses.APIKey = cfgResult.OpenAIResponsesAPIKey
+			if demoCfg.OpenAIResponses.APIKey == "" {
+				demoCfg.OpenAIResponses.APIKey = cfgResult.APIKey
+			}
+			demoCfg.OpenAIResponses.BaseURL = cfgResult.OpenAIResponsesBaseURL
+			demoCfg.OpenAIResponses.Model = cfgResult.OpenAIResponsesModel
+			demoCfg.OpenAIResponses.ReasoningEffort = cfgResult.OpenAIResponsesReasoningEffort
+		} else {
+			demoCfg.Anthropic.APIKey = cfgResult.APIKey
 		}
 		provider, model, provErr := buildProvider(demoCfg)
 		if provErr != nil {

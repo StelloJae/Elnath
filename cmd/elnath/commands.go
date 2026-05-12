@@ -674,12 +674,17 @@ func onboardingResultToConfig(result *onboarding.Result) *config.OnboardingResul
 		})
 	}
 	return &config.OnboardingResult{
-		APIKey:         result.APIKey,
-		Locale:         string(result.Locale),
-		DataDir:        result.DataDir,
-		WikiDir:        result.WikiDir,
-		PermissionMode: result.PermissionMode,
-		MCPServers:     mcpServers,
+		Provider:                       result.Provider,
+		APIKey:                         result.APIKey,
+		OpenAIResponsesAPIKey:          result.OpenAIResponsesAPIKey,
+		OpenAIResponsesBaseURL:         result.OpenAIResponsesBaseURL,
+		OpenAIResponsesModel:           result.OpenAIResponsesModel,
+		OpenAIResponsesReasoningEffort: result.OpenAIResponsesReasoningEffort,
+		Locale:                         string(result.Locale),
+		DataDir:                        result.DataDir,
+		WikiDir:                        result.WikiDir,
+		PermissionMode:                 result.PermissionMode,
+		MCPServers:                     mcpServers,
 	}
 }
 

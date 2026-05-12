@@ -25,13 +25,13 @@ var translations = map[Locale]map[string]string{
 		"lang.navigate": "↑/↓ to select • enter to confirm",
 
 		"apikey.title":       "API Key Setup",
-		"apikey.prompt":      "Enter your Anthropic API key:",
-		"apikey.placeholder": "sk-ant-...",
+		"apikey.prompt":      "Enter an OpenAI Responses-compatible or Anthropic API key:",
+		"apikey.placeholder": "sk-...",
 		"apikey.validating":  "Validating API key...",
 		"apikey.valid":       "API key is valid!",
 		"apikey.invalid":     "Invalid API key. Please try again.",
 		"apikey.error":       "Validation failed: %s (key saved anyway)",
-		"apikey.skip":        "Press enter to skip (can set later via ELNATH_ANTHROPIC_API_KEY)",
+		"apikey.skip":        "Press enter to skip (can set later via ELNATH_OPENAI_RESPONSES_API_KEY or ELNATH_ANTHROPIC_API_KEY)",
 		"apikey.navigate":    "enter to confirm • esc to go back",
 
 		"dir.title":    "Directory Setup",
@@ -354,13 +354,13 @@ SEE ALSO
 		"lang.navigate": "↑/↓ 선택 • Enter 확인",
 
 		"apikey.title":       "API 키 설정",
-		"apikey.prompt":      "Anthropic API 키를 입력하세요:",
-		"apikey.placeholder": "sk-ant-...",
+		"apikey.prompt":      "OpenAI Responses 호환 또는 Anthropic API 키를 입력하세요:",
+		"apikey.placeholder": "sk-...",
 		"apikey.validating":  "API 키 검증 중...",
 		"apikey.valid":       "API 키가 유효합니다!",
 		"apikey.invalid":     "유효하지 않은 API 키입니다. 다시 시도해주세요.",
 		"apikey.error":       "검증 실패: %s (키는 저장됩니다)",
-		"apikey.skip":        "Enter로 건너뛰기 (나중에 ELNATH_ANTHROPIC_API_KEY로 설정 가능)",
+		"apikey.skip":        "Enter로 건너뛰기 (나중에 ELNATH_OPENAI_RESPONSES_API_KEY 또는 ELNATH_ANTHROPIC_API_KEY로 설정 가능)",
 		"apikey.navigate":    "Enter 확인 • Esc 뒤로",
 
 		"dir.title":    "디렉토리 설정",
