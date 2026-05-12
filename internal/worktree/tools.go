@@ -197,9 +197,23 @@ func (t *ListTool) ShouldCancelSiblingsOnError() bool { return false }
 func (t *ListTool) DeferInitialToolSchema() bool { return true }
 
 type ListOutput struct {
-	RegistryPath string   `json:"registry_path"`
-	Total        int      `json:"total"`
-	Worktrees    []Record `json:"worktrees"`
+	RegistryPath string       `json:"registry_path"`
+	Total        int          `json:"total"`
+	Worktrees    []ListRecord `json:"worktrees"`
+}
+
+type ListRecord struct {
+	Name           string `json:"name"`
+	Slug           string `json:"slug"`
+	Path           string `json:"path"`
+	Branch         string `json:"branch"`
+	OriginalBranch string `json:"original_branch,omitempty"`
+	OriginalHead   string `json:"original_head"`
+	CreatedAt      string `json:"created_at"`
+	Exists         bool   `json:"exists"`
+	DirtyFiles     int    `json:"dirty_files"`
+	AheadCommits   int    `json:"ahead_commits"`
+	StatusError    string `json:"status_error,omitempty"`
 }
 
 func (t *ListTool) Execute(ctx context.Context, _ json.RawMessage) (*tools.Result, error) {
@@ -226,12 +240,53 @@ func (m *Manager) List(ctx context.Context) (ListOutput, error) {
 	if err != nil {
 		return ListOutput{}, err
 	}
-	worktrees := append([]Record(nil), registry.Worktrees...)
+	worktrees := make([]ListRecord, 0, len(registry.Worktrees))
+	for _, record := range registry.Worktrees {
+		worktrees = append(worktrees, m.listRecordStatus(ctx, repoRoot, record))
+	}
 	return ListOutput{
 		RegistryPath: filepath.Join(repoRoot, ".elnath", "worktrees", "registry.json"),
 		Total:        len(worktrees),
 		Worktrees:    worktrees,
 	}, nil
+}
+
+func (m *Manager) listRecordStatus(ctx context.Context, repoRoot string, record Record) ListRecord {
+	out := ListRecord{
+		Name:           record.Name,
+		Slug:           record.Slug,
+		Path:           record.Path,
+		Branch:         record.Branch,
+		OriginalBranch: record.OriginalBranch,
+		OriginalHead:   record.OriginalHead,
+		CreatedAt:      record.CreatedAt,
+	}
+	if err := ensureManagedPath(repoRoot, record.Path); err != nil {
+		out.StatusError = err.Error()
+		return out
+	}
+	if _, err := os.Stat(record.Path); err != nil {
+		if os.IsNotExist(err) {
+			out.StatusError = "worktree path missing"
+		} else {
+			out.StatusError = err.Error()
+		}
+		return out
+	}
+	out.Exists = true
+	dirty, err := m.dirtyFileCount(ctx, record.Path)
+	if err != nil {
+		out.StatusError = err.Error()
+		return out
+	}
+	out.DirtyFiles = dirty
+	ahead, err := m.aheadCount(ctx, record.Path, record.OriginalHead)
+	if err != nil {
+		out.StatusError = err.Error()
+		return out
+	}
+	out.AheadCommits = ahead
+	return out
 }
 
 func (t *ExitTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {

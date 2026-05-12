@@ -158,6 +158,68 @@ func TestWorktreeListToolShowsRegisteredWorktrees(t *testing.T) {
 	}
 }
 
+func TestWorktreeListToolReportsStatusEvidence(t *testing.T) {
+	repo := initGitRepo(t)
+	manager := NewManager(repo)
+	enter := NewEnterTool(manager)
+	list := NewListTool(manager)
+
+	result, err := enter.Execute(context.Background(), json.RawMessage(`{"name":"feature/status"}`))
+	if err != nil {
+		t.Fatalf("enter Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("enter returned error result: %s", result.Output)
+	}
+	var entered EnterOutput
+	if err := json.Unmarshal([]byte(result.Output), &entered); err != nil {
+		t.Fatalf("unmarshal enter output: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(entered.Path, "status.txt"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatalf("write dirty file: %v", err)
+	}
+
+	listedDirty, err := list.Execute(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("dirty list Execute error = %v", err)
+	}
+	if listedDirty.IsError {
+		t.Fatalf("dirty list returned error result: %s", listedDirty.Output)
+	}
+	var dirtyOutput ListOutput
+	if err := json.Unmarshal([]byte(listedDirty.Output), &dirtyOutput); err != nil {
+		t.Fatalf("unmarshal dirty list output: %v", err)
+	}
+	if len(dirtyOutput.Worktrees) != 1 {
+		t.Fatalf("dirty worktrees = %d, want 1", len(dirtyOutput.Worktrees))
+	}
+	if got := dirtyOutput.Worktrees[0]; !got.Exists || got.DirtyFiles != 1 || got.AheadCommits != 0 || got.StatusError != "" {
+		t.Fatalf("dirty listed status = %+v, want exists with one dirty file", got)
+	}
+
+	gitRun(t, entered.Path, "add", "status.txt")
+	gitRun(t, entered.Path, "commit", "-m", "status")
+
+	listed, err := list.Execute(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("list Execute error = %v", err)
+	}
+	if listed.IsError {
+		t.Fatalf("list returned error result: %s", listed.Output)
+	}
+	var output ListOutput
+	if err := json.Unmarshal([]byte(listed.Output), &output); err != nil {
+		t.Fatalf("unmarshal list output: %v", err)
+	}
+	if len(output.Worktrees) != 1 {
+		t.Fatalf("worktrees = %d, want 1", len(output.Worktrees))
+	}
+	got := output.Worktrees[0]
+	if !got.Exists || got.DirtyFiles != 0 || got.AheadCommits != 1 || got.StatusError != "" {
+		t.Fatalf("listed status = %+v, want exists clean and one ahead commit", got)
+	}
+}
+
 func TestWorktreeToolMetadata(t *testing.T) {
 	for _, tool := range []tools.Tool{NewEnterTool(nil), NewExitTool(nil)} {
 		if tool.IsConcurrencySafe(nil) {
