@@ -65,9 +65,12 @@ type invocationInput struct {
 }
 
 type invocationOutput struct {
-	Skill  string `json:"skill"`
-	Status string `json:"status"`
-	Output string `json:"output"`
+	Skill      string `json:"skill"`
+	Status     string `json:"status"`
+	Source     string `json:"source,omitempty"`
+	TrustLevel string `json:"trust_level,omitempty"`
+	External   bool   `json:"external"`
+	Output     string `json:"output"`
 }
 
 func (t *InvocationTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
@@ -88,7 +91,8 @@ func (t *InvocationTool) Execute(ctx context.Context, params json.RawMessage) (*
 		return tools.ErrorResult("skill provider is not configured"), nil
 	}
 
-	if _, ok := t.cfg.Registry.Get(name); !ok {
+	sk, ok := t.cfg.Registry.Get(name)
+	if !ok {
 		return tools.ErrorResult(fmt.Sprintf("skill %q not found", name)), nil
 	}
 
@@ -114,9 +118,12 @@ func (t *InvocationTool) Execute(ctx context.Context, params json.RawMessage) (*
 	}
 
 	raw, err := json.Marshal(invocationOutput{
-		Skill:  name,
-		Status: "completed",
-		Output: result.Output,
+		Skill:      name,
+		Status:     "completed",
+		Source:     sk.Source,
+		TrustLevel: sk.TrustLevel(),
+		External:   sk.External(),
+		Output:     result.Output,
 	})
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("skill %q: marshal output: %v", name, err)), nil
