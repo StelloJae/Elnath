@@ -145,6 +145,7 @@ func TestPermissionWithActualToolNames(t *testing.T) {
 		{"plan allows task_monitor", ModePlan, "task_monitor", true},
 		{"plan allows ask_user_question", ModePlan, "ask_user_question", true},
 		{"plan allows schedule_list", ModePlan, "schedule_list", true},
+		{"plan allows worktree_list", ModePlan, "worktree_list", true},
 		{"plan allows enter_plan_mode", ModePlan, "enter_plan_mode", true},
 		{"plan allows exit_plan_mode", ModePlan, "exit_plan_mode", true},
 

@@ -17,6 +17,7 @@ import (
 
 const (
 	EnterToolName = "enter_worktree"
+	ListToolName  = "worktree_list"
 	ExitToolName  = "exit_worktree"
 )
 
@@ -165,6 +166,72 @@ type ExitOutput struct {
 	DirtyFiles   int    `json:"dirty_files"`
 	AheadCommits int    `json:"ahead_commits"`
 	RegistryPath string `json:"registry_path"`
+}
+
+type ListTool struct {
+	manager *Manager
+}
+
+func NewListTool(manager *Manager) *ListTool {
+	return &ListTool{manager: manager}
+}
+
+func (t *ListTool) Name() string { return ListToolName }
+
+func (t *ListTool) Description() string {
+	return "List Elnath-managed git worktrees from the local worktree registry"
+}
+
+func (t *ListTool) Schema() json.RawMessage {
+	return tools.Object(map[string]tools.Property{}, nil)
+}
+
+func (t *ListTool) IsConcurrencySafe(json.RawMessage) bool { return true }
+
+func (t *ListTool) Reversible() bool { return true }
+
+func (t *ListTool) Scope(json.RawMessage) tools.ToolScope { return tools.ToolScope{} }
+
+func (t *ListTool) ShouldCancelSiblingsOnError() bool { return false }
+
+func (t *ListTool) DeferInitialToolSchema() bool { return true }
+
+type ListOutput struct {
+	RegistryPath string   `json:"registry_path"`
+	Total        int      `json:"total"`
+	Worktrees    []Record `json:"worktrees"`
+}
+
+func (t *ListTool) Execute(ctx context.Context, _ json.RawMessage) (*tools.Result, error) {
+	if t == nil || t.manager == nil {
+		return tools.ErrorResult("worktree_list: manager unavailable"), nil
+	}
+	output, err := t.manager.List(ctx)
+	if err != nil {
+		return tools.ErrorResult("worktree_list: " + err.Error()), nil
+	}
+	raw, err := json.Marshal(output)
+	if err != nil {
+		return tools.ErrorResult(fmt.Sprintf("worktree_list: marshal output: %v", err)), nil
+	}
+	return tools.SuccessResult(string(raw)), nil
+}
+
+func (m *Manager) List(ctx context.Context) (ListOutput, error) {
+	repoRoot, err := m.repoRoot(ctx)
+	if err != nil {
+		return ListOutput{}, err
+	}
+	registry, err := m.readRegistryForRoot(repoRoot)
+	if err != nil {
+		return ListOutput{}, err
+	}
+	worktrees := append([]Record(nil), registry.Worktrees...)
+	return ListOutput{
+		RegistryPath: filepath.Join(repoRoot, ".elnath", "worktrees", "registry.json"),
+		Total:        len(worktrees),
+		Worktrees:    worktrees,
+	}, nil
 }
 
 func (t *ExitTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {

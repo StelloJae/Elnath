@@ -443,6 +443,7 @@ func buildExecutionRuntime(
 	reg.Register(scheduler.NewScheduleDeleteTool(schedulePath))
 	worktreeManager := worktree.NewManager(effectiveWorkDir)
 	reg.Register(worktree.NewEnterTool(worktreeManager))
+	reg.Register(worktree.NewListTool(worktreeManager))
 	reg.Register(worktree.NewExitTool(worktreeManager))
 	gitSync, wikiIdx := registerWikiTools(reg, cfg.WikiDir, db.Wiki)
 	reg.Register(conversation.NewConversationSearchTool(historyStore))
