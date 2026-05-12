@@ -158,8 +158,158 @@ func TestWorktreeListToolShowsRegisteredWorktrees(t *testing.T) {
 	}
 }
 
+func TestWorktreeListToolReportsStatusEvidence(t *testing.T) {
+	repo := initGitRepo(t)
+	manager := NewManager(repo)
+	enter := NewEnterTool(manager)
+	list := NewListTool(manager)
+
+	result, err := enter.Execute(context.Background(), json.RawMessage(`{"name":"feature/status"}`))
+	if err != nil {
+		t.Fatalf("enter Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("enter returned error result: %s", result.Output)
+	}
+	var entered EnterOutput
+	if err := json.Unmarshal([]byte(result.Output), &entered); err != nil {
+		t.Fatalf("unmarshal enter output: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(entered.Path, "status.txt"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatalf("write dirty file: %v", err)
+	}
+
+	listedDirty, err := list.Execute(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("dirty list Execute error = %v", err)
+	}
+	if listedDirty.IsError {
+		t.Fatalf("dirty list returned error result: %s", listedDirty.Output)
+	}
+	var dirtyOutput ListOutput
+	if err := json.Unmarshal([]byte(listedDirty.Output), &dirtyOutput); err != nil {
+		t.Fatalf("unmarshal dirty list output: %v", err)
+	}
+	if len(dirtyOutput.Worktrees) != 1 {
+		t.Fatalf("dirty worktrees = %d, want 1", len(dirtyOutput.Worktrees))
+	}
+	if got := dirtyOutput.Worktrees[0]; !got.Exists || got.DirtyFiles != 1 || got.AheadCommits != 0 || got.StatusError != "" {
+		t.Fatalf("dirty listed status = %+v, want exists with one dirty file", got)
+	}
+
+	gitRun(t, entered.Path, "add", "status.txt")
+	gitRun(t, entered.Path, "commit", "-m", "status")
+
+	listed, err := list.Execute(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("list Execute error = %v", err)
+	}
+	if listed.IsError {
+		t.Fatalf("list returned error result: %s", listed.Output)
+	}
+	var output ListOutput
+	if err := json.Unmarshal([]byte(listed.Output), &output); err != nil {
+		t.Fatalf("unmarshal list output: %v", err)
+	}
+	if len(output.Worktrees) != 1 {
+		t.Fatalf("worktrees = %d, want 1", len(output.Worktrees))
+	}
+	got := output.Worktrees[0]
+	if !got.Exists || got.DirtyFiles != 0 || got.AheadCommits != 1 || got.StatusError != "" {
+		t.Fatalf("listed status = %+v, want exists clean and one ahead commit", got)
+	}
+}
+
+func TestWorktreePruneToolDefaultsToDryRun(t *testing.T) {
+	repo := initGitRepo(t)
+	manager := NewManager(repo)
+	enter := NewEnterTool(manager)
+	prune := NewPruneTool(manager)
+
+	result, err := enter.Execute(context.Background(), json.RawMessage(`{"name":"stale"}`))
+	if err != nil {
+		t.Fatalf("enter Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("enter returned error result: %s", result.Output)
+	}
+	var entered EnterOutput
+	if err := json.Unmarshal([]byte(result.Output), &entered); err != nil {
+		t.Fatalf("unmarshal enter output: %v", err)
+	}
+	if err := os.RemoveAll(entered.Path); err != nil {
+		t.Fatalf("remove worktree path: %v", err)
+	}
+
+	dryRun, err := prune.Execute(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("prune Execute error = %v", err)
+	}
+	if dryRun.IsError {
+		t.Fatalf("prune returned error result: %s", dryRun.Output)
+	}
+	var output PruneOutput
+	if err := json.Unmarshal([]byte(dryRun.Output), &output); err != nil {
+		t.Fatalf("unmarshal prune output: %v", err)
+	}
+	if !output.DryRun || output.StaleCount != 1 || output.RemovedCount != 0 || output.KeptCount != 1 {
+		t.Fatalf("dry-run output = %+v, want one stale entry kept", output)
+	}
+	registry, err := manager.readRegistry(context.Background())
+	if err != nil {
+		t.Fatalf("readRegistry: %v", err)
+	}
+	if len(registry.Worktrees) != 1 {
+		t.Fatalf("registry worktrees after dry-run = %d, want 1", len(registry.Worktrees))
+	}
+}
+
+func TestWorktreePruneToolRemovesMissingRegistryEntries(t *testing.T) {
+	repo := initGitRepo(t)
+	manager := NewManager(repo)
+	enter := NewEnterTool(manager)
+	prune := NewPruneTool(manager)
+
+	result, err := enter.Execute(context.Background(), json.RawMessage(`{"name":"stale"}`))
+	if err != nil {
+		t.Fatalf("enter Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("enter returned error result: %s", result.Output)
+	}
+	var entered EnterOutput
+	if err := json.Unmarshal([]byte(result.Output), &entered); err != nil {
+		t.Fatalf("unmarshal enter output: %v", err)
+	}
+	if err := os.RemoveAll(entered.Path); err != nil {
+		t.Fatalf("remove worktree path: %v", err)
+	}
+
+	removed, err := prune.Execute(context.Background(), json.RawMessage(`{"dry_run":false}`))
+	if err != nil {
+		t.Fatalf("prune Execute error = %v", err)
+	}
+	if removed.IsError {
+		t.Fatalf("prune returned error result: %s", removed.Output)
+	}
+	var output PruneOutput
+	if err := json.Unmarshal([]byte(removed.Output), &output); err != nil {
+		t.Fatalf("unmarshal prune output: %v", err)
+	}
+	if output.DryRun || output.StaleCount != 1 || output.RemovedCount != 1 || output.KeptCount != 0 {
+		t.Fatalf("prune output = %+v, want one stale entry removed", output)
+	}
+	registry, err := manager.readRegistry(context.Background())
+	if err != nil {
+		t.Fatalf("readRegistry: %v", err)
+	}
+	if len(registry.Worktrees) != 0 {
+		t.Fatalf("registry worktrees after prune = %d, want 0", len(registry.Worktrees))
+	}
+}
+
 func TestWorktreeToolMetadata(t *testing.T) {
-	for _, tool := range []tools.Tool{NewEnterTool(nil), NewExitTool(nil)} {
+	for _, tool := range []tools.Tool{NewEnterTool(nil), NewPruneTool(nil), NewExitTool(nil)} {
 		if tool.IsConcurrencySafe(nil) {
 			t.Fatalf("%s should not be concurrency-safe", tool.Name())
 		}

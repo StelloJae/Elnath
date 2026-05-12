@@ -18,6 +18,7 @@ import (
 const (
 	EnterToolName = "enter_worktree"
 	ListToolName  = "worktree_list"
+	PruneToolName = "worktree_prune"
 	ExitToolName  = "exit_worktree"
 )
 
@@ -197,9 +198,23 @@ func (t *ListTool) ShouldCancelSiblingsOnError() bool { return false }
 func (t *ListTool) DeferInitialToolSchema() bool { return true }
 
 type ListOutput struct {
-	RegistryPath string   `json:"registry_path"`
-	Total        int      `json:"total"`
-	Worktrees    []Record `json:"worktrees"`
+	RegistryPath string       `json:"registry_path"`
+	Total        int          `json:"total"`
+	Worktrees    []ListRecord `json:"worktrees"`
+}
+
+type ListRecord struct {
+	Name           string `json:"name"`
+	Slug           string `json:"slug"`
+	Path           string `json:"path"`
+	Branch         string `json:"branch"`
+	OriginalBranch string `json:"original_branch,omitempty"`
+	OriginalHead   string `json:"original_head"`
+	CreatedAt      string `json:"created_at"`
+	Exists         bool   `json:"exists"`
+	DirtyFiles     int    `json:"dirty_files"`
+	AheadCommits   int    `json:"ahead_commits"`
+	StatusError    string `json:"status_error,omitempty"`
 }
 
 func (t *ListTool) Execute(ctx context.Context, _ json.RawMessage) (*tools.Result, error) {
@@ -226,12 +241,178 @@ func (m *Manager) List(ctx context.Context) (ListOutput, error) {
 	if err != nil {
 		return ListOutput{}, err
 	}
-	worktrees := append([]Record(nil), registry.Worktrees...)
+	worktrees := make([]ListRecord, 0, len(registry.Worktrees))
+	for _, record := range registry.Worktrees {
+		worktrees = append(worktrees, m.listRecordStatus(ctx, repoRoot, record))
+	}
 	return ListOutput{
 		RegistryPath: filepath.Join(repoRoot, ".elnath", "worktrees", "registry.json"),
 		Total:        len(worktrees),
 		Worktrees:    worktrees,
 	}, nil
+}
+
+func (m *Manager) listRecordStatus(ctx context.Context, repoRoot string, record Record) ListRecord {
+	out := ListRecord{
+		Name:           record.Name,
+		Slug:           record.Slug,
+		Path:           record.Path,
+		Branch:         record.Branch,
+		OriginalBranch: record.OriginalBranch,
+		OriginalHead:   record.OriginalHead,
+		CreatedAt:      record.CreatedAt,
+	}
+	if err := ensureManagedPath(repoRoot, record.Path); err != nil {
+		out.StatusError = err.Error()
+		return out
+	}
+	if _, err := os.Stat(record.Path); err != nil {
+		if os.IsNotExist(err) {
+			out.StatusError = "worktree path missing"
+		} else {
+			out.StatusError = err.Error()
+		}
+		return out
+	}
+	out.Exists = true
+	dirty, err := m.dirtyFileCount(ctx, record.Path)
+	if err != nil {
+		out.StatusError = err.Error()
+		return out
+	}
+	out.DirtyFiles = dirty
+	ahead, err := m.aheadCount(ctx, record.Path, record.OriginalHead)
+	if err != nil {
+		out.StatusError = err.Error()
+		return out
+	}
+	out.AheadCommits = ahead
+	return out
+}
+
+type PruneTool struct {
+	manager *Manager
+}
+
+func NewPruneTool(manager *Manager) *PruneTool {
+	return &PruneTool{manager: manager}
+}
+
+func (t *PruneTool) Name() string { return PruneToolName }
+
+func (t *PruneTool) Description() string {
+	return "Dry-run or remove stale Elnath-managed worktree registry entries whose paths are missing"
+}
+
+func (t *PruneTool) Schema() json.RawMessage {
+	return tools.Object(map[string]tools.Property{
+		"dry_run": tools.Bool("When true or omitted, report stale registry entries without modifying the registry. Set false to remove only missing managed-path entries."),
+	}, nil)
+}
+
+func (t *PruneTool) IsConcurrencySafe(json.RawMessage) bool { return false }
+
+func (t *PruneTool) Reversible() bool { return false }
+
+func (t *PruneTool) Scope(json.RawMessage) tools.ToolScope {
+	return tools.ToolScope{Persistent: true}
+}
+
+func (t *PruneTool) ShouldCancelSiblingsOnError() bool { return false }
+
+func (t *PruneTool) DeferInitialToolSchema() bool { return true }
+
+type PruneInput struct {
+	DryRun *bool `json:"dry_run"`
+}
+
+type PruneOutput struct {
+	RegistryPath string        `json:"registry_path"`
+	DryRun       bool          `json:"dry_run"`
+	Total        int           `json:"total"`
+	StaleCount   int           `json:"stale_count"`
+	RemovedCount int           `json:"removed_count"`
+	KeptCount    int           `json:"kept_count"`
+	Entries      []PruneRecord `json:"entries"`
+}
+
+type PruneRecord struct {
+	Name        string `json:"name"`
+	Path        string `json:"path"`
+	Reason      string `json:"reason"`
+	WouldRemove bool   `json:"would_remove"`
+	Removed     bool   `json:"removed"`
+}
+
+func (t *PruneTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
+	var input PruneInput
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &input); err != nil {
+			return tools.ErrorResult(fmt.Sprintf("invalid params: %v", err)), nil
+		}
+	}
+	if t == nil || t.manager == nil {
+		return tools.ErrorResult("worktree_prune: manager unavailable"), nil
+	}
+	output, err := t.manager.Prune(ctx, input)
+	if err != nil {
+		return tools.ErrorResult("worktree_prune: " + err.Error()), nil
+	}
+	raw, err := json.Marshal(output)
+	if err != nil {
+		return tools.ErrorResult(fmt.Sprintf("worktree_prune: marshal output: %v", err)), nil
+	}
+	return tools.SuccessResult(string(raw)), nil
+}
+
+func (m *Manager) Prune(ctx context.Context, input PruneInput) (PruneOutput, error) {
+	repoRoot, err := m.repoRoot(ctx)
+	if err != nil {
+		return PruneOutput{}, err
+	}
+	registry, err := m.readRegistryForRoot(repoRoot)
+	if err != nil {
+		return PruneOutput{}, err
+	}
+	dryRun := true
+	if input.DryRun != nil {
+		dryRun = *input.DryRun
+	}
+	output := PruneOutput{
+		RegistryPath: filepath.Join(repoRoot, ".elnath", "worktrees", "registry.json"),
+		DryRun:       dryRun,
+		Total:        len(registry.Worktrees),
+	}
+	kept := make([]Record, 0, len(registry.Worktrees))
+	for _, record := range registry.Worktrees {
+		reason, stale := staleRegistryReason(repoRoot, record.Path)
+		if !stale {
+			kept = append(kept, record)
+			continue
+		}
+		output.StaleCount++
+		entry := PruneRecord{
+			Name:        record.Name,
+			Path:        record.Path,
+			Reason:      reason,
+			WouldRemove: true,
+			Removed:     !dryRun,
+		}
+		output.Entries = append(output.Entries, entry)
+		if dryRun {
+			kept = append(kept, record)
+		} else {
+			output.RemovedCount++
+		}
+	}
+	output.KeptCount = len(kept)
+	if !dryRun && output.RemovedCount > 0 {
+		registry.Worktrees = kept
+		if err := m.writeRegistryForRoot(repoRoot, registry); err != nil {
+			return PruneOutput{}, err
+		}
+	}
+	return output, nil
 }
 
 func (t *ExitTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
@@ -541,6 +722,19 @@ func ensureManagedPath(repoRoot string, path string) error {
 		return fmt.Errorf("path is outside managed worktree root")
 	}
 	return nil
+}
+
+func staleRegistryReason(repoRoot string, path string) (string, bool) {
+	if err := ensureManagedPath(repoRoot, path); err != nil {
+		return err.Error(), false
+	}
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return "worktree path missing", true
+		}
+		return err.Error(), false
+	}
+	return "", false
 }
 
 func (r registryFile) findByNameOrPath(name string, path string) (Record, bool) {
