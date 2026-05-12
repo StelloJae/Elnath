@@ -3017,6 +3017,9 @@ func TestExecutionRuntimeRunTaskCommandsSlashCommandJSONIncludesRuntimeControls(
 		if entry.Category != "runtime-control" {
 			t.Fatalf("runtime command %s category = %q, want runtime-control", want, entry.Category)
 		}
+		if entry.ArgumentHint == "" {
+			t.Fatalf("runtime command %s argument hint is empty", want)
+		}
 	}
 }
 
@@ -3035,6 +3038,9 @@ func TestRuntimeLocalSlashCommandRegistry(t *testing.T) {
 		}
 		if spec.Description == "" {
 			t.Fatalf("spec %q has empty description", spec.Name)
+		}
+		if spec.ArgumentHint == "" {
+			t.Fatalf("spec %q has empty argument hint", spec.Name)
 		}
 		names[spec.Name] = true
 	}

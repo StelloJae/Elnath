@@ -83,9 +83,10 @@ func runtimeCommandCatalogWithSkills(skillReg *skill.Registry, includeHidden boo
 	entries := commandCatalog(includeHidden)
 	for _, spec := range runtimeLocalSlashCommandSpecs() {
 		entries = append(entries, commandCatalogEntry{
-			Name:        spec.Name,
-			Description: spec.Description,
-			Category:    "runtime-control",
+			Name:         spec.Name,
+			Description:  spec.Description,
+			Category:     "runtime-control",
+			ArgumentHint: spec.ArgumentHint,
 		})
 	}
 	entries = append(entries, skillBackedCommandCatalogEntries(skillReg, entries)...)
