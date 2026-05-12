@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
+	"strings"
 
 	"github.com/stello/elnath/internal/config"
 	"github.com/stello/elnath/internal/llm"
@@ -138,7 +140,7 @@ func configuredProviderCandidates(cfg *config.Config) []providerConfigCandidateV
 		out = append(out, providerConfigCandidateView{
 			Provider:              "openai-responses",
 			Model:                 providerConfigModel(cfg.OpenAIResponses.Model, resolveFallbackModel(cfg)),
-			BaseURL:               baseURL,
+			BaseURL:               sanitizeProviderBaseURL(baseURL),
 			ReasoningEffort:       cfg.OpenAIResponses.ReasoningEffort,
 			RequestTimeoutSeconds: cfg.OpenAIResponses.Timeout,
 		})
@@ -147,7 +149,7 @@ func configuredProviderCandidates(cfg *config.Config) []providerConfigCandidateV
 		out = append(out, providerConfigCandidateView{
 			Provider:              "anthropic",
 			Model:                 providerConfigModel(cfg.Anthropic.Model, "claude-sonnet-4-6"),
-			BaseURL:               cfg.Anthropic.BaseURL,
+			BaseURL:               sanitizeProviderBaseURL(cfg.Anthropic.BaseURL),
 			ReasoningEffort:       cfg.Anthropic.ReasoningEffort,
 			RequestTimeoutSeconds: cfg.Anthropic.Timeout,
 		})
@@ -156,7 +158,7 @@ func configuredProviderCandidates(cfg *config.Config) []providerConfigCandidateV
 		out = append(out, providerConfigCandidateView{
 			Provider:              "openai",
 			Model:                 providerConfigModel(cfg.OpenAI.Model, resolveFallbackModel(cfg)),
-			BaseURL:               cfg.OpenAI.BaseURL,
+			BaseURL:               sanitizeProviderBaseURL(cfg.OpenAI.BaseURL),
 			ReasoningEffort:       cfg.OpenAI.ReasoningEffort,
 			RequestTimeoutSeconds: cfg.OpenAI.Timeout,
 		})
@@ -165,7 +167,7 @@ func configuredProviderCandidates(cfg *config.Config) []providerConfigCandidateV
 		out = append(out, providerConfigCandidateView{
 			Provider:              "ollama",
 			Model:                 providerConfigModel(cfg.Ollama.Model, "llama3.2"),
-			BaseURL:               cfg.Ollama.BaseURL,
+			BaseURL:               sanitizeProviderBaseURL(cfg.Ollama.BaseURL),
 			RequestTimeoutSeconds: 0,
 		})
 	}
@@ -177,6 +179,40 @@ func providerConfigModel(model, fallback string) string {
 		return model
 	}
 	return fallback
+}
+
+func sanitizeProviderBaseURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "REDACTED_INVALID_URL"
+	}
+	u.User = nil
+	q := u.Query()
+	for key, values := range q {
+		if !isSensitiveProviderURLQueryKey(key) {
+			continue
+		}
+		for i := range values {
+			values[i] = "REDACTED"
+		}
+		q[key] = values
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+func isSensitiveProviderURLQueryKey(key string) bool {
+	k := strings.ToLower(strings.TrimSpace(key))
+	for _, marker := range []string{"api_key", "apikey", "key", "token", "secret", "password", "passwd", "auth", "bearer"} {
+		if strings.Contains(k, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func autoEffortCompatible(providerEffort string) bool {
