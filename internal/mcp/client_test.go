@@ -233,6 +233,74 @@ func TestClientListResources(t *testing.T) {
 	}
 }
 
+func TestClientReadResource(t *testing.T) {
+	client, srv := makePipedClient(t)
+
+	wantURI := "file:///repo/README.md"
+
+	done := make(chan error, 1)
+	go func() {
+		req := srv.readRequest()
+		srv.send(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      json.RawMessage(req["id"]),
+			"result": map[string]any{
+				"protocolVersion": "2025-03-26",
+				"capabilities":    map[string]any{},
+				"serverInfo":      map[string]any{"name": "test", "version": "1.0"},
+			},
+		})
+		srv.readRequest() // notifications/initialized
+
+		readReq := srv.readRequest()
+		method := strings.Trim(string(readReq["method"]), `"`)
+		if method != "resources/read" {
+			done <- fmt.Errorf("expected resources/read, got %q", method)
+			return
+		}
+		var params struct {
+			URI string `json:"uri"`
+		}
+		if err := json.Unmarshal(readReq["params"], &params); err != nil {
+			done <- fmt.Errorf("unmarshal resources/read params: %w", err)
+			return
+		}
+		if params.URI != wantURI {
+			done <- fmt.Errorf("resources/read uri = %q, want %q", params.URI, wantURI)
+			return
+		}
+		srv.send(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      json.RawMessage(readReq["id"]),
+			"result": map[string]any{
+				"contents": []map[string]any{{
+					"uri":      wantURI,
+					"mimeType": "text/markdown",
+					"text":     "hello from readme",
+				}},
+			},
+		})
+		done <- nil
+	}()
+
+	if err := client.Initialize(context.Background()); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	got, err := client.ReadResource(context.Background(), wantURI)
+	if err != nil {
+		t.Fatalf("ReadResource: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Contents) != 1 {
+		t.Fatalf("ReadResource returned %d contents, want 1", len(got.Contents))
+	}
+	if got.Contents[0].URI != wantURI || got.Contents[0].MIMEType != "text/markdown" || got.Contents[0].Text != "hello from readme" {
+		t.Fatalf("content = %+v", got.Contents[0])
+	}
+}
+
 func TestClientListPrompts(t *testing.T) {
 	client, srv := makePipedClient(t)
 
@@ -291,6 +359,73 @@ func TestClientListPrompts(t *testing.T) {
 	}
 	if got[0].Name != want[0].Name || len(got[0].Arguments) != 1 || !got[0].Arguments[0].Required {
 		t.Fatalf("prompt = %+v, want %+v", got[0], want[0])
+	}
+}
+
+func TestClientGetPrompt(t *testing.T) {
+	client, srv := makePipedClient(t)
+
+	done := make(chan error, 1)
+	go func() {
+		req := srv.readRequest()
+		srv.send(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      json.RawMessage(req["id"]),
+			"result": map[string]any{
+				"protocolVersion": "2025-03-26",
+				"capabilities":    map[string]any{},
+				"serverInfo":      map[string]any{"name": "test", "version": "1.0"},
+			},
+		})
+		srv.readRequest() // notifications/initialized
+
+		promptReq := srv.readRequest()
+		method := strings.Trim(string(promptReq["method"]), `"`)
+		if method != "prompts/get" {
+			done <- fmt.Errorf("expected prompts/get, got %q", method)
+			return
+		}
+		var params struct {
+			Name      string            `json:"name"`
+			Arguments map[string]string `json:"arguments"`
+		}
+		if err := json.Unmarshal(promptReq["params"], &params); err != nil {
+			done <- fmt.Errorf("unmarshal prompts/get params: %w", err)
+			return
+		}
+		if params.Name != "review" || params.Arguments["path"] != "README.md" {
+			done <- fmt.Errorf("prompts/get params = %+v", params)
+			return
+		}
+		srv.send(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      json.RawMessage(promptReq["id"]),
+			"result": map[string]any{
+				"description": "Review prompt",
+				"messages": []map[string]any{{
+					"role":    "user",
+					"content": map[string]any{"type": "text", "text": "Review README.md"},
+				}},
+			},
+		})
+		done <- nil
+	}()
+
+	if err := client.Initialize(context.Background()); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	got, err := client.GetPrompt(context.Background(), "review", json.RawMessage(`{"path":"README.md"}`))
+	if err != nil {
+		t.Fatalf("GetPrompt: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if got.Description != "Review prompt" || len(got.Messages) != 1 {
+		t.Fatalf("prompt result = %+v", got)
+	}
+	if got.Messages[0].Role != "user" || got.Messages[0].Content.Text != "Review README.md" {
+		t.Fatalf("prompt message = %+v", got.Messages[0])
 	}
 }
 

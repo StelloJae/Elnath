@@ -17,11 +17,15 @@ type catalogTool struct {
 }
 
 type catalogToolInput struct {
-	Action string `json:"action"`
+	Action    string          `json:"action"`
+	URI       string          `json:"uri,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	Arguments json.RawMessage `json:"arguments,omitempty"`
 }
 
 // NewCatalogTool exposes read-only MCP resource/prompt metadata for one
-// configured server. It does not read resource contents or execute prompts.
+// configured server. Prompt retrieval returns messages but does not execute
+// them.
 func NewCatalogTool(client *Client, serverName string) tools.Tool {
 	server := strings.TrimSpace(serverName)
 	if server == "" {
@@ -37,12 +41,15 @@ func NewCatalogTool(client *Client, serverName string) tools.Tool {
 func (t *catalogTool) Name() string { return t.name }
 
 func (t *catalogTool) Description() string {
-	return "List MCP resource and prompt metadata for " + t.server
+	return "List and read MCP resource/prompt metadata for " + t.server
 }
 
 func (t *catalogTool) Schema() json.RawMessage {
 	return tools.Object(map[string]tools.Property{
-		"action": tools.StringEnum("Catalog action. This tool does not read resources or execute prompts.", "list_resources", "list_prompts"),
+		"action":    tools.StringEnum("Catalog action. Prompt retrieval returns messages but does not execute them.", "list_resources", "list_prompts", "read_resource", "get_prompt"),
+		"uri":       tools.String("Resource URI for read_resource."),
+		"name":      tools.String("Prompt name for get_prompt."),
+		"arguments": tools.Property{Type: "object", Description: "Prompt arguments for get_prompt."},
 	}, []string{"action"})
 }
 
@@ -87,8 +94,37 @@ func (t *catalogTool) Execute(ctx context.Context, params json.RawMessage) (*too
 			"server":  t.server,
 			"prompts": prompts,
 		})
+	case "read_resource":
+		uri := strings.TrimSpace(input.URI)
+		if uri == "" {
+			return tools.ErrorResult("mcp_catalog: uri is required for read_resource"), nil
+		}
+		result, err := t.client.ReadResource(ctx, uri)
+		if err != nil {
+			return tools.ErrorResult(err.Error()), nil
+		}
+		return marshalCatalogToolOutput(map[string]any{
+			"action":   "read_resource",
+			"server":   t.server,
+			"contents": result.Contents,
+		})
+	case "get_prompt":
+		name := strings.TrimSpace(input.Name)
+		if name == "" {
+			return tools.ErrorResult("mcp_catalog: name is required for get_prompt"), nil
+		}
+		result, err := t.client.GetPrompt(ctx, name, input.Arguments)
+		if err != nil {
+			return tools.ErrorResult(err.Error()), nil
+		}
+		return marshalCatalogToolOutput(map[string]any{
+			"action":      "get_prompt",
+			"server":      t.server,
+			"description": result.Description,
+			"messages":    result.Messages,
+		})
 	default:
-		return tools.ErrorResult(fmt.Sprintf("mcp_catalog: unsupported action %q; supported actions are list_resources and list_prompts", input.Action)), nil
+		return tools.ErrorResult(fmt.Sprintf("mcp_catalog: unsupported action %q; supported actions are list_resources, list_prompts, read_resource, and get_prompt", input.Action)), nil
 	}
 }
 
