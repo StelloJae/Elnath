@@ -212,6 +212,32 @@ func TestCommandCatalogToolShowsRuntimeControlWithoutExecuting(t *testing.T) {
 	}
 }
 
+func TestCommandCatalogToolShowsRuntimeControlArgumentHints(t *testing.T) {
+	tool := newCommandCatalogTool()
+
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"show","command":"/provider"}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("Execute returned error result: %s", res.Output)
+	}
+
+	var out struct {
+		Action  string               `json:"action"`
+		Command *commandCatalogEntry `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, res.Output)
+	}
+	if out.Command == nil {
+		t.Fatalf("output = %+v, want /provider command metadata", out)
+	}
+	if out.Command.ArgumentHint != "status|candidates|check <provider> [--json]" {
+		t.Fatalf("ArgumentHint = %q, want provider usage hint", out.Command.ArgumentHint)
+	}
+}
+
 func TestCommandCatalogToolRecommendsCommandsByQuery(t *testing.T) {
 	tool := newCommandCatalogTool()
 

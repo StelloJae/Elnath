@@ -20,6 +20,7 @@ func TestCatalogToolListsSkillsWithoutPromptsByDefault(t *testing.T) {
 		Paths:         []string{"internal/**/*.go"},
 		Model:         "gpt-5.5",
 		Effort:        "high",
+		BaseDir:       "/tmp/elnath-skills/review-pr",
 		Prompt:        "Secret detailed prompt",
 		Status:        "active",
 		Source:        "claude-skill",
@@ -47,6 +48,7 @@ func TestCatalogToolListsSkillsWithoutPromptsByDefault(t *testing.T) {
 			Paths         []string `json:"paths"`
 			Model         string   `json:"model"`
 			Effort        string   `json:"effort"`
+			BaseDir       string   `json:"base_dir"`
 			Status        string   `json:"status"`
 			Source        string   `json:"source"`
 			Prompt        string   `json:"prompt,omitempty"`
@@ -64,6 +66,9 @@ func TestCatalogToolListsSkillsWithoutPromptsByDefault(t *testing.T) {
 	}
 	if len(got.Paths) != 1 || got.Paths[0] != "internal/**/*.go" {
 		t.Fatalf("paths = %v, want [internal/**/*.go]", got.Paths)
+	}
+	if got.BaseDir != "/tmp/elnath-skills/review-pr" {
+		t.Fatalf("base_dir = %q, want skill base dir", got.BaseDir)
 	}
 	if got.Prompt != "" {
 		t.Fatalf("prompt = %q, want omitted by default", got.Prompt)

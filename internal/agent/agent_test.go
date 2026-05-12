@@ -518,6 +518,29 @@ func TestBuildToolDefs(t *testing.T) {
 	}
 }
 
+func TestBuildToolDefsSortedByName(t *testing.T) {
+	reg := tools.NewRegistry()
+	for _, name := range []string{"zeta", "alpha", "gamma", "beta"} {
+		reg.Register(&mockTool{
+			name:        name,
+			description: name,
+			schema:      json.RawMessage(`{"type":"object"}`),
+		})
+	}
+
+	defs := buildToolDefs(reg)
+	got := make([]string, 0, len(defs))
+	for _, def := range defs {
+		got = append(got, def.Name)
+	}
+	want := []string{"alpha", "beta", "gamma", "zeta"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("buildToolDefs order = %v, want %v", got, want)
+		}
+	}
+}
+
 func TestBuildToolDefsSearchFirstDefersMCPAndKeepsToolSearch(t *testing.T) {
 	reg := tools.NewRegistry()
 	reg.Register(&mockTool{

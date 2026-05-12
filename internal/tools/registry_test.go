@@ -113,6 +113,25 @@ func TestToolDefs(t *testing.T) {
 	}
 }
 
+func TestToolDefsSortedByName(t *testing.T) {
+	reg := NewRegistry()
+	for _, name := range []string{"zeta", "alpha", "gamma", "beta"} {
+		reg.Register(&mockTool{name: name, result: SuccessResult("")})
+	}
+
+	defs := reg.ToolDefs()
+	got := make([]string, 0, len(defs))
+	for _, def := range defs {
+		got = append(got, def.Name)
+	}
+	want := []string{"alpha", "beta", "gamma", "zeta"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("ToolDefs order = %v, want %v", got, want)
+		}
+	}
+}
+
 func TestRegisterDuplicate(t *testing.T) {
 	reg := NewRegistry()
 	reg.Register(&mockTool{name: "dup", result: SuccessResult("")})

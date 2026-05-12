@@ -106,5 +106,8 @@ func (r *Registry) ToolDefs() []llm.ToolDef {
 			InputSchema: t.Schema(),
 		})
 	}
+	sort.Slice(defs, func(i, j int) bool {
+		return defs[i].Name < defs[j].Name
+	})
 	return defs
 }

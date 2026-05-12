@@ -2841,6 +2841,7 @@ func TestExecutionRuntimeRunTaskSkillsSlashCommandListsCatalog(t *testing.T) {
 		Name:        "pr-review",
 		Description: "Review PR with security and quality focus",
 		Trigger:     "/pr-review <pr_number>",
+		BaseDir:     "/tmp/elnath-skills/pr-review",
 		Prompt:      "Review PR #{pr_number}",
 	})
 	sess, err := rt.mgr.NewSession()
@@ -2879,6 +2880,7 @@ func TestExecutionRuntimeRunTaskSkillsSlashCommandJSONListsCatalog(t *testing.T)
 		Name:        "pr-review",
 		Description: "Review PR with security and quality focus",
 		Trigger:     "/pr-review <pr_number>",
+		BaseDir:     "/tmp/elnath-skills/pr-review",
 		Prompt:      "Review PR #{pr_number}",
 	})
 	sess, err := rt.mgr.NewSession()
@@ -2900,6 +2902,7 @@ func TestExecutionRuntimeRunTaskSkillsSlashCommandJSONListsCatalog(t *testing.T)
 			Name        string `json:"name"`
 			Description string `json:"description"`
 			Trigger     string `json:"trigger"`
+			BaseDir     string `json:"base_dir"`
 		} `json:"skills"`
 	}
 	if err := json.Unmarshal([]byte(summary), &out); err != nil {
@@ -2908,7 +2911,7 @@ func TestExecutionRuntimeRunTaskSkillsSlashCommandJSONListsCatalog(t *testing.T)
 	if out.Action != "list" || len(out.Skills) != 1 {
 		t.Fatalf("output = %+v, want one listed skill", out)
 	}
-	if got := out.Skills[0]; got.Name != "pr-review" || got.Trigger != "/pr-review <pr_number>" {
+	if got := out.Skills[0]; got.Name != "pr-review" || got.Trigger != "/pr-review <pr_number>" || got.BaseDir != "/tmp/elnath-skills/pr-review" {
 		t.Fatalf("skill entry = %+v, want pr-review trigger metadata", got)
 	}
 }
@@ -3017,6 +3020,9 @@ func TestExecutionRuntimeRunTaskCommandsSlashCommandJSONIncludesRuntimeControls(
 		if entry.Category != "runtime-control" {
 			t.Fatalf("runtime command %s category = %q, want runtime-control", want, entry.Category)
 		}
+		if entry.ArgumentHint == "" {
+			t.Fatalf("runtime command %s argument hint is empty", want)
+		}
 	}
 }
 
@@ -3035,6 +3041,9 @@ func TestRuntimeLocalSlashCommandRegistry(t *testing.T) {
 		}
 		if spec.Description == "" {
 			t.Fatalf("spec %q has empty description", spec.Name)
+		}
+		if spec.ArgumentHint == "" {
+			t.Fatalf("spec %q has empty argument hint", spec.Name)
 		}
 		names[spec.Name] = true
 	}
