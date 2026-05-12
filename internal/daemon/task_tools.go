@@ -23,7 +23,16 @@ const (
 	taskToolPreviewMaxRune        = 240
 	defaultTaskOutputRunes        = 4000
 	maxTaskOutputRunes            = 20000
+	defaultTaskOutputTimeout      = 30 * time.Second
+	maxTaskOutputTimeout          = 10 * time.Minute
+	taskOutputPollInterval        = 100 * time.Millisecond
 	defaultTaskMonitorPollSeconds = 5
+)
+
+const (
+	taskOutputRetrievalSuccess  = "success"
+	taskOutputRetrievalNotReady = "not_ready"
+	taskOutputRetrievalTimeout  = "timeout"
 )
 
 type TaskCreateTool struct {
@@ -414,6 +423,10 @@ func (t *TaskOutputTool) Schema() json.RawMessage {
 		"id":        tools.Int("Daemon task ID."),
 		"field":     tools.StringEnum("Output field to read. Defaults to result.", "result", "progress", "summary", "payload"),
 		"max_chars": tools.Int("Maximum trailing characters to return. Defaults to 4000 and caps at 20000."),
+		"block":     tools.Bool("When true, wait until the task reaches a terminal status before returning or until timeout_ms expires."),
+		"timeout_ms": tools.Int(
+			"Maximum wait time in milliseconds when block is true. Defaults to 30000 and caps at 600000.",
+		),
 	}, []string{"id"})
 }
 
@@ -428,19 +441,23 @@ func (t *TaskOutputTool) ShouldCancelSiblingsOnError() bool { return false }
 func (t *TaskOutputTool) DeferInitialToolSchema() bool { return true }
 
 type taskOutputToolInput struct {
-	ID       int64  `json:"id"`
-	Field    string `json:"field"`
-	MaxChars int    `json:"max_chars"`
+	ID        int64  `json:"id"`
+	Field     string `json:"field"`
+	MaxChars  int    `json:"max_chars"`
+	Block     bool   `json:"block"`
+	TimeoutMS int    `json:"timeout_ms"`
 }
 
 type taskOutputToolOutput struct {
-	TaskID     int64      `json:"task_id"`
-	Status     TaskStatus `json:"status"`
-	Field      string     `json:"field"`
-	MaxChars   int        `json:"max_chars"`
-	TotalChars int        `json:"total_chars"`
-	Truncated  bool       `json:"truncated"`
-	Content    string     `json:"content"`
+	TaskID          int64      `json:"task_id"`
+	Status          TaskStatus `json:"status"`
+	RetrievalStatus string     `json:"retrieval_status"`
+	Terminal        bool       `json:"terminal"`
+	Field           string     `json:"field"`
+	MaxChars        int        `json:"max_chars"`
+	TotalChars      int        `json:"total_chars"`
+	Truncated       bool       `json:"truncated"`
+	Content         string     `json:"content"`
 }
 
 func (t *TaskOutputTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
@@ -466,22 +483,63 @@ func (t *TaskOutputTool) Execute(ctx context.Context, params json.RawMessage) (*
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("task_output: %v", err)), nil
 	}
+	retrievalStatus := taskOutputRetrievalSuccess
+	terminal := isTerminalTaskStatus(task.Status)
+	if input.Block && !terminal {
+		task, retrievalStatus, err = t.waitForTerminalTask(ctx, input.ID, normalizeTaskOutputTimeout(input.TimeoutMS))
+		if err != nil {
+			return tools.ErrorResult(fmt.Sprintf("task_output: %v", err)), nil
+		}
+		terminal = isTerminalTaskStatus(task.Status)
+	} else if !terminal {
+		retrievalStatus = taskOutputRetrievalNotReady
+	}
 	content := taskOutputField(task, field)
 	tail, total, truncated := tailTaskOutput(content, limit)
 	output := taskOutputToolOutput{
-		TaskID:     task.ID,
-		Status:     task.Status,
-		Field:      field,
-		MaxChars:   limit,
-		TotalChars: total,
-		Truncated:  truncated,
-		Content:    tail,
+		TaskID:          task.ID,
+		Status:          task.Status,
+		RetrievalStatus: retrievalStatus,
+		Terminal:        terminal,
+		Field:           field,
+		MaxChars:        limit,
+		TotalChars:      total,
+		Truncated:       truncated,
+		Content:         tail,
 	}
 	raw, err := json.Marshal(output)
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("task_output: marshal output: %v", err)), nil
 	}
 	return tools.SuccessResult(string(raw)), nil
+}
+
+func (t *TaskOutputTool) waitForTerminalTask(ctx context.Context, id int64, timeout time.Duration) (*Task, string, error) {
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+
+	ticker := time.NewTicker(taskOutputPollInterval)
+	defer ticker.Stop()
+
+	var last *Task
+	for {
+		task, err := t.queue.Get(ctx, id)
+		if err != nil {
+			return nil, "", err
+		}
+		last = task
+		if isTerminalTaskStatus(task.Status) {
+			return task, taskOutputRetrievalSuccess, nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return last, "", ctx.Err()
+		case <-deadline.C:
+			return last, taskOutputRetrievalTimeout, nil
+		case <-ticker.C:
+		}
+	}
 }
 
 type TaskMonitorTool struct {
@@ -699,6 +757,17 @@ func normalizeTaskOutputLimit(limit int) int {
 		return maxTaskOutputRunes
 	}
 	return limit
+}
+
+func normalizeTaskOutputTimeout(timeoutMS int) time.Duration {
+	if timeoutMS <= 0 {
+		return defaultTaskOutputTimeout
+	}
+	timeout := time.Duration(timeoutMS) * time.Millisecond
+	if timeout > maxTaskOutputTimeout {
+		return maxTaskOutputTimeout
+	}
+	return timeout
 }
 
 func taskOutputField(task *Task, field string) string {
