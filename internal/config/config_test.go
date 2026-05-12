@@ -456,11 +456,25 @@ func TestApplyEnvOverrides(t *testing.T) {
 			want:   "anthro-key",
 		},
 		{
+			name:   "ELNATH_ANTHROPIC_TIMEOUT_SECONDS",
+			envKey: "ELNATH_ANTHROPIC_TIMEOUT_SECONDS",
+			envVal: "75",
+			check:  func(c *Config) string { return strconv.Itoa(c.Anthropic.Timeout) },
+			want:   "75",
+		},
+		{
 			name:   "ELNATH_OPENAI_API_KEY",
 			envKey: "ELNATH_OPENAI_API_KEY",
 			envVal: "oai-key",
 			check:  func(c *Config) string { return c.OpenAI.APIKey },
 			want:   "oai-key",
+		},
+		{
+			name:   "ELNATH_OPENAI_TIMEOUT_SECONDS",
+			envKey: "ELNATH_OPENAI_TIMEOUT_SECONDS",
+			envVal: "85",
+			check:  func(c *Config) string { return strconv.Itoa(c.OpenAI.Timeout) },
+			want:   "85",
 		},
 		{
 			name:   "ELNATH_OPENAI_RESPONSES_API_KEY",
@@ -489,6 +503,13 @@ func TestApplyEnvOverrides(t *testing.T) {
 			envVal: "medium",
 			check:  func(c *Config) string { return c.OpenAIResponses.ReasoningEffort },
 			want:   "medium",
+		},
+		{
+			name:   "ELNATH_OPENAI_RESPONSES_TIMEOUT_SECONDS",
+			envKey: "ELNATH_OPENAI_RESPONSES_TIMEOUT_SECONDS",
+			envVal: "95",
+			check:  func(c *Config) string { return strconv.Itoa(c.OpenAIResponses.Timeout) },
+			want:   "95",
 		},
 		{
 			name:   "ELNATH_REASONING_EFFORT_MODE",

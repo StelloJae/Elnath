@@ -267,11 +267,21 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("ELNATH_ANTHROPIC_API_KEY"); v != "" {
 		cfg.Anthropic.APIKey = v
 	}
+	if v := os.Getenv("ELNATH_ANTHROPIC_TIMEOUT_SECONDS"); v != "" {
+		if timeout, err := strconv.Atoi(v); err == nil {
+			cfg.Anthropic.Timeout = timeout
+		}
+	}
 	if v := os.Getenv("ELNATH_FALLBACK_MODEL"); v != "" {
 		cfg.FallbackModel = v
 	}
 	if v := os.Getenv("ELNATH_OPENAI_API_KEY"); v != "" {
 		cfg.OpenAI.APIKey = v
+	}
+	if v := os.Getenv("ELNATH_OPENAI_TIMEOUT_SECONDS"); v != "" {
+		if timeout, err := strconv.Atoi(v); err == nil {
+			cfg.OpenAI.Timeout = timeout
+		}
 	}
 	if v := os.Getenv("ELNATH_OPENAI_RESPONSES_API_KEY"); v != "" {
 		cfg.OpenAIResponses.APIKey = v
@@ -284,6 +294,11 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("ELNATH_OPENAI_RESPONSES_REASONING_EFFORT"); v != "" {
 		cfg.OpenAIResponses.ReasoningEffort = v
+	}
+	if v := os.Getenv("ELNATH_OPENAI_RESPONSES_TIMEOUT_SECONDS"); v != "" {
+		if timeout, err := strconv.Atoi(v); err == nil {
+			cfg.OpenAIResponses.Timeout = timeout
+		}
 	}
 	if v := os.Getenv("ELNATH_REASONING_EFFORT_MODE"); v != "" {
 		cfg.Reasoning.EffortMode = v
