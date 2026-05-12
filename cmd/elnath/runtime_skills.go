@@ -21,6 +21,7 @@ type runtimeSkillCatalogEntry struct {
 	Paths         []string `json:"paths,omitempty"`
 	Model         string   `json:"model,omitempty"`
 	Effort        string   `json:"effort,omitempty"`
+	BaseDir       string   `json:"base_dir,omitempty"`
 	Status        string   `json:"status,omitempty"`
 	Source        string   `json:"source,omitempty"`
 }
@@ -96,6 +97,7 @@ func runtimeSkillCatalog(reg *skill.Registry) []runtimeSkillCatalogEntry {
 			Paths:         append([]string(nil), sk.Paths...),
 			Model:         sk.Model,
 			Effort:        sk.Effort,
+			BaseDir:       sk.BaseDir,
 			Status:        sk.Status,
 			Source:        sk.Source,
 		})
