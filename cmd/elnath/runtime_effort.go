@@ -9,7 +9,7 @@ import (
 	"github.com/stello/elnath/internal/llm"
 )
 
-const effortCommandUsage = "Usage: /effort [low|medium|high|xhigh|max|auto|status]"
+const effortCommandUsage = "Usage: /effort [none|minimal|low|medium|high|xhigh|max|auto|status]"
 
 func (rt *executionRuntime) tryEffortCommand(
 	sess *agent.Session,
@@ -97,6 +97,7 @@ func autoEffortPolicyMessage() string {
 		"- root-cause/security/architecture/autonomous -> xhigh",
 		"- otherwise -> medium",
 		"Auto routing is heuristic; use manual override when precision matters.",
+		"Skill metadata effort overrides auto for that skill.",
 		"Manual override: /effort <level>",
 	}, "\n")
 }
