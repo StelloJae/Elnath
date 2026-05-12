@@ -18,6 +18,7 @@ import (
 const (
 	EnterToolName = "enter_worktree"
 	ListToolName  = "worktree_list"
+	RunToolName   = "worktree_run"
 	PruneToolName = "worktree_prune"
 	ExitToolName  = "exit_worktree"
 )
@@ -288,6 +289,139 @@ func (m *Manager) listRecordStatus(ctx context.Context, repoRoot string, record 
 	}
 	out.AheadCommits = ahead
 	return out
+}
+
+type RunTool struct {
+	manager *Manager
+	runner  tools.BashRunner
+}
+
+func NewRunTool(manager *Manager, runner tools.BashRunner) *RunTool {
+	return &RunTool{manager: manager, runner: runner}
+}
+
+func (t *RunTool) Name() string { return RunToolName }
+
+func (t *RunTool) Description() string {
+	return "Execute a bounded shell command inside a named Elnath-managed worktree without changing the active session workspace"
+}
+
+func (t *RunTool) Schema() json.RawMessage {
+	return tools.Object(map[string]tools.Property{
+		"name":        tools.String("Managed worktree name. Required unless path is provided."),
+		"path":        tools.String("Managed worktree path. Required unless name is provided."),
+		"command":     tools.String("Shell command to execute inside the managed worktree."),
+		"timeout_ms":  tools.Int("Timeout in milliseconds. Uses the bash tool default when omitted."),
+		"working_dir": tools.String("Optional working directory relative to the managed worktree root."),
+	}, []string{"command"})
+}
+
+func (t *RunTool) IsConcurrencySafe(json.RawMessage) bool { return false }
+
+func (t *RunTool) Reversible() bool { return false }
+
+func (t *RunTool) Scope(json.RawMessage) tools.ToolScope {
+	return tools.ToolScope{Network: true, Persistent: true}
+}
+
+func (t *RunTool) ShouldCancelSiblingsOnError() bool { return false }
+
+func (t *RunTool) DeferInitialToolSchema() bool { return true }
+
+type RunInput struct {
+	Name       string `json:"name"`
+	Path       string `json:"path"`
+	Command    string `json:"command"`
+	TimeoutMs  int    `json:"timeout_ms"`
+	WorkingDir string `json:"working_dir"`
+}
+
+type RunOutput struct {
+	Name          string `json:"name"`
+	Path          string `json:"path"`
+	Branch        string `json:"branch"`
+	Runner        string `json:"runner"`
+	WorkingDir    string `json:"working_dir"`
+	IsError       bool   `json:"is_error"`
+	CommandOutput string `json:"command_output"`
+}
+
+func (t *RunTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
+	var input RunInput
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &input); err != nil {
+			return tools.ErrorResult(fmt.Sprintf("invalid params: %v", err)), nil
+		}
+	}
+	if strings.TrimSpace(input.Command) == "" {
+		return tools.ErrorResult("worktree_run: command is required"), nil
+	}
+	if t == nil || t.manager == nil {
+		return tools.ErrorResult("worktree_run: manager unavailable"), nil
+	}
+	if t.runner == nil {
+		return tools.ErrorResult("worktree_run: runner unavailable"), nil
+	}
+	output, err := t.manager.Run(ctx, input, t.runner)
+	if err != nil {
+		return tools.ErrorResult("worktree_run: " + err.Error()), nil
+	}
+	raw, err := json.Marshal(output)
+	if err != nil {
+		return tools.ErrorResult(fmt.Sprintf("worktree_run: marshal output: %v", err)), nil
+	}
+	return &tools.Result{Output: string(raw), IsError: output.IsError}, nil
+}
+
+func (m *Manager) Run(ctx context.Context, input RunInput, runner tools.BashRunner) (RunOutput, error) {
+	repoRoot, err := m.repoRoot(ctx)
+	if err != nil {
+		return RunOutput{}, err
+	}
+	registry, err := m.readRegistryForRoot(repoRoot)
+	if err != nil {
+		return RunOutput{}, err
+	}
+	record, ok := registry.findByNameOrPath(strings.TrimSpace(input.Name), strings.TrimSpace(input.Path))
+	if !ok {
+		return RunOutput{}, fmt.Errorf("managed worktree not found")
+	}
+	if err := ensureManagedPath(repoRoot, record.Path); err != nil {
+		return RunOutput{}, err
+	}
+	if _, err := os.Stat(record.Path); err != nil {
+		if os.IsNotExist(err) {
+			return RunOutput{}, fmt.Errorf("worktree path missing")
+		}
+		return RunOutput{}, err
+	}
+	guard := tools.NewPathGuard(record.Path, nil)
+	bash := tools.NewBashToolWithRunner(guard, runner)
+	params, err := json.Marshal(map[string]any{
+		"command":     input.Command,
+		"timeout_ms":  input.TimeoutMs,
+		"working_dir": input.WorkingDir,
+	})
+	if err != nil {
+		return RunOutput{}, fmt.Errorf("marshal bash params: %w", err)
+	}
+	result, err := bash.Execute(tools.WithRootSessionWorkDir(ctx), params)
+	if err != nil {
+		return RunOutput{}, err
+	}
+	workingDir := strings.TrimSpace(input.WorkingDir)
+	if workingDir == "" {
+		workingDir = "."
+	}
+	return RunOutput{
+		Name:          record.Name,
+		Path:          record.Path,
+		Branch:        record.Branch,
+		Runner:        runner.Name(),
+		WorkingDir:    workingDir,
+		IsError:       result.IsError,
+		CommandOutput: result.Output,
+	}, nil
 }
 
 type PruneTool struct {

@@ -308,6 +308,65 @@ func TestWorktreePruneToolRemovesMissingRegistryEntries(t *testing.T) {
 	}
 }
 
+func TestWorktreeRunToolExecutesInsideManagedWorktree(t *testing.T) {
+	repo := initGitRepo(t)
+	manager := NewManager(repo)
+	enter := NewEnterTool(manager)
+	run := NewRunTool(manager, tools.NewDirectRunner())
+
+	result, err := enter.Execute(context.Background(), json.RawMessage(`{"name":"feature/run"}`))
+	if err != nil {
+		t.Fatalf("enter Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("enter returned error result: %s", result.Output)
+	}
+
+	ran, err := run.Execute(context.Background(), json.RawMessage(`{"name":"feature/run","command":"pwd; test -f README.md; echo ran > run.txt"}`))
+	if err != nil {
+		t.Fatalf("run Execute error = %v", err)
+	}
+	if ran.IsError {
+		t.Fatalf("run returned error result: %s", ran.Output)
+	}
+	var output RunOutput
+	if err := json.Unmarshal([]byte(ran.Output), &output); err != nil {
+		t.Fatalf("unmarshal run output: %v", err)
+	}
+	if output.Name != "feature/run" || output.Path == "" || output.Runner != "direct" || output.IsError {
+		t.Fatalf("run output = %+v, want successful direct run in managed worktree", output)
+	}
+	if _, err := os.Stat(filepath.Join(output.Path, "run.txt")); err != nil {
+		t.Fatalf("run.txt not written inside worktree: %v", err)
+	}
+	if strings.Contains(output.CommandOutput, repo+string(os.PathSeparator)+"sessions") {
+		t.Fatalf("command output used session workspace, got %q", output.CommandOutput)
+	}
+}
+
+func TestWorktreeRunToolRejectsWorkingDirEscape(t *testing.T) {
+	repo := initGitRepo(t)
+	manager := NewManager(repo)
+	enter := NewEnterTool(manager)
+	run := NewRunTool(manager, tools.NewDirectRunner())
+
+	result, err := enter.Execute(context.Background(), json.RawMessage(`{"name":"feature/escape"}`))
+	if err != nil {
+		t.Fatalf("enter Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("enter returned error result: %s", result.Output)
+	}
+
+	ran, err := run.Execute(context.Background(), json.RawMessage(`{"name":"feature/escape","command":"pwd","working_dir":".."}`))
+	if err != nil {
+		t.Fatalf("run Execute error = %v", err)
+	}
+	if !ran.IsError || !strings.Contains(ran.Output, "invalid working_dir") {
+		t.Fatalf("run result = %+v, want working_dir escape error", ran)
+	}
+}
+
 func TestWorktreeToolMetadata(t *testing.T) {
 	for _, tool := range []tools.Tool{NewEnterTool(nil), NewPruneTool(nil), NewExitTool(nil)} {
 		if tool.IsConcurrencySafe(nil) {
@@ -322,6 +381,22 @@ func TestWorktreeToolMetadata(t *testing.T) {
 		if tool.ShouldCancelSiblingsOnError() {
 			t.Fatalf("%s should not cancel siblings", tool.Name())
 		}
+	}
+	run := NewRunTool(nil, nil)
+	if run.IsConcurrencySafe(nil) {
+		t.Fatal("worktree_run should not be concurrency-safe")
+	}
+	if run.Reversible() {
+		t.Fatal("worktree_run should not be reversible")
+	}
+	if got := run.Scope(nil); !got.Persistent || !got.Network || len(got.ReadPaths) != 0 || len(got.WritePaths) != 0 {
+		t.Fatalf("worktree_run Scope() = %+v, want persistent network scope", got)
+	}
+	if run.ShouldCancelSiblingsOnError() {
+		t.Fatal("worktree_run should not cancel siblings")
+	}
+	if !tools.ShouldDeferToolSchema(run) {
+		t.Fatal("worktree_run should defer initial schema")
 	}
 }
 
