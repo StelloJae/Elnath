@@ -90,6 +90,17 @@ func completionCorrectionFailedSummary(summary completionContractSummary, failur
 	return updated
 }
 
+func completionCorrectionSkippedSummary(summary completionContractSummary, failureFamily string) completionContractSummary {
+	updated := summary
+	updated.CorrectionAttempted = false
+	updated.CorrectionAttempts = 0
+	updated.CorrectionDecision = summary.RetryDecision
+	updated.CorrectionReason = summary.RetryReason
+	updated.CorrectionStatus = "skipped"
+	updated.CorrectionFailureFamily = failureFamily
+	return updated
+}
+
 func completionRetryEscalatedEffort(provider llm.Provider, summary completionContractSummary) (string, string) {
 	if strings.EqualFold(strings.TrimSpace(summary.ReasoningEffortMode), "manual") {
 		return "", ""
@@ -116,11 +127,11 @@ func (rt *executionRuntime) runVerificationCompletionRetry(
 ) (*orchestrator.WorkflowResult, completionContractSummary) {
 	command := explicitCompletionVerificationCommand(result.Messages)
 	if command == "" {
-		return result, summary
+		return result, completionCorrectionSkippedSummary(summary, "missing_explicit_verification_command")
 	}
 	exec := completionVerificationExecutor(input)
 	if exec == nil {
-		return result, summary
+		return result, completionCorrectionSkippedSummary(summary, "missing_verification_executor")
 	}
 
 	params, err := json.Marshal(map[string]string{"command": command})

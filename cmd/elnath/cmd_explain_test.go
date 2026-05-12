@@ -60,10 +60,12 @@ func TestCmdExplainTimeoutsJSON(t *testing.T) {
 			WorkspaceRetention       string `json:"workspace_retention"`
 		} `json:"daemon"`
 		SelfHealing struct {
-			Enabled            bool `json:"enabled"`
-			ObserveOnly        bool `json:"observe_only"`
-			TimeoutSeconds     int  `json:"timeout_seconds"`
-			CompletionRetryMax int  `json:"completion_retry_max"`
+			Enabled                                    bool `json:"enabled"`
+			ObserveOnly                                bool `json:"observe_only"`
+			TimeoutSeconds                             int  `json:"timeout_seconds"`
+			CompletionRetryMax                         int  `json:"completion_retry_max"`
+			VerificationRetryRequiresStandaloneCommand bool `json:"verification_retry_requires_standalone_command"`
+			VerificationRetryInfersCommandFromProse    bool `json:"verification_retry_infers_command_from_prose"`
 		} `json:"self_healing"`
 		Telegram struct {
 			PollTimeoutSeconds int `json:"poll_timeout_seconds"`
@@ -88,6 +90,9 @@ func TestCmdExplainTimeoutsJSON(t *testing.T) {
 	}
 	if !out.SelfHealing.Enabled || out.SelfHealing.ObserveOnly || out.SelfHealing.TimeoutSeconds != 17 || out.SelfHealing.CompletionRetryMax != 1 {
 		t.Fatalf("self_healing policy = %+v, want configured self-healing timeout policy", out.SelfHealing)
+	}
+	if !out.SelfHealing.VerificationRetryRequiresStandaloneCommand || out.SelfHealing.VerificationRetryInfersCommandFromProse {
+		t.Fatalf("self_healing verification retry policy = %+v, want standalone-only without prose inference", out.SelfHealing)
 	}
 	if out.Telegram.PollTimeoutSeconds != 11 {
 		t.Fatalf("telegram poll timeout = %d, want 11", out.Telegram.PollTimeoutSeconds)
