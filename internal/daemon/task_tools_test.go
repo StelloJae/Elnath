@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stello/elnath/internal/core"
 	"github.com/stello/elnath/internal/tools"
@@ -193,11 +194,32 @@ func TestTaskGetToolReturnsDetails(t *testing.T) {
 	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
 		t.Fatalf("unmarshal output: %v", err)
 	}
+	if !output.Found || output.Task == nil {
+		t.Fatalf("output = %+v, want found task", output)
+	}
 	if output.Task.ID != id {
 		t.Fatalf("ID = %d, want %d", output.Task.ID, id)
 	}
 	if output.Task.Payload != "inspect me" {
 		t.Fatalf("Payload = %q, want inspect me", output.Task.Payload)
+	}
+}
+
+func TestTaskGetToolReturnsStructuredNotFound(t *testing.T) {
+	result, err := NewTaskGetTool(newTaskToolTestQueue(t)).Execute(context.Background(), json.RawMessage(`{"id":404}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute returned error result: %s", result.Output)
+	}
+
+	var output taskGetToolOutput
+	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if output.Found || output.Task != nil {
+		t.Fatalf("output = %+v, want structured not found", output)
 	}
 }
 
@@ -322,6 +344,113 @@ func TestTaskOutputToolReadsProgressField(t *testing.T) {
 	}
 	if output.Field != "progress" || output.Content != "still working" || output.Truncated {
 		t.Fatalf("output = %+v, want progress content", output)
+	}
+}
+
+func TestTaskOutputToolReportsNotReadyForNonBlockingActiveTask(t *testing.T) {
+	ctx := context.Background()
+	queue := newTaskToolTestQueue(t)
+	if _, _, err := queue.Enqueue(ctx, "task payload", ""); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	task, err := queue.Next(ctx)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if task == nil {
+		t.Fatal("Next returned nil")
+	}
+	if err := queue.UpdateProgress(ctx, task.ID, "still working"); err != nil {
+		t.Fatalf("UpdateProgress: %v", err)
+	}
+
+	result, err := NewTaskOutputTool(queue).Execute(ctx, json.RawMessage(`{"id":`+jsonInt(task.ID)+`,"field":"progress","block":false}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute returned error result: %s", result.Output)
+	}
+
+	var output taskOutputToolOutput
+	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if output.RetrievalStatus != "not_ready" || output.Terminal {
+		t.Fatalf("retrieval = %q terminal=%v, want not_ready non-terminal", output.RetrievalStatus, output.Terminal)
+	}
+	if output.Content != "still working" {
+		t.Fatalf("Content = %q, want progress content", output.Content)
+	}
+}
+
+func TestTaskOutputToolBlocksUntilTaskCompletes(t *testing.T) {
+	ctx := context.Background()
+	queue := newTaskToolTestQueue(t)
+	if _, _, err := queue.Enqueue(ctx, "task payload", ""); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	task, err := queue.Next(ctx)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if task == nil {
+		t.Fatal("Next returned nil")
+	}
+
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		_ = queue.MarkDone(ctx, task.ID, "abcdef", "done summary")
+	}()
+
+	result, err := NewTaskOutputTool(queue).Execute(ctx, json.RawMessage(`{"id":`+jsonInt(task.ID)+`,"block":true,"timeout_ms":500,"max_chars":3}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute returned error result: %s", result.Output)
+	}
+
+	var output taskOutputToolOutput
+	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if output.RetrievalStatus != "success" || !output.Terminal || output.Status != StatusDone {
+		t.Fatalf("output = %+v, want terminal success", output)
+	}
+	if output.Content != "def" || output.TotalChars != 6 || !output.Truncated {
+		t.Fatalf("content = %q total=%d truncated=%v, want def/6/true", output.Content, output.TotalChars, output.Truncated)
+	}
+}
+
+func TestTaskOutputToolBlockTimeoutReturnsCurrentTask(t *testing.T) {
+	ctx := context.Background()
+	queue := newTaskToolTestQueue(t)
+	if _, _, err := queue.Enqueue(ctx, "task payload", ""); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	task, err := queue.Next(ctx)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if task == nil {
+		t.Fatal("Next returned nil")
+	}
+
+	result, err := NewTaskOutputTool(queue).Execute(ctx, json.RawMessage(`{"id":`+jsonInt(task.ID)+`,"block":true,"timeout_ms":1}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute returned error result: %s", result.Output)
+	}
+
+	var output taskOutputToolOutput
+	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if output.RetrievalStatus != "timeout" || output.Terminal || output.Status != StatusRunning {
+		t.Fatalf("output = %+v, want timeout with current running task", output)
 	}
 }
 
