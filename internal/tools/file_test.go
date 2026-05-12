@@ -102,6 +102,37 @@ func TestWriteTool(t *testing.T) {
 	}
 }
 
+func TestWriteToolRejectsSameContentOverwrite(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "out.txt")
+	content := "already here\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	tool := NewWriteTool(NewPathGuard(dir, nil))
+
+	res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{
+		"file_path": "out.txt",
+		"content":   content,
+	}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected error for same-content overwrite")
+	}
+	if !strings.Contains(res.Output, "content already matches") {
+		t.Fatalf("error = %q, want content already matches message", res.Output)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile after no-op write: %v", err)
+	}
+	if string(data) != content {
+		t.Fatalf("file content = %q, want unchanged %q", string(data), content)
+	}
+}
+
 // TestGlobTool creates several files then globs for *.txt.
 func TestGlobTool(t *testing.T) {
 	dir := t.TempDir()
