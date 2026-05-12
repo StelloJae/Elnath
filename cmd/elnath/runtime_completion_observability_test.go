@@ -68,6 +68,66 @@ func TestCompletionContractSummaryDetectsBashVerification(t *testing.T) {
 	}
 }
 
+func TestCompletionContractSummaryDetectsFailedBashVerification(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("check the project status and run tests"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "bash-1", Name: "bash", Input: json.RawMessage(`{"command":"go test ./internal/llm -count=1"}`)},
+			}},
+			llm.NewToolResultMessage("bash-1", "FAIL", true),
+			llm.NewAssistantMessage("Done."),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(&orchestrator.RoutingContext{VerificationHint: true}, orchestrator.WorkflowConfig{}, result)
+
+	if summary.VerificationObserved == nil || !*summary.VerificationObserved {
+		t.Fatalf("VerificationObserved = %v, want true for executed verification command", summary.VerificationObserved)
+	}
+	if summary.VerificationCommand != "go test ./internal/llm -count=1" {
+		t.Fatalf("VerificationCommand = %q", summary.VerificationCommand)
+	}
+	if summary.CompletionWarning != "verification_command_failed" {
+		t.Fatalf("CompletionWarning = %q, want verification_command_failed", summary.CompletionWarning)
+	}
+	if summary.RetryDecision != completionRetryDecisionRetrySmallerScope || summary.RetryReason != "verification_command_failed" {
+		t.Fatalf("retry plan = %q/%q, want retry_smaller_scope/verification_command_failed", summary.RetryDecision, summary.RetryReason)
+	}
+}
+
+func TestCompletionContractSummaryUsesLatestBashVerificationResult(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("check the project status and run tests"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "bash-1", Name: "bash", Input: json.RawMessage(`{"command":"go test ./internal/llm -count=1"}`)},
+			}},
+			llm.NewToolResultMessage("bash-1", "FAIL", true),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "bash-2", Name: "bash", Input: json.RawMessage(`{"command":"go test ./internal/llm -count=1"}`)},
+			}},
+			llm.NewToolResultMessage("bash-2", "ok", false),
+			llm.NewAssistantMessage("Done."),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(&orchestrator.RoutingContext{VerificationHint: true}, orchestrator.WorkflowConfig{}, result)
+
+	if summary.VerificationObserved == nil || !*summary.VerificationObserved {
+		t.Fatalf("VerificationObserved = %v, want true", summary.VerificationObserved)
+	}
+	if summary.VerificationCommand != "go test ./internal/llm -count=1" {
+		t.Fatalf("VerificationCommand = %q", summary.VerificationCommand)
+	}
+	if summary.CompletionWarning != "" {
+		t.Fatalf("CompletionWarning = %q, want latest passing verification to clear warning", summary.CompletionWarning)
+	}
+	if summary.RetryDecision != "" || summary.RetryReason != "" {
+		t.Fatalf("retry plan = %q/%q, want empty after latest passing verification", summary.RetryDecision, summary.RetryReason)
+	}
+}
+
 func TestCompletionContractSummaryDetectsIncompleteFinalResponse(t *testing.T) {
 	result := &orchestrator.WorkflowResult{
 		Messages: []llm.Message{
@@ -135,6 +195,37 @@ func TestCompletionContractSummaryDetectsEditToolMutation(t *testing.T) {
 	}
 	if summary.CompletionWarning != "" {
 		t.Fatalf("CompletionWarning = %q, want empty", summary.CompletionWarning)
+	}
+}
+
+func TestCompletionContractSummaryDoesNotCountFailedEditToolAsMutation(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("fix the bug in the daemon and run tests"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "edit-1", Name: "edit_file", Input: json.RawMessage(`{"file_path":"internal/daemon/daemon.go","old_string":"old","new_string":"old"}`)},
+			}},
+			llm.NewToolResultMessage("edit-1", "edit_file: old_string and new_string are identical", true),
+			llm.NewAssistantMessage("Done."),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(&orchestrator.RoutingContext{VerificationHint: true}, orchestrator.WorkflowConfig{}, result)
+
+	if !summary.EditIntent {
+		t.Fatal("EditIntent = false, want true")
+	}
+	if summary.EditObserved == nil {
+		t.Fatal("EditObserved = nil, want explicit false")
+	}
+	if *summary.EditObserved {
+		t.Fatal("EditObserved = true, want failed edit tool not counted as mutation")
+	}
+	if summary.CompletionWarning != "edit_intent_without_mutation" {
+		t.Fatalf("CompletionWarning = %q, want edit_intent_without_mutation", summary.CompletionWarning)
+	}
+	if summary.RetryDecision != completionRetryDecisionRetrySmallerScope || summary.RetryReason != "edit_intent_without_mutation" {
+		t.Fatalf("retry plan = %q/%q, want retry_smaller_scope/edit_intent_without_mutation", summary.RetryDecision, summary.RetryReason)
 	}
 }
 

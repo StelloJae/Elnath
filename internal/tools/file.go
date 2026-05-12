@@ -179,6 +179,9 @@ func (t *WriteTool) Execute(ctx context.Context, params json.RawMessage) (*Resul
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 		return ErrorResult(fmt.Sprintf("write_file mkdir: %v", err)), nil
 	}
+	if existing, err := os.ReadFile(abs); err == nil && string(existing) == p.Content {
+		return ErrorResult(fmt.Sprintf("write_file: content already matches %s", p.FilePath)), nil
+	}
 
 	// Atomic write: write to a temp file in the same directory, then rename.
 	tmp, err := os.CreateTemp(filepath.Dir(abs), ".write_tmp_*")
@@ -275,6 +278,9 @@ func (t *EditTool) Execute(ctx context.Context, params json.RawMessage) (*Result
 		return ErrorResult(fmt.Sprintf("edit_file read: %v", err)), nil
 	}
 	original := string(data)
+	if p.OldString == p.NewString {
+		return ErrorResult(fmt.Sprintf("edit_file: old_string and new_string are identical in %s", p.FilePath)), nil
+	}
 
 	count := strings.Count(original, p.OldString)
 	if count == 0 {

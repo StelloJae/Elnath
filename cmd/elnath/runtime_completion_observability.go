@@ -71,7 +71,7 @@ func summarizeCompletionContract(routeCtx *orchestrator.RoutingContext, cfg orch
 	summary.LoadedDeferredTools = append([]string(nil), result.LoadedDeferredTools...)
 	summary.ConditionalSkillMatches = observedConditionalSkillMatches(result.Messages)
 
-	verificationCommand := observedVerificationCommand(result.Messages)
+	verificationCommand, verificationFailed := observedVerificationCommandStatus(result.Messages)
 	observed := verificationCommand != ""
 	if summary.VerificationHint || observed {
 		summary.VerificationObserved = &observed
@@ -85,6 +85,9 @@ func summarizeCompletionContract(routeCtx *orchestrator.RoutingContext, cfg orch
 	}
 	if finalAssistantReportsIncomplete(result.Messages) {
 		summary.CompletionWarning = "final_response_reports_incomplete"
+	}
+	if summary.CompletionWarning == "" && verificationFailed {
+		summary.CompletionWarning = "verification_command_failed"
 	}
 	if summary.CompletionWarning == "" && editIntent && !editObserved {
 		summary.CompletionWarning = "edit_intent_without_mutation"
@@ -165,6 +168,9 @@ func completionRetryPlan(summary completionContractSummary) (string, string) {
 	if summary.CompletionWarning == "edit_intent_without_mutation" {
 		return completionRetryDecisionRetrySmallerScope, summary.CompletionWarning
 	}
+	if summary.CompletionWarning == "verification_command_failed" {
+		return completionRetryDecisionRetrySmallerScope, summary.CompletionWarning
+	}
 	if summary.VerificationObserved != nil && !*summary.VerificationObserved {
 		return completionRetryDecisionRunVerification, "verification_hint_not_observed"
 	}
@@ -176,22 +182,43 @@ func verificationObservedInMessages(messages []llm.Message) bool {
 }
 
 func observedVerificationCommand(messages []llm.Message) string {
+	command, _ := observedVerificationCommandStatus(messages)
+	return command
+}
+
+func observedVerificationCommandStatus(messages []llm.Message) (string, bool) {
+	pending := make(map[string]string)
+	lastCommand := ""
+	lastFailed := false
 	for _, msg := range messages {
 		for _, block := range msg.Content {
-			toolUse, ok := block.(llm.ToolUseBlock)
-			if !ok {
-				continue
-			}
-			if toolUse.Name != "bash" {
-				continue
-			}
-			command := bashCommandFromToolInput(toolUse.Input)
-			if isVerificationCommand(command) {
-				return strings.TrimSpace(command)
+			switch b := block.(type) {
+			case llm.ToolUseBlock:
+				if b.Name != "bash" {
+					continue
+				}
+				command := strings.TrimSpace(bashCommandFromToolInput(b.Input))
+				if !isVerificationCommand(command) {
+					continue
+				}
+				if b.ID == "" {
+					return command, false
+				}
+				pending[b.ID] = command
+				lastCommand = command
+				lastFailed = false
+			case llm.ToolResultBlock:
+				command, ok := pending[b.ToolUseID]
+				if !ok {
+					continue
+				}
+				lastCommand = command
+				lastFailed = b.IsError
+				delete(pending, b.ToolUseID)
 			}
 		}
 	}
-	return ""
+	return lastCommand, lastFailed
 }
 
 func bashCommandFromToolInput(input json.RawMessage) string {
@@ -234,14 +261,26 @@ func editIntentDetected(messages []llm.Message) bool {
 }
 
 func mutationObservedInMessages(messages []llm.Message) bool {
+	mutatingToolUseIDs := make(map[string]struct{})
 	for _, msg := range messages {
 		for _, block := range msg.Content {
-			toolUse, ok := block.(llm.ToolUseBlock)
-			if !ok {
-				continue
-			}
-			if mutatingToolUseObserved(toolUse) {
-				return true
+			switch b := block.(type) {
+			case llm.ToolUseBlock:
+				if !mutatingToolUseObserved(b) {
+					continue
+				}
+				if b.ID == "" {
+					return true
+				}
+				mutatingToolUseIDs[b.ID] = struct{}{}
+			case llm.ToolResultBlock:
+				if _, ok := mutatingToolUseIDs[b.ToolUseID]; !ok {
+					continue
+				}
+				if !b.IsError {
+					return true
+				}
+				delete(mutatingToolUseIDs, b.ToolUseID)
 			}
 		}
 	}
