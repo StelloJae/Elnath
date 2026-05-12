@@ -3270,6 +3270,7 @@ func TestExecutionRuntimeRegistersDeferredControlSurfaceTools(t *testing.T) {
 	rt := newTestExecutionRuntime(t, &countingProvider{streamText: "unused"})
 
 	for _, name := range []string{
+		"code_symbols",
 		"task_create", "task_list", "task_get", "task_stop", "task_output", "task_monitor", "task_update",
 		"schedule_create", "schedule_list", "schedule_delete",
 		"enter_worktree", "worktree_list", "worktree_run", "worktree_prune", "exit_worktree",
