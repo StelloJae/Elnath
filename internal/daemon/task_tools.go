@@ -11,17 +11,19 @@ import (
 )
 
 const (
-	TaskCreateToolName     = "task_create"
-	TaskListToolName       = "task_list"
-	TaskGetToolName        = "task_get"
-	TaskStopToolName       = "task_stop"
-	TaskOutputToolName     = "task_output"
-	TaskUpdateToolName     = "task_update"
-	defaultTaskListLimit   = 20
-	maxTaskListLimit       = 100
-	taskToolPreviewMaxRune = 240
-	defaultTaskOutputRunes = 4000
-	maxTaskOutputRunes     = 20000
+	TaskCreateToolName            = "task_create"
+	TaskListToolName              = "task_list"
+	TaskGetToolName               = "task_get"
+	TaskStopToolName              = "task_stop"
+	TaskOutputToolName            = "task_output"
+	TaskMonitorToolName           = "task_monitor"
+	TaskUpdateToolName            = "task_update"
+	defaultTaskListLimit          = 20
+	maxTaskListLimit              = 100
+	taskToolPreviewMaxRune        = 240
+	defaultTaskOutputRunes        = 4000
+	maxTaskOutputRunes            = 20000
+	defaultTaskMonitorPollSeconds = 5
 )
 
 type TaskCreateTool struct {
@@ -482,6 +484,102 @@ func (t *TaskOutputTool) Execute(ctx context.Context, params json.RawMessage) (*
 	return tools.SuccessResult(string(raw)), nil
 }
 
+type TaskMonitorTool struct {
+	queue *Queue
+}
+
+func NewTaskMonitorTool(queue *Queue) *TaskMonitorTool {
+	return &TaskMonitorTool{queue: queue}
+}
+
+func (t *TaskMonitorTool) Name() string { return TaskMonitorToolName }
+
+func (t *TaskMonitorTool) Description() string {
+	return "Monitor a daemon queue task with status, progress, summary, and result tail"
+}
+
+func (t *TaskMonitorTool) Schema() json.RawMessage {
+	return tools.Object(map[string]tools.Property{
+		"id":        tools.Int("Daemon task ID."),
+		"max_chars": tools.Int("Maximum trailing result characters to return. Defaults to 4000 and caps at 20000."),
+	}, []string{"id"})
+}
+
+func (t *TaskMonitorTool) IsConcurrencySafe(json.RawMessage) bool { return true }
+
+func (t *TaskMonitorTool) Reversible() bool { return true }
+
+func (t *TaskMonitorTool) Scope(json.RawMessage) tools.ToolScope { return tools.ToolScope{} }
+
+func (t *TaskMonitorTool) ShouldCancelSiblingsOnError() bool { return false }
+
+func (t *TaskMonitorTool) DeferInitialToolSchema() bool { return true }
+
+type taskMonitorToolInput struct {
+	ID       int64 `json:"id"`
+	MaxChars int   `json:"max_chars"`
+}
+
+type taskMonitorToolOutput struct {
+	TaskID           int64      `json:"task_id"`
+	Status           TaskStatus `json:"status"`
+	Terminal         bool       `json:"terminal"`
+	NextPollSeconds  int        `json:"next_poll_seconds"`
+	Progress         string     `json:"progress,omitempty"`
+	Summary          string     `json:"summary,omitempty"`
+	ResultTail       string     `json:"result_tail,omitempty"`
+	ResultTotalChars int        `json:"result_total_chars"`
+	ResultTruncated  bool       `json:"result_truncated"`
+	UpdatedAt        string     `json:"updated_at,omitempty"`
+	CompletedAt      string     `json:"completed_at,omitempty"`
+}
+
+func (t *TaskMonitorTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
+	if t == nil || t.queue == nil {
+		return tools.ErrorResult("task_monitor: queue unavailable"), nil
+	}
+	var input taskMonitorToolInput
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &input); err != nil {
+			return tools.ErrorResult(fmt.Sprintf("invalid params: %v", err)), nil
+		}
+	}
+	if input.ID <= 0 {
+		return tools.ErrorResult("task_monitor: id must be positive"), nil
+	}
+
+	task, err := t.queue.Get(ctx, input.ID)
+	if err != nil {
+		return tools.ErrorResult(fmt.Sprintf("task_monitor: %v", err)), nil
+	}
+	limit := normalizeTaskOutputLimit(input.MaxChars)
+	tail, total, truncated := tailTaskOutput(task.Result, limit)
+	terminal := isTerminalTaskStatus(task.Status)
+	nextPollSeconds := defaultTaskMonitorPollSeconds
+	if terminal {
+		nextPollSeconds = 0
+	}
+
+	output := taskMonitorToolOutput{
+		TaskID:           task.ID,
+		Status:           task.Status,
+		Terminal:         terminal,
+		NextPollSeconds:  nextPollSeconds,
+		Progress:         task.Progress,
+		Summary:          task.Summary,
+		ResultTail:       tail,
+		ResultTotalChars: total,
+		ResultTruncated:  truncated,
+		UpdatedAt:        formatTaskToolTime(task.UpdatedAt),
+		CompletedAt:      formatTaskToolTime(task.CompletedAt),
+	}
+	raw, err := json.Marshal(output)
+	if err != nil {
+		return tools.ErrorResult(fmt.Sprintf("task_monitor: marshal output: %v", err)), nil
+	}
+	return tools.SuccessResult(string(raw)), nil
+}
+
 type TaskUpdateTool struct {
 	queue *Queue
 }
@@ -617,6 +715,10 @@ func taskOutputField(task *Task, field string) string {
 	default:
 		return task.Result
 	}
+}
+
+func isTerminalTaskStatus(status TaskStatus) bool {
+	return status == StatusDone || status == StatusFailed
 }
 
 func tailTaskOutput(s string, maxRunes int) (string, int, bool) {

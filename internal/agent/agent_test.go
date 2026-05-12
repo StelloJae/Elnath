@@ -524,6 +524,7 @@ func TestBuildToolDefsSearchFirstDefersControlSurfaceTools(t *testing.T) {
 	})
 	reg.Register(daemon.NewTaskCreateTool(nil))
 	reg.Register(daemon.NewTaskListTool(nil))
+	reg.Register(daemon.NewTaskMonitorTool(nil))
 	reg.Register(scheduler.NewScheduleCreateTool(""))
 	reg.Register(scheduler.NewScheduleListTool(""))
 	reg.Register(worktree.NewEnterTool(nil))
@@ -537,7 +538,7 @@ func TestBuildToolDefsSearchFirstDefersControlSurfaceTools(t *testing.T) {
 			t.Fatalf("%s should remain visible in search_first mode; got %v", name, byName)
 		}
 	}
-	for _, name := range []string{"task_create", "task_list", "schedule_create", "schedule_list", "enter_worktree", "exit_worktree"} {
+	for _, name := range []string{"task_create", "task_list", "task_monitor", "schedule_create", "schedule_list", "enter_worktree", "exit_worktree"} {
 		if byName[name] {
 			t.Fatalf("%s should be deferred in search_first mode; got %v", name, byName)
 		}

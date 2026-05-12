@@ -435,6 +435,7 @@ func buildExecutionRuntime(
 	reg.Register(daemon.NewTaskGetTool(taskQueue))
 	reg.Register(daemon.NewTaskStopTool(taskQueue))
 	reg.Register(daemon.NewTaskOutputTool(taskQueue))
+	reg.Register(daemon.NewTaskMonitorTool(taskQueue))
 	reg.Register(daemon.NewTaskUpdateTool(taskQueue))
 	schedulePath := resolveRuntimeScheduledTasksPath(cfg)
 	reg.Register(scheduler.NewScheduleCreateTool(schedulePath))
