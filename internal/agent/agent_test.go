@@ -586,6 +586,7 @@ func TestBuildToolDefsSearchFirstDefersControlSurfaceTools(t *testing.T) {
 	reg.Register(daemon.NewTaskOutputTool(nil))
 	reg.Register(daemon.NewTaskMonitorTool(nil))
 	reg.Register(daemon.NewTaskUpdateTool(nil))
+	reg.Register(tools.NewCodeSymbolsTool(tools.NewPathGuard(t.TempDir(), nil)))
 	reg.Register(scheduler.NewScheduleCreateTool(""))
 	reg.Register(scheduler.NewScheduleListTool(""))
 	reg.Register(scheduler.NewScheduleDeleteTool(""))
@@ -604,6 +605,7 @@ func TestBuildToolDefsSearchFirstDefersControlSurfaceTools(t *testing.T) {
 		}
 	}
 	for _, name := range []string{
+		"code_symbols",
 		"task_create", "task_list", "task_get", "task_stop", "task_output", "task_monitor", "task_update",
 		"schedule_create", "schedule_list", "schedule_delete",
 		"enter_worktree", "worktree_list", "worktree_run", "worktree_prune", "exit_worktree",

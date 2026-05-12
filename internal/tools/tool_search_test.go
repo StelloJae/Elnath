@@ -188,6 +188,29 @@ func TestToolSearchReportsDeclaredDeferReason(t *testing.T) {
 	}
 }
 
+func TestToolSearchFindsCodeSymbolsAsDeferredCodeIntelligence(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(NewCodeSymbolsTool(NewPathGuard(t.TempDir(), nil)))
+	search := NewToolSearchTool(reg)
+	reg.Register(search)
+
+	out := executeToolSearch(t, search, `{"query":"symbols outline code intelligence","max_results":5}`)
+
+	if len(out.Matches) != 1 {
+		t.Fatalf("matches len = %d, want 1: %+v", len(out.Matches), out.Matches)
+	}
+	match := out.Matches[0]
+	if match.Name != CodeSymbolsToolName {
+		t.Fatalf("match = %q, want %s", match.Name, CodeSymbolsToolName)
+	}
+	if !match.Deferred || match.DeferReason != "tool_declared_deferred" {
+		t.Fatalf("defer metadata = deferred:%t reason:%q", match.Deferred, match.DeferReason)
+	}
+	if !match.ConcurrencySafe || !match.Reversible {
+		t.Fatalf("metadata = %+v, want read-only", match)
+	}
+}
+
 func TestToolSearchAllowNamesRestrictsCandidates(t *testing.T) {
 	reg := NewRegistry()
 	reg.Register(&mockTool{name: "grep", result: SuccessResult("")})

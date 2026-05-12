@@ -652,6 +652,7 @@ func buildToolRegistryWithSecondaryCaller(guard *tools.PathGuard, runner tools.B
 	reg.Register(tools.NewEditTool(guard, tracker))
 	reg.Register(tools.NewGlobTool(guard))
 	reg.Register(tools.NewGrepTool(guard, tracker))
+	reg.Register(tools.NewCodeSymbolsTool(guard))
 	reg.Register(tools.NewGitToolWithRunner(guard, runner))
 	reg.Register(tools.NewWebFetchTool(tools.WithSecondaryCaller(secondary)))
 	reg.Register(tools.NewTodoWriteTool())
