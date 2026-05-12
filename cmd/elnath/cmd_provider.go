@@ -13,16 +13,18 @@ import (
 )
 
 type providerStatusView struct {
-	Provider              string                        `json:"provider"`
-	Model                 string                        `json:"model"`
-	ReasoningEffort       string                        `json:"reasoning_effort"`
-	ReasoningEffortMode   string                        `json:"reasoning_effort_mode"`
-	ConfiguredEffort      string                        `json:"configured_effort"`
-	ProviderEffort        string                        `json:"provider_effort"`
-	ProviderEffortNote    string                        `json:"provider_effort_note,omitempty"`
-	AutoEffortCompatible  bool                          `json:"auto_effort_compatible"`
-	RequestTimeoutSeconds int                           `json:"request_timeout_seconds"`
-	ConfiguredProviders   []providerConfigCandidateView `json:"configured_providers,omitempty"`
+	Provider                       string                        `json:"provider"`
+	Model                          string                        `json:"model"`
+	ReasoningEffort                string                        `json:"reasoning_effort"`
+	ReasoningEffortMode            string                        `json:"reasoning_effort_mode"`
+	ConfiguredEffort               string                        `json:"configured_effort"`
+	ProviderEffort                 string                        `json:"provider_effort"`
+	ProviderEffortNote             string                        `json:"provider_effort_note,omitempty"`
+	AutoEffortCompatible           bool                          `json:"auto_effort_compatible"`
+	RequestTimeoutSeconds          int                           `json:"request_timeout_seconds"`
+	RuntimeProviderSwitchAvailable bool                          `json:"runtime_provider_switch_available"`
+	ProviderSwitchBoundaries       []string                      `json:"provider_switch_boundaries,omitempty"`
+	ConfiguredProviders            []providerConfigCandidateView `json:"configured_providers,omitempty"`
 }
 
 type providerConfigCandidateView struct {
@@ -32,6 +34,12 @@ type providerConfigCandidateView struct {
 	ReasoningEffort       string `json:"reasoning_effort,omitempty"`
 	RequestTimeoutSeconds int    `json:"request_timeout_seconds"`
 }
+
+const (
+	providerSwitchBoundaryRestartRequired         = "restart_required"
+	providerSwitchBoundaryReflectionStartupBound  = "reflection_provider_startup_bound"
+	providerSwitchBoundaryCompressionStartupBound = "compression_budget_startup_bound"
+)
 
 func cmdProvider(_ context.Context, args []string) error {
 	if len(args) == 0 {
@@ -79,16 +87,17 @@ func providerStatus(args []string) error {
 	}
 	caps := llm.CapabilitiesOf(provider)
 	view := providerStatusView{
-		Provider:              caps.Name,
-		Model:                 model,
-		ReasoningEffort:       caps.ReasoningEffort,
-		ReasoningEffortMode:   cfg.Reasoning.EffortMode,
-		ConfiguredEffort:      cfg.Reasoning.Effort,
-		ProviderEffort:        caps.ReasoningEffort,
-		ProviderEffortNote:    caps.ReasoningEffortFallback,
-		AutoEffortCompatible:  autoEffortCompatible(caps.ReasoningEffort),
-		RequestTimeoutSeconds: caps.RequestTimeoutSeconds,
-		ConfiguredProviders:   configuredProviderCandidates(cfg),
+		Provider:                 caps.Name,
+		Model:                    model,
+		ReasoningEffort:          caps.ReasoningEffort,
+		ReasoningEffortMode:      cfg.Reasoning.EffortMode,
+		ConfiguredEffort:         cfg.Reasoning.Effort,
+		ProviderEffort:           caps.ReasoningEffort,
+		ProviderEffortNote:       caps.ReasoningEffortFallback,
+		AutoEffortCompatible:     autoEffortCompatible(caps.ReasoningEffort),
+		RequestTimeoutSeconds:    caps.RequestTimeoutSeconds,
+		ProviderSwitchBoundaries: defaultProviderSwitchBoundaries(),
+		ConfiguredProviders:      configuredProviderCandidates(cfg),
 	}
 	if jsonOut {
 		enc := json.NewEncoder(os.Stdout)
@@ -103,6 +112,7 @@ func providerStatus(args []string) error {
 	fmt.Fprintf(os.Stdout, "Configured reasoning: mode=%s effort=%s\n", view.ReasoningEffortMode, view.ConfiguredEffort)
 	fmt.Fprintf(os.Stdout, "Auto effort compatible: %t\n", view.AutoEffortCompatible)
 	fmt.Fprintf(os.Stdout, "Request timeout: %ds\n", view.RequestTimeoutSeconds)
+	fmt.Fprintln(os.Stdout, formatProviderSwitchBoundary(view.ProviderSwitchBoundaries))
 	if len(view.ConfiguredProviders) > 0 {
 		fmt.Fprintln(os.Stdout, "Configured providers:")
 		for _, candidate := range view.ConfiguredProviders {
@@ -179,6 +189,21 @@ func providerConfigModel(model, fallback string) string {
 		return model
 	}
 	return fallback
+}
+
+func defaultProviderSwitchBoundaries() []string {
+	return []string{
+		providerSwitchBoundaryRestartRequired,
+		providerSwitchBoundaryReflectionStartupBound,
+		providerSwitchBoundaryCompressionStartupBound,
+	}
+}
+
+func formatProviderSwitchBoundary(boundaries []string) string {
+	if len(boundaries) == 0 {
+		return "Provider switching: unavailable."
+	}
+	return "Provider switching: restart required. Runtime skill provider resolution is dynamic, but reflection provider and compression budget remain startup-bound."
 }
 
 func sanitizeProviderBaseURL(raw string) string {
