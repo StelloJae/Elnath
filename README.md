@@ -277,8 +277,12 @@ See [Sandbox Starter Allowlist](docs/sandbox-starter-allowlist.md) for group not
 | `ELNATH_OPENAI_RESPONSES_REASONING_EFFORT` | Request effort for compatible providers | `low`, `medium`, `high`, `xhigh` |
 | `ELNATH_OPENAI_RESPONSES_TIMEOUT_SECONDS` | Responses-compatible request timeout | `120` |
 | `ELNATH_ANTHROPIC_API_KEY` | Anthropic API key | `sk-ant-...` |
+| `ELNATH_ANTHROPIC_BASE_URL` | Anthropic API base URL | `https://api.anthropic.com` |
+| `ELNATH_ANTHROPIC_MODEL` | Anthropic model | `claude-sonnet-4-6` |
 | `ELNATH_ANTHROPIC_TIMEOUT_SECONDS` | Anthropic request timeout | `120` |
 | `ELNATH_OPENAI_API_KEY` | OpenAI API key | `sk-...` |
+| `ELNATH_OPENAI_BASE_URL` | OpenAI API base URL | `https://api.openai.com/v1` |
+| `ELNATH_OPENAI_MODEL` | OpenAI model | `gpt-5.5` |
 | `ELNATH_OPENAI_TIMEOUT_SECONDS` | OpenAI request timeout | `120` |
 | `ELNATH_DATA_DIR` | Database directory | `~/.elnath/data` |
 | `ELNATH_WIKI_DIR` | Wiki pages directory | `~/.elnath/wiki` |

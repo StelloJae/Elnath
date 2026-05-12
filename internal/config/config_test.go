@@ -456,6 +456,20 @@ func TestApplyEnvOverrides(t *testing.T) {
 			want:   "anthro-key",
 		},
 		{
+			name:   "ELNATH_ANTHROPIC_BASE_URL",
+			envKey: "ELNATH_ANTHROPIC_BASE_URL",
+			envVal: "https://anthropic-proxy.example/v1",
+			check:  func(c *Config) string { return c.Anthropic.BaseURL },
+			want:   "https://anthropic-proxy.example/v1",
+		},
+		{
+			name:   "ELNATH_ANTHROPIC_MODEL",
+			envKey: "ELNATH_ANTHROPIC_MODEL",
+			envVal: "claude-sonnet-4-6[1m]",
+			check:  func(c *Config) string { return c.Anthropic.Model },
+			want:   "claude-sonnet-4-6[1m]",
+		},
+		{
 			name:   "ELNATH_ANTHROPIC_TIMEOUT_SECONDS",
 			envKey: "ELNATH_ANTHROPIC_TIMEOUT_SECONDS",
 			envVal: "75",
@@ -468,6 +482,20 @@ func TestApplyEnvOverrides(t *testing.T) {
 			envVal: "oai-key",
 			check:  func(c *Config) string { return c.OpenAI.APIKey },
 			want:   "oai-key",
+		},
+		{
+			name:   "ELNATH_OPENAI_BASE_URL",
+			envKey: "ELNATH_OPENAI_BASE_URL",
+			envVal: "https://openai-proxy.example/v1",
+			check:  func(c *Config) string { return c.OpenAI.BaseURL },
+			want:   "https://openai-proxy.example/v1",
+		},
+		{
+			name:   "ELNATH_OPENAI_MODEL",
+			envKey: "ELNATH_OPENAI_MODEL",
+			envVal: "gpt-5.5",
+			check:  func(c *Config) string { return c.OpenAI.Model },
+			want:   "gpt-5.5",
 		},
 		{
 			name:   "ELNATH_OPENAI_TIMEOUT_SECONDS",

@@ -267,6 +267,12 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("ELNATH_ANTHROPIC_API_KEY"); v != "" {
 		cfg.Anthropic.APIKey = v
 	}
+	if v := os.Getenv("ELNATH_ANTHROPIC_BASE_URL"); v != "" {
+		cfg.Anthropic.BaseURL = v
+	}
+	if v := os.Getenv("ELNATH_ANTHROPIC_MODEL"); v != "" {
+		cfg.Anthropic.Model = v
+	}
 	if v := os.Getenv("ELNATH_ANTHROPIC_TIMEOUT_SECONDS"); v != "" {
 		if timeout, err := strconv.Atoi(v); err == nil {
 			cfg.Anthropic.Timeout = timeout
@@ -277,6 +283,12 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("ELNATH_OPENAI_API_KEY"); v != "" {
 		cfg.OpenAI.APIKey = v
+	}
+	if v := os.Getenv("ELNATH_OPENAI_BASE_URL"); v != "" {
+		cfg.OpenAI.BaseURL = v
+	}
+	if v := os.Getenv("ELNATH_OPENAI_MODEL"); v != "" {
+		cfg.OpenAI.Model = v
 	}
 	if v := os.Getenv("ELNATH_OPENAI_TIMEOUT_SECONDS"); v != "" {
 		if timeout, err := strconv.Atoi(v); err == nil {
