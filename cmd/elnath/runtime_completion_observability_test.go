@@ -68,6 +68,34 @@ func TestCompletionContractSummaryDetectsBashVerification(t *testing.T) {
 	}
 }
 
+func TestCompletionContractSummaryDetectsFailedBashVerification(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("check the project status and run tests"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "bash-1", Name: "bash", Input: json.RawMessage(`{"command":"go test ./internal/llm -count=1"}`)},
+			}},
+			llm.NewToolResultMessage("bash-1", "FAIL", true),
+			llm.NewAssistantMessage("Done."),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(&orchestrator.RoutingContext{VerificationHint: true}, orchestrator.WorkflowConfig{}, result)
+
+	if summary.VerificationObserved == nil || !*summary.VerificationObserved {
+		t.Fatalf("VerificationObserved = %v, want true for executed verification command", summary.VerificationObserved)
+	}
+	if summary.VerificationCommand != "go test ./internal/llm -count=1" {
+		t.Fatalf("VerificationCommand = %q", summary.VerificationCommand)
+	}
+	if summary.CompletionWarning != "verification_command_failed" {
+		t.Fatalf("CompletionWarning = %q, want verification_command_failed", summary.CompletionWarning)
+	}
+	if summary.RetryDecision != completionRetryDecisionRetrySmallerScope || summary.RetryReason != "verification_command_failed" {
+		t.Fatalf("retry plan = %q/%q, want retry_smaller_scope/verification_command_failed", summary.RetryDecision, summary.RetryReason)
+	}
+}
+
 func TestCompletionContractSummaryDetectsIncompleteFinalResponse(t *testing.T) {
 	result := &orchestrator.WorkflowResult{
 		Messages: []llm.Message{
