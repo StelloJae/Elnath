@@ -122,6 +122,42 @@ func TestExitWorktreeRequiresCleanOrDiscard(t *testing.T) {
 	}
 }
 
+func TestWorktreeListToolShowsRegisteredWorktrees(t *testing.T) {
+	repo := initGitRepo(t)
+	manager := NewManager(repo)
+	enter := NewEnterTool(manager)
+	list := NewListTool(manager)
+
+	result, err := enter.Execute(context.Background(), json.RawMessage(`{"name":"feature/list"}`))
+	if err != nil {
+		t.Fatalf("enter Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("enter returned error result: %s", result.Output)
+	}
+
+	listed, err := list.Execute(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("list Execute error = %v", err)
+	}
+	if listed.IsError {
+		t.Fatalf("list returned error result: %s", listed.Output)
+	}
+	var output ListOutput
+	if err := json.Unmarshal([]byte(listed.Output), &output); err != nil {
+		t.Fatalf("unmarshal list output: %v", err)
+	}
+	if output.Total != 1 || len(output.Worktrees) != 1 {
+		t.Fatalf("list output = %+v, want one registered worktree", output)
+	}
+	if got := output.Worktrees[0]; got.Name != "feature/list" || got.Slug != "feature+list" || got.Path == "" || got.Branch == "" {
+		t.Fatalf("listed worktree = %+v, want registry record details", got)
+	}
+	if !strings.HasSuffix(output.RegistryPath, filepath.Join(".elnath", "worktrees", "registry.json")) {
+		t.Fatalf("registry path = %q, want managed registry path", output.RegistryPath)
+	}
+}
+
 func TestWorktreeToolMetadata(t *testing.T) {
 	for _, tool := range []tools.Tool{NewEnterTool(nil), NewExitTool(nil)} {
 		if tool.IsConcurrencySafe(nil) {
@@ -136,6 +172,25 @@ func TestWorktreeToolMetadata(t *testing.T) {
 		if tool.ShouldCancelSiblingsOnError() {
 			t.Fatalf("%s should not cancel siblings", tool.Name())
 		}
+	}
+}
+
+func TestWorktreeListToolMetadata(t *testing.T) {
+	tool := NewListTool(nil)
+	if !tool.IsConcurrencySafe(nil) {
+		t.Fatal("worktree_list should be concurrency-safe")
+	}
+	if !tool.Reversible() {
+		t.Fatal("worktree_list should be reversible")
+	}
+	if got := tool.Scope(nil); got.Persistent || got.Network || len(got.ReadPaths) != 0 || len(got.WritePaths) != 0 {
+		t.Fatalf("worktree_list Scope() = %+v, want empty read-only scope", got)
+	}
+	if tool.ShouldCancelSiblingsOnError() {
+		t.Fatal("worktree_list should not cancel siblings")
+	}
+	if !tools.ShouldDeferToolSchema(tool) {
+		t.Fatal("worktree_list should defer initial schema")
 	}
 }
 

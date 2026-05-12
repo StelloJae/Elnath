@@ -2948,6 +2948,18 @@ func TestExecutionRuntimeSkillInvocationToolUsesCurrentProviderModel(t *testing.
 	}
 }
 
+func TestExecutionRuntimeRegistersWorktreeListTool(t *testing.T) {
+	rt := newTestExecutionRuntime(t, &countingProvider{streamText: "unused"})
+
+	tool, ok := rt.reg.Get("worktree_list")
+	if !ok {
+		t.Fatal("runtime registry missing worktree_list tool")
+	}
+	if !tool.IsConcurrencySafe(nil) || !tool.Reversible() {
+		t.Fatalf("worktree_list metadata = concurrency:%t reversible:%t, want read-only metadata", tool.IsConcurrencySafe(nil), tool.Reversible())
+	}
+}
+
 func TestExecutionRuntimeRunTaskHelpSlashCommandListsCatalog(t *testing.T) {
 	provider := &countingProvider{streamText: "runtime answer"}
 	rt := newTestExecutionRuntime(t, provider)
