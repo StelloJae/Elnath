@@ -134,6 +134,62 @@ func TestTaskListToolListsQueueTasks(t *testing.T) {
 	}
 }
 
+func TestTaskListToolReportsTimingEvidence(t *testing.T) {
+	ctx := context.Background()
+	queue := newTaskToolTestQueue(t)
+	if _, _, err := queue.Enqueue(ctx, "running task", ""); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	task, err := queue.Next(ctx)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if task == nil {
+		t.Fatal("Next returned nil")
+	}
+
+	now := time.Date(2026, 5, 13, 5, 0, 0, 0, time.UTC)
+	created := now.Add(-45 * time.Second)
+	started := now.Add(-30 * time.Second)
+	updated := now.Add(-12 * time.Second)
+	if _, err := queue.db.ExecContext(ctx, `
+		UPDATE task_queue
+		SET created_at = ?, started_at = ?, updated_at = ?, timeout_class = ?, idle_timeout_count = ?, active_timeout_count = ?
+		WHERE id = ?`,
+		created.UnixMilli(), started.UnixMilli(), updated.UnixMilli(), string(TimeoutClassIdle), 2, 1, task.ID,
+	); err != nil {
+		t.Fatalf("update task timing: %v", err)
+	}
+
+	tool := NewTaskListTool(queue)
+	tool.now = func() time.Time { return now }
+	result, err := tool.Execute(ctx, json.RawMessage(`{"status":"running"}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute returned error result: %s", result.Output)
+	}
+
+	var output taskListToolOutput
+	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if output.TotalReturned != 1 {
+		t.Fatalf("TotalReturned = %d, want 1", output.TotalReturned)
+	}
+	got := output.Tasks[0]
+	if got.ObservedAt != now.Format(time.RFC3339Nano) {
+		t.Fatalf("ObservedAt = %q, want %q", got.ObservedAt, now.Format(time.RFC3339Nano))
+	}
+	if got.AgeSeconds != 45 || got.RunningSeconds != 30 || got.IdleSeconds != 12 {
+		t.Fatalf("timing = age %d running %d idle %d, want 45/30/12", got.AgeSeconds, got.RunningSeconds, got.IdleSeconds)
+	}
+	if got.TimeoutClass != string(TimeoutClassIdle) || got.IdleTimeoutCount != 2 || got.ActiveTimeoutCount != 1 {
+		t.Fatalf("timeout metadata = class %q idle %d active %d", got.TimeoutClass, got.IdleTimeoutCount, got.ActiveTimeoutCount)
+	}
+}
+
 func TestTaskListToolFiltersStatus(t *testing.T) {
 	ctx := context.Background()
 	queue := newTaskToolTestQueue(t)
@@ -202,6 +258,58 @@ func TestTaskGetToolReturnsDetails(t *testing.T) {
 	}
 	if output.Task.Payload != "inspect me" {
 		t.Fatalf("Payload = %q, want inspect me", output.Task.Payload)
+	}
+}
+
+func TestTaskGetToolReportsTimingEvidence(t *testing.T) {
+	ctx := context.Background()
+	queue := newTaskToolTestQueue(t)
+	if _, _, err := queue.Enqueue(ctx, "inspect timing", ""); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	task, err := queue.Next(ctx)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if task == nil {
+		t.Fatal("Next returned nil")
+	}
+
+	now := time.Date(2026, 5, 13, 5, 30, 0, 0, time.UTC)
+	created := now.Add(-60 * time.Second)
+	started := now.Add(-50 * time.Second)
+	updated := now.Add(-15 * time.Second)
+	if _, err := queue.db.ExecContext(ctx, `
+		UPDATE task_queue
+		SET created_at = ?, started_at = ?, updated_at = ?
+		WHERE id = ?`,
+		created.UnixMilli(), started.UnixMilli(), updated.UnixMilli(), task.ID,
+	); err != nil {
+		t.Fatalf("update task timing: %v", err)
+	}
+
+	tool := NewTaskGetTool(queue)
+	tool.now = func() time.Time { return now }
+	result, err := tool.Execute(ctx, json.RawMessage(`{"id":`+jsonInt(task.ID)+`}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute returned error result: %s", result.Output)
+	}
+
+	var output taskGetToolOutput
+	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if !output.Found || output.Task == nil {
+		t.Fatalf("output = %+v, want found task", output)
+	}
+	if output.Task.ObservedAt != now.Format(time.RFC3339Nano) {
+		t.Fatalf("ObservedAt = %q, want %q", output.Task.ObservedAt, now.Format(time.RFC3339Nano))
+	}
+	if output.Task.AgeSeconds != 60 || output.Task.RunningSeconds != 50 || output.Task.IdleSeconds != 15 {
+		t.Fatalf("timing = age %d running %d idle %d, want 60/50/15", output.Task.AgeSeconds, output.Task.RunningSeconds, output.Task.IdleSeconds)
 	}
 }
 

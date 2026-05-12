@@ -188,7 +188,9 @@ func isReadOnly(name string) bool {
 	case "read_file", "glob", "grep", "web_fetch", "web_search",
 		"wiki_search", "wiki_read",
 		"conversation_search", "cross_project_search", "cross_project_conversation_search",
-		"tool_search", "command_catalog", "todo_write", "task_list", "task_get", "task_output", "task_monitor", "ask_user_question", "schedule_list", "worktree_list", "enter_plan_mode", "exit_plan_mode":
+		"tool_search", "command_catalog", "todo_write", "task_list", "task_get", "task_output", "task_monitor", "ask_user_question", "schedule_list", "worktree_list",
+		"agentic_actor_graph", "agentic_task_evidence", "agentic_delegate_list", "agentic_message_list",
+		"enter_plan_mode", "exit_plan_mode":
 		return true
 	}
 	return false

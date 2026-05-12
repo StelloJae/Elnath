@@ -3154,6 +3154,32 @@ func TestExecutionRuntimeRegistersAgenticDelegateEnqueueTool(t *testing.T) {
 	}
 }
 
+func TestExecutionRuntimeRegistersAgenticMessageTools(t *testing.T) {
+	rt := newTestExecutionRuntime(t, &countingProvider{streamText: "unused"})
+
+	send, ok := rt.reg.Get("agentic_message_send")
+	if !ok {
+		t.Fatal("runtime registry missing agentic_message_send tool")
+	}
+	if send.IsConcurrencySafe(nil) || send.Reversible() {
+		t.Fatalf("agentic_message_send metadata = concurrency:%t reversible:%t, want mutating metadata", send.IsConcurrencySafe(nil), send.Reversible())
+	}
+	if !tools.ShouldDeferToolSchema(send) {
+		t.Fatal("agentic_message_send should defer initial schema")
+	}
+
+	list, ok := rt.reg.Get("agentic_message_list")
+	if !ok {
+		t.Fatal("runtime registry missing agentic_message_list tool")
+	}
+	if !list.IsConcurrencySafe(nil) || !list.Reversible() {
+		t.Fatalf("agentic_message_list metadata = concurrency:%t reversible:%t, want read-only metadata", list.IsConcurrencySafe(nil), list.Reversible())
+	}
+	if !tools.ShouldDeferToolSchema(list) {
+		t.Fatal("agentic_message_list should defer initial schema")
+	}
+}
+
 func TestExecutionRuntimeAgenticDelegateEnqueueToolQueuesDelegatedChild(t *testing.T) {
 	rt := newTestExecutionRuntime(t, &countingProvider{streamText: "unused"})
 	ctx := context.Background()
@@ -3224,6 +3250,7 @@ func TestExecutionRuntimeRegistersDeferredControlSurfaceTools(t *testing.T) {
 		"schedule_create", "schedule_list", "schedule_delete",
 		"enter_worktree", "worktree_list", "exit_worktree",
 		"agentic_actor_graph", "agentic_task_evidence", "agentic_delegate_create", "agentic_delegate_list", "agentic_delegate_enqueue",
+		"agentic_message_send", "agentic_message_list",
 	} {
 		tool, ok := rt.reg.Get(name)
 		if !ok {

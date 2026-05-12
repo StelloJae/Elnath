@@ -155,6 +155,12 @@ func TestToolGateway_AgenticDelegateListIsReadOnly(t *testing.T) {
 	}
 }
 
+func TestToolGateway_AgenticMessageListIsReadOnly(t *testing.T) {
+	if !isReadOnlyTool(ActorMessageListToolName) {
+		t.Fatal("agentic_message_list should be classified as read-only")
+	}
+}
+
 func TestToolGateway_DelegateCreateIsMutating(t *testing.T) {
 	if isReadOnlyTool(DelegateCreateToolName) {
 		t.Fatal("agentic_delegate_create should not be classified as read-only")
@@ -164,6 +170,12 @@ func TestToolGateway_DelegateCreateIsMutating(t *testing.T) {
 func TestToolGateway_DelegateEnqueueIsMutating(t *testing.T) {
 	if isReadOnlyTool(DelegateEnqueueToolName) {
 		t.Fatal("agentic_delegate_enqueue should not be classified as read-only")
+	}
+}
+
+func TestToolGateway_AgenticMessageSendIsMutating(t *testing.T) {
+	if isReadOnlyTool(ActorMessageSendToolName) {
+		t.Fatal("agentic_message_send should not be classified as read-only")
 	}
 }
 

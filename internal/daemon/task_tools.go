@@ -136,10 +136,11 @@ func (t *TaskCreateTool) Execute(ctx context.Context, params json.RawMessage) (*
 
 type TaskListTool struct {
 	queue *Queue
+	now   func() time.Time
 }
 
 func NewTaskListTool(queue *Queue) *TaskListTool {
-	return &TaskListTool{queue: queue}
+	return &TaskListTool{queue: queue, now: time.Now}
 }
 
 func (t *TaskListTool) Name() string { return TaskListToolName }
@@ -185,6 +186,10 @@ type taskToolItem struct {
 	Progress           string     `json:"progress,omitempty"`
 	Summary            string     `json:"summary,omitempty"`
 	ResultPreview      string     `json:"result_preview,omitempty"`
+	ObservedAt         string     `json:"observed_at,omitempty"`
+	AgeSeconds         int64      `json:"age_seconds,omitempty"`
+	RunningSeconds     int64      `json:"running_seconds,omitempty"`
+	IdleSeconds        int64      `json:"idle_seconds,omitempty"`
 	TimeoutClass       string     `json:"timeout_class,omitempty"`
 	IdleTimeoutCount   int        `json:"idle_timeout_count,omitempty"`
 	ActiveTimeoutCount int        `json:"active_timeout_count,omitempty"`
@@ -216,12 +221,13 @@ func (t *TaskListTool) Execute(ctx context.Context, params json.RawMessage) (*to
 		return tools.ErrorResult(fmt.Sprintf("task_list: %v", err)), nil
 	}
 
+	now := t.observeTime()
 	items := make([]taskToolItem, 0, minInt(limit, len(tasks)))
 	for _, task := range tasks {
 		if status != "" && task.Status != status {
 			continue
 		}
-		items = append(items, taskToolItemFromTask(task))
+		items = append(items, taskToolItemFromTask(task, now))
 		if len(items) >= limit {
 			break
 		}
@@ -240,12 +246,20 @@ func (t *TaskListTool) Execute(ctx context.Context, params json.RawMessage) (*to
 	return tools.SuccessResult(string(raw)), nil
 }
 
+func (t *TaskListTool) observeTime() time.Time {
+	if t != nil && t.now != nil {
+		return t.now()
+	}
+	return time.Now()
+}
+
 type TaskGetTool struct {
 	queue *Queue
+	now   func() time.Time
 }
 
 func NewTaskGetTool(queue *Queue) *TaskGetTool {
-	return &TaskGetTool{queue: queue}
+	return &TaskGetTool{queue: queue, now: time.Now}
 }
 
 func (t *TaskGetTool) Name() string { return TaskGetToolName }
@@ -310,7 +324,7 @@ func (t *TaskGetTool) Execute(ctx context.Context, params json.RawMessage) (*too
 		}
 		return tools.ErrorResult(fmt.Sprintf("task_get: %v", err)), nil
 	}
-	item := taskToolItemFromTask(*task)
+	item := taskToolItemFromTask(*task, t.observeTime())
 	output := taskGetToolOutput{
 		Found: true,
 		Task: &taskToolDetail{
@@ -324,6 +338,13 @@ func (t *TaskGetTool) Execute(ctx context.Context, params json.RawMessage) (*too
 		return tools.ErrorResult(fmt.Sprintf("task_get: marshal output: %v", err)), nil
 	}
 	return tools.SuccessResult(string(raw)), nil
+}
+
+func (t *TaskGetTool) observeTime() time.Time {
+	if t != nil && t.now != nil {
+		return t.now()
+	}
+	return time.Now()
 }
 
 type RunningTaskCanceller interface {
@@ -893,7 +914,7 @@ func tailTaskOutput(s string, maxRunes int) (string, int, bool) {
 	return string(runes[total-maxRunes:]), total, true
 }
 
-func taskToolItemFromTask(task Task) taskToolItem {
+func taskToolItemFromTask(task Task, now time.Time) taskToolItem {
 	return taskToolItem{
 		ID:                 task.ID,
 		Status:             task.Status,
@@ -902,6 +923,10 @@ func taskToolItemFromTask(task Task) taskToolItem {
 		Progress:           task.Progress,
 		Summary:            task.Summary,
 		ResultPreview:      truncateTaskToolText(task.Result, taskToolPreviewMaxRune),
+		ObservedAt:         formatTaskToolTime(now),
+		AgeSeconds:         taskAgeSeconds(task, now),
+		RunningSeconds:     taskRunningSeconds(task, now),
+		IdleSeconds:        taskIdleSeconds(task, now),
 		TimeoutClass:       string(task.TimeoutClass),
 		IdleTimeoutCount:   task.IdleTimeoutCount,
 		ActiveTimeoutCount: task.ActiveTimeoutCount,
