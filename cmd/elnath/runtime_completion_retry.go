@@ -63,7 +63,12 @@ func (rt *executionRuntime) runSmallerScopeCompletionRetry(
 	retrySummary.CorrectionAttempts = 1
 	retrySummary.CorrectionDecision = summary.RetryDecision
 	retrySummary.CorrectionReason = summary.RetryReason
-	retrySummary.CorrectionStatus = "succeeded"
+	if retrySummary.CompletionWarning != "" {
+		retrySummary.CorrectionStatus = "failed"
+		retrySummary.CorrectionFailureFamily = "completion_warning_unresolved"
+	} else {
+		retrySummary.CorrectionStatus = "succeeded"
+	}
 	if retryEffortReason != "" {
 		retrySummary.ReasoningEffort = retryEffort
 		retrySummary.ReasoningEffortMode = "manual"
