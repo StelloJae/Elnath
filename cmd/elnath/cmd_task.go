@@ -390,10 +390,17 @@ func executeTaskTool(ctx context.Context, tool taskTool, params map[string]any) 
 }
 
 type taskMonitorCLIOutput struct {
-	TaskID             int64  `json:"task_id"`
-	Status             string `json:"status"`
-	RetrievalStatus    string `json:"retrieval_status"`
-	Terminal           bool   `json:"terminal"`
+	TaskID          int64  `json:"task_id"`
+	Status          string `json:"status"`
+	RetrievalStatus string `json:"retrieval_status"`
+	Terminal        bool   `json:"terminal"`
+	Observation     struct {
+		Mode           string `json:"mode"`
+		WaitForUpdate  bool   `json:"wait_for_update"`
+		SinceUpdatedAt string `json:"since_updated_at"`
+		TimeoutMS      int    `json:"timeout_ms"`
+		MaxChars       int    `json:"max_chars"`
+	} `json:"observation"`
 	NextPollSeconds    int    `json:"next_poll_seconds"`
 	ObservedAt         string `json:"observed_at"`
 	UpdatedAt          string `json:"updated_at"`
@@ -435,6 +442,9 @@ func printTaskMonitor(view taskMonitorCLIOutput) {
 	fmt.Printf("Status:       %s\n", view.Status)
 	fmt.Printf("Retrieval:    %s\n", view.RetrievalStatus)
 	fmt.Printf("Terminal:     %t\n", view.Terminal)
+	if view.Observation.Mode != "" {
+		fmt.Printf("Observation:  mode=%s wait=%t timeout_ms=%d max_chars=%d\n", view.Observation.Mode, view.Observation.WaitForUpdate, view.Observation.TimeoutMS, view.Observation.MaxChars)
+	}
 	fmt.Printf("Updated:      %s\n", emptyDash(view.UpdatedAt))
 	fmt.Printf("Observed:     %s\n", emptyDash(view.ObservedAt))
 	fmt.Printf("Next poll:    %ds\n", view.NextPollSeconds)

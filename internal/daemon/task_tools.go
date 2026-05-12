@@ -655,27 +655,36 @@ type taskMonitorToolInput struct {
 }
 
 type taskMonitorToolOutput struct {
-	TaskID             int64      `json:"task_id"`
-	Status             TaskStatus `json:"status"`
-	RetrievalStatus    string     `json:"retrieval_status"`
-	Terminal           bool       `json:"terminal"`
-	NextPollSeconds    int        `json:"next_poll_seconds"`
-	ObservedAt         string     `json:"observed_at,omitempty"`
-	CreatedAt          string     `json:"created_at,omitempty"`
-	UpdatedAt          string     `json:"updated_at,omitempty"`
-	StartedAt          string     `json:"started_at,omitempty"`
-	CompletedAt        string     `json:"completed_at,omitempty"`
-	AgeSeconds         int64      `json:"age_seconds,omitempty"`
-	RunningSeconds     int64      `json:"running_seconds,omitempty"`
-	IdleSeconds        int64      `json:"idle_seconds,omitempty"`
-	Progress           string     `json:"progress,omitempty"`
-	Summary            string     `json:"summary,omitempty"`
-	ResultTail         string     `json:"result_tail,omitempty"`
-	ResultTotalChars   int        `json:"result_total_chars"`
-	ResultTruncated    bool       `json:"result_truncated"`
-	TimeoutClass       string     `json:"timeout_class,omitempty"`
-	IdleTimeoutCount   int        `json:"idle_timeout_count,omitempty"`
-	ActiveTimeoutCount int        `json:"active_timeout_count,omitempty"`
+	TaskID             int64                  `json:"task_id"`
+	Status             TaskStatus             `json:"status"`
+	RetrievalStatus    string                 `json:"retrieval_status"`
+	Terminal           bool                   `json:"terminal"`
+	Observation        taskMonitorObservation `json:"observation"`
+	NextPollSeconds    int                    `json:"next_poll_seconds"`
+	ObservedAt         string                 `json:"observed_at,omitempty"`
+	CreatedAt          string                 `json:"created_at,omitempty"`
+	UpdatedAt          string                 `json:"updated_at,omitempty"`
+	StartedAt          string                 `json:"started_at,omitempty"`
+	CompletedAt        string                 `json:"completed_at,omitempty"`
+	AgeSeconds         int64                  `json:"age_seconds,omitempty"`
+	RunningSeconds     int64                  `json:"running_seconds,omitempty"`
+	IdleSeconds        int64                  `json:"idle_seconds,omitempty"`
+	Progress           string                 `json:"progress,omitempty"`
+	Summary            string                 `json:"summary,omitempty"`
+	ResultTail         string                 `json:"result_tail,omitempty"`
+	ResultTotalChars   int                    `json:"result_total_chars"`
+	ResultTruncated    bool                   `json:"result_truncated"`
+	TimeoutClass       string                 `json:"timeout_class,omitempty"`
+	IdleTimeoutCount   int                    `json:"idle_timeout_count,omitempty"`
+	ActiveTimeoutCount int                    `json:"active_timeout_count,omitempty"`
+}
+
+type taskMonitorObservation struct {
+	Mode           string `json:"mode"`
+	WaitForUpdate  bool   `json:"wait_for_update"`
+	SinceUpdatedAt string `json:"since_updated_at,omitempty"`
+	TimeoutMS      int    `json:"timeout_ms,omitempty"`
+	MaxChars       int    `json:"max_chars"`
 }
 
 func (t *TaskMonitorTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
@@ -697,8 +706,12 @@ func (t *TaskMonitorTool) Execute(ctx context.Context, params json.RawMessage) (
 		return tools.ErrorResult(fmt.Sprintf("task_monitor: %v", err)), nil
 	}
 	retrievalStatus := taskMonitorRetrievalSnapshot
+	monitorMode := "snapshot"
+	since := ""
+	waitTimeout := time.Duration(0)
 	if input.WaitForUpdate {
-		since := strings.TrimSpace(input.SinceUpdatedAt)
+		monitorMode = "wait_for_update"
+		since = strings.TrimSpace(input.SinceUpdatedAt)
 		if since == "" {
 			return tools.ErrorResult("task_monitor: since_updated_at is required when wait_for_update is true"), nil
 		}
@@ -707,7 +720,8 @@ func (t *TaskMonitorTool) Execute(ctx context.Context, params json.RawMessage) (
 			return tools.ErrorResult(fmt.Sprintf("task_monitor: since_updated_at must be RFC3339Nano: %v", err)), nil
 		}
 		since = formatTaskToolTime(sinceTime)
-		task, retrievalStatus, err = t.waitForMonitorUpdate(ctx, input.ID, since, normalizeTaskOutputTimeout(input.TimeoutMS))
+		waitTimeout = normalizeTaskOutputTimeout(input.TimeoutMS)
+		task, retrievalStatus, err = t.waitForMonitorUpdate(ctx, input.ID, since, waitTimeout)
 		if err != nil {
 			return tools.ErrorResult(fmt.Sprintf("task_monitor: %v", err)), nil
 		}
@@ -724,10 +738,17 @@ func (t *TaskMonitorTool) Execute(ctx context.Context, params json.RawMessage) (
 	}
 
 	output := taskMonitorToolOutput{
-		TaskID:             task.ID,
-		Status:             task.Status,
-		RetrievalStatus:    retrievalStatus,
-		Terminal:           terminal,
+		TaskID:          task.ID,
+		Status:          task.Status,
+		RetrievalStatus: retrievalStatus,
+		Terminal:        terminal,
+		Observation: taskMonitorObservation{
+			Mode:           monitorMode,
+			WaitForUpdate:  input.WaitForUpdate,
+			SinceUpdatedAt: since,
+			TimeoutMS:      durationMillis(waitTimeout),
+			MaxChars:       limit,
+		},
 		NextPollSeconds:    nextPollSeconds,
 		ObservedAt:         formatTaskToolTime(now),
 		CreatedAt:          formatTaskToolTime(task.CreatedAt),
@@ -751,6 +772,13 @@ func (t *TaskMonitorTool) Execute(ctx context.Context, params json.RawMessage) (
 		return tools.ErrorResult(fmt.Sprintf("task_monitor: marshal output: %v", err)), nil
 	}
 	return tools.SuccessResult(string(raw)), nil
+}
+
+func durationMillis(duration time.Duration) int {
+	if duration <= 0 {
+		return 0
+	}
+	return int(duration / time.Millisecond)
 }
 
 func (t *TaskMonitorTool) waitForMonitorUpdate(ctx context.Context, id int64, sinceUpdatedAt string, timeout time.Duration) (*Task, string, error) {
