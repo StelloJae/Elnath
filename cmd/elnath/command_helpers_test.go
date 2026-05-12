@@ -279,7 +279,7 @@ func openTelegramCommandTestShell(t *testing.T, bot telegram.BotClient) (*telegr
 
 func TestCommandRegistryContainsExpectedCommands(t *testing.T) {
 	reg := commandRegistry()
-	for _, name := range []string{"version", "help", "run", "setup", "daemon", "telegram", "wiki", "search", "eval", "lessons", "provider"} {
+	for _, name := range []string{"version", "help", "run", "setup", "daemon", "telegram", "wiki", "search", "eval", "lessons", "provider", "doctor"} {
 		if _, ok := reg[name]; !ok {
 			t.Fatalf("missing command %q", name)
 		}
