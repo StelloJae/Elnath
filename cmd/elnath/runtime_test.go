@@ -2782,7 +2782,7 @@ func TestExecutionRuntimeRunTaskCommandsSlashCommandListsCatalog(t *testing.T) {
 	if provider.streamCalls != 0 || provider.chatCalls != 0 {
 		t.Fatalf("provider calls = chat:%d stream:%d, want none for local commands command", provider.chatCalls, provider.streamCalls)
 	}
-	for _, want := range []string{"commands", "run", "skill", "/effort", "/model", "/provider", "/help", "/skills"} {
+	for _, want := range []string{"commands", "run", "skill", "/effort", "/model", "/provider", "/help", "/skills", "/version"} {
 		if !strings.Contains(summary, want) || !strings.Contains(streamed.String(), want) {
 			t.Fatalf("summary=%q streamed=%q missing %q", summary, streamed.String(), want)
 		}
@@ -3006,6 +3006,32 @@ func TestExecutionRuntimeRunTaskHelpSlashCommandListsCatalog(t *testing.T) {
 	}
 }
 
+func TestExecutionRuntimeRunTaskVersionSlashCommand(t *testing.T) {
+	provider := &countingProvider{streamText: "runtime answer"}
+	rt := newTestExecutionRuntime(t, provider)
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	messages, summary, err := rt.runTask(context.Background(), sess, nil, "/version", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask /version: %v", err)
+	}
+	if provider.streamCalls != 0 || provider.chatCalls != 0 {
+		t.Fatalf("provider calls = chat:%d stream:%d, want none for local version command", provider.chatCalls, provider.streamCalls)
+	}
+	if summary != "elnath "+version {
+		t.Fatalf("summary = %q, want version output", summary)
+	}
+	if len(messages) != 2 {
+		t.Fatalf("messages len = %d, want 2", len(messages))
+	}
+	if messages[1].Text() != summary {
+		t.Fatalf("assistant message = %q, want %q", messages[1].Text(), summary)
+	}
+}
+
 func TestExecutionRuntimeRunTaskCommandsSlashCommandJSONIncludesRuntimeControls(t *testing.T) {
 	provider := &countingProvider{streamText: "runtime answer"}
 	rt := newTestExecutionRuntime(t, provider)
@@ -3030,7 +3056,7 @@ func TestExecutionRuntimeRunTaskCommandsSlashCommandJSONIncludesRuntimeControls(
 	for _, entry := range entries {
 		seen[entry.Name] = entry
 	}
-	for _, want := range []string{"/effort", "/model", "/provider", "/help", "/skills"} {
+	for _, want := range []string{"/effort", "/model", "/provider", "/help", "/skills", "/version"} {
 		entry, ok := seen[want]
 		if !ok {
 			t.Fatalf("missing runtime command %s in JSON catalog: %+v", want, entries)
@@ -3065,7 +3091,7 @@ func TestRuntimeLocalSlashCommandRegistry(t *testing.T) {
 		}
 		names[spec.Name] = true
 	}
-	for _, want := range []string{"/effort", "/model", "/provider", "/commands", "/help", "/skills"} {
+	for _, want := range []string{"/effort", "/model", "/provider", "/commands", "/help", "/skills", "/version"} {
 		if !names[want] {
 			t.Fatalf("runtime local slash registry missing %s; got %+v", want, specs)
 		}

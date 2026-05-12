@@ -22,6 +22,7 @@ func runtimeLocalSlashCommandSpecs() []localSlashCommandSpec {
 		{Name: "/commands", Description: "List local command catalog entries.", ArgumentHint: "[--json] [--all]"},
 		{Name: "/help", Description: "Alias for the local command catalog.", ArgumentHint: "[--json] [--all]"},
 		{Name: "/skills", Description: "List registered skills without executing them.", ArgumentHint: "[--json]"},
+		{Name: "/version", Description: "Print the Elnath version for this session.", ArgumentHint: "[--json]"},
 	}
 }
 
@@ -47,6 +48,8 @@ func (rt *executionRuntime) tryLocalSlashCommand(
 		return rt.tryCommandsCommand(sess, messages, input, bus)
 	case "/skills":
 		return rt.trySkillsCommand(sess, messages, input, bus)
+	case "/version":
+		return rt.tryVersionCommand(sess, messages, input, bus)
 	default:
 		return nil, "", false, nil
 	}
