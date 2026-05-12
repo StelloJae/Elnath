@@ -118,6 +118,7 @@ Recent hardening also closed two structural follow-ups behind this operator flow
 | `provider status` | Inspect configured provider and effort support | `elnath provider status --json` |
 | `provider candidates` | List configured provider candidates | `elnath provider candidates --json` |
 | `provider check` | Validate one provider candidate without switching | `elnath provider check openai_responses --json` |
+| `skill list` | List wiki-native skills, optionally with compatible SKILL.md roots | `elnath skill list --compatible --json` |
 | `version` | Show version | `elnath version` |
 | `help` | Show command help | `elnath help` |
 
@@ -147,6 +148,12 @@ tools and `tool_search` visible while deferring larger MCP/control-plane
 schemas until the model selects them. `tool_search` returns compact JSON
 metadata including `deferred` and, when applicable, `defer_reason` such as
 `mcp_prefix` or `tool_declared_deferred`.
+
+Skills remain wiki-native by default, and runtime-compatible skill roots can be
+inspected with `elnath skill list --compatible --json`. That includes project
+and user `.claude/skills/**/SKILL.md`, `.codex/skills/**/SKILL.md`,
+`.agents/skills/**/SKILL.md`, compatible plugin-cache skills, and legacy
+`.claude/commands` markdown command skills.
 
 ## Architecture
 
