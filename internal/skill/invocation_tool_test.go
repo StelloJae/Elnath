@@ -20,8 +20,9 @@ func TestInvocationToolExecutesSkillWithArgsAndToolFilter(t *testing.T) {
 		Name:          "review-pr",
 		Description:   "Review PRs",
 		RequiredTools: []string{"read_file"},
+		ArgumentNames: []string{"pr_number"},
 		Model:         "skill-model",
-		Prompt:        "Review $ARGUMENTS in {target}",
+		Prompt:        "Review $pr_number from $ARGUMENTS in {target}",
 		Status:        "active",
 		Source:        "codex-plugin-skill",
 	})
@@ -77,7 +78,7 @@ func TestInvocationToolExecutesSkillWithArgsAndToolFilter(t *testing.T) {
 	if captured.Model != "skill-model" {
 		t.Fatalf("captured model = %q, want skill-model", captured.Model)
 	}
-	if !strings.Contains(captured.System, "Review PR 123 in repo") {
+	if !strings.Contains(captured.System, "Review PR 123 from PR 123 in repo") {
 		t.Fatalf("system prompt = %q, want rendered skill prompt", captured.System)
 	}
 	toolNames := map[string]bool{}
@@ -153,6 +154,91 @@ func TestInvocationToolResolvesProviderAndModelAtExecutionTime(t *testing.T) {
 	}
 	if captured.Model != "second-model" {
 		t.Fatalf("captured model = %q, want second-model", captured.Model)
+	}
+}
+
+func TestInvocationToolNamedArgsOverridePositionalBackfill(t *testing.T) {
+	t.Parallel()
+
+	skillReg := NewRegistry()
+	skillReg.Add(&Skill{
+		Name:          "review-pr",
+		ArgumentNames: []string{"pr_number"},
+		Prompt:        "Review $pr_number from $ARGUMENTS.",
+		Status:        "active",
+	})
+
+	var captured llm.ChatRequest
+	provider := &mockProvider{
+		streamFn: func(_ context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
+			captured = req
+			cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: "done"})
+			cb(llm.StreamEvent{Type: llm.EventDone})
+			return nil
+		},
+	}
+
+	invoke := NewInvocationTool(InvocationToolConfig{
+		Registry:   skillReg,
+		Provider:   provider,
+		Tools:      tools.NewRegistry(),
+		Permission: agent.NewPermission(agent.WithMode(agent.ModeBypass)),
+	})
+	res, err := invoke.Execute(context.Background(), json.RawMessage(`{
+		"skill": "review-pr",
+		"args": "positional-42",
+		"named_args": {"pr_number": "named-99"}
+	}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("Execute returned error result: %s", res.Output)
+	}
+	if !strings.Contains(captured.System, "Review named-99 from positional-42.") {
+		t.Fatalf("system prompt = %q, want named arg to override positional backfill", captured.System)
+	}
+}
+
+func TestInvocationToolPassesSessionIDToRuntimePlaceholders(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	skillReg := NewRegistry()
+	skillReg.Add(&Skill{
+		Name:    "asset-skill",
+		BaseDir: baseDir,
+		Prompt:  "Run ${CLAUDE_SKILL_DIR}/scripts/check.sh for ${CLAUDE_SESSION_ID}.",
+		Status:  "active",
+	})
+
+	var captured llm.ChatRequest
+	provider := &mockProvider{
+		streamFn: func(_ context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
+			captured = req
+			cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: "done"})
+			cb(llm.StreamEvent{Type: llm.EventDone})
+			return nil
+		},
+	}
+
+	invoke := NewInvocationTool(InvocationToolConfig{
+		Registry:   skillReg,
+		Provider:   provider,
+		Tools:      tools.NewRegistry(),
+		Permission: agent.NewPermission(agent.WithMode(agent.ModeBypass)),
+	})
+	ctx := tools.WithSessionID(context.Background(), "session-456")
+	res, err := invoke.Execute(ctx, json.RawMessage(`{"skill":"asset-skill"}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("Execute returned error result: %s", res.Output)
+	}
+	want := "Run " + baseDir + "/scripts/check.sh for session-456."
+	if !strings.Contains(captured.System, want) {
+		t.Fatalf("system prompt = %q, want %q", captured.System, want)
 	}
 }
 

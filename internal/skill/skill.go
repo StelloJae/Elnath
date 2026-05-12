@@ -2,9 +2,15 @@ package skill
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/stello/elnath/internal/wiki"
+)
+
+var (
+	skillDollarNamePattern      = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	skillNumericArgumentPattern = regexp.MustCompile(`^\d+$`)
 )
 
 // Skill represents a wiki-defined skill.
@@ -14,6 +20,7 @@ type Skill struct {
 	Trigger       string
 	RequiredTools []string
 	Paths         []string
+	ArgumentNames []string
 	Model         string
 	Effort        string
 	BaseDir       string
@@ -73,6 +80,7 @@ func FromPage(page *wiki.Page) *Skill {
 		Trigger:       extraString(page.Extra, "trigger"),
 		RequiredTools: extraStrings(page.Extra, "required_tools"),
 		Paths:         normalizeSkillPaths(extraStrings(page.Extra, "paths")),
+		ArgumentNames: normalizeSkillArgumentNames(extraStrings(page.Extra, "arguments")),
 		Model:         extraString(page.Extra, "model"),
 		Effort:        extraString(page.Extra, "effort"),
 		BaseDir:       extraString(page.Extra, "base_dir"),
@@ -95,8 +103,44 @@ func (s *Skill) RenderPrompt(args map[string]string) string {
 	}
 	for key, value := range args {
 		result = strings.ReplaceAll(result, "{"+key+"}", value)
+		result = replaceDollarNamePlaceholder(result, key, value)
 	}
 	return result
+}
+
+func (s *Skill) RenderPromptWithRuntime(args map[string]string, skillDir, sessionID string) string {
+	if s == nil {
+		return ""
+	}
+	clone := *s
+	clone.Prompt = renderRuntimePlaceholders(clone.Prompt, skillDir, sessionID)
+	return clone.RenderPrompt(args)
+}
+
+func renderRuntimePlaceholders(input, skillDir, sessionID string) string {
+	if skillDir != "" {
+		input = strings.ReplaceAll(input, "${CLAUDE_SKILL_DIR}", skillDir)
+		input = strings.ReplaceAll(input, "${ELNATH_SKILL_DIR}", skillDir)
+	}
+	if sessionID != "" {
+		input = strings.ReplaceAll(input, "${CLAUDE_SESSION_ID}", sessionID)
+		input = strings.ReplaceAll(input, "${ELNATH_SESSION_ID}", sessionID)
+	}
+	return input
+}
+
+func replaceDollarNamePlaceholder(input, key, value string) string {
+	if !skillDollarNamePattern.MatchString(key) {
+		return input
+	}
+	token := "$" + key
+	re := regexp.MustCompile(`\$` + regexp.QuoteMeta(key) + `([^A-Za-z0-9_]|$)`)
+	return re.ReplaceAllStringFunc(input, func(match string) string {
+		if match == token {
+			return value
+		}
+		return value + match[len(token):]
+	})
 }
 
 func firstNonEmptyArg(args map[string]string, keys ...string) string {
@@ -169,6 +213,27 @@ func normalizeSkillPaths(paths []string) []string {
 			continue
 		}
 		out = append(out, path)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func normalizeSkillArgumentNames(names []string) []string {
+	if len(names) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		name = strings.TrimPrefix(name, "$")
+		name = strings.TrimPrefix(strings.TrimSuffix(name, ">"), "<")
+		name = strings.TrimPrefix(strings.TrimSuffix(name, "}"), "{")
+		if name == "" || skillNumericArgumentPattern.MatchString(name) {
+			continue
+		}
+		out = append(out, name)
 	}
 	if len(out) == 0 {
 		return nil

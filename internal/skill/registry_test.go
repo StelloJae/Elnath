@@ -556,6 +556,40 @@ func TestExecuteAddsCompatibleSkillBaseDirContext(t *testing.T) {
 	}
 }
 
+func TestExecuteRendersCompatibleRuntimePlaceholders(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	var capturedSystem string
+	provider := &mockProvider{streamFn: func(_ context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
+		capturedSystem = req.System
+		cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: "ok"})
+		cb(llm.StreamEvent{Type: llm.EventDone})
+		return nil
+	}}
+
+	reg := NewRegistry()
+	reg.Add(&Skill{
+		Name:    "asset-skill",
+		BaseDir: baseDir,
+		Prompt:  "Run ${CLAUDE_SKILL_DIR}/scripts/check.sh for ${CLAUDE_SESSION_ID}.",
+	})
+
+	_, err := reg.Execute(context.Background(), ExecuteParams{
+		SkillName: "asset-skill",
+		Provider:  provider,
+		ToolReg:   tools.NewRegistry(),
+		SessionID: "session-123",
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	want := "Run " + baseDir + "/scripts/check.sh for session-123."
+	if !strings.Contains(capturedSystem, want) {
+		t.Fatalf("system prompt = %q, want %q", capturedSystem, want)
+	}
+}
+
 func TestExecutePipelineErrorFallsBackToSkillPrompt(t *testing.T) {
 	t.Parallel()
 

@@ -167,6 +167,43 @@ Review Go changes.
 	}
 }
 
+func TestLoadClaudeSkillDirParsesArgumentMetadata(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	skillDir := filepath.Join(root, ".claude", "skills", "review-pr")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	raw := `---
+description: Review PR
+argument-hint: "<pr_number> <base>"
+arguments:
+  - pr_number
+  - base
+---
+Review $pr_number against $base.
+`
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	skills, err := LoadClaudeSkillDir(root)
+	if err != nil {
+		t.Fatalf("LoadClaudeSkillDir: %v", err)
+	}
+	if len(skills) != 1 {
+		t.Fatalf("len(skills) = %d, want 1", len(skills))
+	}
+	if skills[0].Trigger != "/review-pr <pr_number> <base>" {
+		t.Fatalf("Trigger = %q, want argument hint", skills[0].Trigger)
+	}
+	want := []string{"pr_number", "base"}
+	if !reflect.DeepEqual(skills[0].ArgumentNames, want) {
+		t.Fatalf("ArgumentNames = %#v, want %#v", skills[0].ArgumentNames, want)
+	}
+}
+
 func TestLoadClaudeSkillDirRecordsSkillBaseDir(t *testing.T) {
 	t.Parallel()
 

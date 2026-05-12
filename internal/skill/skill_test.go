@@ -158,6 +158,12 @@ func TestRenderPrompt(t *testing.T) {
 			args:  map[string]string{"ARGUMENTS": "PR 42", "target": "tests"},
 			want:  "Review PR 42 with tests",
 		},
+		{
+			name:  "claude named dollar placeholders",
+			skill: &Skill{Prompt: "Review $pr_number on $branch; keep $branch_name literal"},
+			args:  map[string]string{"pr_number": "42", "branch": "main"},
+			want:  "Review 42 on main; keep $branch_name literal",
+		},
 	}
 
 	for _, tt := range tests {
@@ -168,5 +174,36 @@ func TestRenderPrompt(t *testing.T) {
 				t.Fatalf("RenderPrompt() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestRenderRuntimePlaceholders(t *testing.T) {
+	t.Parallel()
+
+	got := renderRuntimePlaceholders(
+		"Run ${CLAUDE_SKILL_DIR}/scripts/check.sh for ${CLAUDE_SESSION_ID}; mirror ${ELNATH_SKILL_DIR} ${ELNATH_SESSION_ID}.",
+		"/tmp/skill",
+		"session-123",
+	)
+	want := "Run /tmp/skill/scripts/check.sh for session-123; mirror /tmp/skill session-123."
+	if got != want {
+		t.Fatalf("renderRuntimePlaceholders() = %q, want %q", got, want)
+	}
+}
+
+func TestRenderPromptWithRuntimeKeepsUserArgsLiteral(t *testing.T) {
+	t.Parallel()
+
+	sk := &Skill{
+		Prompt: "Run ${CLAUDE_SKILL_DIR}/scripts/check.sh with {literal}.",
+	}
+	got := sk.RenderPromptWithRuntime(
+		map[string]string{"literal": "${CLAUDE_SESSION_ID}"},
+		"/tmp/skill",
+		"session-123",
+	)
+	want := "Run /tmp/skill/scripts/check.sh with ${CLAUDE_SESSION_ID}."
+	if got != want {
+		t.Fatalf("RenderPromptWithRuntime() = %q, want %q", got, want)
 	}
 }
