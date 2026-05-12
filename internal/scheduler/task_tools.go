@@ -123,9 +123,20 @@ type scheduleToolItem struct {
 	Surface    string `json:"surface,omitempty"`
 }
 
+type scheduleRuntimeSemantics struct {
+	HotReloadSupported bool   `json:"hot_reload_supported"`
+	EffectiveWhen      string `json:"effective_when"`
+}
+
+var staticScheduleRuntime = scheduleRuntimeSemantics{
+	HotReloadSupported: false,
+	EffectiveWhen:      "after_daemon_restart",
+}
+
 type scheduleCreateToolOutput struct {
-	Path string           `json:"path"`
-	Task scheduleToolItem `json:"task"`
+	Path    string                   `json:"path"`
+	Task    scheduleToolItem         `json:"task"`
+	Runtime scheduleRuntimeSemantics `json:"runtime"`
 }
 
 func (t *ScheduleCreateTool) Execute(_ context.Context, params json.RawMessage) (*tools.Result, error) {
@@ -154,7 +165,7 @@ func (t *ScheduleCreateTool) Execute(_ context.Context, params json.RawMessage) 
 		return tools.ErrorResult(fmt.Sprintf("schedule_create: write config: %v", err)), nil
 	}
 
-	output := scheduleCreateToolOutput{Path: t.store.path, Task: task}
+	output := scheduleCreateToolOutput{Path: t.store.path, Task: task, Runtime: staticScheduleRuntime}
 	rawOutput, err := json.Marshal(output)
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("schedule_create: marshal output: %v", err)), nil
@@ -191,9 +202,10 @@ func (t *ScheduleListTool) ShouldCancelSiblingsOnError() bool { return false }
 func (t *ScheduleListTool) DeferInitialToolSchema() bool { return true }
 
 type scheduleListToolOutput struct {
-	Path  string             `json:"path"`
-	Total int                `json:"total"`
-	Tasks []scheduleToolItem `json:"tasks"`
+	Path    string                   `json:"path"`
+	Total   int                      `json:"total"`
+	Tasks   []scheduleToolItem       `json:"tasks"`
+	Runtime scheduleRuntimeSemantics `json:"runtime"`
 }
 
 func (t *ScheduleListTool) Execute(_ context.Context, _ json.RawMessage) (*tools.Result, error) {
@@ -205,7 +217,7 @@ func (t *ScheduleListTool) Execute(_ context.Context, _ json.RawMessage) (*tools
 	for _, raw := range cfg.ScheduledTasks {
 		items = append(items, scheduleToolItemFromRaw(raw))
 	}
-	output := scheduleListToolOutput{Path: t.store.path, Total: len(items), Tasks: items}
+	output := scheduleListToolOutput{Path: t.store.path, Total: len(items), Tasks: items, Runtime: staticScheduleRuntime}
 	rawOutput, err := json.Marshal(output)
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("schedule_list: marshal output: %v", err)), nil
@@ -250,9 +262,10 @@ type scheduleDeleteToolInput struct {
 }
 
 type scheduleDeleteToolOutput struct {
-	Path    string `json:"path"`
-	Name    string `json:"name"`
-	Deleted bool   `json:"deleted"`
+	Path    string                   `json:"path"`
+	Name    string                   `json:"name"`
+	Deleted bool                     `json:"deleted"`
+	Runtime scheduleRuntimeSemantics `json:"runtime"`
 }
 
 func (t *ScheduleDeleteTool) Execute(_ context.Context, params json.RawMessage) (*tools.Result, error) {
@@ -288,7 +301,7 @@ func (t *ScheduleDeleteTool) Execute(_ context.Context, params json.RawMessage) 
 		return tools.ErrorResult(fmt.Sprintf("schedule_delete: write config: %v", err)), nil
 	}
 
-	output := scheduleDeleteToolOutput{Path: t.store.path, Name: name, Deleted: true}
+	output := scheduleDeleteToolOutput{Path: t.store.path, Name: name, Deleted: true, Runtime: staticScheduleRuntime}
 	rawOutput, err := json.Marshal(output)
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("schedule_delete: marshal output: %v", err)), nil

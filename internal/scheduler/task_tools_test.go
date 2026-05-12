@@ -33,8 +33,20 @@ func TestScheduleCreateListDeleteTools(t *testing.T) {
 	if err := json.Unmarshal([]byte(createResult.Output), &createOutput); err != nil {
 		t.Fatalf("unmarshal create output: %v", err)
 	}
+	var createRuntime struct {
+		Runtime struct {
+			HotReloadSupported bool   `json:"hot_reload_supported"`
+			EffectiveWhen      string `json:"effective_when"`
+		} `json:"runtime"`
+	}
+	if err := json.Unmarshal([]byte(createResult.Output), &createRuntime); err != nil {
+		t.Fatalf("unmarshal create runtime output: %v", err)
+	}
 	if createOutput.Path != path || createOutput.Task.Name != "morning-check" || createOutput.Task.Type != "research" || !createOutput.Task.RunOnStart {
 		t.Fatalf("create output = %+v, want created research task", createOutput)
+	}
+	if createRuntime.Runtime.HotReloadSupported || createRuntime.Runtime.EffectiveWhen != "after_daemon_restart" {
+		t.Fatalf("create runtime = %+v, want restart-bound schedule semantics", createRuntime.Runtime)
 	}
 
 	tasks, err := LoadConfig(path)
@@ -56,8 +68,20 @@ func TestScheduleCreateListDeleteTools(t *testing.T) {
 	if err := json.Unmarshal([]byte(listResult.Output), &listOutput); err != nil {
 		t.Fatalf("unmarshal list output: %v", err)
 	}
+	var listRuntime struct {
+		Runtime struct {
+			HotReloadSupported bool   `json:"hot_reload_supported"`
+			EffectiveWhen      string `json:"effective_when"`
+		} `json:"runtime"`
+	}
+	if err := json.Unmarshal([]byte(listResult.Output), &listRuntime); err != nil {
+		t.Fatalf("unmarshal list runtime output: %v", err)
+	}
 	if listOutput.Total != 1 || listOutput.Tasks[0].Name != "morning-check" || !listOutput.Tasks[0].Enabled {
 		t.Fatalf("list output = %+v, want one enabled task", listOutput)
+	}
+	if listRuntime.Runtime.HotReloadSupported || listRuntime.Runtime.EffectiveWhen != "after_daemon_restart" {
+		t.Fatalf("list runtime = %+v, want restart-bound schedule semantics", listRuntime.Runtime)
 	}
 
 	deleteResult, err := NewScheduleDeleteTool(path).Execute(ctx, json.RawMessage(`{"name":"morning-check"}`))
@@ -71,8 +95,20 @@ func TestScheduleCreateListDeleteTools(t *testing.T) {
 	if err := json.Unmarshal([]byte(deleteResult.Output), &deleteOutput); err != nil {
 		t.Fatalf("unmarshal delete output: %v", err)
 	}
+	var deleteRuntime struct {
+		Runtime struct {
+			HotReloadSupported bool   `json:"hot_reload_supported"`
+			EffectiveWhen      string `json:"effective_when"`
+		} `json:"runtime"`
+	}
+	if err := json.Unmarshal([]byte(deleteResult.Output), &deleteRuntime); err != nil {
+		t.Fatalf("unmarshal delete runtime output: %v", err)
+	}
 	if !deleteOutput.Deleted || deleteOutput.Name != "morning-check" {
 		t.Fatalf("delete output = %+v, want deleted task", deleteOutput)
+	}
+	if deleteRuntime.Runtime.HotReloadSupported || deleteRuntime.Runtime.EffectiveWhen != "after_daemon_restart" {
+		t.Fatalf("delete runtime = %+v, want restart-bound schedule semantics", deleteRuntime.Runtime)
 	}
 	tasks, err = LoadConfig(path)
 	if err != nil {
