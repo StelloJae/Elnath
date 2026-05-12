@@ -3305,6 +3305,54 @@ func TestCompletionRetryDoesNotInferVerificationFromProse(t *testing.T) {
 	if gotSummary.CorrectionAttempted {
 		t.Fatalf("correction attempted from prose-only command: %+v", gotSummary)
 	}
+	if gotSummary.CorrectionStatus != "skipped" || gotSummary.CorrectionFailureFamily != "missing_explicit_verification_command" {
+		t.Fatalf("correction skip = status %q family %q", gotSummary.CorrectionStatus, gotSummary.CorrectionFailureFamily)
+	}
+	if gotSummary.CorrectionDecision != completionRetryDecisionRunVerification || gotSummary.CorrectionReason != "verification_hint_not_observed" {
+		t.Fatalf("correction decision = %q/%q, want run_verification/verification_hint_not_observed", gotSummary.CorrectionDecision, gotSummary.CorrectionReason)
+	}
+}
+
+func TestCompletionRetryRecordsMissingVerificationExecutor(t *testing.T) {
+	rt := newTestExecutionRuntimeWithConfig(t, &countingProvider{}, false, func(cfg *config.Config) {
+		cfg.SelfHealing.Enabled = true
+		cfg.SelfHealing.ObserveOnly = false
+	})
+	rt.completionRetryMax = 1
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("fix the existing handler\n\ngo test ./cmd/elnath -count=1"),
+			llm.NewAssistantMessage("Done."),
+		},
+		Summary:      "Done.",
+		FinishReason: "stop",
+		Workflow:     "single",
+	}
+	observed := false
+	summary := completionContractSummary{
+		VerificationHint:     true,
+		VerificationObserved: &observed,
+		RetryDecision:        completionRetryDecisionRunVerification,
+		RetryReason:          "verification_hint_not_observed",
+	}
+
+	gotResult, gotSummary := rt.maybeRunCompletionRetry(context.Background(), &stubWorkflow{name: "single"}, orchestrator.WorkflowInput{
+		Session:  &agent.Session{ID: "verify-session"},
+		Provider: rt.provider,
+	}, result, summary)
+
+	if gotResult != result {
+		t.Fatal("missing verification executor should preserve original workflow result")
+	}
+	if gotSummary.CorrectionAttempted {
+		t.Fatalf("correction attempted without executor: %+v", gotSummary)
+	}
+	if gotSummary.CorrectionStatus != "skipped" || gotSummary.CorrectionFailureFamily != "missing_verification_executor" {
+		t.Fatalf("correction skip = status %q family %q", gotSummary.CorrectionStatus, gotSummary.CorrectionFailureFamily)
+	}
+	if gotSummary.CorrectionDecision != completionRetryDecisionRunVerification || gotSummary.CorrectionReason != "verification_hint_not_observed" {
+		t.Fatalf("correction decision = %q/%q, want run_verification/verification_hint_not_observed", gotSummary.CorrectionDecision, gotSummary.CorrectionReason)
+	}
 }
 
 func TestExecutionRuntimeRunTaskPersistsFullSkillTranscript(t *testing.T) {
