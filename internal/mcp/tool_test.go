@@ -161,6 +161,150 @@ func TestMCPCatalogToolListsPrompts(t *testing.T) {
 	}
 }
 
+func TestMCPCatalogToolReadsResource(t *testing.T) {
+	client, srv := newTestClient(t)
+	tool := NewCatalogTool(client, "github")
+
+	done := make(chan error, 1)
+	go func() {
+		handshake(t, srv)
+		readReq := srv.readRequest()
+		if method := strings.Trim(string(readReq["method"]), `"`); method != "resources/read" {
+			done <- fmt.Errorf("expected resources/read, got %q", method)
+			return
+		}
+		var params struct {
+			URI string `json:"uri"`
+		}
+		if err := json.Unmarshal(readReq["params"], &params); err != nil {
+			done <- fmt.Errorf("unmarshal resources/read params: %w", err)
+			return
+		}
+		if params.URI != "file:///repo/README.md" {
+			done <- fmt.Errorf("uri = %q", params.URI)
+			return
+		}
+		srv.send(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      json.RawMessage(readReq["id"]),
+			"result": map[string]any{
+				"contents": []map[string]any{{
+					"uri":      "file:///repo/README.md",
+					"mimeType": "text/markdown",
+					"text":     "hello from readme",
+				}},
+			},
+		})
+		done <- nil
+	}()
+
+	if err := client.Initialize(context.Background()); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"read_resource","uri":"file:///repo/README.md"}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("Execute returned error: %s", res.Output)
+	}
+	var out struct {
+		Action   string            `json:"action"`
+		Server   string            `json:"server"`
+		Contents []ResourceContent `json:"contents"`
+	}
+	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, res.Output)
+	}
+	if out.Action != "read_resource" || out.Server != "github" || len(out.Contents) != 1 || out.Contents[0].Text != "hello from readme" {
+		t.Fatalf("output = %+v", out)
+	}
+}
+
+func TestMCPCatalogToolGetsPrompt(t *testing.T) {
+	client, srv := newTestClient(t)
+	tool := NewCatalogTool(client, "github")
+
+	done := make(chan error, 1)
+	go func() {
+		handshake(t, srv)
+		promptReq := srv.readRequest()
+		if method := strings.Trim(string(promptReq["method"]), `"`); method != "prompts/get" {
+			done <- fmt.Errorf("expected prompts/get, got %q", method)
+			return
+		}
+		var params struct {
+			Name      string            `json:"name"`
+			Arguments map[string]string `json:"arguments"`
+		}
+		if err := json.Unmarshal(promptReq["params"], &params); err != nil {
+			done <- fmt.Errorf("unmarshal prompts/get params: %w", err)
+			return
+		}
+		if params.Name != "review" || params.Arguments["path"] != "README.md" {
+			done <- fmt.Errorf("prompt params = %+v", params)
+			return
+		}
+		srv.send(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      json.RawMessage(promptReq["id"]),
+			"result": map[string]any{
+				"description": "Review prompt",
+				"messages": []map[string]any{{
+					"role":    "user",
+					"content": map[string]any{"type": "text", "text": "Review README.md"},
+				}},
+			},
+		})
+		done <- nil
+	}()
+
+	if err := client.Initialize(context.Background()); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"get_prompt","name":"review","arguments":{"path":"README.md"}}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("Execute returned error: %s", res.Output)
+	}
+	var out struct {
+		Action      string          `json:"action"`
+		Server      string          `json:"server"`
+		Description string          `json:"description"`
+		Messages    []PromptMessage `json:"messages"`
+	}
+	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, res.Output)
+	}
+	if out.Action != "get_prompt" || out.Server != "github" || out.Description != "Review prompt" || len(out.Messages) != 1 {
+		t.Fatalf("output = %+v", out)
+	}
+	if out.Messages[0].Role != "user" || out.Messages[0].Content.Text != "Review README.md" {
+		t.Fatalf("message = %+v", out.Messages[0])
+	}
+}
+
+func TestMCPCatalogToolRequiresResourceURI(t *testing.T) {
+	client, _ := newTestClient(t)
+	tool := NewCatalogTool(client, "github")
+
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"read_resource"}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !res.IsError || !strings.Contains(res.Output, "uri is required") {
+		t.Fatalf("Execute result = %+v", res)
+	}
+}
+
 func TestMCPToolDescription(t *testing.T) {
 	client, _ := newTestClient(t)
 	info := ToolInfo{Name: "x", Description: "Does X", InputSchema: json.RawMessage(`{}`)}

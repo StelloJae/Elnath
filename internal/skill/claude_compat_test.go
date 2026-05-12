@@ -45,6 +45,7 @@ Review the pull request using $ARGUMENTS.
 		RequiredTools: []string{"read_file", "grep"},
 		Model:         "gpt-5.5",
 		Effort:        "high",
+		BaseDir:       skillDir,
 		Prompt:        "Review the pull request using $ARGUMENTS.",
 		Status:        "active",
 		Source:        "claude-skill",
@@ -163,6 +164,35 @@ Review Go changes.
 	want := []string{"internal/**/*.go", "docs"}
 	if !reflect.DeepEqual(skills[0].Paths, want) {
 		t.Fatalf("Paths = %#v, want %#v", skills[0].Paths, want)
+	}
+}
+
+func TestLoadClaudeSkillDirRecordsSkillBaseDir(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	skillDir := filepath.Join(root, ".claude", "skills", "with-assets")
+	if err := os.MkdirAll(filepath.Join(skillDir, "scripts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	raw := `---
+description: Use colocated files
+---
+Run scripts/check.sh from this skill directory.
+`
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	skills, err := LoadClaudeSkillDir(root)
+	if err != nil {
+		t.Fatalf("LoadClaudeSkillDir: %v", err)
+	}
+	if len(skills) != 1 {
+		t.Fatalf("len(skills) = %d, want 1", len(skills))
+	}
+	if skills[0].BaseDir != skillDir {
+		t.Fatalf("BaseDir = %q, want %q", skills[0].BaseDir, skillDir)
 	}
 }
 

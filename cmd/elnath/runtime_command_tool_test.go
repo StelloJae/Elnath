@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/stello/elnath/internal/llm"
+	"github.com/stello/elnath/internal/skill"
 	"github.com/stello/elnath/internal/tools"
 )
 
@@ -81,6 +82,84 @@ func TestCommandCatalogToolListsCommandsAsJSON(t *testing.T) {
 		if !seen[name] {
 			t.Fatalf("command list missing %q", name)
 		}
+	}
+}
+
+func TestCommandCatalogToolListsSkillBackedSlashCommands(t *testing.T) {
+	reg := skill.NewRegistry()
+	reg.Add(&skill.Skill{
+		Name:        "review-pr",
+		Description: "Review pull requests",
+		Trigger:     "/review-pr <pr_number>",
+		Source:      "claude-command-skill",
+		Prompt:      "Review the PR.",
+	})
+	tool := newCommandCatalogTool(reg)
+
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"list"}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("Execute returned error result: %s", res.Output)
+	}
+
+	var out struct {
+		Action   string                `json:"action"`
+		Commands []commandCatalogEntry `json:"commands"`
+	}
+	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, res.Output)
+	}
+	var found commandCatalogEntry
+	for _, entry := range out.Commands {
+		if entry.Name == "/review-pr" {
+			found = entry
+			break
+		}
+	}
+	if found.Name == "" {
+		t.Fatalf("commands = %+v, want /review-pr skill-backed command", out.Commands)
+	}
+	if found.Category != "skill" || found.ArgumentHint != "<pr_number>" || found.Source != "claude-command-skill" {
+		t.Fatalf("skill-backed command = %+v", found)
+	}
+}
+
+func TestCommandCatalogToolUsesSkillNameWhenTriggerIsNotSlashCommand(t *testing.T) {
+	reg := skill.NewRegistry()
+	reg.Add(&skill.Skill{
+		Name:        "review-pr",
+		Description: "Review pull requests",
+		Trigger:     "Use when reviewing pull requests",
+		Source:      "codex-skill",
+		Prompt:      "Review the PR.",
+	})
+	tool := newCommandCatalogTool(reg)
+
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"list"}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("Execute returned error result: %s", res.Output)
+	}
+
+	var out struct {
+		Commands []commandCatalogEntry `json:"commands"`
+	}
+	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, res.Output)
+	}
+	seen := map[string]commandCatalogEntry{}
+	for _, entry := range out.Commands {
+		seen[entry.Name] = entry
+	}
+	if _, ok := seen["/Use"]; ok {
+		t.Fatalf("commands = %+v, natural-language trigger should not become /Use", out.Commands)
+	}
+	if entry, ok := seen["/review-pr"]; !ok || entry.ArgumentHint != "" {
+		t.Fatalf("commands = %+v, want /review-pr without argument hint", out.Commands)
 	}
 }
 

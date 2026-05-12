@@ -422,7 +422,6 @@ func buildExecutionRuntime(
 	}
 	app.RegisterCloser("bash runner", bashRunnerCloser{runner: runner})
 	reg := buildToolRegistry(guard, provider, runner)
-	reg.Register(newCommandCatalogTool())
 	planModeController := agent.NewPlanModeController(perm)
 	reg.Register(agent.NewEnterPlanModeTool(planModeController))
 	reg.Register(agent.NewExitPlanModeTool(planModeController))
@@ -477,6 +476,7 @@ func buildExecutionRuntime(
 			app.Logger.Warn("compatible skill registry load failed", "root", root.Path, "source", root.Source, "error", err)
 		}
 	}
+	reg.Register(newCommandCatalogTool(skillReg))
 	reg.Register(skill.NewCatalogTool(skillReg))
 	profiles := make(map[string]*profile.Profile)
 	if wikiStore != nil {

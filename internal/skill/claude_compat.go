@@ -217,7 +217,7 @@ func LoadCompatibleSkillRoot(root CompatibleSkillRoot) ([]*Skill, error) {
 		if err != nil {
 			return fmt.Errorf("read %q: %w", path, err)
 		}
-		sk, err := parseCompatibleSkillWithSource(nameHint, data, source, kind)
+		sk, err := parseCompatibleSkillFileWithSource(nameHint, data, source, kind, filepath.Dir(path))
 		if err != nil {
 			return fmt.Errorf("parse %q: %w", path, err)
 		}
@@ -293,6 +293,10 @@ func parseClaudeSkillWithSource(nameHint string, raw []byte, source string) (*Sk
 }
 
 func parseCompatibleSkillWithSource(nameHint string, raw []byte, source, kind string) (*Skill, error) {
+	return parseCompatibleSkillFileWithSource(nameHint, raw, source, kind, "")
+}
+
+func parseCompatibleSkillFileWithSource(nameHint string, raw []byte, source, kind, baseDir string) (*Skill, error) {
 	yamlBlock, body, err := splitClaudeSkillFrontmatter(raw)
 	if err != nil && kind == compatibleRootKindCommands && !hasFrontmatter(raw) {
 		yamlBlock = ""
@@ -331,6 +335,7 @@ func parseCompatibleSkillWithSource(nameHint string, raw []byte, source, kind st
 		Paths:         normalizeSkillPaths(fm.Paths),
 		Model:         strings.TrimSpace(fm.Model),
 		Effort:        strings.TrimSpace(fm.Effort),
+		BaseDir:       strings.TrimSpace(baseDir),
 		Prompt:        prompt,
 		Status:        "active",
 		Source:        strings.TrimSpace(source),

@@ -7,15 +7,22 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/stello/elnath/internal/skill"
 	"github.com/stello/elnath/internal/tools"
 )
 
 const commandCatalogToolName = "command_catalog"
 
-type commandCatalogTool struct{}
+type commandCatalogTool struct {
+	skillReg *skill.Registry
+}
 
-func newCommandCatalogTool() *commandCatalogTool {
-	return &commandCatalogTool{}
+func newCommandCatalogTool(registries ...*skill.Registry) *commandCatalogTool {
+	var skillReg *skill.Registry
+	if len(registries) > 0 {
+		skillReg = registries[0]
+	}
+	return &commandCatalogTool{skillReg: skillReg}
 }
 
 func (t *commandCatalogTool) Name() string { return commandCatalogToolName }
@@ -69,14 +76,14 @@ func (t *commandCatalogTool) Execute(_ context.Context, params json.RawMessage) 
 	case "", "list":
 		return marshalCommandCatalogToolOutput(map[string]any{
 			"action":   "list",
-			"commands": runtimeCommandCatalog(input.IncludeHidden),
+			"commands": runtimeCommandCatalogWithSkills(t.skillReg, input.IncludeHidden),
 		})
 	case "show":
 		name := strings.TrimSpace(input.Command)
 		if name == "" {
 			return tools.ErrorResult("command_catalog: command is required for action=show"), nil
 		}
-		entry, ok := findCommandCatalogEntry(name, input.IncludeHidden)
+		entry, ok := findCommandCatalogEntry(name, input.IncludeHidden, t.skillReg)
 		if !ok {
 			return tools.ErrorResult(fmt.Sprintf("command_catalog: command %q not found", name)), nil
 		}
@@ -89,15 +96,19 @@ func (t *commandCatalogTool) Execute(_ context.Context, params json.RawMessage) 
 		return marshalCommandCatalogToolOutput(map[string]any{
 			"action":   "recommend",
 			"query":    query,
-			"commands": recommendedCommandCatalogEntries(query, input.IncludeHidden, normalizeCommandCatalogMax(input.MaxResults)),
+			"commands": recommendedCommandCatalogEntries(query, input.IncludeHidden, normalizeCommandCatalogMax(input.MaxResults), t.skillReg),
 		})
 	default:
 		return tools.ErrorResult(fmt.Sprintf("command_catalog: unsupported action %q; supported actions are list, show, and recommend", input.Action)), nil
 	}
 }
 
-func findCommandCatalogEntry(name string, includeHidden bool) (commandCatalogEntry, bool) {
-	for _, entry := range runtimeCommandCatalog(includeHidden) {
+func findCommandCatalogEntry(name string, includeHidden bool, skillReg ...*skill.Registry) (commandCatalogEntry, bool) {
+	var reg *skill.Registry
+	if len(skillReg) > 0 {
+		reg = skillReg[0]
+	}
+	for _, entry := range runtimeCommandCatalogWithSkills(reg, includeHidden) {
 		if entry.Name == name {
 			return entry, true
 		}
@@ -110,8 +121,12 @@ func findCommandCatalogEntry(name string, includeHidden bool) (commandCatalogEnt
 	return commandCatalogEntry{}, false
 }
 
-func recommendedCommandCatalogEntries(query string, includeHidden bool, maxResults int) []commandCatalogRecommendation {
-	commands := runtimeCommandCatalog(includeHidden)
+func recommendedCommandCatalogEntries(query string, includeHidden bool, maxResults int, skillReg ...*skill.Registry) []commandCatalogRecommendation {
+	var reg *skill.Registry
+	if len(skillReg) > 0 {
+		reg = skillReg[0]
+	}
+	commands := runtimeCommandCatalogWithSkills(reg, includeHidden)
 	terms := commandCatalogQueryTerms(query)
 	if len(terms) == 0 {
 		if len(commands) > maxResults {

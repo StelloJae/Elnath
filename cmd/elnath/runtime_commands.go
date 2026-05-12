@@ -9,6 +9,7 @@ import (
 	"github.com/stello/elnath/internal/agent"
 	"github.com/stello/elnath/internal/event"
 	"github.com/stello/elnath/internal/llm"
+	"github.com/stello/elnath/internal/skill"
 )
 
 const commandsCommandUsage = "Usage: /commands [--json] [--all] or /help [--json] [--all]"
@@ -24,7 +25,7 @@ func (rt *executionRuntime) tryCommandsCommand(
 		return nil, "", false, nil
 	}
 
-	summary := applyCommandsCommand(fields[1:])
+	summary := rt.applyCommandsCommand(fields[1:])
 	if bus != nil {
 		bus.Emit(event.TextDeltaEvent{Base: event.NewBase(), Content: summary + "\n"})
 	}
@@ -43,7 +44,7 @@ func (rt *executionRuntime) tryCommandsCommand(
 	return updated, summary, true, nil
 }
 
-func applyCommandsCommand(args []string) string {
+func (rt *executionRuntime) applyCommandsCommand(args []string) string {
 	for _, arg := range args {
 		switch strings.ToLower(strings.TrimSpace(arg)) {
 		case "help", "-h", "--help":
@@ -55,7 +56,11 @@ func applyCommandsCommand(args []string) string {
 		}
 	}
 	includeHidden := hasFlag(args, "--all") || hasFlag(args, "--hidden")
-	catalog := runtimeCommandCatalog(includeHidden)
+	var skillReg *skill.Registry
+	if rt != nil {
+		skillReg = rt.skillReg
+	}
+	catalog := runtimeCommandCatalogWithSkills(skillReg, includeHidden)
 	if hasFlag(args, "--json") {
 		raw, err := json.MarshalIndent(catalog, "", "  ")
 		if err != nil {
@@ -66,7 +71,15 @@ func applyCommandsCommand(args []string) string {
 	return strings.TrimSpace(formatCommandCatalog(catalog))
 }
 
+func applyCommandsCommand(args []string) string {
+	return (*executionRuntime)(nil).applyCommandsCommand(args)
+}
+
 func runtimeCommandCatalog(includeHidden bool) []commandCatalogEntry {
+	return runtimeCommandCatalogWithSkills(nil, includeHidden)
+}
+
+func runtimeCommandCatalogWithSkills(skillReg *skill.Registry, includeHidden bool) []commandCatalogEntry {
 	entries := commandCatalog(includeHidden)
 	for _, spec := range runtimeLocalSlashCommandSpecs() {
 		entries = append(entries, commandCatalogEntry{
@@ -75,8 +88,62 @@ func runtimeCommandCatalog(includeHidden bool) []commandCatalogEntry {
 			Category:    "runtime-control",
 		})
 	}
+	entries = append(entries, skillBackedCommandCatalogEntries(skillReg, entries)...)
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].Name < entries[j].Name
 	})
 	return entries
+}
+
+func skillBackedCommandCatalogEntries(skillReg *skill.Registry, existing []commandCatalogEntry) []commandCatalogEntry {
+	if skillReg == nil {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(existing))
+	for _, entry := range existing {
+		seen[entry.Name] = struct{}{}
+		for _, alias := range entry.Aliases {
+			seen[alias] = struct{}{}
+		}
+	}
+
+	var entries []commandCatalogEntry
+	for _, sk := range skillReg.List() {
+		entry, ok := skillBackedCommandCatalogEntry(sk)
+		if !ok {
+			continue
+		}
+		if _, exists := seen[entry.Name]; exists {
+			continue
+		}
+		seen[entry.Name] = struct{}{}
+		entries = append(entries, entry)
+	}
+	return entries
+}
+
+func skillBackedCommandCatalogEntry(sk *skill.Skill) (commandCatalogEntry, bool) {
+	if sk == nil || strings.TrimSpace(sk.Name) == "" {
+		return commandCatalogEntry{}, false
+	}
+	trigger := strings.TrimSpace(sk.Trigger)
+	if trigger == "" {
+		trigger = "/" + sk.Name
+	}
+	fields := strings.Fields(trigger)
+	name := "/" + sk.Name
+	var hint string
+	if len(fields) > 0 && strings.HasPrefix(fields[0], "/") {
+		name = fields[0]
+		if len(fields) > 1 {
+			hint = strings.Join(fields[1:], " ")
+		}
+	}
+	return commandCatalogEntry{
+		Name:         name,
+		Description:  sk.Description,
+		Category:     "skill",
+		ArgumentHint: hint,
+		Source:       sk.Source,
+	}, true
 }

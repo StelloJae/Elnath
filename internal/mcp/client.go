@@ -30,6 +30,19 @@ type ResourceInfo struct {
 	MIMEType    string `json:"mimeType,omitempty"`
 }
 
+// ResourceContent is the normalized content returned by resources/read.
+type ResourceContent struct {
+	URI         string `json:"uri"`
+	MIMEType    string `json:"mimeType,omitempty"`
+	Text        string `json:"text,omitempty"`
+	BlobOmitted bool   `json:"blob_omitted,omitempty"`
+}
+
+// ReadResourceResult contains resource contents returned by an MCP server.
+type ReadResourceResult struct {
+	Contents []ResourceContent `json:"contents"`
+}
+
 // PromptArgument describes one named argument accepted by an MCP prompt.
 type PromptArgument struct {
 	Name        string `json:"name"`
@@ -42,6 +55,25 @@ type PromptInfo struct {
 	Name        string           `json:"name"`
 	Description string           `json:"description,omitempty"`
 	Arguments   []PromptArgument `json:"arguments,omitempty"`
+}
+
+// PromptContent is a normalized prompt message content block.
+type PromptContent struct {
+	Type string          `json:"type,omitempty"`
+	Text string          `json:"text,omitempty"`
+	Raw  json.RawMessage `json:"raw,omitempty"`
+}
+
+// PromptMessage is one message returned by prompts/get.
+type PromptMessage struct {
+	Role    string        `json:"role"`
+	Content PromptContent `json:"content"`
+}
+
+// GetPromptResult contains prompt messages returned by an MCP server.
+type GetPromptResult struct {
+	Description string          `json:"description,omitempty"`
+	Messages    []PromptMessage `json:"messages"`
 }
 
 // Client manages a connection to an external MCP server over stdio.
@@ -177,6 +209,51 @@ func (c *Client) ListResources(ctx context.Context) ([]ResourceInfo, error) {
 	return result.Resources, nil
 }
 
+// ReadResource calls resources/read and returns the requested resource content.
+func (c *Client) ReadResource(ctx context.Context, uri string) (*ReadResourceResult, error) {
+	uri = strings.TrimSpace(uri)
+	if uri == "" {
+		return nil, fmt.Errorf("mcp: resources/read: uri is required")
+	}
+	params, err := json.Marshal(map[string]any{
+		"uri": uri,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("mcp: marshal resources/read params: %w", err)
+	}
+
+	resp, err := c.call(ctx, "resources/read", json.RawMessage(params))
+	if err != nil {
+		return nil, fmt.Errorf("mcp: resources/read: %w", err)
+	}
+	if resp.Error != nil {
+		return nil, fmt.Errorf("mcp: resources/read: %w", resp.Error)
+	}
+
+	var raw struct {
+		Contents []struct {
+			URI      string `json:"uri"`
+			MIMEType string `json:"mimeType,omitempty"`
+			Text     string `json:"text,omitempty"`
+			Blob     string `json:"blob,omitempty"`
+		} `json:"contents"`
+	}
+	if err := json.Unmarshal(resp.Result, &raw); err != nil {
+		return nil, fmt.Errorf("mcp: parse resources/read result: %w", err)
+	}
+
+	out := &ReadResourceResult{Contents: make([]ResourceContent, 0, len(raw.Contents))}
+	for _, content := range raw.Contents {
+		out.Contents = append(out.Contents, ResourceContent{
+			URI:         content.URI,
+			MIMEType:    content.MIMEType,
+			Text:        content.Text,
+			BlobOmitted: content.Blob != "",
+		})
+	}
+	return out, nil
+}
+
 // ListPrompts calls prompts/list and returns all prompts advertised by the
 // server. Prompt execution is intentionally not part of this metadata call.
 func (c *Client) ListPrompts(ctx context.Context) ([]PromptInfo, error) {
@@ -195,6 +272,74 @@ func (c *Client) ListPrompts(ctx context.Context) ([]PromptInfo, error) {
 		return nil, fmt.Errorf("mcp: parse prompts/list result: %w", err)
 	}
 	return result.Prompts, nil
+}
+
+// GetPrompt calls prompts/get and returns prompt messages without executing
+// them.
+func (c *Client) GetPrompt(ctx context.Context, name string, arguments json.RawMessage) (*GetPromptResult, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, fmt.Errorf("mcp: prompts/get: name is required")
+	}
+	if len(arguments) == 0 || strings.TrimSpace(string(arguments)) == "null" {
+		arguments = json.RawMessage(`{}`)
+	}
+	params, err := json.Marshal(map[string]any{
+		"name":      name,
+		"arguments": json.RawMessage(arguments),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("mcp: marshal prompts/get params: %w", err)
+	}
+
+	resp, err := c.call(ctx, "prompts/get", json.RawMessage(params))
+	if err != nil {
+		return nil, fmt.Errorf("mcp: prompts/get %s: %w", name, err)
+	}
+	if resp.Error != nil {
+		return nil, fmt.Errorf("mcp: prompts/get %s: %w", name, resp.Error)
+	}
+
+	var raw struct {
+		Description string `json:"description,omitempty"`
+		Messages    []struct {
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(resp.Result, &raw); err != nil {
+		return nil, fmt.Errorf("mcp: parse prompts/get result: %w", err)
+	}
+
+	out := &GetPromptResult{
+		Description: raw.Description,
+		Messages:    make([]PromptMessage, 0, len(raw.Messages)),
+	}
+	for _, message := range raw.Messages {
+		out.Messages = append(out.Messages, PromptMessage{
+			Role:    message.Role,
+			Content: normalizePromptContent(message.Content),
+		})
+	}
+	return out, nil
+}
+
+func normalizePromptContent(raw json.RawMessage) PromptContent {
+	if len(raw) == 0 {
+		return PromptContent{}
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return PromptContent{Text: text}
+	}
+	var structured struct {
+		Type string `json:"type,omitempty"`
+		Text string `json:"text,omitempty"`
+	}
+	if err := json.Unmarshal(raw, &structured); err == nil && (structured.Type != "" || structured.Text != "") {
+		return PromptContent{Type: structured.Type, Text: structured.Text}
+	}
+	return PromptContent{Raw: raw}
 }
 
 // CallTool invokes a named tool with the given JSON arguments.

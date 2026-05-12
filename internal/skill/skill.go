@@ -16,6 +16,7 @@ type Skill struct {
 	Paths         []string
 	Model         string
 	Effort        string
+	BaseDir       string
 	Prompt        string
 	Status        string
 	Source        string
@@ -43,6 +44,7 @@ func FromPage(page *wiki.Page) *Skill {
 		Paths:         normalizeSkillPaths(extraStrings(page.Extra, "paths")),
 		Model:         extraString(page.Extra, "model"),
 		Effort:        extraString(page.Extra, "effort"),
+		BaseDir:       extraString(page.Extra, "base_dir"),
 		Prompt:        page.Content,
 		Status:        status,
 		Source:        extraString(page.Extra, "source"),

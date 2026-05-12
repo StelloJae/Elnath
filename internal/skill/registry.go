@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 
 	"github.com/stello/elnath/internal/agent"
 	"github.com/stello/elnath/internal/event"
@@ -202,6 +203,9 @@ func (r *Registry) Execute(ctx context.Context, params ExecuteParams) (*ExecuteR
 	}
 
 	rendered := skill.RenderPrompt(params.Args)
+	if baseDir := strings.TrimSpace(skill.BaseDir); baseDir != "" {
+		rendered = "Skill directory: " + baseDir + "\nResolve relative paths mentioned by this skill from that directory.\n\n" + rendered
+	}
 	if params.Pipeline != nil {
 		prefix, err := params.Pipeline.RenderPromptPrefix(ctx, SkillInvocation{
 			SkillName: params.SkillName,

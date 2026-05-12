@@ -2792,6 +2792,47 @@ func TestExecutionRuntimeRunTaskCommandsSlashCommandListsCatalog(t *testing.T) {
 	}
 }
 
+func TestExecutionRuntimeRunTaskCommandsSlashCommandListsSkillBackedSlashCommands(t *testing.T) {
+	provider := &countingProvider{streamText: "runtime answer"}
+	rt := newTestExecutionRuntime(t, provider)
+	rt.skillReg = skill.NewRegistry()
+	rt.skillReg.Add(&skill.Skill{
+		Name:        "review-pr",
+		Description: "Review PR with security and quality focus",
+		Trigger:     "/review-pr <pr_number>",
+		Source:      "claude-command-skill",
+		Prompt:      "Review PR #{pr_number}",
+	})
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	_, summary, err := rt.runTask(context.Background(), sess, nil, "/commands --json", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask /commands --json: %v", err)
+	}
+	if provider.streamCalls != 0 || provider.chatCalls != 0 {
+		t.Fatalf("provider calls = chat:%d stream:%d, want none for local commands command", provider.chatCalls, provider.streamCalls)
+	}
+
+	var entries []commandCatalogEntry
+	if err := json.Unmarshal([]byte(summary), &entries); err != nil {
+		t.Fatalf("summary is not JSON: %v\n%s", err, summary)
+	}
+	seen := map[string]commandCatalogEntry{}
+	for _, entry := range entries {
+		seen[entry.Name] = entry
+	}
+	entry, ok := seen["/review-pr"]
+	if !ok {
+		t.Fatalf("entries = %+v, want /review-pr skill-backed slash command", entries)
+	}
+	if entry.Category != "skill" || entry.ArgumentHint != "<pr_number>" || entry.Source != "claude-command-skill" {
+		t.Fatalf("entry = %+v", entry)
+	}
+}
+
 func TestExecutionRuntimeRunTaskSkillsSlashCommandListsCatalog(t *testing.T) {
 	provider := &countingProvider{streamText: "runtime answer"}
 	rt := newTestExecutionRuntime(t, provider)
