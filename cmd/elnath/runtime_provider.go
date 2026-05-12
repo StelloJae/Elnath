@@ -7,11 +7,12 @@ import (
 
 	"github.com/stello/elnath/internal/agent"
 	"github.com/stello/elnath/internal/config"
+	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/event"
 	"github.com/stello/elnath/internal/llm"
 )
 
-const providerCommandUsage = "Usage: /provider [status [--json]|candidates [--json]|check <provider> [--json]|help]"
+const providerCommandUsage = "Usage: /provider [status [--json]|candidates [--json]|check <provider> [--json]|use <provider> [--json]|help]"
 
 func (rt *executionRuntime) tryProviderCommand(
 	sess *agent.Session,
@@ -65,6 +66,8 @@ func (rt *executionRuntime) applyProviderCommand(args []string) string {
 		return rt.applyProviderCandidatesCommand(args[1:])
 	case "check":
 		return rt.applyProviderCheckCommand(args[1:])
+	case "use", "switch":
+		return rt.applyProviderUseCommand(args[1:])
 	default:
 		return "Runtime provider switching is not available in this session. Set provider in config.yaml or ELNATH_PROVIDER, then restart Elnath."
 	}
@@ -139,7 +142,7 @@ func (rt *executionRuntime) applyProviderCheckCommand(args []string) string {
 		msg += " Fallback: " + view.ProviderEffortNote + "."
 	}
 	msg += " This does not switch the current session."
-	msg += "\n" + formatProviderSwitchBoundary(view.ProviderSwitchBoundaries)
+	msg += "\n" + formatRuntimeProviderSwitchBoundary(view.RuntimeProviderSwitchAvailable, view.ProviderSwitchBoundaries)
 	return msg
 }
 
@@ -148,8 +151,112 @@ func (rt *executionRuntime) providerSelectionCheckView(providerName string) (pro
 	if err != nil {
 		return providerSelectionCheckView{}, err
 	}
-	view.ProviderSwitchBoundaries = providerSwitchBoundaries(rt.reflectPool != nil)
+	view.WouldSwitch = config.NormalizeProviderName(view.Provider) != config.NormalizeProviderName(rt.providerName())
+	view.RuntimeProviderSwitchAvailable = rt.runtimeProviderSwitchAvailable()
+	view.ProviderSwitchBoundaries = rt.runtimeProviderSwitchBoundaries()
 	return view, nil
+}
+
+func (rt *executionRuntime) applyProviderUseCommand(args []string) string {
+	if len(args) == 0 || len(args) > 2 {
+		return invalidProviderArgument(args)
+	}
+	jsonOut := false
+	providerName := ""
+	for _, arg := range args {
+		arg = strings.TrimSpace(arg)
+		if arg == "" {
+			continue
+		}
+		if strings.EqualFold(arg, "--json") {
+			jsonOut = true
+			continue
+		}
+		if providerName != "" {
+			return invalidProviderArgument(args)
+		}
+		providerName = arg
+	}
+	if providerName == "" {
+		return invalidProviderArgument(args)
+	}
+
+	view, err := rt.switchProviderForSession(providerName)
+	if err != nil {
+		return fmt.Sprintf("Provider switch failed: %v\n%s", err, formatRuntimeProviderSwitchBoundary(false, rt.runtimeProviderSwitchBoundaries()))
+	}
+	if jsonOut {
+		raw, err := json.MarshalIndent(view, "", "  ")
+		if err != nil {
+			return fmt.Sprintf("provider use: marshal JSON: %v", err)
+		}
+		return string(raw)
+	}
+	msg := fmt.Sprintf("Provider switched: %s -> %s. Model: %s. Reasoning effort: %s. Request timeout: %ds.",
+		view.PreviousProvider,
+		view.Provider,
+		view.Model,
+		view.ProviderEffort,
+		view.RequestTimeoutSeconds,
+	)
+	if view.ProviderEffortNote != "" {
+		msg += " Fallback: " + view.ProviderEffortNote + "."
+	}
+	return msg
+}
+
+func (rt *executionRuntime) switchProviderForSession(providerName string) (providerSelectionCheckView, error) {
+	view, err := rt.providerSelectionCheckView(providerName)
+	if err != nil {
+		return providerSelectionCheckView{}, err
+	}
+	if !rt.runtimeProviderSwitchAvailable() {
+		return view, fmt.Errorf("runtime provider switch unavailable")
+	}
+	provider, model, err := buildProviderForSelection(rt.currentConfig(), providerName)
+	if err != nil {
+		return providerSelectionCheckView{}, err
+	}
+	previous := rt.providerName()
+	rt.provider = provider
+	rt.wfCfg.Model = model
+	providerCW := resolveProviderContextWindow(provider, model)
+	rt.wfCfg.CompressionMaxTokens = conversation.ResolveCompressionBudget(providerCW, rt.currentConfig().MaxContextTokens)
+	if rt.mgr != nil {
+		rt.mgr.WithProvider(provider).WithProviderContextWindow(providerCW)
+	}
+
+	caps := llm.CapabilitiesOf(provider)
+	return providerSelectionCheckView{
+		RequestedProvider:              config.NormalizeProviderName(providerName),
+		PreviousProvider:               previous,
+		Provider:                       caps.Name,
+		Model:                          model,
+		ProviderEffort:                 caps.ReasoningEffort,
+		ProviderEffortNote:             caps.ReasoningEffortFallback,
+		AutoEffortCompatible:           autoEffortCompatible(caps.ReasoningEffort),
+		RequestTimeoutSeconds:          caps.RequestTimeoutSeconds,
+		WouldSwitch:                    false,
+		Switched:                       config.NormalizeProviderName(previous) != config.NormalizeProviderName(caps.Name),
+		RuntimeProviderSwitchAvailable: true,
+	}, nil
+}
+
+func (rt *executionRuntime) runtimeProviderSwitchAvailable() bool {
+	return rt != nil && !rt.daemonMode && rt.reflectPool == nil
+}
+
+func (rt *executionRuntime) runtimeProviderSwitchBoundaries() []string {
+	if rt == nil {
+		return providerSwitchBoundaries(false)
+	}
+	if rt.daemonMode {
+		return []string{providerSwitchBoundaryRestartRequired, providerSwitchBoundaryDaemonSharedRuntime}
+	}
+	if rt.reflectPool != nil {
+		return []string{providerSwitchBoundaryRestartRequired, providerSwitchBoundaryReflectionStartupBound}
+	}
+	return nil
 }
 
 func (rt *executionRuntime) currentProviderMessage() string {
@@ -162,7 +269,7 @@ func (rt *executionRuntime) currentProviderMessage() string {
 	if len(view.ConfiguredProviders) > 0 {
 		msg += "\n" + formatProviderCandidates(view.ConfiguredProviders)
 	}
-	msg += "\n" + formatProviderSwitchBoundary(view.ProviderSwitchBoundaries)
+	msg += "\n" + formatRuntimeProviderSwitchBoundary(view.RuntimeProviderSwitchAvailable, view.ProviderSwitchBoundaries)
 	msg += " Use /model and /effort for in-session overrides."
 	return msg
 }
@@ -183,17 +290,18 @@ func (rt *executionRuntime) currentProviderStatusView() providerStatusView {
 		model = "provider default"
 	}
 	view := providerStatusView{
-		Provider:                 caps.Name,
-		Model:                    model,
-		ReasoningEffort:          caps.ReasoningEffort,
-		ReasoningEffortMode:      rt.wfCfg.ReasoningEffortMode,
-		ConfiguredEffort:         rt.wfCfg.ReasoningEffort,
-		ProviderEffort:           caps.ReasoningEffort,
-		ProviderEffortNote:       caps.ReasoningEffortFallback,
-		AutoEffortCompatible:     autoEffortCompatible(caps.ReasoningEffort),
-		RequestTimeoutSeconds:    caps.RequestTimeoutSeconds,
-		ProviderSwitchBoundaries: providerSwitchBoundaries(rt.reflectPool != nil),
-		ConfiguredProviders:      configuredProviderCandidates(cfg),
+		Provider:                       caps.Name,
+		Model:                          model,
+		ReasoningEffort:                caps.ReasoningEffort,
+		ReasoningEffortMode:            rt.wfCfg.ReasoningEffortMode,
+		ConfiguredEffort:               rt.wfCfg.ReasoningEffort,
+		ProviderEffort:                 caps.ReasoningEffort,
+		ProviderEffortNote:             caps.ReasoningEffortFallback,
+		AutoEffortCompatible:           autoEffortCompatible(caps.ReasoningEffort),
+		RequestTimeoutSeconds:          caps.RequestTimeoutSeconds,
+		RuntimeProviderSwitchAvailable: rt.runtimeProviderSwitchAvailable(),
+		ProviderSwitchBoundaries:       rt.runtimeProviderSwitchBoundaries(),
+		ConfiguredProviders:            configuredProviderCandidates(cfg),
 	}
 	return view
 }
@@ -233,4 +341,11 @@ func formatProviderCandidates(candidates []providerConfigCandidateView) string {
 
 func invalidProviderArgument(args []string) string {
 	return fmt.Sprintf("Invalid provider argument: %s. %s", strings.Join(args, " "), providerCommandUsage)
+}
+
+func formatRuntimeProviderSwitchBoundary(available bool, boundaries []string) string {
+	if available {
+		return "Provider switching: available with /provider use <provider>."
+	}
+	return formatProviderSwitchBoundary(boundaries)
 }

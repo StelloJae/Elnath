@@ -234,6 +234,7 @@ type executionRuntime struct {
 	completionCtxMu    sync.Mutex
 	completionCtxs     map[int64]completionContractSummary
 	planModeController *agent.PlanModeController
+	taskStopTool       *daemon.TaskStopTool
 }
 
 type delegateEnqueueRuntimeService struct {
@@ -444,6 +445,7 @@ func buildExecutionRuntime(
 		effectiveWorkDir, _ = os.Getwd()
 	}
 	guard := tools.NewPathGuard(effectiveWorkDir, protectedPaths)
+	var rt *executionRuntime
 	// buildBashRunnerForConfig returns a shareable facade. Stateful
 	// sandbox/proxy runners are created inside each Run so daemon workers do
 	// not share proxy decision buffers or drain goroutines.
@@ -452,7 +454,12 @@ func buildExecutionRuntime(
 		return nil, err
 	}
 	app.RegisterCloser("bash runner", bashRunnerCloser{runner: runner})
-	reg := buildToolRegistry(guard, provider, runner)
+	reg := buildToolRegistryWithSecondaryCaller(guard, runner, llm.NewDynamicSecondaryModelCaller(func() llm.Provider {
+		if rt == nil {
+			return provider
+		}
+		return rt.provider
+	}))
 	planModeController := agent.NewPlanModeController(perm)
 	reg.Register(agent.NewEnterPlanModeTool(planModeController))
 	reg.Register(agent.NewExitPlanModeTool(planModeController))
@@ -464,7 +471,8 @@ func buildExecutionRuntime(
 	reg.Register(daemon.NewTaskCreateTool(taskQueue))
 	reg.Register(daemon.NewTaskListTool(taskQueue))
 	reg.Register(daemon.NewTaskGetTool(taskQueue))
-	reg.Register(daemon.NewTaskStopTool(taskQueue))
+	taskStopTool := daemon.NewTaskStopTool(taskQueue)
+	reg.Register(taskStopTool)
 	reg.Register(daemon.NewTaskOutputTool(taskQueue))
 	reg.Register(daemon.NewTaskMonitorTool(taskQueue))
 	reg.Register(daemon.NewTaskUpdateTool(taskQueue))
@@ -547,7 +555,6 @@ func buildExecutionRuntime(
 	if hooks == nil {
 		hooks = agent.NewHookRegistry()
 	}
-	var rt *executionRuntime
 	reg.Register(skill.NewInvocationTool(skill.InvocationToolConfig{
 		Registry: skillReg,
 		ProviderResolver: func() llm.Provider {
@@ -760,8 +767,16 @@ func buildExecutionRuntime(
 		reflectTimeout:     reflectTimeout,
 		completionRetryMax: completionRetryMax,
 		planModeController: planModeController,
+		taskStopTool:       taskStopTool,
 	}
 	return rt, nil
+}
+
+func (rt *executionRuntime) bindRunningTaskCanceller(canceller daemon.RunningTaskCanceller) {
+	if rt == nil || rt.taskStopTool == nil {
+		return
+	}
+	rt.taskStopTool.WithRunningCanceller(canceller)
 }
 
 // reflectionPoolCloser adapts *reflection.Pool to the core.Closer interface,

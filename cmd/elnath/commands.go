@@ -634,8 +634,15 @@ func (c bashRunnerCloser) Close() error {
 }
 
 func buildToolRegistry(guard *tools.PathGuard, provider llm.Provider, runner tools.BashRunner) *tools.Registry {
+	return buildToolRegistryWithSecondaryCaller(guard, runner, llm.NewSecondaryModelCaller(provider))
+}
+
+func buildToolRegistryWithSecondaryCaller(guard *tools.PathGuard, runner tools.BashRunner, secondary llm.SecondaryModelCaller) *tools.Registry {
 	if runner == nil {
 		panic("buildToolRegistry requires a configured BashRunner")
+	}
+	if secondary == nil {
+		secondary = llm.NewNoopSecondaryModelCaller()
 	}
 	reg := tools.NewRegistry()
 	tracker := tools.NewReadTracker()
@@ -646,7 +653,7 @@ func buildToolRegistry(guard *tools.PathGuard, provider llm.Provider, runner too
 	reg.Register(tools.NewGlobTool(guard))
 	reg.Register(tools.NewGrepTool(guard, tracker))
 	reg.Register(tools.NewGitToolWithRunner(guard, runner))
-	reg.Register(tools.NewWebFetchTool(tools.WithSecondaryCaller(llm.NewSecondaryModelCaller(provider))))
+	reg.Register(tools.NewWebFetchTool(tools.WithSecondaryCaller(secondary)))
 	reg.Register(tools.NewTodoWriteTool())
 	reg.Register(tools.NewToolSearchTool(reg))
 	return reg
