@@ -91,6 +91,8 @@ type CompletionGate interface {
 	Evaluate(ctx context.Context, task Task, agenticTaskID int64) (CompletionGateDecision, error)
 }
 
+type runningTaskCancelFunc func(reason string)
+
 // Daemon runs background task processing with Unix domain socket IPC.
 type Daemon struct {
 	queue             *Queue
@@ -114,6 +116,8 @@ type Daemon struct {
 	faultScenario     *fault.Scenario
 	faultGuard        fault.GuardConfig
 	faultGuardChecked bool
+	runningMu         sync.Mutex
+	running           map[int64]runningTaskCancelFunc
 	cancel            context.CancelFunc
 	wg                sync.WaitGroup
 }
@@ -133,7 +137,46 @@ func New(queue *Queue, socketPath string, maxWorkers int, runner AgentTaskRunner
 		agentRunner:   runner,
 		logger:        logger,
 		faultInjector: fault.NoopInjector{},
+		running:       map[int64]runningTaskCancelFunc{},
 	}
+}
+
+func (d *Daemon) CancelRunningTask(id int64, reason string) (bool, error) {
+	if id <= 0 {
+		return false, fmt.Errorf("daemon: cancel running task: id must be positive")
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "task_stop requested"
+	}
+
+	d.runningMu.Lock()
+	cancel, ok := d.running[id]
+	d.runningMu.Unlock()
+	if !ok {
+		return false, nil
+	}
+
+	cancel(reason)
+	return true, nil
+}
+
+func (d *Daemon) registerRunningTask(id int64, cancel runningTaskCancelFunc) {
+	if id <= 0 || cancel == nil {
+		return
+	}
+	d.runningMu.Lock()
+	d.running[id] = cancel
+	d.runningMu.Unlock()
+}
+
+func (d *Daemon) unregisterRunningTask(id int64) {
+	if id <= 0 {
+		return
+	}
+	d.runningMu.Lock()
+	delete(d.running, id)
+	d.runningMu.Unlock()
 }
 
 func (d *Daemon) WithFaultInjection(inj fault.Injector, scenario *fault.Scenario) {
@@ -701,6 +744,15 @@ func (d *Daemon) runTask(ctx context.Context, task *Task) (TaskResult, error) {
 	taskCtx, taskCancel := context.WithCancel(ctx)
 	defer taskCancel()
 
+	var manualCanceled atomic.Bool
+	var manualCancelReason atomic.Value
+	d.registerRunningTask(task.ID, func(reason string) {
+		manualCancelReason.Store(reason)
+		manualCanceled.Store(true)
+		taskCancel()
+	})
+	defer d.unregisterRunningTask(task.ID)
+
 	if d.wallClockTimeout > 0 {
 		var wallCancel context.CancelFunc
 		taskCtx, wallCancel = context.WithTimeout(taskCtx, d.wallClockTimeout)
@@ -744,6 +796,10 @@ func (d *Daemon) runTask(ctx context.Context, task *Task) (TaskResult, error) {
 	}
 	result, err := exec(taskCtx, event.OnTextToSink(onTextFn))
 	if err != nil {
+		if manualCanceled.Load() && taskCtx.Err() != nil && ctx.Err() == nil {
+			reason, _ := manualCancelReason.Load().(string)
+			return TaskResult{}, taskCanceledError{reason: reason}
+		}
 		if taskCtx.Err() != nil && ctx.Err() == nil {
 			inner := fmt.Errorf("daemon: task timed out: %w", taskCtx.Err())
 			timeoutClass := TimeoutClassActiveButKilled
@@ -770,6 +826,18 @@ func (d *Daemon) runTask(ctx context.Context, task *Task) (TaskResult, error) {
 		result.Result = result.Summary
 	}
 	return result, nil
+}
+
+type taskCanceledError struct {
+	reason string
+}
+
+func (e taskCanceledError) Error() string {
+	reason := strings.TrimSpace(e.reason)
+	if reason == "" {
+		reason = "task_stop requested"
+	}
+	return "daemon: task canceled: " + reason
 }
 
 type taskTimeoutError struct {

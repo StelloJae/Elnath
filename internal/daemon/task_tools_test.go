@@ -256,7 +256,64 @@ func TestTaskStopToolCancelsPendingTask(t *testing.T) {
 	}
 }
 
-func TestTaskStopToolRejectsRunningTask(t *testing.T) {
+type fakeRunningTaskCanceller struct {
+	called  int
+	taskID  int64
+	reason  string
+	stopped bool
+	err     error
+}
+
+func (f *fakeRunningTaskCanceller) CancelRunningTask(id int64, reason string) (bool, error) {
+	f.called++
+	f.taskID = id
+	f.reason = reason
+	return f.stopped, f.err
+}
+
+func TestTaskStopToolCancelsRunningTaskWithCanceller(t *testing.T) {
+	ctx := context.Background()
+	queue := newTaskToolTestQueue(t)
+	if _, _, err := queue.Enqueue(ctx, "running task", ""); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	task, err := queue.Next(ctx)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if task == nil {
+		t.Fatal("Next returned nil")
+	}
+
+	canceller := &fakeRunningTaskCanceller{stopped: true}
+	result, err := NewTaskStopTool(queue).WithRunningCanceller(canceller).Execute(ctx, json.RawMessage(`{"id":`+jsonInt(task.ID)+`,"reason":"operator stop"}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute returned error result: %s", result.Output)
+	}
+	if canceller.called != 1 || canceller.taskID != task.ID || canceller.reason != "operator stop" {
+		t.Fatalf("canceller = %+v, want one call for task %d", canceller, task.ID)
+	}
+
+	var output taskStopToolOutput
+	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if output.TaskID != task.ID || !output.Stopped || output.PreviousStatus != StatusRunning || output.Status != StatusRunning {
+		t.Fatalf("output = %+v, want accepted running stop request", output)
+	}
+	stillRunning, err := queue.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("Get running task: %v", err)
+	}
+	if stillRunning.Status != StatusRunning {
+		t.Fatalf("task status = %s, want queue state left running for worker cancellation", stillRunning.Status)
+	}
+}
+
+func TestTaskStopToolRejectsRunningTaskWithoutCanceller(t *testing.T) {
 	ctx := context.Background()
 	queue := newTaskToolTestQueue(t)
 	if _, _, err := queue.Enqueue(ctx, "running task", ""); err != nil {
@@ -274,8 +331,8 @@ func TestTaskStopToolRejectsRunningTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute error = %v", err)
 	}
-	if !result.IsError || !strings.Contains(result.Output, "only pending tasks can be stopped") {
-		t.Fatalf("result = %+v, want running unsupported error", result)
+	if !result.IsError || !strings.Contains(result.Output, "running task cancellation unavailable") {
+		t.Fatalf("result = %+v, want running cancellation unavailable error", result)
 	}
 }
 

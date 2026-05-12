@@ -1898,6 +1898,63 @@ func TestDaemonInactivityTimeout(t *testing.T) {
 	}
 }
 
+func TestDaemonCancelRunningTask(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+
+	runnerEntered := make(chan struct{})
+	runnerCanceled := make(chan struct{})
+	cancelAwareRunner := func(ctx context.Context, _ string, _ event.Sink) (TaskResult, error) {
+		close(runnerEntered)
+		<-ctx.Done()
+		close(runnerCanceled)
+		return TaskResult{}, ctx.Err()
+	}
+
+	socketPath := filepath.Join(t.TempDir(), "s")
+	d := startDaemon(t, q, socketPath, cancelAwareRunner, 1)
+
+	resp := sendIPC(t, socketPath, IPCRequest{
+		Command: "submit",
+		Payload: mustMarshalString(t, "cancel running"),
+	})
+	if !resp.OK {
+		t.Fatalf("submit: %s", resp.Err)
+	}
+	taskID := extractTaskID(t, resp)
+
+	select {
+	case <-runnerEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("runner did not start")
+	}
+
+	cancelled, err := d.CancelRunningTask(taskID, "operator stop")
+	if err != nil {
+		t.Fatalf("CancelRunningTask: %v", err)
+	}
+	if !cancelled {
+		t.Fatal("CancelRunningTask cancelled=false, want true")
+	}
+
+	select {
+	case <-runnerCanceled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("runner did not observe cancellation")
+	}
+
+	task := pollTaskStatus(t, q, taskID, StatusFailed, 5*time.Second)
+	if !strings.Contains(task.Result, "operator stop") {
+		t.Fatalf("result = %q, want cancellation reason", task.Result)
+	}
+	if task.TimeoutClass != TimeoutClassNone {
+		t.Fatalf("timeout class = %q, want none for manual cancellation", task.TimeoutClass)
+	}
+}
+
 // TestDaemonWallClockTimeout verifies that a task exceeding the wall-clock
 // deadline is cancelled even if it reports progress.
 func TestDaemonWallClockTimeout(t *testing.T) {

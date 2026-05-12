@@ -234,6 +234,7 @@ type executionRuntime struct {
 	completionCtxMu    sync.Mutex
 	completionCtxs     map[int64]completionContractSummary
 	planModeController *agent.PlanModeController
+	taskStopTool       *daemon.TaskStopTool
 }
 
 type delegateEnqueueRuntimeService struct {
@@ -464,7 +465,8 @@ func buildExecutionRuntime(
 	reg.Register(daemon.NewTaskCreateTool(taskQueue))
 	reg.Register(daemon.NewTaskListTool(taskQueue))
 	reg.Register(daemon.NewTaskGetTool(taskQueue))
-	reg.Register(daemon.NewTaskStopTool(taskQueue))
+	taskStopTool := daemon.NewTaskStopTool(taskQueue)
+	reg.Register(taskStopTool)
 	reg.Register(daemon.NewTaskOutputTool(taskQueue))
 	reg.Register(daemon.NewTaskMonitorTool(taskQueue))
 	reg.Register(daemon.NewTaskUpdateTool(taskQueue))
@@ -760,8 +762,16 @@ func buildExecutionRuntime(
 		reflectTimeout:     reflectTimeout,
 		completionRetryMax: completionRetryMax,
 		planModeController: planModeController,
+		taskStopTool:       taskStopTool,
 	}
 	return rt, nil
+}
+
+func (rt *executionRuntime) bindRunningTaskCanceller(canceller daemon.RunningTaskCanceller) {
+	if rt == nil || rt.taskStopTool == nil {
+		return
+	}
+	rt.taskStopTool.WithRunningCanceller(canceller)
 }
 
 // reflectionPoolCloser adapts *reflection.Pool to the core.Closer interface,

@@ -326,18 +326,28 @@ func (t *TaskGetTool) Execute(ctx context.Context, params json.RawMessage) (*too
 	return tools.SuccessResult(string(raw)), nil
 }
 
+type RunningTaskCanceller interface {
+	CancelRunningTask(id int64, reason string) (bool, error)
+}
+
 type TaskStopTool struct {
-	queue *Queue
+	queue            *Queue
+	runningCanceller RunningTaskCanceller
 }
 
 func NewTaskStopTool(queue *Queue) *TaskStopTool {
 	return &TaskStopTool{queue: queue}
 }
 
+func (t *TaskStopTool) WithRunningCanceller(canceller RunningTaskCanceller) *TaskStopTool {
+	t.runningCanceller = canceller
+	return t
+}
+
 func (t *TaskStopTool) Name() string { return TaskStopToolName }
 
 func (t *TaskStopTool) Description() string {
-	return "Stop a pending daemon queue task by ID"
+	return "Stop a pending or running daemon queue task by ID"
 }
 
 func (t *TaskStopTool) Schema() json.RawMessage {
@@ -394,19 +404,32 @@ func (t *TaskStopTool) Execute(ctx context.Context, params json.RawMessage) (*to
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("task_stop: %v", err)), nil
 	}
-	if task.Status != StatusPending {
-		return tools.ErrorResult(fmt.Sprintf("task_stop: task %d is %s; only pending tasks can be stopped", input.ID, task.Status)), nil
-	}
-	if err := t.queue.CancelTask(ctx, input.ID, reason); err != nil {
-		return tools.ErrorResult(fmt.Sprintf("task_stop: %v", err)), nil
-	}
-
 	output := taskStopToolOutput{
 		TaskID:         input.ID,
 		Stopped:        true,
 		PreviousStatus: task.Status,
-		Status:         StatusFailed,
 		Reason:         reason,
+	}
+	switch task.Status {
+	case StatusPending:
+		if err := t.queue.CancelTask(ctx, input.ID, reason); err != nil {
+			return tools.ErrorResult(fmt.Sprintf("task_stop: %v", err)), nil
+		}
+		output.Status = StatusFailed
+	case StatusRunning:
+		if t.runningCanceller == nil {
+			return tools.ErrorResult("task_stop: running task cancellation unavailable"), nil
+		}
+		stopped, err := t.runningCanceller.CancelRunningTask(input.ID, reason)
+		if err != nil {
+			return tools.ErrorResult(fmt.Sprintf("task_stop: %v", err)), nil
+		}
+		if !stopped {
+			return tools.ErrorResult(fmt.Sprintf("task_stop: task %d is running but no active runner was found", input.ID)), nil
+		}
+		output.Status = StatusRunning
+	default:
+		return tools.ErrorResult(fmt.Sprintf("task_stop: task %d is %s; only pending or running tasks can be stopped", input.ID, task.Status)), nil
 	}
 	raw, err := json.Marshal(output)
 	if err != nil {

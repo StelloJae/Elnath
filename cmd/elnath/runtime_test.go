@@ -3124,6 +3124,63 @@ func TestExecutionRuntimeRegistersDeferredControlSurfaceTools(t *testing.T) {
 	}
 }
 
+type fakeRuntimeRunningCanceller struct {
+	called  int
+	taskID  int64
+	reason  string
+	stopped bool
+}
+
+func (f *fakeRuntimeRunningCanceller) CancelRunningTask(id int64, reason string) (bool, error) {
+	f.called++
+	f.taskID = id
+	f.reason = reason
+	return f.stopped, nil
+}
+
+func TestExecutionRuntimeBindsTaskStopRunningCanceller(t *testing.T) {
+	rt := newTestExecutionRuntime(t, &countingProvider{streamText: "unused"})
+	if rt.taskStopTool == nil {
+		t.Fatal("taskStopTool is nil")
+	}
+	tool, ok := rt.reg.Get("task_stop")
+	if !ok {
+		t.Fatal("task_stop not registered")
+	}
+	if got, ok := tool.(*daemon.TaskStopTool); !ok || got != rt.taskStopTool {
+		t.Fatalf("registered task_stop = %T, want runtime taskStopTool pointer", tool)
+	}
+
+	ctx := context.Background()
+	queue, err := daemon.NewQueueNoRecover(rt.db.Main)
+	if err != nil {
+		t.Fatalf("NewQueueNoRecover: %v", err)
+	}
+	if _, _, err := queue.Enqueue(ctx, "runtime running task", ""); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	task, err := queue.Next(ctx)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if task == nil {
+		t.Fatal("Next returned nil")
+	}
+
+	canceller := &fakeRuntimeRunningCanceller{stopped: true}
+	rt.bindRunningTaskCanceller(canceller)
+	result, err := rt.taskStopTool.Execute(ctx, json.RawMessage(`{"id":`+fmt.Sprint(task.ID)+`,"reason":"operator stop"}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result == nil || result.IsError {
+		t.Fatalf("result = %+v, want success", result)
+	}
+	if canceller.called != 1 || canceller.taskID != task.ID || canceller.reason != "operator stop" {
+		t.Fatalf("canceller = %+v, want one call for task %d", canceller, task.ID)
+	}
+}
+
 func TestExecutionRuntimeRunTaskHelpSlashCommandListsCatalog(t *testing.T) {
 	provider := &countingProvider{streamText: "runtime answer"}
 	rt := newTestExecutionRuntime(t, provider)

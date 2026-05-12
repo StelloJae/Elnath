@@ -187,6 +187,7 @@ func cmdDaemonStart(ctx context.Context) error {
 	signalBridge := agenticsignals.NewBridge(agenticStore)
 
 	d := daemon.New(queue, cfg.Daemon.SocketPath, cfg.Daemon.MaxWorkers, rt.newDaemonTaskRunner(), app.Logger)
+	rt.bindRunningTaskCanceller(d)
 	d.WithTaskEnvelope(agenticruntime.NewDaemonEnvelope(agenticStore))
 	d.WithCompletionGate(agenticcompletion.NewGate(agenticStore, agenticCompletionGateConfigMode(cfg),
 		agenticcompletion.WithCompletionContextProvider(rt)))
