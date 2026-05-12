@@ -277,6 +277,25 @@ func TestDefaultCompatibleSkillRootsIncludesCodexPluginCacheSkills(t *testing.T)
 	}
 }
 
+func TestDefaultCompatibleSkillRootsCanDisableCodexPluginCacheSkills(t *testing.T) {
+	t.Parallel()
+
+	homeDir := t.TempDir()
+	writeCompatSkill(t, filepath.Join(homeDir, ".codex", "skills", "user-codex"), "User Codex")
+	writeCompatSkill(t, filepath.Join(homeDir, ".codex", "plugins", "cache", "openai-curated", "github", "63976030", "skills", "github"), "GitHub")
+
+	reg := NewRegistry()
+	roots := DefaultCompatibleSkillRootsWithOptions("", homeDir, CompatibleSkillRootOptions{DisablePluginCache: true})
+	if err := reg.LoadCompatibleSkillRoots(roots); err != nil {
+		t.Fatalf("LoadCompatibleSkillRoots: %v", err)
+	}
+
+	want := []string{"user-codex"}
+	if got := reg.Names(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Names = %v, want %v", got, want)
+	}
+}
+
 func TestRegistryLoadCompatibleSkillRootsIncludesLegacyCommandSkills(t *testing.T) {
 	t.Parallel()
 

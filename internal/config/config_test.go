@@ -63,6 +63,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Tools.ExposureMode != ToolExposureModeStandard {
 		t.Errorf("expected Tools.ExposureMode default %q, got %q", ToolExposureModeStandard, cfg.Tools.ExposureMode)
 	}
+	if cfg.Skills.PluginCache != SkillPluginCacheModeEnabled {
+		t.Errorf("expected Skills.PluginCache default %q, got %q", SkillPluginCacheModeEnabled, cfg.Skills.PluginCache)
+	}
 	if cfg.SelfHealing.CompletionRetryMax != 1 {
 		t.Errorf("expected SelfHealing.CompletionRetryMax default %d, got %d", 1, cfg.SelfHealing.CompletionRetryMax)
 	}
@@ -204,6 +207,31 @@ func TestLoad_ToolsExposureMode(t *testing.T) {
 	}
 	if cfg.Tools.ExposureMode != ToolExposureModeSearchFirst {
 		t.Fatalf("Tools.ExposureMode = %q, want %q", cfg.Tools.ExposureMode, ToolExposureModeSearchFirst)
+	}
+}
+
+func TestLoad_SkillsPluginCacheMode(t *testing.T) {
+	dir := t.TempDir()
+	wikiDir := filepath.Join(dir, "wiki")
+	if err := os.MkdirAll(wikiDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	yaml := "data_dir: " + dir + "\nwiki_dir: " + wikiDir + "\nskills:\n  plugin_cache: disabled\n"
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.Skills.PluginCache != SkillPluginCacheModeDisabled {
+		t.Fatalf("Skills.PluginCache = %q, want %q", cfg.Skills.PluginCache, SkillPluginCacheModeDisabled)
+	}
+	if SkillsPluginCacheEnabled(cfg) {
+		t.Fatal("SkillsPluginCacheEnabled = true, want false")
 	}
 }
 
@@ -575,6 +603,13 @@ func TestApplyEnvOverrides(t *testing.T) {
 			want:   "bypass",
 		},
 		{
+			name:   "ELNATH_SKILLS_PLUGIN_CACHE",
+			envKey: "ELNATH_SKILLS_PLUGIN_CACHE",
+			envVal: "disabled",
+			check:  func(c *Config) string { return c.Skills.PluginCache },
+			want:   "disabled",
+		},
+		{
 			name:   "ELNATH_TELEGRAM_ENABLED",
 			envKey: "ELNATH_TELEGRAM_ENABLED",
 			envVal: "true",
@@ -767,6 +802,11 @@ func TestValidate(t *testing.T) {
 			name:    "unsupported tools exposure mode",
 			mutate:  func(c *Config) { c.Tools.ExposureMode = "all_at_once" },
 			wantErr: "tools.exposure_mode",
+		},
+		{
+			name:    "unsupported skills plugin cache mode",
+			mutate:  func(c *Config) { c.Skills.PluginCache = "always" },
+			wantErr: "skills.plugin_cache",
 		},
 		{
 			name:    "negative self healing completion retry max",

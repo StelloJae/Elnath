@@ -4177,6 +4177,64 @@ func TestExecutionRuntimeBuildsSkillCatalogFromCodexSkillRoots(t *testing.T) {
 	}
 }
 
+func TestExecutionRuntimeCanDisablePluginCacheSkillRoots(t *testing.T) {
+	root := t.TempDir()
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	writeRuntimeCompatSkill(t, filepath.Join(root, ".codex", "skills", "project-codex"), "Project Codex")
+	writeRuntimeCompatSkill(t, filepath.Join(homeDir, ".codex", "plugins", "cache", "openai-curated", "github", "63976030", "skills", "github"), "GitHub")
+
+	cfg := &config.Config{
+		DataDir:  filepath.Join(root, "data"),
+		WikiDir:  filepath.Join(root, "wiki"),
+		LogLevel: "error",
+		Permission: config.PermissionConfig{
+			Mode: "bypass",
+		},
+		Skills: config.SkillsConfig{
+			PluginCache: config.SkillPluginCacheModeDisabled,
+		},
+	}
+	app, err := core.New(cfg)
+	if err != nil {
+		t.Fatalf("core.New: %v", err)
+	}
+	db, err := core.OpenDB(cfg.DataDir)
+	if err != nil {
+		t.Fatalf("core.OpenDB: %v", err)
+	}
+	app.RegisterCloser("database", db)
+	t.Cleanup(func() {
+		if err := app.Close(); err != nil {
+			t.Fatalf("app.Close: %v", err)
+		}
+	})
+
+	rt, err := buildExecutionRuntime(
+		context.Background(),
+		cfg,
+		app,
+		db,
+		&countingProvider{streamText: "runtime answer"},
+		"mock-model",
+		self.New(cfg.DataDir),
+		"",
+		agent.NewPermission(agent.WithMode(agent.ModeBypass)),
+		root,
+		nil,
+		identity.LegacyPrincipal(),
+		false,
+	)
+	if err != nil {
+		t.Fatalf("buildExecutionRuntime: %v", err)
+	}
+	want := []string{"project-codex"}
+	if got := rt.skillReg.Names(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("skillReg names = %v, want %v", got, want)
+	}
+}
+
 func TestExecutionRuntimeBuildsSkillCatalogFromLegacyCommands(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("HOME", filepath.Join(root, "home"))

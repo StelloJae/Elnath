@@ -167,7 +167,9 @@ Skills remain wiki-native by default, and runtime-compatible skill roots can be
 inspected with `elnath skill list --compatible --json`. That includes project
 and user `.claude/skills/**/SKILL.md`, `.codex/skills/**/SKILL.md`,
 `.agents/skills/**/SKILL.md`, compatible plugin-cache skills, and legacy
-`.claude/commands` markdown command skills.
+`.claude/commands` markdown command skills. Set `skills.plugin_cache:
+disabled` or `ELNATH_SKILLS_PLUGIN_CACHE=disabled` to skip Codex plugin-cache
+skill roots while keeping local wiki/project/user skills.
 
 ## Architecture
 
@@ -228,6 +230,9 @@ self_healing:
   enabled: true
   observe_only: true # set false to allow one bounded completion correction pass
   completion_retry_max: 1 # supported: 0 or 1; 0 disables correction retry even when observe_only=false
+
+skills:
+  plugin_cache: enabled # enabled|disabled; disabled skips ~/.codex/plugins/cache skills
 
 permission:
   mode: default

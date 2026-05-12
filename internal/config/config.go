@@ -36,6 +36,7 @@ type Config struct {
 
 	Permission     PermissionConfig     `yaml:"permission"`
 	Tools          ToolsConfig          `yaml:"tools"`
+	Skills         SkillsConfig         `yaml:"skills"`
 	Sandbox        SandboxConfig        `yaml:"sandbox"`
 	Principal      PrincipalConfig      `yaml:"principal"`
 	Daemon         DaemonConfig         `yaml:"daemon"`
@@ -110,6 +111,13 @@ type ToolsConfig struct {
 	ExposureMode string `yaml:"exposure_mode"`
 }
 
+type SkillsConfig struct {
+	// PluginCache controls whether Codex plugin-cache SKILL.md roots are loaded.
+	// Default "enabled" preserves existing discovery; "disabled" keeps local
+	// wiki/project/user skills while skipping ~/.codex/plugins/cache skills.
+	PluginCache string `yaml:"plugin_cache"`
+}
+
 type PermissionConfig struct {
 	Mode  string   `yaml:"mode"` // default, accept_edits, plan, bypass
 	Allow []string `yaml:"allow"`
@@ -151,6 +159,9 @@ type FaultInjectionConfig struct {
 const (
 	ToolExposureModeStandard    = "standard"
 	ToolExposureModeSearchFirst = "search_first"
+
+	SkillPluginCacheModeEnabled  = "enabled"
+	SkillPluginCacheModeDisabled = "disabled"
 
 	AgenticEnforcementModeObserve = "observe"
 	AgenticEnforcementModeGateway = "gateway"
@@ -330,6 +341,9 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("ELNATH_TOOLS_EXPOSURE_MODE"); v != "" {
 		cfg.Tools.ExposureMode = v
 	}
+	if v := os.Getenv("ELNATH_SKILLS_PLUGIN_CACHE"); v != "" {
+		cfg.Skills.PluginCache = v
+	}
 	if v := os.Getenv("ELNATH_LOCALE"); v != "" {
 		cfg.Locale = v
 	}
@@ -413,6 +427,11 @@ func validate(cfg *Config) error {
 	default:
 		return fmt.Errorf("unsupported tools.exposure_mode: %q (supported: standard, search_first)", cfg.Tools.ExposureMode)
 	}
+	switch strings.ToLower(strings.TrimSpace(cfg.Skills.PluginCache)) {
+	case "", SkillPluginCacheModeEnabled, SkillPluginCacheModeDisabled:
+	default:
+		return fmt.Errorf("unsupported skills.plugin_cache: %q (supported: enabled, disabled)", cfg.Skills.PluginCache)
+	}
 	if cfg.SelfHealing.CompletionRetryMax < 0 {
 		return fmt.Errorf("self_healing.completion_retry_max must be >= 0")
 	}
@@ -451,6 +470,13 @@ func validate(cfg *Config) error {
 	}
 
 	return nil
+}
+
+func SkillsPluginCacheEnabled(cfg *Config) bool {
+	if cfg == nil {
+		return true
+	}
+	return strings.ToLower(strings.TrimSpace(cfg.Skills.PluginCache)) != SkillPluginCacheModeDisabled
 }
 
 func validateProviderReasoningEffort(providerName, effort string) error {

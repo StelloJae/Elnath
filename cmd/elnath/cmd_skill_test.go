@@ -245,6 +245,71 @@ func TestCmdSkillListCompatibleIncludesSkillRoots(t *testing.T) {
 	}
 }
 
+func TestCmdSkillListCompatibleCanDisablePluginCacheRoots(t *testing.T) {
+	dir := t.TempDir()
+	dataDir := filepath.Join(dir, "data")
+	wikiDir := filepath.Join(dir, "wiki")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(data) error = %v", err)
+	}
+	if err := os.MkdirAll(wikiDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(wiki) error = %v", err)
+	}
+	cfgPath := filepath.Join(dir, "config.yaml")
+	config := "data_dir: " + dataDir + "\n" +
+		"wiki_dir: " + wikiDir + "\n" +
+		"locale: en\n" +
+		"permission:\n  mode: default\n" +
+		"skills:\n  plugin_cache: disabled\n"
+	if err := os.WriteFile(cfgPath, []byte(config), 0o644); err != nil {
+		t.Fatalf("WriteFile(config) error = %v", err)
+	}
+	withArgs(t, []string{"elnath", "--config", cfgPath})
+
+	root := t.TempDir()
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(oldWD); err != nil {
+			t.Fatalf("restore Chdir: %v", err)
+		}
+	})
+
+	writeRuntimeCompatSkill(t, filepath.Join(root, ".codex", "skills", "project-codex"), "Project Codex")
+	writeRuntimeCompatSkill(t, filepath.Join(homeDir, ".codex", "plugins", "cache", "openai-curated", "github", "63976030", "skills", "github"), "GitHub")
+
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdSkill(context.Background(), []string{"list", "--compatible", "--json"}); err != nil {
+			t.Fatalf("cmdSkill(list --compatible --json) error = %v", err)
+		}
+	})
+	var out struct {
+		Skills []struct {
+			Name string `json:"name"`
+		} `json:"skills"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &out); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout)
+	}
+	seen := map[string]bool{}
+	for _, sk := range out.Skills {
+		seen[sk.Name] = true
+	}
+	if !seen["project-codex"] {
+		t.Fatalf("skills = %+v, want project-codex", out.Skills)
+	}
+	if seen["github"] {
+		t.Fatalf("skills = %+v, should exclude plugin-cache github", out.Skills)
+	}
+}
+
 func TestCmdSkillShow(t *testing.T) {
 	cfgPath, _, wikiDir := writeSkillTestConfig(t)
 	withArgs(t, []string{"elnath", "--config", cfgPath})

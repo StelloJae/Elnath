@@ -25,6 +25,10 @@ type CompatibleSkillRoot struct {
 	Kind   string
 }
 
+type CompatibleSkillRootOptions struct {
+	DisablePluginCache bool
+}
+
 var claudeToolNameMap = map[string]string{
 	"bash":          "bash",
 	"read":          "read_file",
@@ -106,6 +110,10 @@ func LoadClaudeSkillDir(projectRoot string) ([]*Skill, error) {
 }
 
 func DefaultCompatibleSkillRoots(projectRoot, homeDir string) []CompatibleSkillRoot {
+	return DefaultCompatibleSkillRootsWithOptions(projectRoot, homeDir, CompatibleSkillRootOptions{})
+}
+
+func DefaultCompatibleSkillRootsWithOptions(projectRoot, homeDir string, opts CompatibleSkillRootOptions) []CompatibleSkillRoot {
 	var roots []CompatibleSkillRoot
 	homeDir = strings.TrimSpace(homeDir)
 	if homeDir != "" {
@@ -115,7 +123,9 @@ func DefaultCompatibleSkillRoots(projectRoot, homeDir string) []CompatibleSkillR
 			CompatibleSkillRoot{Path: filepath.Join(homeDir, ".agents", "skills"), Source: codexSkillSource, Kind: compatibleRootKindSkills},
 			CompatibleSkillRoot{Path: filepath.Join(homeDir, ".claude", "commands"), Source: claudeCommandSkillSource, Kind: compatibleRootKindCommands},
 		)
-		roots = append(roots, defaultCodexPluginSkillRoots(homeDir)...)
+		if !opts.DisablePluginCache {
+			roots = append(roots, defaultCodexPluginSkillRoots(homeDir)...)
+		}
 	}
 	projectRoot = strings.TrimSpace(projectRoot)
 	if projectRoot != "" {

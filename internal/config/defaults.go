@@ -36,6 +36,9 @@ func DefaultConfig() *Config {
 		Tools: ToolsConfig{
 			ExposureMode: ToolExposureModeStandard,
 		},
+		Skills: SkillsConfig{
+			PluginCache: SkillPluginCacheModeEnabled,
+		},
 		Daemon: DaemonConfig{
 			SocketPath:         filepath.Join(base, "daemon.sock"),
 			MaxWorkers:         3,

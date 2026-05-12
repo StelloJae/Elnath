@@ -123,7 +123,8 @@ func loadSkillList(showAll, includeCompatible bool) ([]*skill.Skill, error) {
 	if includeCompatible {
 		projectRoot, _ := os.Getwd()
 		homeDir, _ := os.UserHomeDir()
-		for _, root := range skill.DefaultCompatibleSkillRoots(projectRoot, homeDir) {
+		rootOpts := skill.CompatibleSkillRootOptions{DisablePluginCache: !config.SkillsPluginCacheEnabled(cfg)}
+		for _, root := range skill.DefaultCompatibleSkillRootsWithOptions(projectRoot, homeDir, rootOpts) {
 			compatibleSkills, err := skill.LoadCompatibleSkillRoot(root)
 			if err != nil {
 				return nil, err
