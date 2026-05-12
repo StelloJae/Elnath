@@ -102,7 +102,8 @@ func (rt *executionRuntime) currentProviderMessage() string {
 	if len(view.ConfiguredProviders) > 0 {
 		msg += "\n" + formatProviderCandidates(view.ConfiguredProviders)
 	}
-	msg += "\nRuntime provider switching requires config.yaml or ELNATH_PROVIDER plus restart. Use /model and /effort for in-session overrides."
+	msg += "\n" + formatProviderSwitchBoundary(view.ProviderSwitchBoundaries)
+	msg += " Use /model and /effort for in-session overrides."
 	return msg
 }
 
@@ -122,16 +123,17 @@ func (rt *executionRuntime) currentProviderStatusView() providerStatusView {
 		model = "provider default"
 	}
 	view := providerStatusView{
-		Provider:              caps.Name,
-		Model:                 model,
-		ReasoningEffort:       caps.ReasoningEffort,
-		ReasoningEffortMode:   rt.wfCfg.ReasoningEffortMode,
-		ConfiguredEffort:      rt.wfCfg.ReasoningEffort,
-		ProviderEffort:        caps.ReasoningEffort,
-		ProviderEffortNote:    caps.ReasoningEffortFallback,
-		AutoEffortCompatible:  autoEffortCompatible(caps.ReasoningEffort),
-		RequestTimeoutSeconds: caps.RequestTimeoutSeconds,
-		ConfiguredProviders:   configuredProviderCandidates(cfg),
+		Provider:                 caps.Name,
+		Model:                    model,
+		ReasoningEffort:          caps.ReasoningEffort,
+		ReasoningEffortMode:      rt.wfCfg.ReasoningEffortMode,
+		ConfiguredEffort:         rt.wfCfg.ReasoningEffort,
+		ProviderEffort:           caps.ReasoningEffort,
+		ProviderEffortNote:       caps.ReasoningEffortFallback,
+		AutoEffortCompatible:     autoEffortCompatible(caps.ReasoningEffort),
+		RequestTimeoutSeconds:    caps.RequestTimeoutSeconds,
+		ProviderSwitchBoundaries: providerSwitchBoundaries(rt.reflectPool != nil),
+		ConfiguredProviders:      configuredProviderCandidates(cfg),
 	}
 	return view
 }
