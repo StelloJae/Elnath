@@ -507,11 +507,22 @@ func buildExecutionRuntime(
 	if hooks == nil {
 		hooks = agent.NewHookRegistry()
 	}
+	var rt *executionRuntime
 	reg.Register(skill.NewInvocationTool(skill.InvocationToolConfig{
-		Registry:   skillReg,
-		Provider:   provider,
-		Tools:      reg,
-		Model:      model,
+		Registry: skillReg,
+		ProviderResolver: func() llm.Provider {
+			if rt == nil {
+				return provider
+			}
+			return rt.provider
+		},
+		Tools: reg,
+		ModelResolver: func() string {
+			if rt == nil {
+				return model
+			}
+			return rt.wfCfg.Model
+		},
 		Permission: perm,
 		Hooks:      hooks,
 		Locale:     string(loadLocale()),
@@ -661,7 +672,7 @@ func buildExecutionRuntime(
 	b.Register(prompt.NewSessionSummaryNode(30, 5, 800))
 	b.Register(&prompt.LocaleInstructionNode{})
 
-	return &executionRuntime{
+	rt = &executionRuntime{
 		app:                app,
 		db:                 db,
 		provider:           provider,
@@ -702,7 +713,8 @@ func buildExecutionRuntime(
 		reflectMaxTurns:    reflectMaxTurns,
 		reflectTimeout:     reflectTimeout,
 		completionRetryMax: completionRetryMax,
-	}, nil
+	}
+	return rt, nil
 }
 
 // reflectionPoolCloser adapts *reflection.Pool to the core.Closer interface,

@@ -13,13 +13,15 @@ import (
 )
 
 type InvocationToolConfig struct {
-	Registry   *Registry
-	Provider   llm.Provider
-	Tools      *tools.Registry
-	Model      string
-	Permission *agent.Permission
-	Hooks      *agent.HookRegistry
-	Locale     string
+	Registry         *Registry
+	Provider         llm.Provider
+	ProviderResolver func() llm.Provider
+	Tools            *tools.Registry
+	Model            string
+	ModelResolver    func() string
+	Permission       *agent.Permission
+	Hooks            *agent.HookRegistry
+	Locale           string
 }
 
 type InvocationTool struct {
@@ -81,7 +83,8 @@ func (t *InvocationTool) Execute(ctx context.Context, params json.RawMessage) (*
 	if t == nil || t.cfg.Registry == nil {
 		return tools.ErrorResult("skill registry is not configured"), nil
 	}
-	if t.cfg.Provider == nil {
+	provider := t.resolveProvider()
+	if provider == nil {
 		return tools.ErrorResult("skill provider is not configured"), nil
 	}
 
@@ -98,9 +101,9 @@ func (t *InvocationTool) Execute(ctx context.Context, params json.RawMessage) (*
 	result, err := t.cfg.Registry.Execute(ctx, ExecuteParams{
 		SkillName:  name,
 		Args:       args,
-		Provider:   t.cfg.Provider,
+		Provider:   provider,
 		ToolReg:    registryWithoutTool(t.cfg.Tools, t.Name()),
-		Model:      t.cfg.Model,
+		Model:      t.resolveModel(),
 		Sink:       event.NopSink{},
 		Permission: t.cfg.Permission,
 		Hooks:      t.cfg.Hooks,
@@ -119,6 +122,26 @@ func (t *InvocationTool) Execute(ctx context.Context, params json.RawMessage) (*
 		return tools.ErrorResult(fmt.Sprintf("skill %q: marshal output: %v", name, err)), nil
 	}
 	return tools.SuccessResult(string(raw)), nil
+}
+
+func (t *InvocationTool) resolveProvider() llm.Provider {
+	if t != nil && t.cfg.ProviderResolver != nil {
+		return t.cfg.ProviderResolver()
+	}
+	if t == nil {
+		return nil
+	}
+	return t.cfg.Provider
+}
+
+func (t *InvocationTool) resolveModel() string {
+	if t != nil && t.cfg.ModelResolver != nil {
+		return t.cfg.ModelResolver()
+	}
+	if t == nil {
+		return ""
+	}
+	return t.cfg.Model
 }
 
 func normalizeInvocationSkillName(name string) string {
