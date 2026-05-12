@@ -21,19 +21,25 @@ type SchemaDeferralProvider interface {
 }
 
 func ShouldDeferToolSchema(tool Tool) bool {
+	return ToolSchemaDeferReason(tool) != ""
+}
+
+func ToolSchemaDeferReason(tool Tool) string {
 	if tool == nil {
-		return false
+		return ""
 	}
 	if tool.Name() == ToolSearchName {
-		return false
+		return ""
 	}
 	if strings.HasPrefix(tool.Name(), "mcp_") {
-		return true
+		return "mcp_prefix"
 	}
 	if deferrable, ok := tool.(SchemaDeferralProvider); ok {
-		return deferrable.DeferInitialToolSchema()
+		if deferrable.DeferInitialToolSchema() {
+			return "tool_declared_deferred"
+		}
 	}
-	return false
+	return ""
 }
 
 // ToolSearchTool searches the current registry without changing which tools
@@ -85,6 +91,7 @@ type toolSearchMatch struct {
 	Description           string `json:"description"`
 	SchemaPreview         string `json:"schema_preview"`
 	Deferred              bool   `json:"deferred"`
+	DeferReason           string `json:"defer_reason,omitempty"`
 	ConcurrencySafe       bool   `json:"concurrency_safe"`
 	Reversible            bool   `json:"reversible"`
 	CancelSiblingsOnError bool   `json:"cancel_siblings_on_error"`
@@ -255,11 +262,13 @@ func scoreToolSearchCandidate(tool Tool, required, optional []string) int {
 }
 
 func buildToolSearchMatch(tool Tool) toolSearchMatch {
+	deferReason := ToolSchemaDeferReason(tool)
 	return toolSearchMatch{
 		Name:                  tool.Name(),
 		Description:           tool.Description(),
 		SchemaPreview:         compactSchemaPreview(tool.Schema()),
-		Deferred:              ShouldDeferToolSchema(tool),
+		Deferred:              deferReason != "",
+		DeferReason:           deferReason,
 		ConcurrencySafe:       tool.IsConcurrencySafe(nil),
 		Reversible:            tool.Reversible(),
 		CancelSiblingsOnError: tool.ShouldCancelSiblingsOnError(),
