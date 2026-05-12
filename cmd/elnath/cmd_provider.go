@@ -54,6 +54,7 @@ const (
 	providerSwitchBoundaryRestartRequired         = "restart_required"
 	providerSwitchBoundaryReflectionStartupBound  = "reflection_provider_startup_bound"
 	providerSwitchBoundaryCompressionStartupBound = "compression_budget_startup_bound"
+	providerSwitchBoundaryDaemonSharedRuntime     = "daemon_shared_runtime"
 )
 
 func cmdProvider(_ context.Context, args []string) error {
@@ -338,7 +339,10 @@ func formatProviderSwitchBoundary(boundaries []string) string {
 	}
 	reflectionBound := containsProviderSwitchBoundary(boundaries, providerSwitchBoundaryReflectionStartupBound)
 	compressionBound := containsProviderSwitchBoundary(boundaries, providerSwitchBoundaryCompressionStartupBound)
+	daemonBound := containsProviderSwitchBoundary(boundaries, providerSwitchBoundaryDaemonSharedRuntime)
 	switch {
+	case daemonBound:
+		return "Provider switching: restart required. Daemon mode uses a shared runtime, so provider changes must be made in config before daemon start."
 	case reflectionBound && compressionBound:
 		return "Provider switching: restart required. Runtime skill provider resolution is dynamic, but reflection provider and compression budget remain startup-bound."
 	case reflectionBound:

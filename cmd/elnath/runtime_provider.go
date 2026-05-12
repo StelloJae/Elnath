@@ -243,12 +243,15 @@ func (rt *executionRuntime) switchProviderForSession(providerName string) (provi
 }
 
 func (rt *executionRuntime) runtimeProviderSwitchAvailable() bool {
-	return rt != nil && rt.reflectPool == nil
+	return rt != nil && !rt.daemonMode && rt.reflectPool == nil
 }
 
 func (rt *executionRuntime) runtimeProviderSwitchBoundaries() []string {
 	if rt == nil {
 		return providerSwitchBoundaries(false)
+	}
+	if rt.daemonMode {
+		return []string{providerSwitchBoundaryRestartRequired, providerSwitchBoundaryDaemonSharedRuntime}
 	}
 	if rt.reflectPool != nil {
 		return []string{providerSwitchBoundaryRestartRequired, providerSwitchBoundaryReflectionStartupBound}

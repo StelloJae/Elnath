@@ -2747,6 +2747,43 @@ func TestExecutionRuntimeRunTaskProviderSlashCommandBlocksSwitchWhenReflectionBo
 	}
 }
 
+func TestExecutionRuntimeRunTaskProviderSlashCommandBlocksSwitchInDaemonMode(t *testing.T) {
+	provider := &capabilityCountingProvider{}
+	rt := newTestExecutionRuntimeWithConfig(t, provider, true, func(cfg *config.Config) {
+		cfg.OpenAIResponses.APIKey = "sk-test"
+		cfg.OpenAIResponses.Model = "kimi-k2"
+		cfg.Anthropic.APIKey = "anthropic-test"
+		cfg.Anthropic.Model = "claude-sonnet-4-6"
+	})
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	_, summary, err := rt.runTask(context.Background(), sess, nil, "/provider use anthropic", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask /provider use: %v", err)
+	}
+	if !strings.Contains(summary, "Daemon mode uses a shared runtime") {
+		t.Fatalf("summary = %q, want daemon shared runtime boundary", summary)
+	}
+	if rt.provider.Name() != "openai-responses" || rt.wfCfg.Model != "mock-model" {
+		t.Fatalf("runtime provider/model changed to %s/%s, want unchanged", rt.provider.Name(), rt.wfCfg.Model)
+	}
+
+	_, jsonSummary, err := rt.runTask(context.Background(), sess, nil, "/provider check anthropic --json", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask /provider check: %v", err)
+	}
+	var out providerSelectionCheckView
+	if err := json.Unmarshal([]byte(jsonSummary), &out); err != nil {
+		t.Fatalf("summary is not JSON: %v\n%s", err, jsonSummary)
+	}
+	if out.RuntimeProviderSwitchAvailable || !containsString(out.ProviderSwitchBoundaries, providerSwitchBoundaryDaemonSharedRuntime) {
+		t.Fatalf("provider check = %+v, want daemon switch boundary", out)
+	}
+}
+
 func TestExecutionRuntimeRunTaskProviderSlashCommandExplainsSwitchBoundary(t *testing.T) {
 	provider := &capabilityCountingProvider{}
 	rt := newTestExecutionRuntimeWithConfig(t, provider, false, func(cfg *config.Config) {
