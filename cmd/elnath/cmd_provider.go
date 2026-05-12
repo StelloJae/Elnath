@@ -284,6 +284,9 @@ func providerSelectionCheckViewForConfig(cfg *config.Config, providerName string
 	if selected == "" {
 		return providerSelectionCheckView{}, fmt.Errorf("provider name is required")
 	}
+	if !isConfiguredProviderCandidate(cfg, selected) {
+		return providerSelectionCheckView{}, fmt.Errorf("provider %q is not a configured provider candidate", selected)
+	}
 	provider, model, err := buildProviderForSelection(cfg, selected)
 	if err != nil {
 		return providerSelectionCheckView{}, err
@@ -301,6 +304,19 @@ func providerSelectionCheckViewForConfig(cfg *config.Config, providerName string
 		RuntimeProviderSwitchAvailable: false,
 		ProviderSwitchBoundaries:       providerSwitchBoundaries(cfg != nil && cfg.SelfHealing.Enabled),
 	}, nil
+}
+
+func isConfiguredProviderCandidate(cfg *config.Config, selected string) bool {
+	selected = config.NormalizeProviderName(selected)
+	if selected == "" {
+		return false
+	}
+	for _, candidate := range configuredProviderCandidates(cfg) {
+		if config.NormalizeProviderName(candidate.Provider) == selected {
+			return true
+		}
+	}
+	return false
 }
 
 func providerSwitchBoundaries(reflectionStartupBound bool) []string {

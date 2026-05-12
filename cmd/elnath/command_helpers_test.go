@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/stello/elnath/internal/agent"
+	"github.com/stello/elnath/internal/config"
 	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/core"
 	"github.com/stello/elnath/internal/daemon"
@@ -520,6 +521,24 @@ func TestProviderCommandCheckJSON(t *testing.T) {
 	}
 	if strings.Contains(stdout, "test-key") {
 		t.Fatalf("stdout leaked credential: %q", stdout)
+	}
+}
+
+func TestProviderSelectionCheckRejectsUnlistedProviderCandidate(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := config.DefaultConfig()
+	cfg.Provider = ""
+	cfg.OpenAIResponses.APIKey = "responses-key"
+	cfg.OpenAIResponses.Model = "kimi-k2"
+	cfg.Anthropic.APIKey = ""
+	cfg.OpenAI.APIKey = ""
+
+	_, err := providerSelectionCheckViewForConfig(cfg, "codex")
+	if err == nil {
+		t.Fatal("providerSelectionCheckViewForConfig error = nil, want unlisted candidate error")
+	}
+	if !strings.Contains(err.Error(), "not a configured provider candidate") {
+		t.Fatalf("error = %q, want configured-candidate rejection", err)
 	}
 }
 
