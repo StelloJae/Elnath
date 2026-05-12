@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -72,6 +74,35 @@ func TestBuildProviderOpenAIResponsesUsesFallbackModel(t *testing.T) {
 	}
 }
 
+func TestBuildProviderPrefersCodexOAuthOverAnthropicByDefault(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	codexDir := filepath.Join(home, ".codex")
+	if err := os.MkdirAll(codexDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	auth := `{"auth_mode":"chatgpt","tokens":{"access_token":"codex-token","account_id":"acct"}}`
+	if err := os.WriteFile(filepath.Join(codexDir, "auth.json"), []byte(auth), 0o600); err != nil {
+		t.Fatalf("WriteFile auth.json: %v", err)
+	}
+
+	cfg := config.DefaultConfig()
+	cfg.Anthropic.APIKey = "anthropic-key"
+	cfg.OpenAIResponses.APIKey = ""
+	cfg.OpenAI.APIKey = ""
+
+	provider, model, err := buildProvider(cfg)
+	if err != nil {
+		t.Fatalf("buildProvider: %v", err)
+	}
+	if provider.Name() != "codex" {
+		t.Fatalf("provider.Name() = %q, want codex", provider.Name())
+	}
+	if model != "gpt-5.5" {
+		t.Fatalf("model = %q, want gpt-5.5", model)
+	}
+}
+
 func TestBuildProviderHonorsExplicitProvider(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	cfg := config.DefaultConfig()
@@ -80,6 +111,36 @@ func TestBuildProviderHonorsExplicitProvider(t *testing.T) {
 	cfg.Anthropic.Model = "claude-sonnet-4-6"
 	cfg.OpenAIResponses.APIKey = "responses-key"
 	cfg.OpenAIResponses.Model = "kimi-k2"
+
+	provider, model, err := buildProvider(cfg)
+	if err != nil {
+		t.Fatalf("buildProvider: %v", err)
+	}
+	if provider.Name() != "anthropic" {
+		t.Fatalf("provider.Name() = %q, want anthropic", provider.Name())
+	}
+	if model != "claude-sonnet-4-6" {
+		t.Fatalf("model = %q, want claude-sonnet-4-6", model)
+	}
+}
+
+func TestBuildProviderHonorsExplicitProviderWithCodexOAuthAvailable(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	codexDir := filepath.Join(home, ".codex")
+	if err := os.MkdirAll(codexDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	auth := `{"auth_mode":"chatgpt","tokens":{"access_token":"codex-token","account_id":"acct"}}`
+	if err := os.WriteFile(filepath.Join(codexDir, "auth.json"), []byte(auth), 0o600); err != nil {
+		t.Fatalf("WriteFile auth.json: %v", err)
+	}
+
+	cfg := config.DefaultConfig()
+	cfg.Provider = "anthropic"
+	cfg.Anthropic.APIKey = "anthropic-key"
+	cfg.Anthropic.Model = "claude-sonnet-4-6"
+	cfg.OpenAIResponses.APIKey = ""
 
 	provider, model, err := buildProvider(cfg)
 	if err != nil {

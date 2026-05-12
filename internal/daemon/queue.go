@@ -42,6 +42,11 @@ const defaultMaxRecoveries = 3
 // cleaned up by RecoverStale instead of mutating live idempotency keys.
 const idempotencyWindow = 30 * time.Second
 
+const (
+	queueBusyRetryAttempts = 50
+	queueBusyRetryDelay    = 10 * time.Millisecond
+)
+
 // TaskStatus represents the lifecycle state of a queued task.
 type TaskStatus string
 
@@ -771,12 +776,12 @@ func (q *Queue) lookupActiveTaskID(ctx context.Context, tx *sql.Tx, idemKey stri
 		  AND created_at >= ?
 		ORDER BY created_at DESC
 		LIMIT 1`
-	var err error
-	if tx != nil {
-		err = tx.QueryRowContext(ctx, query, idemKey, cutoff).Scan(&existingID)
-	} else {
-		err = q.db.QueryRowContext(ctx, query, idemKey, cutoff).Scan(&existingID)
-	}
+	err := retryQueueBusy(ctx, func() error {
+		if tx != nil {
+			return tx.QueryRowContext(ctx, query, idemKey, cutoff).Scan(&existingID)
+		}
+		return q.db.QueryRowContext(ctx, query, idemKey, cutoff).Scan(&existingID)
+	})
 	if err == sql.ErrNoRows {
 		return 0, nil
 	}
@@ -794,12 +799,12 @@ func (q *Queue) lookupActiveTaskIDAny(ctx context.Context, tx *sql.Tx, idemKey s
 		  AND status IN ('pending','running')
 		ORDER BY created_at DESC
 		LIMIT 1`
-	var err error
-	if tx != nil {
-		err = tx.QueryRowContext(ctx, query, idemKey).Scan(&existingID)
-	} else {
-		err = q.db.QueryRowContext(ctx, query, idemKey).Scan(&existingID)
-	}
+	err := retryQueueBusy(ctx, func() error {
+		if tx != nil {
+			return tx.QueryRowContext(ctx, query, idemKey).Scan(&existingID)
+		}
+		return q.db.QueryRowContext(ctx, query, idemKey).Scan(&existingID)
+	})
 	if err == sql.ErrNoRows {
 		return 0, nil
 	}
@@ -813,27 +818,37 @@ func (q *Queue) insertTask(ctx context.Context, tx *sql.Tx, payload, idemKey str
 	sessionID := ParseTaskPayload(payload).SessionID
 	var (
 		res sql.Result
-		err error
 	)
-	for attempt := 0; attempt < 5; attempt++ {
+	err := retryQueueBusy(ctx, func() error {
 		query := `
 			INSERT INTO task_queue (payload, idempotency_key, session_id, status, created_at, updated_at)
 			VALUES (?, ?, ?, ?, ?, ?)`
 		if tx != nil {
+			var err error
 			res, err = tx.ExecContext(ctx, query, payload, idemKey, sessionID, string(StatusPending), now, now)
-		} else {
-			res, err = q.db.ExecContext(ctx, query, payload, idemKey, sessionID, string(StatusPending), now, now)
+			return err
 		}
+		var err error
+		res, err = q.db.ExecContext(ctx, query, payload, idemKey, sessionID, string(StatusPending), now, now)
+		return err
+	})
+	return res, err
+}
+
+func retryQueueBusy(ctx context.Context, op func() error) error {
+	var err error
+	for attempt := 0; attempt < queueBusyRetryAttempts; attempt++ {
+		err = op()
 		if !isBusyError(err) {
-			return res, err
+			return err
 		}
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(10 * time.Millisecond):
+			return ctx.Err()
+		case <-time.After(queueBusyRetryDelay):
 		}
 	}
-	return res, err
+	return err
 }
 
 func isUniqueViolation(err error) bool {

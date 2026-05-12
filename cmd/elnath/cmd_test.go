@@ -1926,8 +1926,8 @@ func TestLoadCodexModelMissing(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	if got := loadCodexModel(); got != "o4-mini" {
-		t.Fatalf("loadCodexModel = %q, want o4-mini default", got)
+	if got := loadCodexModel(); got != "gpt-5.5" {
+		t.Fatalf("loadCodexModel = %q, want gpt-5.5 default", got)
 	}
 }
 
@@ -2029,8 +2029,24 @@ func TestLoadCodexModelNoModelLine(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	if got := loadCodexModel(); got != "o4-mini" {
-		t.Fatalf("loadCodexModel = %q, want o4-mini default", got)
+	if got := loadCodexModel(); got != "gpt-5.5" {
+		t.Fatalf("loadCodexModel = %q, want gpt-5.5 default", got)
+	}
+}
+
+func TestLoadCodexModelEmptyModelLine(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	codexDir := filepath.Join(home, ".codex")
+	if err := os.MkdirAll(codexDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(codexDir, "config.toml"), []byte("model = \"\"\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	if got := loadCodexModel(); got != "gpt-5.5" {
+		t.Fatalf("loadCodexModel = %q, want gpt-5.5 default", got)
 	}
 }
 

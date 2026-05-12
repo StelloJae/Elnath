@@ -288,33 +288,6 @@ func buildProviderForSelection(cfg *config.Config, selectedProvider string) (llm
 		}
 	}
 
-	if cfg.Anthropic.APIKey != "" {
-		var opts []llm.AnthropicOption
-		if cfg.Anthropic.BaseURL != "" {
-			opts = append(opts, llm.WithAnthropicBaseURL(cfg.Anthropic.BaseURL))
-		}
-		if cfg.Anthropic.Timeout > 0 {
-			opts = append(opts, llm.WithAnthropicTimeout(time.Duration(cfg.Anthropic.Timeout)*time.Second))
-		}
-		if cfg.DataDir != "" {
-			// Prompt-cache FileSink lands each turn's BreakReport at
-			// <data-dir>/prompt-cache/<session-id>.jsonl so `elnath debug
-			// prompt-cache --session=<id>` has real data to show. Active
-			// only when the agent threads a non-empty SessionID through
-			// ChatRequest (orchestrator.agentOptions wires this today).
-			opts = append(opts, llm.WithAnthropicPromptCacheSink(promptcache.NewFileSink(cfg.DataDir)))
-		}
-		m := cfg.Anthropic.Model
-		if m == "" {
-			m = "claude-sonnet-4-6"
-		}
-		reg.Register("anthropic", llm.NewAnthropicProvider(cfg.Anthropic.APIKey, m, opts...))
-		providerModels["anthropic"] = m
-		if model == "" {
-			model = m
-		}
-	}
-
 	// Codex OAuth provider (preferred — auto-refreshes tokens).
 	if llm.CodexOAuthAvailable() {
 		codexModel := loadCodexModel()
@@ -346,6 +319,33 @@ func buildProviderForSelection(cfg *config.Config, selectedProvider string) (llm
 			if model == "" {
 				model = codexModel
 			}
+		}
+	}
+
+	if cfg.Anthropic.APIKey != "" {
+		var opts []llm.AnthropicOption
+		if cfg.Anthropic.BaseURL != "" {
+			opts = append(opts, llm.WithAnthropicBaseURL(cfg.Anthropic.BaseURL))
+		}
+		if cfg.Anthropic.Timeout > 0 {
+			opts = append(opts, llm.WithAnthropicTimeout(time.Duration(cfg.Anthropic.Timeout)*time.Second))
+		}
+		if cfg.DataDir != "" {
+			// Prompt-cache FileSink lands each turn's BreakReport at
+			// <data-dir>/prompt-cache/<session-id>.jsonl so `elnath debug
+			// prompt-cache --session=<id>` has real data to show. Active
+			// only when the agent threads a non-empty SessionID through
+			// ChatRequest (orchestrator.agentOptions wires this today).
+			opts = append(opts, llm.WithAnthropicPromptCacheSink(promptcache.NewFileSink(cfg.DataDir)))
+		}
+		m := cfg.Anthropic.Model
+		if m == "" {
+			m = "claude-sonnet-4-6"
+		}
+		reg.Register("anthropic", llm.NewAnthropicProvider(cfg.Anthropic.APIKey, m, opts...))
+		providerModels["anthropic"] = m
+		if model == "" {
+			model = m
 		}
 	}
 
@@ -484,26 +484,30 @@ func loadCodexAuth() (token, model, accountID string) {
 	return auth.Tokens.AccessToken, model, accountID
 }
 
-// loadCodexModel reads the model from ~/.codex/config.toml, defaulting to o4-mini.
+// loadCodexModel reads the model from ~/.codex/config.toml, defaulting to the
+// centralized Elnath fallback model.
 func loadCodexModel() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "o4-mini"
+		return defaultFallbackModel
 	}
 	cfgData, err := os.ReadFile(filepath.Join(home, ".codex", "config.toml"))
 	if err != nil {
-		return "o4-mini"
+		return defaultFallbackModel
 	}
 	for _, line := range strings.Split(string(cfgData), "\n") {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "model") && !strings.HasPrefix(line, "model_") {
 			parts := strings.SplitN(line, "=", 2)
 			if len(parts) == 2 {
-				return strings.Trim(strings.TrimSpace(parts[1]), "\"")
+				model := strings.Trim(strings.TrimSpace(parts[1]), "\"")
+				if model != "" {
+					return model
+				}
 			}
 		}
 	}
-	return "o4-mini"
+	return defaultFallbackModel
 }
 
 func buildRouter(cfg orchestrator.WorkflowConfig) *orchestrator.Router {
