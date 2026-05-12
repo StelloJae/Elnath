@@ -16,6 +16,7 @@ import (
 	"github.com/stello/elnath/internal/agentic"
 	agenticactors "github.com/stello/elnath/internal/agentic/actors"
 	agenticapprovals "github.com/stello/elnath/internal/agentic/approvals"
+	agenticenqueue "github.com/stello/elnath/internal/agentic/enqueue"
 	agenticmemory "github.com/stello/elnath/internal/agentic/memory"
 	agenticpolicy "github.com/stello/elnath/internal/agentic/policy"
 	agentictools "github.com/stello/elnath/internal/agentic/tools"
@@ -235,6 +236,35 @@ type executionRuntime struct {
 	planModeController *agent.PlanModeController
 }
 
+type delegateEnqueueRuntimeService struct {
+	service *agenticenqueue.Service
+}
+
+func (s delegateEnqueueRuntimeService) EnqueueDelegated(ctx context.Context, req agentictools.DelegateEnqueueRequest) (*agentictools.DelegateEnqueueResult, error) {
+	if s.service == nil {
+		return nil, fmt.Errorf("enqueue service unavailable")
+	}
+	result, err := s.service.Enqueue(ctx, agenticenqueue.Request{
+		TaskID:                  req.TaskID,
+		OperatorID:              req.OperatorID,
+		Reason:                  req.Reason,
+		RequestedEnforcement:    req.RequestedEnforcement,
+		RequestedCompletionGate: req.RequestedCompletionGate,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := &agentictools.DelegateEnqueueResult{
+		QueueTaskID: result.QueueTaskID,
+		Existed:     result.Existed,
+	}
+	if result.Decision != nil {
+		out.DecisionID = result.Decision.ID
+		out.DecisionStatus = result.Decision.Status
+	}
+	return out, nil
+}
+
 type agenticRuntimeEnforcementKey struct{}
 
 func withAgenticRuntimeEnforcement(ctx context.Context, mode string) context.Context {
@@ -442,6 +472,10 @@ func buildExecutionRuntime(
 	reg.Register(agentictools.NewTaskEvidenceTool(agenticStore))
 	reg.Register(agentictools.NewDelegateCreateTool(agenticStore))
 	reg.Register(agentictools.NewDelegateListTool(agenticStore))
+	reg.Register(agentictools.NewDelegateEnqueueTool(agenticStore, delegateEnqueueRuntimeService{service: agenticenqueue.NewService(agenticStore, taskQueue, agenticenqueue.Options{
+		EnforcementMode:    cfg.Agentic.Enforcement.Mode,
+		CompletionGateMode: cfg.Agentic.CompletionGate.Mode,
+	})}))
 	schedulePath := resolveRuntimeScheduledTasksPath(cfg)
 	reg.Register(scheduler.NewScheduleCreateTool(schedulePath))
 	reg.Register(scheduler.NewScheduleListTool(schedulePath))
