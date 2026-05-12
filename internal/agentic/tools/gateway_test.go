@@ -114,6 +114,35 @@ func TestToolGateway_ReadOnlyActionAutoAllowedExecutesAndReceipts(t *testing.T) 
 	}
 }
 
+func TestToolGateway_ObserveAllowsAgenticActorGraph(t *testing.T) {
+	ctx := context.Background()
+	db, store, approvalBridge, task := newGatewayTestStore(t)
+	exec := &recordingExecutor{}
+	gateway := NewGateway(exec, store, policy.NewEvaluator(), approvalBridge)
+
+	result, err := gateway.Execute(WithContext(ctx, Context{
+		TaskID:     task.ID,
+		ToolCallID: "call-graph",
+		ActionKind: "observe",
+	}), ActorGraphToolName, json.RawMessage(`{"task_id":1}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result == nil || result.IsError || !strings.Contains(result.Output, ActorGraphToolName+" ok") {
+		t.Fatalf("result = %+v, want successful graph read", result)
+	}
+	if exec.Calls() != 1 {
+		t.Fatalf("executor calls = %d, want 1", exec.Calls())
+	}
+	assertLatestDecision(t, db, agentic.PolicyDecisionAuto)
+}
+
+func TestToolGateway_AgenticActorGraphIsReadOnly(t *testing.T) {
+	if !isReadOnlyTool(ActorGraphToolName) {
+		t.Fatal("agentic_actor_graph should be classified as read-only")
+	}
+}
+
 func TestToolGateway_MutatingActionRequiresApprovalAndDoesNotExecute(t *testing.T) {
 	ctx := context.Background()
 	db, store, approvalBridge, task := newGatewayTestStore(t)

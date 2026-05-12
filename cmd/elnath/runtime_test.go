@@ -2963,6 +2963,21 @@ func TestExecutionRuntimeRegistersWorktreeListTool(t *testing.T) {
 	}
 }
 
+func TestExecutionRuntimeRegistersAgenticActorGraphTool(t *testing.T) {
+	rt := newTestExecutionRuntime(t, &countingProvider{streamText: "unused"})
+
+	tool, ok := rt.reg.Get("agentic_actor_graph")
+	if !ok {
+		t.Fatal("runtime registry missing agentic_actor_graph tool")
+	}
+	if !tool.IsConcurrencySafe(nil) || !tool.Reversible() {
+		t.Fatalf("agentic_actor_graph metadata = concurrency:%t reversible:%t, want read-only metadata", tool.IsConcurrencySafe(nil), tool.Reversible())
+	}
+	if !tools.ShouldDeferToolSchema(tool) {
+		t.Fatal("agentic_actor_graph should defer initial schema")
+	}
+}
+
 func TestExecutionRuntimeRegistersDeferredControlSurfaceTools(t *testing.T) {
 	rt := newTestExecutionRuntime(t, &countingProvider{streamText: "unused"})
 
@@ -2970,6 +2985,7 @@ func TestExecutionRuntimeRegistersDeferredControlSurfaceTools(t *testing.T) {
 		"task_create", "task_list", "task_get", "task_stop", "task_output", "task_monitor", "task_update",
 		"schedule_create", "schedule_list", "schedule_delete",
 		"enter_worktree", "worktree_list", "exit_worktree",
+		"agentic_actor_graph",
 	} {
 		tool, ok := rt.reg.Get(name)
 		if !ok {
