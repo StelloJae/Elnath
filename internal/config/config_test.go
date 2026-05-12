@@ -725,6 +725,11 @@ func TestValidate(t *testing.T) {
 			wantErr: "self_healing.completion_retry_max",
 		},
 		{
+			name:    "unsupported self healing completion retry max above current executor limit",
+			mutate:  func(c *Config) { c.SelfHealing.CompletionRetryMax = 2 },
+			wantErr: "self_healing.completion_retry_max",
+		},
+		{
 			name: "openai responses base url requires api key",
 			mutate: func(c *Config) {
 				c.OpenAIResponses.BaseURL = "https://api.example.test/v1"
