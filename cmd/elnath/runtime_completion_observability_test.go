@@ -223,6 +223,90 @@ func TestCompletionContractSummaryDetectsEditToolMutation(t *testing.T) {
 	}
 }
 
+func TestCompletionContractSummaryDetectsWorktreeRunMutation(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("fix the bug in a managed worktree and run tests"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "worktree-run-1", Name: "worktree_run", Input: json.RawMessage(`{"worktree_id":"wt-1","command":"touch internal/daemon/.elnath-test-marker"}`)},
+			}},
+			llm.NewToolResultMessage("worktree-run-1", `{"exit_code":0}`, false),
+			llm.NewAssistantMessage("Done."),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(&orchestrator.RoutingContext{VerificationHint: true}, orchestrator.WorkflowConfig{}, result)
+
+	if !summary.EditIntent {
+		t.Fatal("EditIntent = false, want true")
+	}
+	if summary.EditObserved == nil || !*summary.EditObserved {
+		t.Fatalf("EditObserved = %v, want true", summary.EditObserved)
+	}
+	if summary.CompletionWarning != "" {
+		t.Fatalf("CompletionWarning = %q, want empty", summary.CompletionWarning)
+	}
+}
+
+func TestCompletionContractSummaryDoesNotCountVerificationOnlyWorktreeRunAsMutation(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("fix the bug in a managed worktree and run tests"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "worktree-run-1", Name: "worktree_run", Input: json.RawMessage(`{"worktree_id":"wt-1","command":"go test ./cmd/elnath -count=1"}`)},
+			}},
+			llm.NewToolResultMessage("worktree-run-1", `{"exit_code":0}`, false),
+			llm.NewAssistantMessage("Done."),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(&orchestrator.RoutingContext{VerificationHint: true}, orchestrator.WorkflowConfig{}, result)
+
+	if !summary.EditIntent {
+		t.Fatal("EditIntent = false, want true")
+	}
+	if summary.EditObserved == nil {
+		t.Fatal("EditObserved = nil, want explicit false")
+	}
+	if *summary.EditObserved {
+		t.Fatal("EditObserved = true, want verification-only worktree_run not counted as mutation")
+	}
+	if summary.CompletionWarning != "edit_intent_without_mutation" {
+		t.Fatalf("CompletionWarning = %q, want edit_intent_without_mutation", summary.CompletionWarning)
+	}
+}
+
+func TestCompletionContractSummaryDoesNotCountFailedWorktreeRunAsMutation(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("fix the bug in a managed worktree and run tests"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "worktree-run-1", Name: "worktree_run", Input: json.RawMessage(`{"worktree_id":"wt-1","command":"touch internal/daemon/.elnath-test-marker"}`)},
+			}},
+			llm.NewToolResultMessage("worktree-run-1", `{"exit_code":1}`, true),
+			llm.NewAssistantMessage("Done."),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(&orchestrator.RoutingContext{VerificationHint: true}, orchestrator.WorkflowConfig{}, result)
+
+	if !summary.EditIntent {
+		t.Fatal("EditIntent = false, want true")
+	}
+	if summary.EditObserved == nil {
+		t.Fatal("EditObserved = nil, want explicit false")
+	}
+	if *summary.EditObserved {
+		t.Fatal("EditObserved = true, want failed worktree_run not counted as mutation")
+	}
+	if summary.CompletionWarning != "edit_intent_without_mutation" {
+		t.Fatalf("CompletionWarning = %q, want edit_intent_without_mutation", summary.CompletionWarning)
+	}
+	if summary.RetryDecision != completionRetryDecisionRetrySmallerScope || summary.RetryReason != "edit_intent_without_mutation" {
+		t.Fatalf("retry plan = %q/%q, want retry_smaller_scope/edit_intent_without_mutation", summary.RetryDecision, summary.RetryReason)
+	}
+}
+
 func TestCompletionContractSummaryDoesNotCountFailedEditToolAsMutation(t *testing.T) {
 	result := &orchestrator.WorkflowResult{
 		Messages: []llm.Message{

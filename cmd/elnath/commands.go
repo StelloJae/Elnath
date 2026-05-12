@@ -73,7 +73,7 @@ func commandSpecs() []commandSpec {
 		{Name: "lessons", Runner: cmdLessons, Description: "Manage lessons learned from agent runs.", Category: "knowledge"},
 		{Name: "skill", Runner: cmdSkill, Description: "Manage Elnath skills.", Category: "skills"},
 		{Name: "profile", Runner: cmdProfile, Description: "Inspect runtime profile information.", Category: "runtime"},
-		{Name: "provider", Runner: cmdProvider, Description: "Inspect configured LLM provider capability.", Category: "provider", ArgumentHint: "status [--json]"},
+		{Name: "provider", Runner: cmdProvider, Description: "Inspect configured LLM provider capability.", Category: "provider", ArgumentHint: "status|candidates|check <provider> [--json]"},
 		{Name: "explain", Runner: cmdExplain, Description: "Explain project or runtime state.", Category: "knowledge"},
 		{Name: "debug", Runner: cmdDebug, Description: "Run debugging helpers.", Category: "debugging"},
 		// Hidden internal exec mode for the v41 / B3b-4-S0 Linux
