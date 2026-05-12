@@ -161,6 +161,12 @@ func TestToolGateway_DelegateCreateIsMutating(t *testing.T) {
 	}
 }
 
+func TestToolGateway_DelegateEnqueueIsMutating(t *testing.T) {
+	if isReadOnlyTool(DelegateEnqueueToolName) {
+		t.Fatal("agentic_delegate_enqueue should not be classified as read-only")
+	}
+}
+
 func TestToolGateway_MutatingActionRequiresApprovalAndDoesNotExecute(t *testing.T) {
 	ctx := context.Background()
 	db, store, approvalBridge, task := newGatewayTestStore(t)

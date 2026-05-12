@@ -3028,6 +3028,83 @@ func TestExecutionRuntimeRegistersAgenticDelegateListTool(t *testing.T) {
 	}
 }
 
+func TestExecutionRuntimeRegistersAgenticDelegateEnqueueTool(t *testing.T) {
+	rt := newTestExecutionRuntime(t, &countingProvider{streamText: "unused"})
+
+	tool, ok := rt.reg.Get("agentic_delegate_enqueue")
+	if !ok {
+		t.Fatal("runtime registry missing agentic_delegate_enqueue tool")
+	}
+	if tool.IsConcurrencySafe(nil) || tool.Reversible() {
+		t.Fatalf("agentic_delegate_enqueue metadata = concurrency:%t reversible:%t, want mutating metadata", tool.IsConcurrencySafe(nil), tool.Reversible())
+	}
+	if !tools.ShouldDeferToolSchema(tool) {
+		t.Fatal("agentic_delegate_enqueue should defer initial schema")
+	}
+}
+
+func TestExecutionRuntimeAgenticDelegateEnqueueToolQueuesDelegatedChild(t *testing.T) {
+	rt := newTestExecutionRuntime(t, &countingProvider{streamText: "unused"})
+	ctx := context.Background()
+	parent, err := rt.agenticStore.CreateAgenticTask(ctx, agentic.AgenticTask{
+		Title:              "Parent",
+		Prompt:             "coordinate work",
+		Status:             agentic.TaskStatusProposed,
+		RiskLevel:          agentic.RiskLevelLow,
+		AutonomyDecision:   agentic.PolicyDecisionObserveOnly,
+		VerificationStatus: agentic.VerificationStatusPending,
+	})
+	if err != nil {
+		t.Fatalf("CreateAgenticTask parent: %v", err)
+	}
+	child, err := rt.agenticStore.CreateAgenticTask(ctx, agentic.AgenticTask{
+		Title:              "Child",
+		Prompt:             "execute delegated work",
+		ParentID:           parent.ID,
+		Status:             agentic.TaskStatusProposed,
+		RiskLevel:          agentic.RiskLevelLow,
+		AutonomyDecision:   agentic.PolicyDecisionObserveOnly,
+		VerificationStatus: agentic.VerificationStatusPending,
+	})
+	if err != nil {
+		t.Fatalf("CreateAgenticTask child: %v", err)
+	}
+	if _, err := rt.agenticStore.CreateTaskEdge(ctx, agentic.TaskEdge{ParentID: parent.ID, ChildID: child.ID, EdgeType: "delegates_to"}); err != nil {
+		t.Fatalf("CreateTaskEdge: %v", err)
+	}
+	tool, ok := rt.reg.Get("agentic_delegate_enqueue")
+	if !ok {
+		t.Fatal("runtime registry missing agentic_delegate_enqueue tool")
+	}
+
+	result, err := tool.Execute(ctx, json.RawMessage(`{"child_task_id":`+fmt.Sprint(child.ID)+`,"operator_id":"runtime-test"}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result == nil || result.IsError {
+		t.Fatalf("result = %+v, want success", result)
+	}
+	var out struct {
+		ChildTaskID    int64  `json:"child_task_id"`
+		ParentTaskID   int64  `json:"parent_task_id"`
+		QueueTaskID    int64  `json:"queue_task_id"`
+		DecisionStatus string `json:"decision_status"`
+	}
+	if err := json.Unmarshal([]byte(result.Output), &out); err != nil {
+		t.Fatalf("unmarshal output: %v\n%s", err, result.Output)
+	}
+	if out.ChildTaskID != child.ID || out.ParentTaskID != parent.ID || out.QueueTaskID == 0 || out.DecisionStatus != agentic.TaskEnqueueStatusEnqueued {
+		t.Fatalf("output = %+v, want queued delegated child", out)
+	}
+	updated, err := rt.agenticStore.GetAgenticTask(ctx, child.ID)
+	if err != nil {
+		t.Fatalf("GetAgenticTask child: %v", err)
+	}
+	if updated.QueueTaskID != out.QueueTaskID || updated.Status != agentic.TaskStatusPending {
+		t.Fatalf("updated child = %+v, want queue-backed pending child", updated)
+	}
+}
+
 func TestExecutionRuntimeRegistersDeferredControlSurfaceTools(t *testing.T) {
 	rt := newTestExecutionRuntime(t, &countingProvider{streamText: "unused"})
 
@@ -3035,7 +3112,7 @@ func TestExecutionRuntimeRegistersDeferredControlSurfaceTools(t *testing.T) {
 		"task_create", "task_list", "task_get", "task_stop", "task_output", "task_monitor", "task_update",
 		"schedule_create", "schedule_list", "schedule_delete",
 		"enter_worktree", "worktree_list", "exit_worktree",
-		"agentic_actor_graph", "agentic_task_evidence", "agentic_delegate_create", "agentic_delegate_list",
+		"agentic_actor_graph", "agentic_task_evidence", "agentic_delegate_create", "agentic_delegate_list", "agentic_delegate_enqueue",
 	} {
 		tool, ok := rt.reg.Get(name)
 		if !ok {
