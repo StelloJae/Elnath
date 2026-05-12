@@ -146,6 +146,10 @@ func TestPermissionWithActualToolNames(t *testing.T) {
 		{"plan allows ask_user_question", ModePlan, "ask_user_question", true},
 		{"plan allows schedule_list", ModePlan, "schedule_list", true},
 		{"plan allows worktree_list", ModePlan, "worktree_list", true},
+		{"plan allows agentic_actor_graph", ModePlan, "agentic_actor_graph", true},
+		{"plan allows agentic_task_evidence", ModePlan, "agentic_task_evidence", true},
+		{"plan allows agentic_delegate_list", ModePlan, "agentic_delegate_list", true},
+		{"plan allows agentic_message_list", ModePlan, "agentic_message_list", true},
 		{"plan allows enter_plan_mode", ModePlan, "enter_plan_mode", true},
 		{"plan allows exit_plan_mode", ModePlan, "exit_plan_mode", true},
 
@@ -156,6 +160,9 @@ func TestPermissionWithActualToolNames(t *testing.T) {
 		{"plan denies git", ModePlan, "git", false},
 		{"plan denies task_create", ModePlan, "task_create", false},
 		{"plan denies task_update", ModePlan, "task_update", false},
+		{"plan denies agentic_delegate_create", ModePlan, "agentic_delegate_create", false},
+		{"plan denies agentic_delegate_enqueue", ModePlan, "agentic_delegate_enqueue", false},
+		{"plan denies agentic_message_send", ModePlan, "agentic_message_send", false},
 		{"plan denies schedule_create", ModePlan, "schedule_create", false},
 		{"plan denies schedule_delete", ModePlan, "schedule_delete", false},
 		{"plan denies enter_worktree", ModePlan, "enter_worktree", false},
@@ -194,6 +201,7 @@ func TestAcceptEditsAutoApprovesWithoutPrompter(t *testing.T) {
 		"wiki_search", "wiki_read", "conversation_search",
 		"cross_project_search", "cross_project_conversation_search",
 		"tool_search", "command_catalog", "todo_write", "task_list", "task_get", "task_output", "task_monitor", "ask_user_question", "schedule_list",
+		"agentic_actor_graph", "agentic_task_evidence", "agentic_delegate_list", "agentic_message_list",
 		"enter_plan_mode", "exit_plan_mode",
 		"write_file", "edit_file", "wiki_write",
 	}
