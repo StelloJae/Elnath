@@ -426,6 +426,7 @@ func buildExecutionRuntime(
 	planModeController := agent.NewPlanModeController(perm)
 	reg.Register(agent.NewEnterPlanModeTool(planModeController))
 	reg.Register(agent.NewExitPlanModeTool(planModeController))
+	reg.Register(agent.NewAskUserQuestionTool())
 	taskQueue, err := daemon.NewQueueNoRecover(db.Main)
 	if err != nil {
 		return nil, fmt.Errorf("open task queue tools: %w", err)
