@@ -3020,6 +3020,7 @@ func TestExecutionRuntimeRunTaskSelfHealingCorrectionRetriesIncompleteFinal(t *t
 	rt := newTestExecutionRuntimeWithConfig(t, provider, false, func(cfg *config.Config) {
 		cfg.SelfHealing.Enabled = true
 		cfg.SelfHealing.ObserveOnly = false
+		cfg.SelfHealing.CompletionRetryMax = 1
 	})
 	sess, err := rt.mgr.NewSession()
 	if err != nil {
@@ -3071,6 +3072,36 @@ func TestExecutionRuntimeRunTaskSelfHealingObserveOnlyDoesNotRetryIncompleteFina
 	}
 	if provider.idx != 1 {
 		t.Fatalf("streamed responses = %d, want no correction retry in observe-only mode", provider.idx)
+	}
+}
+
+func TestExecutionRuntimeRunTaskSelfHealingRetryMaxZeroDisablesCorrection(t *testing.T) {
+	provider := &sequenceStreamProvider{responses: []string{
+		"I could not finish the patch.",
+		"Done now.",
+	}}
+	rt := newTestExecutionRuntimeWithConfig(t, provider, false, func(cfg *config.Config) {
+		cfg.SelfHealing.Enabled = true
+		cfg.SelfHealing.ObserveOnly = false
+		cfg.SelfHealing.CompletionRetryMax = 0
+	})
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	_, summary, err := rt.runTask(context.Background(), sess, nil, "fix the existing handler", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask: %v", err)
+	}
+	if summary != "I could not finish the patch." {
+		t.Fatalf("summary = %q, want first attempt result", summary)
+	}
+	if provider.idx != 1 {
+		t.Fatalf("streamed responses = %d, want retry disabled by completion_retry_max=0", provider.idx)
+	}
+	if rt.completionRetryMax != 0 {
+		t.Fatalf("completionRetryMax = %d, want 0", rt.completionRetryMax)
 	}
 }
 

@@ -63,12 +63,13 @@ func DefaultConfig() *Config {
 			MinMessages: 5,
 		},
 		SelfHealing: SelfHealingConfig{
-			Enabled:        true,
-			ObserveOnly:    true,
-			MaxTurns:       20,
-			TimeoutSeconds: 15,
-			MaxConcurrent:  2,
-			QueueSize:      10,
+			Enabled:            true,
+			ObserveOnly:        true,
+			MaxTurns:           20,
+			TimeoutSeconds:     15,
+			CompletionRetryMax: 1,
+			MaxConcurrent:      2,
+			QueueSize:          10,
 		},
 	}
 }

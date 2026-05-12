@@ -206,6 +206,7 @@ reasoning:
 self_healing:
   enabled: true
   observe_only: true # set false to allow one bounded completion correction pass
+  completion_retry_max: 1 # set 0 to disable correction retry even when observe_only=false
 
 permission:
   mode: default
