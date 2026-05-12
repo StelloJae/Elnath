@@ -96,6 +96,38 @@ func TestCompletionContractSummaryDetectsFailedBashVerification(t *testing.T) {
 	}
 }
 
+func TestCompletionContractSummaryUsesLatestBashVerificationResult(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("check the project status and run tests"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "bash-1", Name: "bash", Input: json.RawMessage(`{"command":"go test ./internal/llm -count=1"}`)},
+			}},
+			llm.NewToolResultMessage("bash-1", "FAIL", true),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "bash-2", Name: "bash", Input: json.RawMessage(`{"command":"go test ./internal/llm -count=1"}`)},
+			}},
+			llm.NewToolResultMessage("bash-2", "ok", false),
+			llm.NewAssistantMessage("Done."),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(&orchestrator.RoutingContext{VerificationHint: true}, orchestrator.WorkflowConfig{}, result)
+
+	if summary.VerificationObserved == nil || !*summary.VerificationObserved {
+		t.Fatalf("VerificationObserved = %v, want true", summary.VerificationObserved)
+	}
+	if summary.VerificationCommand != "go test ./internal/llm -count=1" {
+		t.Fatalf("VerificationCommand = %q", summary.VerificationCommand)
+	}
+	if summary.CompletionWarning != "" {
+		t.Fatalf("CompletionWarning = %q, want latest passing verification to clear warning", summary.CompletionWarning)
+	}
+	if summary.RetryDecision != "" || summary.RetryReason != "" {
+		t.Fatalf("retry plan = %q/%q, want empty after latest passing verification", summary.RetryDecision, summary.RetryReason)
+	}
+}
+
 func TestCompletionContractSummaryDetectsIncompleteFinalResponse(t *testing.T) {
 	result := &orchestrator.WorkflowResult{
 		Messages: []llm.Message{

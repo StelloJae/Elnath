@@ -188,7 +188,8 @@ func observedVerificationCommand(messages []llm.Message) string {
 
 func observedVerificationCommandStatus(messages []llm.Message) (string, bool) {
 	pending := make(map[string]string)
-	firstPending := ""
+	lastCommand := ""
+	lastFailed := false
 	for _, msg := range messages {
 		for _, block := range msg.Content {
 			switch b := block.(type) {
@@ -204,19 +205,20 @@ func observedVerificationCommandStatus(messages []llm.Message) (string, bool) {
 					return command, false
 				}
 				pending[b.ID] = command
-				if firstPending == "" {
-					firstPending = command
-				}
+				lastCommand = command
+				lastFailed = false
 			case llm.ToolResultBlock:
 				command, ok := pending[b.ToolUseID]
 				if !ok {
 					continue
 				}
-				return command, b.IsError
+				lastCommand = command
+				lastFailed = b.IsError
+				delete(pending, b.ToolUseID)
 			}
 		}
 	}
-	return firstPending, false
+	return lastCommand, lastFailed
 }
 
 func bashCommandFromToolInput(input json.RawMessage) string {
