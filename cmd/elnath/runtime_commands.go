@@ -12,7 +12,7 @@ import (
 	"github.com/stello/elnath/internal/skill"
 )
 
-const commandsCommandUsage = "Usage: /commands [--json] [--all] or /help [--json] [--all]"
+const commandsCommandUsage = "Usage: /commands [--json] [--all|--hidden] or /help [--json] [--all|--hidden]"
 
 func (rt *executionRuntime) tryCommandsCommand(
 	sess *agent.Session,
@@ -89,14 +89,14 @@ func runtimeCommandCatalogWithSkills(skillReg *skill.Registry, includeHidden boo
 			ArgumentHint: spec.ArgumentHint,
 		})
 	}
-	entries = append(entries, skillBackedCommandCatalogEntries(skillReg, entries)...)
+	entries = append(entries, skillBackedCommandCatalogEntries(skillReg, entries, includeHidden)...)
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].Name < entries[j].Name
 	})
 	return entries
 }
 
-func skillBackedCommandCatalogEntries(skillReg *skill.Registry, existing []commandCatalogEntry) []commandCatalogEntry {
+func skillBackedCommandCatalogEntries(skillReg *skill.Registry, existing []commandCatalogEntry, includeHidden bool) []commandCatalogEntry {
 	if skillReg == nil {
 		return nil
 	}
@@ -110,6 +110,9 @@ func skillBackedCommandCatalogEntries(skillReg *skill.Registry, existing []comma
 
 	var entries []commandCatalogEntry
 	for _, sk := range skillReg.List() {
+		if !sk.UserInvocable() && !includeHidden {
+			continue
+		}
 		entry, ok := skillBackedCommandCatalogEntry(sk)
 		if !ok {
 			continue
@@ -146,5 +149,6 @@ func skillBackedCommandCatalogEntry(sk *skill.Skill) (commandCatalogEntry, bool)
 		Category:     "skill",
 		ArgumentHint: hint,
 		Source:       sk.Source,
+		Hidden:       !sk.UserInvocable(),
 	}, true
 }

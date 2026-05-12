@@ -32,6 +32,8 @@ type skillListEntry struct {
 	Source        string   `json:"source,omitempty"`
 	TrustLevel    string   `json:"trust_level,omitempty"`
 	External      bool     `json:"external"`
+	Hidden        bool     `json:"hidden,omitempty"`
+	UserInvocable bool     `json:"user_invocable"`
 }
 
 func cmdSkill(ctx context.Context, args []string) error {
@@ -82,6 +84,9 @@ func cmdSkillList(_ context.Context, args []string) error {
 		var markers []string
 		if sk.Status == "draft" {
 			markers = append(markers, "draft")
+		}
+		if !sk.UserInvocable() {
+			markers = append(markers, "hidden")
 		}
 		if includeCompatible && sk.Source != "" {
 			markers = append(markers, sk.Source)
@@ -167,6 +172,8 @@ func skillListEntries(skills []*skill.Skill) []skillListEntry {
 			Source:        sk.Source,
 			TrustLevel:    sk.TrustLevel(),
 			External:      sk.External(),
+			Hidden:        !sk.UserInvocable(),
+			UserInvocable: sk.UserInvocable(),
 		})
 	}
 	return out

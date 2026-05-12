@@ -11,7 +11,7 @@ import (
 	"github.com/stello/elnath/internal/skill"
 )
 
-const skillsCommandUsage = "Usage: /skills [--json]"
+const skillsCommandUsage = "Usage: /skills [--json] [--all|--hidden]"
 
 type runtimeSkillCatalogEntry struct {
 	Name          string   `json:"name"`
@@ -27,6 +27,8 @@ type runtimeSkillCatalogEntry struct {
 	Source        string   `json:"source,omitempty"`
 	TrustLevel    string   `json:"trust_level,omitempty"`
 	External      bool     `json:"external"`
+	Hidden        bool     `json:"hidden,omitempty"`
+	UserInvocable bool     `json:"user_invocable"`
 }
 
 func (rt *executionRuntime) trySkillsCommand(
@@ -64,14 +66,15 @@ func (rt *executionRuntime) applySkillsCommand(args []string) string {
 		switch strings.ToLower(strings.TrimSpace(arg)) {
 		case "help", "-h", "--help":
 			return skillsCommandUsage
-		case "--json":
+		case "--json", "--all", "--hidden":
 			continue
 		default:
 			return fmt.Sprintf("Invalid skills argument: %s. %s", strings.Join(args, " "), skillsCommandUsage)
 		}
 	}
 
-	entries := runtimeSkillCatalog(rt.skillReg)
+	includeHidden := hasFlag(args, "--all") || hasFlag(args, "--hidden")
+	entries := runtimeSkillCatalog(rt.skillReg, includeHidden)
 	if hasFlag(args, "--json") {
 		raw, err := json.MarshalIndent(map[string]any{
 			"action": "list",
@@ -85,13 +88,16 @@ func (rt *executionRuntime) applySkillsCommand(args []string) string {
 	return formatRuntimeSkillCatalog(entries)
 }
 
-func runtimeSkillCatalog(reg *skill.Registry) []runtimeSkillCatalogEntry {
+func runtimeSkillCatalog(reg *skill.Registry, includeHidden bool) []runtimeSkillCatalogEntry {
 	if reg == nil {
 		return nil
 	}
 	skills := reg.List()
 	entries := make([]runtimeSkillCatalogEntry, 0, len(skills))
 	for _, sk := range skills {
+		if !sk.UserInvocable() && !includeHidden {
+			continue
+		}
 		entries = append(entries, runtimeSkillCatalogEntry{
 			Name:          sk.Name,
 			Description:   sk.Description,
@@ -106,6 +112,8 @@ func runtimeSkillCatalog(reg *skill.Registry) []runtimeSkillCatalogEntry {
 			Source:        sk.Source,
 			TrustLevel:    sk.TrustLevel(),
 			External:      sk.External(),
+			Hidden:        !sk.UserInvocable(),
+			UserInvocable: sk.UserInvocable(),
 		})
 	}
 	return entries
@@ -125,6 +133,9 @@ func formatRuntimeSkillCatalog(entries []runtimeSkillCatalogEntry) string {
 		}
 		b.WriteString("  ")
 		b.WriteString(trigger)
+		if entry.Hidden {
+			b.WriteString(" [hidden]")
+		}
 		if entry.Description != "" {
 			b.WriteString(" - ")
 			b.WriteString(entry.Description)

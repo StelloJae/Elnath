@@ -204,6 +204,36 @@ Review $pr_number against $base.
 	}
 }
 
+func TestLoadClaudeSkillDirParsesUserInvocableFalse(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	skillDir := filepath.Join(root, ".claude", "skills", "background-review")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	raw := `---
+description: Background-only review helper
+user-invocable: false
+---
+Review in the background.
+`
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	skills, err := LoadClaudeSkillDir(root)
+	if err != nil {
+		t.Fatalf("LoadClaudeSkillDir: %v", err)
+	}
+	if len(skills) != 1 {
+		t.Fatalf("len(skills) = %d, want 1", len(skills))
+	}
+	if !skills[0].Hidden || skills[0].UserInvocable() {
+		t.Fatalf("skill visibility = hidden %v user_invocable %v, want hidden true user_invocable false", skills[0].Hidden, skills[0].UserInvocable())
+	}
+}
+
 func TestLoadClaudeSkillDirRecordsSkillBaseDir(t *testing.T) {
 	t.Parallel()
 

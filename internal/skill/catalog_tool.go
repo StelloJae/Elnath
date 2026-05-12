@@ -75,6 +75,7 @@ type catalogSkillEntry struct {
 	Source        string   `json:"source,omitempty"`
 	TrustLevel    string   `json:"trust_level,omitempty"`
 	External      bool     `json:"external"`
+	UserInvocable bool     `json:"user_invocable"`
 	Score         int      `json:"score,omitempty"`
 	MatchedFields []string `json:"matched_fields,omitempty"`
 	Prompt        string   `json:"prompt,omitempty"`
@@ -210,6 +211,7 @@ func skillCatalogEntry(sk *Skill, includePrompt bool) catalogSkillEntry {
 		Source:        sk.Source,
 		TrustLevel:    sk.TrustLevel(),
 		External:      sk.External(),
+		UserInvocable: sk.UserInvocable(),
 	}
 	if includePrompt {
 		entry.Prompt = sk.Prompt
