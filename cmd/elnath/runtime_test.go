@@ -2343,10 +2343,23 @@ func TestExecutionRuntimeEffortStatusExplainsAutoRoutingPolicy(t *testing.T) {
 		"implementation/debug/benchmark/CI -> high",
 		"root-cause/security/architecture/autonomous -> xhigh",
 		"Auto routing is heuristic",
+		"Skill metadata effort overrides auto for that skill",
 		"Manual override: /effort <level>",
 	} {
 		if !strings.Contains(summary, want) {
 			t.Fatalf("summary = %q, want contains %q", summary, want)
+		}
+	}
+}
+
+func TestExecutionRuntimeEffortHelpListsAllAcceptedLevels(t *testing.T) {
+	provider := &countingProvider{streamText: "unused"}
+	rt := newTestExecutionRuntime(t, provider)
+
+	got := rt.applyEffortCommand([]string{"help"})
+	for _, want := range []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "auto", "status"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("help = %q, want contains %q", got, want)
 		}
 	}
 }

@@ -141,6 +141,7 @@ func TestPermissionWithActualToolNames(t *testing.T) {
 		{"plan allows task_list", ModePlan, "task_list", true},
 		{"plan allows task_get", ModePlan, "task_get", true},
 		{"plan allows task_output", ModePlan, "task_output", true},
+		{"plan allows task_monitor", ModePlan, "task_monitor", true},
 		{"plan allows schedule_list", ModePlan, "schedule_list", true},
 		{"plan allows enter_plan_mode", ModePlan, "enter_plan_mode", true},
 		{"plan allows exit_plan_mode", ModePlan, "exit_plan_mode", true},
@@ -189,7 +190,7 @@ func TestAcceptEditsAutoApprovesWithoutPrompter(t *testing.T) {
 		"read_file", "glob", "grep", "web_fetch", "web_search",
 		"wiki_search", "wiki_read", "conversation_search",
 		"cross_project_search", "cross_project_conversation_search",
-		"tool_search", "todo_write", "task_list", "task_get", "task_output", "schedule_list",
+		"tool_search", "todo_write", "task_list", "task_get", "task_output", "task_monitor", "schedule_list",
 		"enter_plan_mode", "exit_plan_mode",
 		"write_file", "edit_file", "wiki_write",
 	}

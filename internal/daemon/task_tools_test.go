@@ -325,6 +325,83 @@ func TestTaskOutputToolReadsProgressField(t *testing.T) {
 	}
 }
 
+func TestTaskMonitorToolReturnsRunningSnapshot(t *testing.T) {
+	ctx := context.Background()
+	queue := newTaskToolTestQueue(t)
+	if _, _, err := queue.Enqueue(ctx, "task payload", ""); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	task, err := queue.Next(ctx)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if task == nil {
+		t.Fatal("Next returned nil")
+	}
+	if _, err := queue.UpdateAnnotation(ctx, task.ID, "still working", "halfway"); err != nil {
+		t.Fatalf("UpdateAnnotation: %v", err)
+	}
+
+	result, err := NewTaskMonitorTool(queue).Execute(ctx, json.RawMessage(`{"id":`+jsonInt(task.ID)+`}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute returned error result: %s", result.Output)
+	}
+
+	var output taskMonitorToolOutput
+	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if output.TaskID != task.ID || output.Status != StatusRunning || output.Terminal {
+		t.Fatalf("output = %+v, want running non-terminal task %d", output, task.ID)
+	}
+	if output.Progress != "still working" || output.Summary != "halfway" {
+		t.Fatalf("progress/summary = %q/%q, want still working/halfway", output.Progress, output.Summary)
+	}
+	if output.NextPollSeconds != defaultTaskMonitorPollSeconds {
+		t.Fatalf("NextPollSeconds = %d, want %d", output.NextPollSeconds, defaultTaskMonitorPollSeconds)
+	}
+}
+
+func TestTaskMonitorToolReturnsTerminalResultTail(t *testing.T) {
+	ctx := context.Background()
+	queue := newTaskToolTestQueue(t)
+	if _, _, err := queue.Enqueue(ctx, "task payload", ""); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	task, err := queue.Next(ctx)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if task == nil {
+		t.Fatal("Next returned nil")
+	}
+	if err := queue.MarkDone(ctx, task.ID, "abcdef", "done summary"); err != nil {
+		t.Fatalf("MarkDone: %v", err)
+	}
+
+	result, err := NewTaskMonitorTool(queue).Execute(ctx, json.RawMessage(`{"id":`+jsonInt(task.ID)+`,"max_chars":3}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute returned error result: %s", result.Output)
+	}
+
+	var output taskMonitorToolOutput
+	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if output.Status != StatusDone || !output.Terminal || output.NextPollSeconds != 0 {
+		t.Fatalf("output = %+v, want done terminal with no next poll", output)
+	}
+	if output.ResultTail != "def" || output.ResultTotalChars != 6 || !output.ResultTruncated {
+		t.Fatalf("result tail = %q total=%d truncated=%v, want def/6/true", output.ResultTail, output.ResultTotalChars, output.ResultTruncated)
+	}
+}
+
 func TestTaskUpdateToolAnnotatesPendingTask(t *testing.T) {
 	ctx := context.Background()
 	queue := newTaskToolTestQueue(t)
@@ -475,7 +552,8 @@ func TestTaskToolsMetadata(t *testing.T) {
 	listTool := NewTaskListTool(nil)
 	getTool := NewTaskGetTool(nil)
 	outputTool := NewTaskOutputTool(nil)
-	for _, tool := range []tools.Tool{listTool, getTool, outputTool} {
+	monitorTool := NewTaskMonitorTool(nil)
+	for _, tool := range []tools.Tool{listTool, getTool, outputTool, monitorTool} {
 		if !tool.IsConcurrencySafe(nil) {
 			t.Fatalf("%s should be concurrency-safe", tool.Name())
 		}
