@@ -156,6 +156,109 @@ func TestInvocationToolResolvesProviderAndModelAtExecutionTime(t *testing.T) {
 	}
 }
 
+func TestInvocationToolHonorsTrustLevelAllowlist(t *testing.T) {
+	t.Parallel()
+
+	skillReg := NewRegistry()
+	skillReg.Add(&Skill{
+		Name:   "local-review",
+		Prompt: "Review local code.",
+		Status: "active",
+		Source: "claude-skill",
+	})
+
+	var calls int
+	provider := &mockProvider{
+		streamFn: func(_ context.Context, _ llm.ChatRequest, cb func(llm.StreamEvent)) error {
+			calls++
+			cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: "allowed"})
+			cb(llm.StreamEvent{Type: llm.EventDone})
+			return nil
+		},
+	}
+
+	invoke := NewInvocationTool(InvocationToolConfig{
+		Registry: skillReg,
+		Provider: provider,
+		Tools:    tools.NewRegistry(),
+	})
+	res, err := invoke.Execute(context.Background(), json.RawMessage(`{
+		"skill":"local-review",
+		"allow_trust_levels":["local_compatible"]
+	}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("Execute returned error result: %s", res.Output)
+	}
+	if calls != 1 {
+		t.Fatalf("provider calls = %d, want 1", calls)
+	}
+}
+
+func TestInvocationToolBlocksDisallowedTrustLevelBeforeProvider(t *testing.T) {
+	t.Parallel()
+
+	skillReg := NewRegistry()
+	skillReg.Add(&Skill{
+		Name:   "plugin-review",
+		Prompt: "Review with plugin skill.",
+		Status: "active",
+		Source: "codex-plugin-skill",
+	})
+
+	invoke := NewInvocationTool(InvocationToolConfig{
+		Registry: skillReg,
+		Tools:    tools.NewRegistry(),
+	})
+	res, err := invoke.Execute(context.Background(), json.RawMessage(`{
+		"skill":"plugin-review",
+		"allow_trust_levels":["local_compatible"]
+	}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if !res.IsError || !strings.Contains(res.Output, "filtered by allow_trust_levels") {
+		t.Fatalf("result = %+v, want trust-filter error", res)
+	}
+}
+
+func TestInvocationToolRejectsUnknownTrustLevelAllowlist(t *testing.T) {
+	t.Parallel()
+
+	invoke := NewInvocationTool(InvocationToolConfig{
+		Registry: NewRegistry(),
+		Tools:    tools.NewRegistry(),
+	})
+	res, err := invoke.Execute(context.Background(), json.RawMessage(`{
+		"skill":"review",
+		"allow_trust_levels":["mystery"]
+	}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if !res.IsError || !strings.Contains(res.Output, "unsupported trust level") {
+		t.Fatalf("result = %+v, want unsupported trust level error", res)
+	}
+}
+
+func TestInvocationToolDefaultProviderCheckPrecedesSkillLookup(t *testing.T) {
+	t.Parallel()
+
+	invoke := NewInvocationTool(InvocationToolConfig{
+		Registry: NewRegistry(),
+		Tools:    tools.NewRegistry(),
+	})
+	res, err := invoke.Execute(context.Background(), json.RawMessage(`{"skill":"missing"}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if !res.IsError || !strings.Contains(res.Output, "skill provider is not configured") {
+		t.Fatalf("result = %+v, want default provider configuration error", res)
+	}
+}
+
 func TestInvocationToolUnknownSkillReturnsErrorResult(t *testing.T) {
 	t.Parallel()
 

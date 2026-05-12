@@ -86,7 +86,7 @@ func (t *CatalogTool) Execute(_ context.Context, params json.RawMessage) (*tools
 			return tools.ErrorResult(fmt.Sprintf("invalid params: %v", err)), nil
 		}
 	}
-	filter, filterErr := newCatalogTrustFilter(input.AllowTrust)
+	filter, filterErr := newSkillTrustFilter(input.AllowTrust)
 	if filterErr != nil {
 		return tools.ErrorResult(filterErr.Error()), nil
 	}
@@ -131,7 +131,7 @@ func (t *CatalogTool) Execute(_ context.Context, params json.RawMessage) (*tools
 	}
 }
 
-func (t *CatalogTool) skillEntries(includePrompt bool, filter catalogTrustFilter) []catalogSkillEntry {
+func (t *CatalogTool) skillEntries(includePrompt bool, filter skillTrustFilter) []catalogSkillEntry {
 	if t == nil || t.registry == nil {
 		return nil
 	}
@@ -146,7 +146,7 @@ func (t *CatalogTool) skillEntries(includePrompt bool, filter catalogTrustFilter
 	return out
 }
 
-func (t *CatalogTool) recommendedSkillEntries(query string, maxResults int, filter catalogTrustFilter) []catalogSkillEntry {
+func (t *CatalogTool) recommendedSkillEntries(query string, maxResults int, filter skillTrustFilter) []catalogSkillEntry {
 	if t == nil || t.registry == nil {
 		return nil
 	}
@@ -177,7 +177,7 @@ func (t *CatalogTool) recommendedSkillEntries(query string, maxResults int, filt
 	return matches
 }
 
-func firstSkillCatalogEntries(skills []*Skill, maxResults int, filter catalogTrustFilter) []catalogSkillEntry {
+func firstSkillCatalogEntries(skills []*Skill, maxResults int, filter skillTrustFilter) []catalogSkillEntry {
 	out := make([]catalogSkillEntry, 0, min(len(skills), maxResults))
 	for _, sk := range skills {
 		if !filter.allowsSkill(sk) {
@@ -186,59 +186,6 @@ func firstSkillCatalogEntries(skills []*Skill, maxResults int, filter catalogTru
 		out = append(out, skillCatalogEntry(sk, false))
 		if len(out) >= maxResults {
 			break
-		}
-	}
-	return out
-}
-
-type catalogTrustFilter struct {
-	active bool
-	allow  map[string]struct{}
-}
-
-func newCatalogTrustFilter(levels []string) (catalogTrustFilter, error) {
-	if len(levels) == 0 {
-		return catalogTrustFilter{}, nil
-	}
-	filter := catalogTrustFilter{active: true, allow: make(map[string]struct{}, len(levels))}
-	for _, level := range levels {
-		level = strings.ToLower(strings.TrimSpace(level))
-		if !validSkillTrustLevel(level) {
-			return catalogTrustFilter{}, fmt.Errorf("skill_catalog: unsupported trust level %q", level)
-		}
-		filter.allow[level] = struct{}{}
-	}
-	return filter, nil
-}
-
-func validSkillTrustLevel(level string) bool {
-	switch level {
-	case "wiki", "local_compatible", "plugin_cache", "declared":
-		return true
-	default:
-		return false
-	}
-}
-
-func (f catalogTrustFilter) allowsSkill(sk *Skill) bool {
-	if !f.active {
-		return true
-	}
-	if sk == nil {
-		return false
-	}
-	_, ok := f.allow[sk.TrustLevel()]
-	return ok
-}
-
-func (f catalogTrustFilter) filterMatches(matches []ConditionalSkillMatch) []ConditionalSkillMatch {
-	if !f.active || len(matches) == 0 {
-		return matches
-	}
-	out := make([]ConditionalSkillMatch, 0, len(matches))
-	for _, match := range matches {
-		if _, ok := f.allow[match.TrustLevel]; ok {
-			out = append(out, match)
 		}
 	}
 	return out
