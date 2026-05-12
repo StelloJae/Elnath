@@ -192,15 +192,15 @@ func isQuestionLike(text string) bool {
 }
 
 func userTaskText(messages []llm.Message) string {
-	var parts []string
-	for _, msg := range messages {
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
 		if msg.Role == llm.RoleUser {
 			if text := strings.TrimSpace(msg.Text()); text != "" {
-				parts = append(parts, text)
+				return text
 			}
 		}
 	}
-	return strings.Join(parts, "\n")
+	return ""
 }
 
 func containsAny(s string, needles []string) bool {
