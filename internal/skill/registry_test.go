@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/stello/elnath/internal/agent"
@@ -517,6 +518,41 @@ func TestExecutePipelineNilUsesSkillPromptOnly(t *testing.T) {
 	}
 	if capturedSystem != "Just skill body." {
 		t.Fatalf("system prompt = %q, want skill body only", capturedSystem)
+	}
+}
+
+func TestExecuteAddsCompatibleSkillBaseDirContext(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	var capturedSystem string
+	provider := &mockProvider{streamFn: func(_ context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
+		capturedSystem = req.System
+		cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: "ok"})
+		cb(llm.StreamEvent{Type: llm.EventDone})
+		return nil
+	}}
+
+	reg := NewRegistry()
+	reg.Add(&Skill{
+		Name:    "asset-skill",
+		BaseDir: baseDir,
+		Prompt:  "Run scripts/check.sh.",
+	})
+
+	_, err := reg.Execute(context.Background(), ExecuteParams{
+		SkillName: "asset-skill",
+		Provider:  provider,
+		ToolReg:   tools.NewRegistry(),
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !strings.Contains(capturedSystem, "Skill directory: "+baseDir) {
+		t.Fatalf("system prompt = %q, want skill directory context", capturedSystem)
+	}
+	if !strings.Contains(capturedSystem, "Run scripts/check.sh.") {
+		t.Fatalf("system prompt = %q, want skill body", capturedSystem)
 	}
 }
 
