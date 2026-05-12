@@ -1611,10 +1611,13 @@ func (rt *executionRuntime) trySkillExecution(
 	if len(fields) == 0 {
 		return nil, "", false, nil
 	}
-	skillName := strings.TrimPrefix(fields[0], "/")
-	sk, ok := rt.skillReg.Get(skillName)
+	sk, ok := runtimeSkillBySlashToken(rt.skillReg, fields[0])
 	if !ok {
 		return nil, "", false, nil
+	}
+	skillName := sk.Name
+	if !sk.UserInvocable() {
+		return nil, "", true, fmt.Errorf("skill %q is not user-invocable", skillName)
 	}
 
 	args := skillInvocationArgs(sk, fields[1:])
@@ -1677,6 +1680,30 @@ func (rt *executionRuntime) trySkillExecution(
 	updated := append(messages, delta...)
 	sess.Messages = updated
 	return updated, result.Output, true, nil
+}
+
+func runtimeSkillBySlashToken(reg *skill.Registry, token string) (*skill.Skill, bool) {
+	if reg == nil {
+		return nil, false
+	}
+	name := strings.TrimPrefix(strings.TrimSpace(token), "/")
+	if name == "" {
+		return nil, false
+	}
+	if sk, ok := reg.Get(name); ok {
+		return sk, true
+	}
+	slashToken := "/" + name
+	for _, sk := range reg.List() {
+		triggerFields := strings.Fields(strings.TrimSpace(sk.Trigger))
+		if len(triggerFields) == 0 {
+			continue
+		}
+		if triggerFields[0] == slashToken {
+			return sk, true
+		}
+	}
+	return nil, false
 }
 
 func (rt *executionRuntime) recordSkillUsage(sessionID, skillName string, success bool) {

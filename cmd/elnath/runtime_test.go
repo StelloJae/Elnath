@@ -2956,6 +2956,53 @@ func TestExecutionRuntimeRunTaskCommandsSlashCommandListsSkillBackedSlashCommand
 	}
 }
 
+func TestExecutionRuntimeCommandsSlashCommandHidesNonUserInvocableSkillsByDefault(t *testing.T) {
+	provider := &countingProvider{streamText: "runtime answer"}
+	rt := newTestExecutionRuntime(t, provider)
+	rt.skillReg = skill.NewRegistry()
+	rt.skillReg.Add(&skill.Skill{Name: "visible-skill", Trigger: "/visible-skill", Prompt: "Visible."})
+	rt.skillReg.Add(&skill.Skill{Name: "hidden-helper", Trigger: "/hidden-helper", Prompt: "Hidden.", Hidden: true})
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	_, summary, err := rt.runTask(context.Background(), sess, nil, "/commands --json", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask /commands --json: %v", err)
+	}
+	var entries []commandCatalogEntry
+	if err := json.Unmarshal([]byte(summary), &entries); err != nil {
+		t.Fatalf("summary is not JSON: %v\n%s", err, summary)
+	}
+	seen := map[string]commandCatalogEntry{}
+	for _, entry := range entries {
+		seen[entry.Name] = entry
+	}
+	if _, ok := seen["/visible-skill"]; !ok {
+		t.Fatalf("commands = %+v, want visible skill command", entries)
+	}
+	if _, ok := seen["/hidden-helper"]; ok {
+		t.Fatalf("commands = %+v, hidden skill should be omitted by default", entries)
+	}
+
+	_, summary, err = rt.runTask(context.Background(), sess, nil, "/commands --all --json", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask /commands --all --json: %v", err)
+	}
+	entries = nil
+	if err := json.Unmarshal([]byte(summary), &entries); err != nil {
+		t.Fatalf("summary is not JSON: %v\n%s", err, summary)
+	}
+	seen = map[string]commandCatalogEntry{}
+	for _, entry := range entries {
+		seen[entry.Name] = entry
+	}
+	if entry, ok := seen["/hidden-helper"]; !ok || !entry.Hidden {
+		t.Fatalf("commands = %+v, want hidden helper marked hidden with --all", entries)
+	}
+}
+
 func TestExecutionRuntimeRunTaskSkillsSlashCommandListsCatalog(t *testing.T) {
 	provider := &countingProvider{streamText: "runtime answer"}
 	rt := newTestExecutionRuntime(t, provider)
@@ -2994,6 +3041,91 @@ func TestExecutionRuntimeRunTaskSkillsSlashCommandListsCatalog(t *testing.T) {
 	}
 	if len(messages) != 2 {
 		t.Fatalf("messages len = %d, want 2", len(messages))
+	}
+}
+
+func TestExecutionRuntimeSkillsSlashCommandHidesNonUserInvocableSkillsByDefault(t *testing.T) {
+	provider := &countingProvider{streamText: "runtime answer"}
+	rt := newTestExecutionRuntime(t, provider)
+	rt.skillReg = skill.NewRegistry()
+	rt.skillReg.Add(&skill.Skill{Name: "visible-skill", Trigger: "/visible-skill", Prompt: "Visible."})
+	rt.skillReg.Add(&skill.Skill{Name: "hidden-helper", Trigger: "/hidden-helper", Prompt: "Hidden.", Hidden: true})
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	_, summary, err := rt.runTask(context.Background(), sess, nil, "/skills", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask /skills: %v", err)
+	}
+	if !strings.Contains(summary, "/visible-skill") {
+		t.Fatalf("summary = %q, want visible skill", summary)
+	}
+	if strings.Contains(summary, "/hidden-helper") {
+		t.Fatalf("summary = %q, hidden skill should be omitted by default", summary)
+	}
+
+	_, summary, err = rt.runTask(context.Background(), sess, nil, "/skills --all --json", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask /skills --all --json: %v", err)
+	}
+	var out struct {
+		Skills []struct {
+			Name          string `json:"name"`
+			UserInvocable bool   `json:"user_invocable"`
+		} `json:"skills"`
+	}
+	if err := json.Unmarshal([]byte(summary), &out); err != nil {
+		t.Fatalf("summary is not JSON: %v\n%s", err, summary)
+	}
+	seen := map[string]bool{}
+	for _, got := range out.Skills {
+		seen[got.Name] = got.UserInvocable
+	}
+	if seen["visible-skill"] != true {
+		t.Fatalf("visible-skill user_invocable = %v, want true", seen["visible-skill"])
+	}
+	if seen["hidden-helper"] != false {
+		t.Fatalf("hidden-helper user_invocable = %v, want false", seen["hidden-helper"])
+	}
+}
+
+func TestExecutionRuntimeBlocksDirectNonUserInvocableSkillExecution(t *testing.T) {
+	provider := &countingProvider{streamText: "runtime answer"}
+	rt := newTestExecutionRuntime(t, provider)
+	rt.skillReg = skill.NewRegistry()
+	rt.skillReg.Add(&skill.Skill{Name: "hidden-helper", Trigger: "/hidden-helper", Prompt: "Hidden.", Hidden: true})
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	_, _, err = rt.runTask(context.Background(), sess, nil, "/hidden-helper", orchestrationOutput{})
+	if err == nil || !strings.Contains(err.Error(), `skill "hidden-helper" is not user-invocable`) {
+		t.Fatalf("runTask /hidden-helper error = %v, want non-user-invocable error", err)
+	}
+	if provider.streamCalls != 0 || provider.chatCalls != 0 {
+		t.Fatalf("provider calls = chat:%d stream:%d, want none for hidden direct skill", provider.chatCalls, provider.streamCalls)
+	}
+}
+
+func TestExecutionRuntimeBlocksDirectNonUserInvocableSkillTriggerAlias(t *testing.T) {
+	provider := &countingProvider{streamText: "runtime answer"}
+	rt := newTestExecutionRuntime(t, provider)
+	rt.skillReg = skill.NewRegistry()
+	rt.skillReg.Add(&skill.Skill{Name: "internal-helper", Trigger: "/hidden-helper <target>", Prompt: "Hidden.", Hidden: true})
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	_, _, err = rt.runTask(context.Background(), sess, nil, "/hidden-helper src", orchestrationOutput{})
+	if err == nil || !strings.Contains(err.Error(), `skill "internal-helper" is not user-invocable`) {
+		t.Fatalf("runTask /hidden-helper error = %v, want non-user-invocable error", err)
+	}
+	if provider.streamCalls != 0 || provider.chatCalls != 0 {
+		t.Fatalf("provider calls = chat:%d stream:%d, want none for hidden trigger alias", provider.chatCalls, provider.streamCalls)
 	}
 }
 
@@ -3581,6 +3713,33 @@ func TestRuntimeLocalSlashCommandRegistry(t *testing.T) {
 		if !names[want] {
 			t.Fatalf("runtime local slash registry missing %s; got %+v", want, specs)
 		}
+	}
+	for _, spec := range specs {
+		if spec.Name == "/skills" && (!strings.Contains(spec.ArgumentHint, "--all") || !strings.Contains(spec.ArgumentHint, "--hidden")) {
+			t.Fatalf("/skills argument hint = %q, want --all and --hidden", spec.ArgumentHint)
+		}
+	}
+}
+
+func TestExecutionRuntimeSkillsSlashCommandHelpShowsHiddenFlags(t *testing.T) {
+	provider := &countingProvider{streamText: "runtime answer"}
+	rt := newTestExecutionRuntime(t, provider)
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	_, summary, err := rt.runTask(context.Background(), sess, nil, "/skills --help", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask /skills --help: %v", err)
+	}
+	for _, want := range []string{"--json", "--all", "--hidden"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary = %q, want %s", summary, want)
+		}
+	}
+	if provider.streamCalls != 0 || provider.chatCalls != 0 {
+		t.Fatalf("provider calls = chat:%d stream:%d, want none for skills help", provider.chatCalls, provider.streamCalls)
 	}
 }
 

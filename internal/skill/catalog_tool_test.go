@@ -85,6 +85,41 @@ func TestCatalogToolListsSkillsWithoutPromptsByDefault(t *testing.T) {
 	}
 }
 
+func TestCatalogToolExposesUserInvocableMetadata(t *testing.T) {
+	reg := NewRegistry()
+	reg.Add(&Skill{Name: "visible", Status: "active"})
+	reg.Add(&Skill{Name: "hidden-helper", Status: "active", Hidden: true})
+
+	tool := NewCatalogTool(reg)
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"list"}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("Execute returned error result: %s", res.Output)
+	}
+
+	var out struct {
+		Skills []struct {
+			Name          string `json:"name"`
+			UserInvocable bool   `json:"user_invocable"`
+		} `json:"skills"`
+	}
+	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, res.Output)
+	}
+	seen := map[string]bool{}
+	for _, got := range out.Skills {
+		seen[got.Name] = got.UserInvocable
+	}
+	if seen["visible"] != true {
+		t.Fatalf("visible user_invocable = %v, want true", seen["visible"])
+	}
+	if seen["hidden-helper"] != false {
+		t.Fatalf("hidden-helper user_invocable = %v, want false", seen["hidden-helper"])
+	}
+}
+
 func TestCatalogToolMarksPluginCacheSkillsAsExternal(t *testing.T) {
 	reg := NewRegistry()
 	reg.Add(&Skill{

@@ -3,6 +3,7 @@ package skill
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/stello/elnath/internal/wiki"
@@ -27,6 +28,7 @@ type Skill struct {
 	Prompt        string
 	Status        string
 	Source        string
+	Hidden        bool
 }
 
 func (s *Skill) TrustLevel() string {
@@ -41,6 +43,13 @@ func (s *Skill) External() bool {
 		return false
 	}
 	return SkillSourceIsExternal(s.Source)
+}
+
+func (s *Skill) UserInvocable() bool {
+	if s == nil {
+		return false
+	}
+	return !s.Hidden
 }
 
 func TrustLevelForSource(source string) string {
@@ -87,6 +96,7 @@ func FromPage(page *wiki.Page) *Skill {
 		Prompt:        page.Content,
 		Status:        status,
 		Source:        extraString(page.Extra, "source"),
+		Hidden:        !skillUserInvocableFromExtra(page.Extra),
 	}
 }
 
@@ -195,6 +205,38 @@ func extraStrings(extra map[string]any, key string) []string {
 		return out
 	default:
 		return nil
+	}
+}
+
+func skillUserInvocableFromExtra(extra map[string]any) bool {
+	if value, ok := boolExtra(extra, "user_invocable"); ok {
+		return value
+	}
+	if value, ok := boolExtra(extra, "user-invocable"); ok {
+		return value
+	}
+	return true
+}
+
+func boolExtra(extra map[string]any, key string) (bool, bool) {
+	if extra == nil {
+		return false, false
+	}
+	raw, ok := extra[key]
+	if !ok {
+		return false, false
+	}
+	switch value := raw.(type) {
+	case bool:
+		return value, true
+	case string:
+		parsed, err := strconv.ParseBool(strings.TrimSpace(value))
+		if err != nil {
+			return false, false
+		}
+		return parsed, true
+	default:
+		return false, false
 	}
 }
 

@@ -58,19 +58,21 @@ var claudeToolNameMap = map[string]string{
 }
 
 type claudeSkillFrontmatter struct {
-	Name                   string     `yaml:"name"`
-	Description            string     `yaml:"description"`
-	WhenToUse              string     `yaml:"when_to_use"`
-	AllowedTools           stringList `yaml:"allowed-tools"`
-	AllowedToolsUnderscore stringList `yaml:"allowed_tools"`
-	RequiredTools          stringList `yaml:"required_tools"`
-	Tools                  stringList `yaml:"tools"`
-	Paths                  stringList `yaml:"paths"`
-	ArgumentHint           string     `yaml:"argument-hint"`
-	ArgumentHintUnderscore string     `yaml:"argument_hint"`
-	Arguments              stringList `yaml:"arguments"`
-	Model                  string     `yaml:"model"`
-	Effort                 string     `yaml:"effort"`
+	Name                    string     `yaml:"name"`
+	Description             string     `yaml:"description"`
+	WhenToUse               string     `yaml:"when_to_use"`
+	AllowedTools            stringList `yaml:"allowed-tools"`
+	AllowedToolsUnderscore  stringList `yaml:"allowed_tools"`
+	RequiredTools           stringList `yaml:"required_tools"`
+	Tools                   stringList `yaml:"tools"`
+	Paths                   stringList `yaml:"paths"`
+	ArgumentHint            string     `yaml:"argument-hint"`
+	ArgumentHintUnderscore  string     `yaml:"argument_hint"`
+	Arguments               stringList `yaml:"arguments"`
+	Model                   string     `yaml:"model"`
+	Effort                  string     `yaml:"effort"`
+	UserInvocable           *bool      `yaml:"user-invocable"`
+	UserInvocableUnderscore *bool      `yaml:"user_invocable"`
 }
 
 type stringList []string
@@ -353,6 +355,7 @@ func parseCompatibleSkillFileWithSource(nameHint string, raw []byte, source, kin
 		Prompt:        prompt,
 		Status:        "active",
 		Source:        strings.TrimSpace(source),
+		Hidden:        !compatibleSkillUserInvocable(fm),
 	}, nil
 }
 
@@ -386,6 +389,16 @@ func compatibleSkillTrigger(name string, fm claudeSkillFrontmatter) string {
 		trigger += " " + hint
 	}
 	return trigger
+}
+
+func compatibleSkillUserInvocable(fm claudeSkillFrontmatter) bool {
+	if fm.UserInvocable != nil {
+		return *fm.UserInvocable
+	}
+	if fm.UserInvocableUnderscore != nil {
+		return *fm.UserInvocableUnderscore
+	}
+	return true
 }
 
 func splitClaudeSkillFrontmatter(raw []byte) (yamlBlock, body string, err error) {

@@ -111,6 +111,23 @@ func TestFromPage(t *testing.T) {
 				Status: "active",
 			},
 		},
+		{
+			name: "user invocable false hides skill from slash surfaces",
+			page: &wiki.Page{
+				Tags:    []string{"skill"},
+				Content: "Internal helper.",
+				Extra: map[string]any{
+					"name":           "internal-helper",
+					"user_invocable": false,
+				},
+			},
+			want: &Skill{
+				Name:   "internal-helper",
+				Prompt: "Internal helper.",
+				Status: "active",
+				Hidden: true,
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -122,6 +139,19 @@ func TestFromPage(t *testing.T) {
 				t.Fatalf("FromPage() = %#v, want %#v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestSkillUserInvocableDefaultsToTrue(t *testing.T) {
+	t.Parallel()
+
+	sk := &Skill{Name: "review-pr"}
+	if !sk.UserInvocable() {
+		t.Fatal("UserInvocable() = false, want true by default")
+	}
+	sk.Hidden = true
+	if sk.UserInvocable() {
+		t.Fatal("UserInvocable() = true for hidden skill, want false")
 	}
 }
 
