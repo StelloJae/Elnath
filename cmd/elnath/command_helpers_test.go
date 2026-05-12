@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/stello/elnath/internal/agent"
+	"github.com/stello/elnath/internal/config"
 	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/core"
 	"github.com/stello/elnath/internal/daemon"
@@ -380,6 +381,164 @@ func TestProviderCommandStatusJSON(t *testing.T) {
 	}
 	if got := seen["openai-responses"]; got.Model != "kimi-k2" || got.BaseURL != "https://api.moonshot.ai/v1" || got.ReasoningEffort != "high" || got.RequestTimeoutSeconds != 77 {
 		t.Fatalf("configured openai-responses = %+v, want moonshot/kimi/high/77", got)
+	}
+}
+
+func TestProviderCommandStatusJSONNoSelfHealOmitsReflectionBoundary(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	cfgData := "data_dir: " + filepath.Join(dir, "data") + "\n" +
+		"wiki_dir: " + filepath.Join(dir, "wiki") + "\n" +
+		"provider: openai_responses\n" +
+		"openai_responses:\n" +
+		"  api_key: test-key\n" +
+		"  model: kimi-k2\n" +
+		"permission:\n  mode: default\n"
+	if err := os.WriteFile(cfgPath, []byte(cfgData), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	t.Setenv("ELNATH_PROVIDER", "")
+	t.Setenv("ELNATH_OPENAI_API_KEY", "")
+	t.Setenv("ELNATH_OPENAI_RESPONSES_API_KEY", "")
+	t.Setenv("ELNATH_ANTHROPIC_API_KEY", "")
+	withArgs(t, []string{"elnath", "--config", cfgPath, "--no-self-heal"})
+	resetLoadLocaleCache()
+
+	stdout, stderr := captureOutput(t, func() {
+		if err := executeCommand(context.Background(), "provider", []string{"status", "--json"}); err != nil {
+			t.Fatalf("executeCommand(provider status --json): %v", err)
+		}
+	})
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+	var got struct {
+		ProviderSwitchBoundaries []string `json:"provider_switch_boundaries"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatalf("provider status json: %v\n%s", err, stdout)
+	}
+	if containsString(got.ProviderSwitchBoundaries, "reflection_provider_startup_bound") {
+		t.Fatalf("provider switch boundaries = %+v, should omit reflection boundary with --no-self-heal", got.ProviderSwitchBoundaries)
+	}
+	if !containsString(got.ProviderSwitchBoundaries, "compression_budget_startup_bound") {
+		t.Fatalf("provider switch boundaries = %+v, missing compression boundary", got.ProviderSwitchBoundaries)
+	}
+}
+
+func TestProviderCommandCandidatesJSON(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	cfgData := "data_dir: " + filepath.Join(dir, "data") + "\n" +
+		"wiki_dir: " + filepath.Join(dir, "wiki") + "\n" +
+		"openai_responses:\n" +
+		"  api_key: test-key\n" +
+		"  base_url: https://api.moonshot.ai/v1\n" +
+		"  model: kimi-k2\n" +
+		"  reasoning_effort: high\n" +
+		"  timeout_seconds: 77\n" +
+		"anthropic:\n" +
+		"  api_key: anthropic-key\n" +
+		"  model: claude-sonnet-4-6\n" +
+		"  timeout_seconds: 90\n"
+	if err := os.WriteFile(cfgPath, []byte(cfgData), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	t.Setenv("ELNATH_PROVIDER", "")
+	t.Setenv("ELNATH_OPENAI_API_KEY", "")
+	t.Setenv("ELNATH_OPENAI_RESPONSES_API_KEY", "")
+	t.Setenv("ELNATH_ANTHROPIC_API_KEY", "")
+	withArgs(t, []string{"elnath", "--config", cfgPath})
+	resetLoadLocaleCache()
+
+	stdout, stderr := captureOutput(t, func() {
+		if err := executeCommand(context.Background(), "provider", []string{"candidates", "--json"}); err != nil {
+			t.Fatalf("executeCommand(provider candidates --json): %v", err)
+		}
+	})
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+	var got []providerConfigCandidateView
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatalf("provider candidates json: %v\n%s", err, stdout)
+	}
+	if len(got) != 2 {
+		t.Fatalf("candidates = %+v, want openai-responses and anthropic", got)
+	}
+	if got[0].Provider != "openai-responses" || got[0].Model != "kimi-k2" || got[0].RequestTimeoutSeconds != 77 {
+		t.Fatalf("first candidate = %+v, want openai-responses/kimi-k2/77", got[0])
+	}
+	if got[1].Provider != "anthropic" || got[1].Model != "claude-sonnet-4-6" || got[1].RequestTimeoutSeconds != 90 {
+		t.Fatalf("second candidate = %+v, want anthropic/claude-sonnet-4-6/90", got[1])
+	}
+	if strings.Contains(stdout, "test-key") || strings.Contains(stdout, "anthropic-key") {
+		t.Fatalf("stdout leaked credential: %q", stdout)
+	}
+}
+
+func TestProviderCommandCheckJSON(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	cfgData := "data_dir: " + filepath.Join(dir, "data") + "\n" +
+		"wiki_dir: " + filepath.Join(dir, "wiki") + "\n" +
+		"openai_responses:\n" +
+		"  api_key: test-key\n" +
+		"  base_url: https://api.moonshot.ai/v1\n" +
+		"  model: kimi-k2\n" +
+		"  reasoning_effort: high\n" +
+		"  timeout_seconds: 77\n"
+	if err := os.WriteFile(cfgPath, []byte(cfgData), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	t.Setenv("ELNATH_PROVIDER", "")
+	t.Setenv("ELNATH_OPENAI_API_KEY", "")
+	t.Setenv("ELNATH_OPENAI_RESPONSES_API_KEY", "")
+	t.Setenv("ELNATH_ANTHROPIC_API_KEY", "")
+	withArgs(t, []string{"elnath", "--config", cfgPath})
+	resetLoadLocaleCache()
+
+	stdout, stderr := captureOutput(t, func() {
+		if err := executeCommand(context.Background(), "provider", []string{"check", "openai_responses", "--json"}); err != nil {
+			t.Fatalf("executeCommand(provider check --json): %v", err)
+		}
+	})
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+	var got providerSelectionCheckView
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatalf("provider check json: %v\n%s", err, stdout)
+	}
+	if got.RequestedProvider != "openai-responses" || got.Provider != "openai-responses" {
+		t.Fatalf("provider check = %+v, want openai-responses", got)
+	}
+	if got.Model != "kimi-k2" || got.RequestTimeoutSeconds != 77 {
+		t.Fatalf("provider check = %+v, want kimi-k2 timeout 77", got)
+	}
+	if got.WouldSwitch || got.RuntimeProviderSwitchAvailable {
+		t.Fatalf("provider check switch fields = would_switch:%t runtime_available:%t, want false/false", got.WouldSwitch, got.RuntimeProviderSwitchAvailable)
+	}
+	if strings.Contains(stdout, "test-key") {
+		t.Fatalf("stdout leaked credential: %q", stdout)
+	}
+}
+
+func TestProviderSelectionCheckRejectsUnlistedProviderCandidate(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := config.DefaultConfig()
+	cfg.Provider = ""
+	cfg.OpenAIResponses.APIKey = "responses-key"
+	cfg.OpenAIResponses.Model = "kimi-k2"
+	cfg.Anthropic.APIKey = ""
+	cfg.OpenAI.APIKey = ""
+
+	_, err := providerSelectionCheckViewForConfig(cfg, "codex")
+	if err == nil {
+		t.Fatal("providerSelectionCheckViewForConfig error = nil, want unlisted candidate error")
+	}
+	if !strings.Contains(err.Error(), "not a configured provider candidate") {
+		t.Fatalf("error = %q, want configured-candidate rejection", err)
 	}
 }
 

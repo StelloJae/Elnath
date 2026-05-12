@@ -243,6 +243,19 @@ func summarizeToolUses(stats []agent.ToolStat) (calls, errors int) {
 }
 
 func buildProvider(cfg *config.Config) (llm.Provider, string, error) {
+	selected := ""
+	if cfg != nil {
+		selected = cfg.Provider
+	}
+	return buildProviderForSelection(cfg, selected)
+}
+
+func buildProviderForSelection(cfg *config.Config, selectedProvider string) (llm.Provider, string, error) {
+	if cfg == nil {
+		inner := fmt.Errorf("no LLM provider configured: set ELNATH_OPENAI_RESPONSES_API_KEY, ELNATH_OPENAI_API_KEY, or ELNATH_ANTHROPIC_API_KEY")
+		return nil, "", userfacingerr.Wrap(userfacingerr.ELN001, inner, "build provider")
+	}
+
 	reg := llm.NewRegistry()
 	var model string
 	providerModels := make(map[string]string)
@@ -374,10 +387,10 @@ func buildProvider(cfg *config.Config) (llm.Provider, string, error) {
 		return nil, "", userfacingerr.Wrap(userfacingerr.ELN001, inner, "build provider")
 	}
 
-	if selected := config.NormalizeProviderName(cfg.Provider); selected != "" {
+	if selected := config.NormalizeProviderName(selectedProvider); selected != "" {
 		p, err := reg.Get(selected)
 		if err != nil {
-			return nil, "", fmt.Errorf("provider %q selected but not configured", cfg.Provider)
+			return nil, "", fmt.Errorf("provider %q selected but not configured", selectedProvider)
 		}
 		selectedModel := providerModels[selected]
 		if selectedModel == "" {

@@ -80,6 +80,13 @@ func autoReasoningEffortDecision(messages []llm.Message) reasoningEffortDecision
 	if len(text) > 600 {
 		return reasoningEffortDecision{Effort: "high", Reason: "long_task"}
 	}
+
+	if len(text) <= 180 &&
+		(isQuestionLike(text) || containsAny(text, simpleStatusKeywords())) &&
+		!containsAny(text, workActionKeywords()) {
+		return reasoningEffortDecision{Effort: "low", Reason: "simple_keyword"}
+	}
+
 	if containsAny(text, []string{
 		"implement",
 		"refactor",
@@ -108,7 +115,15 @@ func autoReasoningEffortDecision(messages []llm.Message) reasoningEffortDecision
 		return reasoningEffortDecision{Effort: "high", Reason: "work_keyword"}
 	}
 
-	if len(text) <= 160 && containsAny(text, []string{
+	if len(text) <= 160 && containsAny(text, simpleStatusKeywords()) {
+		return reasoningEffortDecision{Effort: "low", Reason: "simple_keyword"}
+	}
+
+	return reasoningEffortDecision{Effort: "medium", Reason: "default_medium"}
+}
+
+func simpleStatusKeywords() []string {
+	return []string{
 		"what",
 		"when",
 		"where",
@@ -122,11 +137,58 @@ func autoReasoningEffortDecision(messages []llm.Message) reasoningEffortDecision
 		"번역",
 		"요약",
 		"상태",
-	}) {
-		return reasoningEffortDecision{Effort: "low", Reason: "simple_keyword"}
 	}
+}
 
-	return reasoningEffortDecision{Effort: "medium", Reason: "default_medium"}
+func workActionKeywords() []string {
+	return []string{
+		"implement",
+		"refactor",
+		"debug",
+		"diagnose",
+		"repair",
+		"fix",
+		"run",
+		"rerun",
+		"execute",
+		"merge",
+		"baseline",
+		"failure",
+		"failing",
+		"failed",
+		"error",
+		"broken",
+		"regression",
+		"timeout",
+		"구현",
+		"수정",
+		"고쳐",
+		"디버그",
+		"진단",
+		"돌려",
+		"실행",
+		"재실행",
+		"머지",
+		"실패",
+		"에러",
+		"오류",
+		"문제",
+		"원인",
+	}
+}
+
+func isQuestionLike(text string) bool {
+	return strings.Contains(text, "?") ||
+		containsAny(text, []string{
+			"why",
+			"how",
+			"뭐",
+			"왜",
+			"어떻게",
+			"맞아",
+			"인가",
+			"거야",
+		})
 }
 
 func userTaskText(messages []llm.Message) string {

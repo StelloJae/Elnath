@@ -114,6 +114,39 @@ func TestBuildProviderHonorsOpenAIResponsesProviderAlias(t *testing.T) {
 	}
 }
 
+func TestBuildProviderForSelectionDoesNotMutateConfiguredProvider(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := config.DefaultConfig()
+	cfg.Provider = ""
+	cfg.Anthropic.APIKey = "anthropic-key"
+	cfg.Anthropic.Model = "claude-sonnet-4-6"
+	cfg.OpenAIResponses.APIKey = "responses-key"
+	cfg.OpenAIResponses.BaseURL = "https://api.moonshot.ai/v1"
+	cfg.OpenAIResponses.Model = "kimi-k2"
+
+	provider, model, err := buildProviderForSelection(cfg, "anthropic")
+	if err != nil {
+		t.Fatalf("buildProviderForSelection: %v", err)
+	}
+	if provider.Name() != "anthropic" {
+		t.Fatalf("provider.Name() = %q, want anthropic", provider.Name())
+	}
+	if model != "claude-sonnet-4-6" {
+		t.Fatalf("model = %q, want claude-sonnet-4-6", model)
+	}
+	if cfg.Provider != "" {
+		t.Fatalf("cfg.Provider = %q, want unchanged empty provider", cfg.Provider)
+	}
+
+	defaultProvider, defaultModel, err := buildProvider(cfg)
+	if err != nil {
+		t.Fatalf("buildProvider: %v", err)
+	}
+	if defaultProvider.Name() != "openai-responses" || defaultModel != "kimi-k2" {
+		t.Fatalf("default provider/model = %s/%s, want openai-responses/kimi-k2", defaultProvider.Name(), defaultModel)
+	}
+}
+
 func TestBuildProviderRejectsUnconfiguredExplicitProvider(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	cfg := config.DefaultConfig()

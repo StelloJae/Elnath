@@ -401,6 +401,15 @@ func countExactUserTurns(messages []llm.Message, want string) int {
 	return count
 }
 
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
 func newTestExecutionRuntime(t *testing.T, provider llm.Provider) *executionRuntime {
 	t.Helper()
 	return newTestExecutionRuntimeWithMode(t, provider, false)
@@ -2489,6 +2498,7 @@ func TestExecutionRuntimeRunTaskProviderSlashCommandReportsCapabilities(t *testi
 func TestExecutionRuntimeRunTaskProviderSlashCommandJSONReportsConfiguredCandidates(t *testing.T) {
 	provider := &capabilityCountingProvider{}
 	rt := newTestExecutionRuntimeWithConfig(t, provider, false, func(cfg *config.Config) {
+		cfg.SelfHealing.Enabled = true
 		cfg.OpenAIResponses.APIKey = "sk-test"
 		cfg.OpenAIResponses.Model = "kimi-k2"
 		cfg.OpenAIResponses.BaseURL = "https://api.moonshot.ai/v1"
@@ -2532,6 +2542,40 @@ func TestExecutionRuntimeRunTaskProviderSlashCommandJSONReportsConfiguredCandida
 	}
 	if responses.Model != "kimi-k2" || responses.BaseURL != "https://api.moonshot.ai/v1" || responses.ReasoningEffort != "high" || responses.RequestTimeoutSeconds != 120 {
 		t.Fatalf("openai-responses candidate = %+v, want configured Responses-compatible metadata", responses)
+	}
+	if out.RuntimeProviderSwitchAvailable {
+		t.Fatalf("runtime provider switch available = true, want false until hot-switch seam is complete")
+	}
+	for _, want := range []string{"restart_required", "reflection_provider_startup_bound", "compression_budget_startup_bound"} {
+		if !containsString(out.ProviderSwitchBoundaries, want) {
+			t.Fatalf("provider switch boundaries = %+v, missing %q", out.ProviderSwitchBoundaries, want)
+		}
+	}
+}
+
+func TestExecutionRuntimeRunTaskProviderSlashCommandOmitsReflectionBoundaryWhenSelfHealingDisabled(t *testing.T) {
+	provider := &capabilityCountingProvider{}
+	rt := newTestExecutionRuntimeWithConfig(t, provider, false, func(cfg *config.Config) {
+		cfg.SelfHealing.Enabled = false
+	})
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	_, summary, err := rt.runTask(context.Background(), sess, nil, "/provider status --json", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask /provider status --json: %v", err)
+	}
+	var out providerStatusView
+	if err := json.Unmarshal([]byte(summary), &out); err != nil {
+		t.Fatalf("summary is not JSON: %v\n%s", err, summary)
+	}
+	if containsString(out.ProviderSwitchBoundaries, "reflection_provider_startup_bound") {
+		t.Fatalf("provider switch boundaries = %+v, should omit reflection boundary when self-healing is disabled", out.ProviderSwitchBoundaries)
+	}
+	if !containsString(out.ProviderSwitchBoundaries, "compression_budget_startup_bound") {
+		t.Fatalf("provider switch boundaries = %+v, missing compression boundary", out.ProviderSwitchBoundaries)
 	}
 }
 
@@ -2591,6 +2635,68 @@ func TestExecutionRuntimeRunTaskProviderSlashCommandListsCandidates(t *testing.T
 	}
 	if strings.Contains(summary, "sk-test") {
 		t.Fatalf("summary leaked API key: %q", summary)
+	}
+}
+
+func TestExecutionRuntimeRunTaskProviderSlashCommandChecksCandidateWithoutSwitching(t *testing.T) {
+	provider := &capabilityCountingProvider{}
+	rt := newTestExecutionRuntimeWithConfig(t, provider, false, func(cfg *config.Config) {
+		cfg.OpenAIResponses.APIKey = "sk-test"
+		cfg.OpenAIResponses.Model = "kimi-k2"
+		cfg.OpenAIResponses.BaseURL = "https://api.moonshot.ai/v1"
+		cfg.Anthropic.APIKey = "anthropic-test"
+		cfg.Anthropic.Model = "claude-sonnet-4-6"
+		cfg.Anthropic.Timeout = 90
+	})
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	_, summary, err := rt.runTask(context.Background(), sess, nil, "/provider check anthropic --json", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask /provider check: %v", err)
+	}
+	if provider.streamCalls != 0 || provider.chatCalls != 0 {
+		t.Fatalf("provider calls = chat:%d stream:%d, want none for local provider check", provider.chatCalls, provider.streamCalls)
+	}
+
+	var out providerSelectionCheckView
+	if err := json.Unmarshal([]byte(summary), &out); err != nil {
+		t.Fatalf("summary is not JSON: %v\n%s", err, summary)
+	}
+	if out.RequestedProvider != "anthropic" || out.Provider != "anthropic" {
+		t.Fatalf("provider check = %+v, want requested/active anthropic candidate", out)
+	}
+	if out.Model != "claude-sonnet-4-6" || out.RequestTimeoutSeconds != 90 {
+		t.Fatalf("provider check = %+v, want anthropic model and timeout", out)
+	}
+	if out.WouldSwitch || out.RuntimeProviderSwitchAvailable {
+		t.Fatalf("provider check switch fields = would_switch:%t runtime_available:%t, want false/false", out.WouldSwitch, out.RuntimeProviderSwitchAvailable)
+	}
+	if rt.provider.Name() != "openai-responses" || rt.wfCfg.Model != "mock-model" {
+		t.Fatalf("runtime provider/model changed to %s/%s, want openai-responses/mock-model", rt.provider.Name(), rt.wfCfg.Model)
+	}
+}
+
+func TestExecutionRuntimeRunTaskProviderSlashCommandExplainsSwitchBoundary(t *testing.T) {
+	provider := &capabilityCountingProvider{}
+	rt := newTestExecutionRuntimeWithConfig(t, provider, false, func(cfg *config.Config) {
+		cfg.SelfHealing.Enabled = true
+	})
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	_, summary, err := rt.runTask(context.Background(), sess, nil, "/provider status", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask /provider status: %v", err)
+	}
+	for _, want := range []string{"Provider switching: restart required", "reflection provider", "compression budget"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary=%q missing %q", summary, want)
+		}
 	}
 }
 

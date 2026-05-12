@@ -11,7 +11,7 @@ import (
 	"github.com/stello/elnath/internal/llm"
 )
 
-const providerCommandUsage = "Usage: /provider [status [--json]|candidates|help]"
+const providerCommandUsage = "Usage: /provider [status [--json]|candidates [--json]|check <provider> [--json]|help]"
 
 func (rt *executionRuntime) tryProviderCommand(
 	sess *agent.Session,
@@ -63,6 +63,8 @@ func (rt *executionRuntime) applyProviderCommand(args []string) string {
 		return rt.applyProviderStatusCommand(args[1:])
 	case "candidates":
 		return rt.applyProviderCandidatesCommand(args[1:])
+	case "check":
+		return rt.applyProviderCheckCommand(args[1:])
 	default:
 		return "Runtime provider switching is not available in this session. Set provider in config.yaml or ELNATH_PROVIDER, then restart Elnath."
 	}
@@ -92,6 +94,64 @@ func (rt *executionRuntime) applyProviderCandidatesCommand(args []string) string
 	return invalidProviderArgument(args)
 }
 
+func (rt *executionRuntime) applyProviderCheckCommand(args []string) string {
+	if len(args) == 0 || len(args) > 2 {
+		return invalidProviderArgument(args)
+	}
+	jsonOut := false
+	providerName := ""
+	for _, arg := range args {
+		arg = strings.TrimSpace(arg)
+		if arg == "" {
+			continue
+		}
+		if strings.EqualFold(arg, "--json") {
+			jsonOut = true
+			continue
+		}
+		if providerName != "" {
+			return invalidProviderArgument(args)
+		}
+		providerName = arg
+	}
+	if providerName == "" {
+		return invalidProviderArgument(args)
+	}
+
+	view, err := rt.providerSelectionCheckView(providerName)
+	if err != nil {
+		return fmt.Sprintf("Provider check failed: %v", err)
+	}
+	if jsonOut {
+		raw, err := json.MarshalIndent(view, "", "  ")
+		if err != nil {
+			return fmt.Sprintf("provider check: marshal JSON: %v", err)
+		}
+		return string(raw)
+	}
+	msg := fmt.Sprintf("Provider check: %s configured. Model: %s. Reasoning effort: %s. Request timeout: %ds.",
+		view.Provider,
+		view.Model,
+		view.ProviderEffort,
+		view.RequestTimeoutSeconds,
+	)
+	if view.ProviderEffortNote != "" {
+		msg += " Fallback: " + view.ProviderEffortNote + "."
+	}
+	msg += " This does not switch the current session."
+	msg += "\n" + formatProviderSwitchBoundary(view.ProviderSwitchBoundaries)
+	return msg
+}
+
+func (rt *executionRuntime) providerSelectionCheckView(providerName string) (providerSelectionCheckView, error) {
+	view, err := providerSelectionCheckViewForConfig(rt.currentConfig(), providerName)
+	if err != nil {
+		return providerSelectionCheckView{}, err
+	}
+	view.ProviderSwitchBoundaries = providerSwitchBoundaries(rt.reflectPool != nil)
+	return view, nil
+}
+
 func (rt *executionRuntime) currentProviderMessage() string {
 	view := rt.currentProviderStatusView()
 	msg := fmt.Sprintf("Provider: %s. Model: %s. Reasoning effort: %s.", view.Provider, view.Model, view.ProviderEffort)
@@ -102,7 +162,8 @@ func (rt *executionRuntime) currentProviderMessage() string {
 	if len(view.ConfiguredProviders) > 0 {
 		msg += "\n" + formatProviderCandidates(view.ConfiguredProviders)
 	}
-	msg += "\nRuntime provider switching requires config.yaml or ELNATH_PROVIDER plus restart. Use /model and /effort for in-session overrides."
+	msg += "\n" + formatProviderSwitchBoundary(view.ProviderSwitchBoundaries)
+	msg += " Use /model and /effort for in-session overrides."
 	return msg
 }
 
@@ -122,16 +183,17 @@ func (rt *executionRuntime) currentProviderStatusView() providerStatusView {
 		model = "provider default"
 	}
 	view := providerStatusView{
-		Provider:              caps.Name,
-		Model:                 model,
-		ReasoningEffort:       caps.ReasoningEffort,
-		ReasoningEffortMode:   rt.wfCfg.ReasoningEffortMode,
-		ConfiguredEffort:      rt.wfCfg.ReasoningEffort,
-		ProviderEffort:        caps.ReasoningEffort,
-		ProviderEffortNote:    caps.ReasoningEffortFallback,
-		AutoEffortCompatible:  autoEffortCompatible(caps.ReasoningEffort),
-		RequestTimeoutSeconds: caps.RequestTimeoutSeconds,
-		ConfiguredProviders:   configuredProviderCandidates(cfg),
+		Provider:                 caps.Name,
+		Model:                    model,
+		ReasoningEffort:          caps.ReasoningEffort,
+		ReasoningEffortMode:      rt.wfCfg.ReasoningEffortMode,
+		ConfiguredEffort:         rt.wfCfg.ReasoningEffort,
+		ProviderEffort:           caps.ReasoningEffort,
+		ProviderEffortNote:       caps.ReasoningEffortFallback,
+		AutoEffortCompatible:     autoEffortCompatible(caps.ReasoningEffort),
+		RequestTimeoutSeconds:    caps.RequestTimeoutSeconds,
+		ProviderSwitchBoundaries: providerSwitchBoundaries(rt.reflectPool != nil),
+		ConfiguredProviders:      configuredProviderCandidates(cfg),
 	}
 	return view
 }
