@@ -758,6 +758,37 @@ func TestOnboardingResultToConfig(t *testing.T) {
 	}
 }
 
+func TestOnboardingResultToConfigPreservesOpenAIResponsesProvider(t *testing.T) {
+	result := &onboarding.Result{
+		Provider:                       "openai_responses",
+		APIKey:                         "sk-responses",
+		OpenAIResponsesAPIKey:          "sk-responses",
+		OpenAIResponsesBaseURL:         "https://api.moonshot.ai/v1",
+		OpenAIResponsesModel:           "kimi-k2",
+		OpenAIResponsesReasoningEffort: "high",
+		Locale:                         onboarding.En,
+		DataDir:                        "/tmp/data",
+		WikiDir:                        "/tmp/wiki",
+	}
+
+	cfg := onboardingResultToConfig(result)
+	if cfg.Provider != "openai_responses" {
+		t.Fatalf("Provider = %q, want openai_responses", cfg.Provider)
+	}
+	if cfg.OpenAIResponsesAPIKey != "sk-responses" {
+		t.Fatalf("OpenAIResponsesAPIKey = %q", cfg.OpenAIResponsesAPIKey)
+	}
+	if cfg.OpenAIResponsesBaseURL != "https://api.moonshot.ai/v1" {
+		t.Fatalf("OpenAIResponsesBaseURL = %q", cfg.OpenAIResponsesBaseURL)
+	}
+	if cfg.OpenAIResponsesModel != "kimi-k2" {
+		t.Fatalf("OpenAIResponsesModel = %q", cfg.OpenAIResponsesModel)
+	}
+	if cfg.OpenAIResponsesReasoningEffort != "high" {
+		t.Fatalf("OpenAIResponsesReasoningEffort = %q", cfg.OpenAIResponsesReasoningEffort)
+	}
+}
+
 func TestLoadCodexAuthAndModel(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

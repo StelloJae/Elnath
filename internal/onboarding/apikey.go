@@ -165,7 +165,7 @@ func (m APIKeyModel) View() string {
 
 func validateKeyCmd(key string) tea.Cmd {
 	return func() tea.Msg {
-		result := ValidateAnthropicKey(context.Background(), key)
+		result := validateOnboardingKey(context.Background(), key)
 		return apiKeyValidatedMsg{result: result}
 	}
 }

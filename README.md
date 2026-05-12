@@ -271,6 +271,10 @@ See [Sandbox Starter Allowlist](docs/sandbox-starter-allowlist.md) for group not
 
 | Variable | Purpose | Example |
 |----------|---------|---------|
+| `ELNATH_OPENAI_RESPONSES_API_KEY` | OpenAI Responses-compatible API key | `sk-...` |
+| `ELNATH_OPENAI_RESPONSES_BASE_URL` | Responses-compatible API base URL | `https://api.openai.com/v1` |
+| `ELNATH_OPENAI_RESPONSES_MODEL` | Responses-compatible model | `gpt-5.5`, `kimi-k2`, `minimax-m2.7` |
+| `ELNATH_OPENAI_RESPONSES_REASONING_EFFORT` | Request effort for compatible providers | `low`, `medium`, `high`, `xhigh` |
 | `ELNATH_ANTHROPIC_API_KEY` | Anthropic API key | `sk-ant-...` |
 | `ELNATH_OPENAI_API_KEY` | OpenAI API key | `sk-...` |
 | `ELNATH_DATA_DIR` | Database directory | `~/.elnath/data` |

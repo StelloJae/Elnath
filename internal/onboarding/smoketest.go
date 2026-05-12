@@ -137,7 +137,7 @@ func (m SmokeTestModel) View() string {
 
 func runSmokeTestCmd(apiKey string) tea.Cmd {
 	return func() tea.Msg {
-		result := ValidateAnthropicKey(context.Background(), apiKey)
+		result := validateOnboardingKey(context.Background(), apiKey)
 		if result.Valid {
 			return smokeTestResultMsg{success: true, response: "API key validated successfully"}
 		}

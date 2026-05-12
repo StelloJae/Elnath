@@ -28,13 +28,18 @@ type stepBackMsg struct{}
 
 // Result holds the wizard's collected choices.
 type Result struct {
-	Path           PathChoice
-	Locale         Locale
-	APIKey         string
-	PermissionMode string
-	MCPServers     []MCPSelection
-	DataDir        string
-	WikiDir        string
+	Path                           PathChoice
+	Locale                         Locale
+	Provider                       string
+	APIKey                         string
+	OpenAIResponsesAPIKey          string
+	OpenAIResponsesBaseURL         string
+	OpenAIResponsesModel           string
+	OpenAIResponsesReasoningEffort string
+	PermissionMode                 string
+	MCPServers                     []MCPSelection
+	DataDir                        string
+	WikiDir                        string
 }
 
 // Option configures the root model.
@@ -65,13 +70,13 @@ func WithExistingConfig(ec ExistingConfig) Option {
 
 // Model is the root Bubbletea model that orchestrates wizard steps.
 type Model struct {
-	cfgPath   string
-	version   string
-	rerun     bool
-	existing  *ExistingConfig
-	step      Step
-	locale    Locale
-	result    Result
+	cfgPath    string
+	version    string
+	rerun      bool
+	existing   *ExistingConfig
+	step       Step
+	locale     Locale
+	result     Result
 	welcome    WelcomeModel
 	language   LanguageModel
 	apikey     APIKeyModel
@@ -135,6 +140,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case APIKeyDoneMsg:
 		m.result.APIKey = msg.Key
+		m.result.Provider = detectProviderFromAPIKey(msg.Key)
+		if m.result.Provider == "openai_responses" {
+			m.result.OpenAIResponsesAPIKey = msg.Key
+		} else {
+			m.result.OpenAIResponsesAPIKey = ""
+		}
 		return m.afterAPIKey()
 
 	case PermissionDoneMsg:

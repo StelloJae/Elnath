@@ -28,11 +28,23 @@ func RunQuickstart(cfgPath, version string) (*QuickstartResult, error) {
 	if llm.CodexOAuthAvailable() {
 		res.ProviderDetected = "codex"
 		fmt.Println("Codex OAuth detected - skipping API key setup.")
+	} else if responsesKey := strings.TrimSpace(os.Getenv("ELNATH_OPENAI_RESPONSES_API_KEY")); responsesKey != "" {
+		res.ProviderDetected = "openai_responses"
+		res.Provider = "openai_responses"
+		res.APIKey = responsesKey
+		res.OpenAIResponsesAPIKey = responsesKey
+		res.OpenAIResponsesBaseURL = strings.TrimSpace(os.Getenv("ELNATH_OPENAI_RESPONSES_BASE_URL"))
+		res.OpenAIResponsesModel = strings.TrimSpace(os.Getenv("ELNATH_OPENAI_RESPONSES_MODEL"))
+		res.OpenAIResponsesReasoningEffort = strings.TrimSpace(os.Getenv("ELNATH_OPENAI_RESPONSES_REASONING_EFFORT"))
 	} else {
-		fmt.Print("Enter your Anthropic API key (press Enter to skip): ")
+		fmt.Print("Enter OpenAI Responses-compatible or Anthropic API key (press Enter to skip): ")
 		res.APIKey = strings.TrimSpace(readLineOrEnv("ELNATH_ANTHROPIC_API_KEY"))
 		if res.APIKey != "" {
-			res.ProviderDetected = "anthropic"
+			res.Provider = detectProviderFromAPIKey(res.APIKey)
+			res.ProviderDetected = res.Provider
+			if res.Provider == "openai_responses" {
+				res.OpenAIResponsesAPIKey = res.APIKey
+			}
 		}
 	}
 
@@ -44,7 +56,7 @@ func RunQuickstart(cfgPath, version string) (*QuickstartResult, error) {
 	res.DataDir = filepath.Join(base, "data")
 	res.WikiDir = filepath.Join(base, "wiki")
 
-	if res.APIKey != "" {
+	if res.APIKey != "" && res.ProviderDetected == "anthropic" {
 		vr := ValidateAnthropicKey(context.Background(), res.APIKey)
 		res.SmokeTestPassed = vr.Valid
 		if vr.Valid {

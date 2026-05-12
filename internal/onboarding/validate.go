@@ -14,6 +14,31 @@ type ValidationResult struct {
 	Error error
 }
 
+func validateOnboardingKey(ctx context.Context, apiKey string) ValidationResult {
+	switch detectProviderFromAPIKey(apiKey) {
+	case "openai_responses":
+		return ValidationResult{
+			Valid: true,
+			Error: fmt.Errorf("Responses-compatible API keys are not remotely validated during onboarding"),
+		}
+	case "anthropic":
+		return ValidateAnthropicKey(ctx, apiKey)
+	default:
+		return ValidationResult{Valid: false, Error: fmt.Errorf("empty key")}
+	}
+}
+
+func detectProviderFromAPIKey(apiKey string) string {
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return ""
+	}
+	if strings.HasPrefix(apiKey, "sk-ant-") {
+		return "anthropic"
+	}
+	return "openai_responses"
+}
+
 // ValidateAnthropicKey makes a lightweight API call to verify the key.
 // Returns valid=true if the key authenticates successfully.
 // Network errors are reported but don't mark the key as invalid.

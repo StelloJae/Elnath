@@ -213,6 +213,51 @@ func TestRunNonInteractiveOnboarding_EnvVars(t *testing.T) {
 	}
 }
 
+func TestRunNonInteractiveOnboarding_OpenAIResponsesEnvVars(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+
+	t.Setenv("ELNATH_OPENAI_RESPONSES_API_KEY", "sk-responses-env")
+	t.Setenv("ELNATH_OPENAI_RESPONSES_BASE_URL", "https://api.moonshot.ai/v1")
+	t.Setenv("ELNATH_OPENAI_RESPONSES_MODEL", "kimi-k2")
+	t.Setenv("ELNATH_OPENAI_RESPONSES_REASONING_EFFORT", "low")
+
+	result, err := RunNonInteractiveOnboarding(cfgPath)
+	if err != nil {
+		t.Fatalf("RunNonInteractiveOnboarding failed: %v", err)
+	}
+
+	if result.Provider != "openai_responses" {
+		t.Fatalf("Provider = %q, want openai_responses", result.Provider)
+	}
+	if result.OpenAIResponsesAPIKey != "sk-responses-env" {
+		t.Fatalf("OpenAIResponsesAPIKey = %q", result.OpenAIResponsesAPIKey)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load config failed: %v", err)
+	}
+	if cfg.Provider != "openai_responses" {
+		t.Fatalf("config provider = %q, want openai_responses", cfg.Provider)
+	}
+	if cfg.OpenAIResponses.APIKey != "sk-responses-env" {
+		t.Fatalf("openai_responses.api_key = %q", cfg.OpenAIResponses.APIKey)
+	}
+	if cfg.OpenAIResponses.BaseURL != "https://api.moonshot.ai/v1" {
+		t.Fatalf("openai_responses.base_url = %q", cfg.OpenAIResponses.BaseURL)
+	}
+	if cfg.OpenAIResponses.Model != "kimi-k2" {
+		t.Fatalf("openai_responses.model = %q", cfg.OpenAIResponses.Model)
+	}
+	if cfg.OpenAIResponses.ReasoningEffort != "low" {
+		t.Fatalf("openai_responses.reasoning_effort = %q", cfg.OpenAIResponses.ReasoningEffort)
+	}
+	if cfg.Anthropic.APIKey != "" {
+		t.Fatalf("anthropic.api_key = %q, want empty", cfg.Anthropic.APIKey)
+	}
+}
+
 func TestRunNonInteractiveOnboarding_Defaults(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.yaml")

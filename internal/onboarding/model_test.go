@@ -73,6 +73,38 @@ func TestModel_APIKeyDone_QuickPath(t *testing.T) {
 	}
 }
 
+func TestModel_APIKeyDone_DetectsOpenAIResponsesProvider(t *testing.T) {
+	m := New("/tmp/config.yaml", "0.3.0")
+	m.step = StepAPIKey
+	m.result.Path = PathFull
+
+	updated, _ := m.Update(APIKeyDoneMsg{Key: "sk-responses-compatible"})
+	model := updated.(Model)
+
+	if model.result.Provider != "openai_responses" {
+		t.Fatalf("Provider = %q, want openai_responses", model.result.Provider)
+	}
+	if model.result.OpenAIResponsesAPIKey != "sk-responses-compatible" {
+		t.Fatalf("OpenAIResponsesAPIKey = %q", model.result.OpenAIResponsesAPIKey)
+	}
+}
+
+func TestModel_APIKeyDone_DetectsAnthropicProvider(t *testing.T) {
+	m := New("/tmp/config.yaml", "0.3.0")
+	m.step = StepAPIKey
+	m.result.Path = PathFull
+
+	updated, _ := m.Update(APIKeyDoneMsg{Key: "sk-ant-test"})
+	model := updated.(Model)
+
+	if model.result.Provider != "anthropic" {
+		t.Fatalf("Provider = %q, want anthropic", model.result.Provider)
+	}
+	if model.result.OpenAIResponsesAPIKey != "" {
+		t.Fatalf("OpenAIResponsesAPIKey = %q, want empty", model.result.OpenAIResponsesAPIKey)
+	}
+}
+
 func TestModel_APIKeyDone_FullPath(t *testing.T) {
 	m := New("/tmp/config.yaml", "0.3.0")
 	m.step = StepAPIKey
@@ -364,7 +396,6 @@ func TestModel_RerunMode_PermissionPreselected(t *testing.T) {
 		t.Errorf("expected cursor at index 2 (plan), got %d", pm.cursor)
 	}
 }
-
 
 func TestModel_FullFlowEndToEnd(t *testing.T) {
 	m := New("/tmp/config.yaml", "0.3.0")
