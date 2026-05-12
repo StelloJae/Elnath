@@ -30,6 +30,8 @@ type skillListEntry struct {
 	Effort        string   `json:"effort,omitempty"`
 	Status        string   `json:"status,omitempty"`
 	Source        string   `json:"source,omitempty"`
+	TrustLevel    string   `json:"trust_level,omitempty"`
+	External      bool     `json:"external"`
 }
 
 func cmdSkill(ctx context.Context, args []string) error {
@@ -162,6 +164,8 @@ func skillListEntries(skills []*skill.Skill) []skillListEntry {
 			Effort:        sk.Effort,
 			Status:        sk.Status,
 			Source:        sk.Source,
+			TrustLevel:    sk.TrustLevel(),
+			External:      sk.External(),
 		})
 	}
 	return out

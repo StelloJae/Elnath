@@ -149,6 +149,8 @@ func TestCmdSkillListJSON(t *testing.T) {
 			RequiredTools []string `json:"required_tools"`
 			Status        string   `json:"status"`
 			Source        string   `json:"source"`
+			TrustLevel    string   `json:"trust_level"`
+			External      bool     `json:"external"`
 		} `json:"skills"`
 	}
 	if err := json.Unmarshal([]byte(stdout), &out); err != nil {
@@ -160,6 +162,9 @@ func TestCmdSkillListJSON(t *testing.T) {
 	got := out.Skills[0]
 	if got.Name != "pr-review" || got.Trigger != "/pr-review <number>" || got.Source != "user" {
 		t.Fatalf("skill = %+v, want pr-review metadata", got)
+	}
+	if got.TrustLevel != "declared" || got.External {
+		t.Fatalf("trust metadata = level %q external %v, want declared false", got.TrustLevel, got.External)
 	}
 	if len(got.RequiredTools) != 2 || got.RequiredTools[0] != "bash" || got.RequiredTools[1] != "read_file" {
 		t.Fatalf("required_tools = %v, want [bash read_file]", got.RequiredTools)
@@ -199,6 +204,7 @@ func TestCmdSkillListCompatibleIncludesSkillRoots(t *testing.T) {
 		},
 	})
 	writeRuntimeCompatSkill(t, filepath.Join(root, ".codex", "skills", "project-codex"), "Project Codex")
+	writeRuntimeCompatSkill(t, filepath.Join(homeDir, ".codex", "plugins", "cache", "openai-curated", "github", "63976030", "skills", "github"), "GitHub")
 
 	stdout, _ := captureOutput(t, func() {
 		if err := cmdSkill(context.Background(), []string{"list", "--compatible", "--json"}); err != nil {
@@ -207,22 +213,35 @@ func TestCmdSkillListCompatibleIncludesSkillRoots(t *testing.T) {
 	})
 	var out struct {
 		Skills []struct {
-			Name   string `json:"name"`
-			Source string `json:"source"`
+			Name       string `json:"name"`
+			Source     string `json:"source"`
+			TrustLevel string `json:"trust_level"`
+			External   bool   `json:"external"`
 		} `json:"skills"`
 	}
 	if err := json.Unmarshal([]byte(stdout), &out); err != nil {
 		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout)
 	}
-	seen := map[string]string{}
+	seen := map[string]struct {
+		Source     string
+		TrustLevel string
+		External   bool
+	}{}
 	for _, sk := range out.Skills {
-		seen[sk.Name] = sk.Source
+		seen[sk.Name] = struct {
+			Source     string
+			TrustLevel string
+			External   bool
+		}{Source: sk.Source, TrustLevel: sk.TrustLevel, External: sk.External}
 	}
 	if _, ok := seen["wiki-skill"]; !ok {
 		t.Fatalf("skills = %+v, want wiki skill included", out.Skills)
 	}
-	if seen["project-codex"] != "codex-skill" {
-		t.Fatalf("project-codex source = %q, want codex-skill; skills=%+v", seen["project-codex"], out.Skills)
+	if seen["project-codex"].Source != "codex-skill" || seen["project-codex"].TrustLevel != "local_compatible" || seen["project-codex"].External {
+		t.Fatalf("project-codex metadata = %+v, want codex-skill local_compatible false; skills=%+v", seen["project-codex"], out.Skills)
+	}
+	if seen["github"].Source != "codex-plugin-skill" || seen["github"].TrustLevel != "plugin_cache" || !seen["github"].External {
+		t.Fatalf("github metadata = %+v, want plugin_cache external; skills=%+v", seen["github"], out.Skills)
 	}
 }
 
