@@ -141,6 +141,13 @@ Interactive `elnath run` also supports session-local slash controls:
 - `/effort low|medium|high|xhigh` pins request effort for the current session
   when the active provider supports it.
 
+Tool exposure can be tuned with `tools.exposure_mode`. The default `standard`
+mode exposes registered tool schemas directly. `search_first` keeps common
+tools and `tool_search` visible while deferring larger MCP/control-plane
+schemas until the model selects them. `tool_search` returns compact JSON
+metadata including `deferred` and, when applicable, `defer_reason` such as
+`mcp_prefix` or `tool_declared_deferred`.
+
 ## Architecture
 
 ```
