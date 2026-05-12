@@ -223,6 +223,35 @@ func TestAgentReasoningEffortAuto(t *testing.T) {
 	}
 }
 
+func TestAgentReasoningEffortAutoUsesLatestUserTurn(t *testing.T) {
+	reg := tools.NewRegistry()
+	var captured llm.ChatRequest
+	provider := &mockProvider{
+		streamFn: func(_ context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
+			captured = req
+			cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: "done"})
+			cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{InputTokens: 1, OutputTokens: 1}})
+			return nil
+		},
+	}
+
+	a := New(provider, reg,
+		WithMaxIterations(1),
+		WithReasoningEffortMode("auto"),
+	)
+	_, err := a.Run(context.Background(), []llm.Message{
+		llm.NewUserMessage("diagnose root cause for a benchmark failure"),
+		llm.NewAssistantMessage("I will inspect the failure."),
+		llm.NewUserMessage("quick status summary"),
+	}, event.NopSink{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if captured.ReasoningEffort != "low" {
+		t.Fatalf("ReasoningEffort = %q, want low for latest simple status turn", captured.ReasoningEffort)
+	}
+}
+
 func TestAgentReasoningEffortAutoSkipsKnownIgnoredProvider(t *testing.T) {
 	reg := tools.NewRegistry()
 	var captured llm.ChatRequest
