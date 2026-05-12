@@ -302,6 +302,8 @@ func mutatingToolUseObserved(toolUse llm.ToolUseBlock) bool {
 	switch toolUse.Name {
 	case "write_file", "edit_file", "wiki_write":
 		return true
+	case "worktree_run":
+		return bashCommandLooksMutating(worktreeRunCommandFromToolInput(toolUse.Input))
 	case "git":
 		var payload struct {
 			Subcommand string `json:"subcommand"`
@@ -315,6 +317,16 @@ func mutatingToolUseObserved(toolUse llm.ToolUseBlock) bool {
 	default:
 		return false
 	}
+}
+
+func worktreeRunCommandFromToolInput(input json.RawMessage) string {
+	var payload struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal(input, &payload); err != nil {
+		return ""
+	}
+	return payload.Command
 }
 
 func bashCommandLooksMutating(command string) bool {

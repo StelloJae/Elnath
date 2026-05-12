@@ -16,9 +16,9 @@ type localSlashCommandSpec struct {
 
 func runtimeLocalSlashCommandSpecs() []localSlashCommandSpec {
 	return []localSlashCommandSpec{
-		{Name: "/effort", Description: "Inspect or set session reasoning effort.", ArgumentHint: "[auto|none|minimal|low|medium|high|xhigh|status]"},
+		{Name: "/effort", Description: "Inspect or set session reasoning effort.", ArgumentHint: "[auto|none|minimal|low|medium|high|xhigh|max|status]"},
 		{Name: "/model", Description: "Inspect or set the session request model.", ArgumentHint: "[status|default|unset|<model>] [--json]"},
-		{Name: "/provider", Description: "Inspect active provider capabilities, configured candidates, and safe candidate checks.", ArgumentHint: "status|candidates|check <provider> [--json]"},
+		{Name: "/provider", Description: "Inspect or switch active provider capabilities and configured candidates.", ArgumentHint: "status|candidates|check <provider>|use <provider> [--json]"},
 		{Name: "/commands", Description: "List local command catalog entries.", ArgumentHint: "[--json] [--all]"},
 		{Name: "/help", Description: "Alias for the local command catalog.", ArgumentHint: "[--json] [--all]"},
 		{Name: "/skills", Description: "List registered skills without executing them.", ArgumentHint: "[--json]"},

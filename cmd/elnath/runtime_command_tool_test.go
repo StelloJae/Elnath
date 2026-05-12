@@ -210,6 +210,9 @@ func TestCommandCatalogToolShowsRuntimeControlWithoutExecuting(t *testing.T) {
 	if out.Action != "show" || out.Command == nil || out.Command.Name != "/effort" || out.Command.Category != "runtime-control" {
 		t.Fatalf("output = %+v, want /effort runtime-control metadata", out)
 	}
+	if !strings.Contains(out.Command.ArgumentHint, "max") {
+		t.Fatalf("ArgumentHint = %q, want max effort alias", out.Command.ArgumentHint)
+	}
 }
 
 func TestCommandCatalogToolShowsRuntimeControlArgumentHints(t *testing.T) {
@@ -233,7 +236,7 @@ func TestCommandCatalogToolShowsRuntimeControlArgumentHints(t *testing.T) {
 	if out.Command == nil {
 		t.Fatalf("output = %+v, want /provider command metadata", out)
 	}
-	if out.Command.ArgumentHint != "status|candidates|check <provider> [--json]" {
+	if out.Command.ArgumentHint != "status|candidates|check <provider>|use <provider> [--json]" {
 		t.Fatalf("ArgumentHint = %q, want provider usage hint", out.Command.ArgumentHint)
 	}
 }
