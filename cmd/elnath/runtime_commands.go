@@ -133,11 +133,8 @@ func skillBackedCommandCatalogEntry(sk *skill.Skill) (commandCatalogEntry, bool)
 	fields := strings.Fields(trigger)
 	name := "/" + sk.Name
 	var hint string
-	if len(fields) > 0 {
+	if len(fields) > 0 && strings.HasPrefix(fields[0], "/") {
 		name = fields[0]
-		if !strings.HasPrefix(name, "/") {
-			name = "/" + strings.TrimPrefix(name, "/")
-		}
 		if len(fields) > 1 {
 			hint = strings.Join(fields[1:], " ")
 		}
