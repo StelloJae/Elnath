@@ -43,6 +43,10 @@ func (t *InvocationTool) Schema() json.RawMessage {
 		"skill":      tools.String(`Skill name, with or without leading slash. Example: "review-pr" or "/review-pr".`),
 		"args":       tools.String("Optional positional arguments passed to $ARGUMENTS and {arguments}."),
 		"named_args": {Type: "object", Description: "Optional JSON object of named placeholder values for {name}-style skill prompts."},
+		"allow_trust_levels": tools.Array(
+			"Optional invocation trust-level allowlist. Supported values: wiki, local_compatible, plugin_cache, declared.",
+			"string",
+		),
 	}, []string{"skill"})
 }
 
@@ -59,9 +63,10 @@ func (t *InvocationTool) ShouldCancelSiblingsOnError() bool { return true }
 func (t *InvocationTool) DeferInitialToolSchema() bool { return true }
 
 type invocationInput struct {
-	Skill     string            `json:"skill"`
-	Args      string            `json:"args"`
-	NamedArgs map[string]string `json:"named_args"`
+	Skill      string            `json:"skill"`
+	Args       string            `json:"args"`
+	NamedArgs  map[string]string `json:"named_args"`
+	AllowTrust []string          `json:"allow_trust_levels"`
 }
 
 type invocationOutput struct {
@@ -86,14 +91,31 @@ func (t *InvocationTool) Execute(ctx context.Context, params json.RawMessage) (*
 	if t == nil || t.cfg.Registry == nil {
 		return tools.ErrorResult("skill registry is not configured"), nil
 	}
-	provider := t.resolveProvider()
-	if provider == nil {
-		return tools.ErrorResult("skill provider is not configured"), nil
+	filter, filterErr := newSkillTrustFilter(input.AllowTrust)
+	if filterErr != nil {
+		return tools.ErrorResult(filterErr.Error()), nil
+	}
+	var provider llm.Provider
+	if !filter.active {
+		provider = t.resolveProvider()
+		if provider == nil {
+			return tools.ErrorResult("skill provider is not configured"), nil
+		}
 	}
 
 	sk, ok := t.cfg.Registry.Get(name)
 	if !ok {
 		return tools.ErrorResult(fmt.Sprintf("skill %q not found", name)), nil
+	}
+	if !filter.allowsSkill(sk) {
+		return tools.ErrorResult(fmt.Sprintf("skill %q filtered by allow_trust_levels", name)), nil
+	}
+
+	if provider == nil {
+		provider = t.resolveProvider()
+	}
+	if provider == nil {
+		return tools.ErrorResult("skill provider is not configured"), nil
 	}
 
 	args := cloneNamedArgs(input.NamedArgs)
