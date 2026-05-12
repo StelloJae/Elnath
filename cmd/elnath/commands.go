@@ -47,6 +47,7 @@ type commandCatalogEntry struct {
 	Aliases      []string `json:"aliases,omitempty"`
 	ArgumentHint string   `json:"argument_hint,omitempty"`
 	Hidden       bool     `json:"hidden,omitempty"`
+	Source       string   `json:"source,omitempty"`
 }
 
 func commandSpecs() []commandSpec {
