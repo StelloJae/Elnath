@@ -65,6 +65,19 @@ func TestInvocationToolExecutesSkillWithArgsAndToolFilter(t *testing.T) {
 		TrustLevel string `json:"trust_level"`
 		External   bool   `json:"external"`
 		Output     string `json:"output"`
+		Receipt    struct {
+			Skill             string   `json:"skill"`
+			Provider          string   `json:"provider"`
+			Model             string   `json:"model"`
+			PermissionMode    string   `json:"permission_mode"`
+			RequiredTools     []string `json:"required_tools"`
+			AvailableTools    []string `json:"available_tools"`
+			ToolFilterApplied bool     `json:"tool_filter_applied"`
+			Source            string   `json:"source"`
+			TrustLevel        string   `json:"trust_level"`
+			External          bool     `json:"external"`
+			UserInvocable     bool     `json:"user_invocable"`
+		} `json:"receipt"`
 	}
 	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
 		t.Fatalf("output is not JSON: %v\n%s", err, res.Output)
@@ -74,6 +87,18 @@ func TestInvocationToolExecutesSkillWithArgsAndToolFilter(t *testing.T) {
 	}
 	if out.Source != "codex-plugin-skill" || out.TrustLevel != "plugin_cache" || !out.External {
 		t.Fatalf("trust metadata = %+v, want plugin_cache external", out)
+	}
+	if out.Receipt.Skill != "review-pr" || out.Receipt.Provider != "mock" || out.Receipt.Model != "skill-model" {
+		t.Fatalf("receipt = %+v, want skill/provider/effective model", out.Receipt)
+	}
+	if out.Receipt.PermissionMode != "bypass" {
+		t.Fatalf("receipt permission mode = %q, want bypass", out.Receipt.PermissionMode)
+	}
+	if !out.Receipt.ToolFilterApplied || !reflect.DeepEqual(out.Receipt.RequiredTools, []string{"read_file"}) || !reflect.DeepEqual(out.Receipt.AvailableTools, []string{"read_file"}) {
+		t.Fatalf("receipt tools = %+v, want filtered read_file only", out.Receipt)
+	}
+	if out.Receipt.Source != "codex-plugin-skill" || out.Receipt.TrustLevel != "plugin_cache" || !out.Receipt.External || !out.Receipt.UserInvocable {
+		t.Fatalf("receipt trust metadata = %+v", out.Receipt)
 	}
 	if captured.Model != "skill-model" {
 		t.Fatalf("captured model = %q, want skill-model", captured.Model)

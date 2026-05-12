@@ -19,6 +19,8 @@ type Registry struct {
 	skills map[string]*Skill
 }
 
+const skillExecutionMaxIterations = 30
+
 func NewRegistry() *Registry {
 	return &Registry{skills: make(map[string]*Skill)}
 }
@@ -194,6 +196,25 @@ type ExecuteResult struct {
 	Output   string
 	Messages []llm.Message
 	Usage    llm.UsageStats
+	Receipt  ExecutionReceipt
+}
+
+type ExecutionReceipt struct {
+	Skill               string   `json:"skill"`
+	Provider            string   `json:"provider,omitempty"`
+	Model               string   `json:"model,omitempty"`
+	ReasoningEffort     string   `json:"reasoning_effort,omitempty"`
+	ReasoningEffortMode string   `json:"reasoning_effort_mode,omitempty"`
+	PermissionMode      string   `json:"permission_mode,omitempty"`
+	MaxIterations       int      `json:"max_iterations,omitempty"`
+	RequiredTools       []string `json:"required_tools,omitempty"`
+	AvailableTools      []string `json:"available_tools,omitempty"`
+	ToolFilterApplied   bool     `json:"tool_filter_applied"`
+	BaseDir             string   `json:"base_dir,omitempty"`
+	Source              string   `json:"source,omitempty"`
+	TrustLevel          string   `json:"trust_level,omitempty"`
+	External            bool     `json:"external"`
+	UserInvocable       bool     `json:"user_invocable"`
 }
 
 func (r *Registry) Execute(ctx context.Context, params ExecuteParams) (*ExecuteResult, error) {
@@ -230,13 +251,15 @@ func (r *Registry) Execute(ctx context.Context, params ExecuteParams) (*ExecuteR
 	if skill.Model != "" {
 		model = skill.Model
 	}
+	reasoningEffortMode := "inherited"
 
 	options := []agent.Option{
 		agent.WithSystemPrompt(rendered),
 		agent.WithModel(model),
-		agent.WithMaxIterations(30),
+		agent.WithMaxIterations(skillExecutionMaxIterations),
 	}
 	if skill.Effort != "" {
+		reasoningEffortMode = "manual"
 		options = append(options,
 			agent.WithReasoningEffort(skill.Effort),
 			agent.WithReasoningEffortMode("manual"),
@@ -267,5 +290,43 @@ func (r *Registry) Execute(ctx context.Context, params ExecuteParams) (*ExecuteR
 		Output:   output,
 		Messages: result.Messages,
 		Usage:    result.Usage,
+		Receipt: ExecutionReceipt{
+			Skill:               skill.Name,
+			Provider:            providerName(params.Provider),
+			Model:               model,
+			ReasoningEffort:     skill.Effort,
+			ReasoningEffortMode: reasoningEffortMode,
+			PermissionMode:      permissionMode(params.Permission),
+			MaxIterations:       skillExecutionMaxIterations,
+			RequiredTools:       append([]string(nil), skill.RequiredTools...),
+			AvailableTools:      toolRegistryNames(filteredReg),
+			ToolFilterApplied:   len(skill.RequiredTools) > 0,
+			BaseDir:             skill.BaseDir,
+			Source:              skill.Source,
+			TrustLevel:          skill.TrustLevel(),
+			External:            skill.External(),
+			UserInvocable:       skill.UserInvocable(),
+		},
 	}, nil
+}
+
+func providerName(provider llm.Provider) string {
+	if provider == nil {
+		return ""
+	}
+	return provider.Name()
+}
+
+func toolRegistryNames(reg *tools.Registry) []string {
+	if reg == nil {
+		return nil
+	}
+	return reg.Names()
+}
+
+func permissionMode(permission *agent.Permission) string {
+	if permission == nil {
+		return ""
+	}
+	return permission.Mode().String()
 }
