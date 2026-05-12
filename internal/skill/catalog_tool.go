@@ -35,6 +35,10 @@ func (t *CatalogTool) Schema() json.RawMessage {
 		"cwd":            tools.String("Project root used to normalize absolute paths for action=match_paths."),
 		"max_results":    tools.Int("Maximum recommendations for action=recommend. Defaults to 5, max 20."),
 		"include_prompt": tools.Bool("Include the full skill prompt for action=show. Defaults to false."),
+		"allow_trust_levels": tools.Array(
+			"Optional trust-level allowlist. Supported values: wiki, local_compatible, plugin_cache, declared.",
+			"string",
+		),
 	}, []string{"action"})
 }
 
@@ -54,6 +58,7 @@ type catalogToolInput struct {
 	CWD           string   `json:"cwd"`
 	MaxResults    int      `json:"max_results"`
 	IncludePrompt bool     `json:"include_prompt"`
+	AllowTrust    []string `json:"allow_trust_levels"`
 }
 
 type catalogSkillEntry struct {
@@ -81,13 +86,17 @@ func (t *CatalogTool) Execute(_ context.Context, params json.RawMessage) (*tools
 			return tools.ErrorResult(fmt.Sprintf("invalid params: %v", err)), nil
 		}
 	}
+	filter, filterErr := newCatalogTrustFilter(input.AllowTrust)
+	if filterErr != nil {
+		return tools.ErrorResult(filterErr.Error()), nil
+	}
 
 	action := strings.ToLower(strings.TrimSpace(input.Action))
 	switch action {
 	case "", "list":
 		return marshalSkillCatalogOutput(map[string]any{
 			"action": "list",
-			"skills": t.skillEntries(false),
+			"skills": t.skillEntries(false, filter),
 		})
 	case "show":
 		name := strings.TrimSpace(strings.TrimPrefix(input.Skill, "/"))
@@ -98,6 +107,9 @@ func (t *CatalogTool) Execute(_ context.Context, params json.RawMessage) (*tools
 		if !ok {
 			return tools.ErrorResult(fmt.Sprintf("skill %q not found", name)), nil
 		}
+		if !filter.allowsSkill(sk) {
+			return tools.ErrorResult(fmt.Sprintf("skill %q filtered by allow_trust_levels", name)), nil
+		}
 		return marshalSkillCatalogOutput(map[string]any{
 			"action": "show",
 			"skill":  skillCatalogEntry(sk, input.IncludePrompt),
@@ -107,40 +119,46 @@ func (t *CatalogTool) Execute(_ context.Context, params json.RawMessage) (*tools
 		return marshalSkillCatalogOutput(map[string]any{
 			"action": "recommend",
 			"query":  query,
-			"skills": t.recommendedSkillEntries(query, normalizeSkillCatalogMax(input.MaxResults)),
+			"skills": t.recommendedSkillEntries(query, normalizeSkillCatalogMax(input.MaxResults), filter),
 		})
 	case "match_paths":
 		return marshalSkillCatalogOutput(map[string]any{
 			"action":  "match_paths",
-			"matches": t.registry.ConditionalMatchesForPaths(input.Paths, input.CWD),
+			"matches": filter.filterMatches(t.registry.ConditionalMatchesForPaths(input.Paths, input.CWD)),
 		})
 	default:
 		return tools.ErrorResult(fmt.Sprintf("skill_catalog: unsupported action %q; supported actions are list, show, recommend, and match_paths", input.Action)), nil
 	}
 }
 
-func (t *CatalogTool) skillEntries(includePrompt bool) []catalogSkillEntry {
+func (t *CatalogTool) skillEntries(includePrompt bool, filter catalogTrustFilter) []catalogSkillEntry {
 	if t == nil || t.registry == nil {
 		return nil
 	}
 	skills := t.registry.List()
 	out := make([]catalogSkillEntry, 0, len(skills))
 	for _, sk := range skills {
+		if !filter.allowsSkill(sk) {
+			continue
+		}
 		out = append(out, skillCatalogEntry(sk, includePrompt))
 	}
 	return out
 }
 
-func (t *CatalogTool) recommendedSkillEntries(query string, maxResults int) []catalogSkillEntry {
+func (t *CatalogTool) recommendedSkillEntries(query string, maxResults int, filter catalogTrustFilter) []catalogSkillEntry {
 	if t == nil || t.registry == nil {
 		return nil
 	}
 	terms := skillCatalogQueryTerms(query)
 	if len(terms) == 0 {
-		return firstSkillCatalogEntries(t.registry.List(), maxResults)
+		return firstSkillCatalogEntries(t.registry.List(), maxResults, filter)
 	}
 	var matches []catalogSkillEntry
 	for _, sk := range t.registry.List() {
+		if !filter.allowsSkill(sk) {
+			continue
+		}
 		entry := skillCatalogEntry(sk, false)
 		entry.Score, entry.MatchedFields = scoreSkillCatalogEntry(sk, terms)
 		if entry.Score > 0 {
@@ -159,13 +177,69 @@ func (t *CatalogTool) recommendedSkillEntries(query string, maxResults int) []ca
 	return matches
 }
 
-func firstSkillCatalogEntries(skills []*Skill, maxResults int) []catalogSkillEntry {
-	if len(skills) > maxResults {
-		skills = skills[:maxResults]
-	}
-	out := make([]catalogSkillEntry, 0, len(skills))
+func firstSkillCatalogEntries(skills []*Skill, maxResults int, filter catalogTrustFilter) []catalogSkillEntry {
+	out := make([]catalogSkillEntry, 0, min(len(skills), maxResults))
 	for _, sk := range skills {
+		if !filter.allowsSkill(sk) {
+			continue
+		}
 		out = append(out, skillCatalogEntry(sk, false))
+		if len(out) >= maxResults {
+			break
+		}
+	}
+	return out
+}
+
+type catalogTrustFilter struct {
+	active bool
+	allow  map[string]struct{}
+}
+
+func newCatalogTrustFilter(levels []string) (catalogTrustFilter, error) {
+	if len(levels) == 0 {
+		return catalogTrustFilter{}, nil
+	}
+	filter := catalogTrustFilter{active: true, allow: make(map[string]struct{}, len(levels))}
+	for _, level := range levels {
+		level = strings.ToLower(strings.TrimSpace(level))
+		if !validSkillTrustLevel(level) {
+			return catalogTrustFilter{}, fmt.Errorf("skill_catalog: unsupported trust level %q", level)
+		}
+		filter.allow[level] = struct{}{}
+	}
+	return filter, nil
+}
+
+func validSkillTrustLevel(level string) bool {
+	switch level {
+	case "wiki", "local_compatible", "plugin_cache", "declared":
+		return true
+	default:
+		return false
+	}
+}
+
+func (f catalogTrustFilter) allowsSkill(sk *Skill) bool {
+	if !f.active {
+		return true
+	}
+	if sk == nil {
+		return false
+	}
+	_, ok := f.allow[sk.TrustLevel()]
+	return ok
+}
+
+func (f catalogTrustFilter) filterMatches(matches []ConditionalSkillMatch) []ConditionalSkillMatch {
+	if !f.active || len(matches) == 0 {
+		return matches
+	}
+	out := make([]ConditionalSkillMatch, 0, len(matches))
+	for _, match := range matches {
+		if _, ok := f.allow[match.TrustLevel]; ok {
+			out = append(out, match)
+		}
 	}
 	return out
 }
