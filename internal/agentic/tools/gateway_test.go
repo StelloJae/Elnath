@@ -143,6 +143,12 @@ func TestToolGateway_AgenticActorGraphIsReadOnly(t *testing.T) {
 	}
 }
 
+func TestToolGateway_AgenticTaskEvidenceIsReadOnly(t *testing.T) {
+	if !isReadOnlyTool(TaskEvidenceToolName) {
+		t.Fatal("agentic_task_evidence should be classified as read-only")
+	}
+}
+
 func TestToolGateway_MutatingActionRequiresApprovalAndDoesNotExecute(t *testing.T) {
 	ctx := context.Background()
 	db, store, approvalBridge, task := newGatewayTestStore(t)
