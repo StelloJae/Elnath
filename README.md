@@ -125,6 +125,18 @@ Recent hardening also closed two structural follow-ups behind this operator flow
 
 Interactive `elnath run` also supports session-local slash controls:
 
+- `/commands [--json] [--all]` lists CLI, runtime-control, and skill-backed
+  slash command metadata without calling the LLM.
+- `/skills [--json]` lists registered skills without executing them.
+- `/version [--json]` prints the version for the current runtime session.
+- `/status [--json]` shows local session state such as version, provider, model,
+  effort mode, permission mode, tool exposure mode, work directory, and daemon
+  mode. It does not replace `provider status`, `daemon status`, or
+  `agentic status`.
+- `/plan` enters read-only plan mode for the current session, `/plan status`
+  shows whether plan mode is active, and `/plan exit` restores the previous
+  permission mode. It reuses the same plan-mode controller as the model-callable
+  `enter_plan_mode` / `exit_plan_mode` tools.
 - `/model status` shows the active provider and request model.
 - `/model <model-id>` pins the request model for the current session, for
   example `/model kimi-k2` when `openai_responses` points at a compatible
