@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -491,6 +492,61 @@ func TestExecuteUsesSkillReasoningEffort(t *testing.T) {
 	}
 	if captured.ReasoningEffort != "xhigh" {
 		t.Fatalf("ReasoningEffort = %q, want xhigh", captured.ReasoningEffort)
+	}
+}
+
+func TestExecuteReportsExecutionReceipt(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	provider := &mockProvider{streamFn: func(_ context.Context, _ llm.ChatRequest, cb func(llm.StreamEvent)) error {
+		cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: "ok"})
+		cb(llm.StreamEvent{Type: llm.EventDone})
+		return nil
+	}}
+	toolReg := tools.NewRegistry()
+	toolReg.Register(&mockTool{name: "bash"})
+	toolReg.Register(&mockTool{name: "read_file"})
+
+	reg := NewRegistry()
+	reg.Add(&Skill{
+		Name:          "deep-debug",
+		Prompt:        "Debug carefully.",
+		RequiredTools: []string{"read_file"},
+		Model:         "skill-model",
+		Effort:        "xhigh",
+		BaseDir:       baseDir,
+		Source:        "claude-skill",
+	})
+
+	result, err := reg.Execute(context.Background(), ExecuteParams{
+		SkillName:  "deep-debug",
+		Provider:   provider,
+		ToolReg:    toolReg,
+		Model:      "default-model",
+		Permission: agent.NewPermission(agent.WithMode(agent.ModeBypass)),
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	receipt := result.Receipt
+	if receipt.Skill != "deep-debug" || receipt.Provider != "mock" || receipt.Model != "skill-model" {
+		t.Fatalf("receipt identity = %+v, want skill/provider/effective model", receipt)
+	}
+	if receipt.ReasoningEffort != "xhigh" || receipt.ReasoningEffortMode != "manual" {
+		t.Fatalf("receipt effort = %+v, want manual xhigh", receipt)
+	}
+	if receipt.PermissionMode != "bypass" {
+		t.Fatalf("receipt permission mode = %q, want bypass", receipt.PermissionMode)
+	}
+	if receipt.MaxIterations != 30 {
+		t.Fatalf("receipt max iterations = %d, want 30", receipt.MaxIterations)
+	}
+	if !receipt.ToolFilterApplied || !reflect.DeepEqual(receipt.RequiredTools, []string{"read_file"}) || !reflect.DeepEqual(receipt.AvailableTools, []string{"read_file"}) {
+		t.Fatalf("receipt tools = %+v, want filtered read_file only", receipt)
+	}
+	if receipt.BaseDir != baseDir || receipt.TrustLevel != "local_compatible" || receipt.UserInvocable != true {
+		t.Fatalf("receipt skill metadata = %+v", receipt)
 	}
 }
 

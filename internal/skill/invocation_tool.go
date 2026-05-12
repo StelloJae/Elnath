@@ -70,12 +70,13 @@ type invocationInput struct {
 }
 
 type invocationOutput struct {
-	Skill      string `json:"skill"`
-	Status     string `json:"status"`
-	Source     string `json:"source,omitempty"`
-	TrustLevel string `json:"trust_level,omitempty"`
-	External   bool   `json:"external"`
-	Output     string `json:"output"`
+	Skill      string           `json:"skill"`
+	Status     string           `json:"status"`
+	Source     string           `json:"source,omitempty"`
+	TrustLevel string           `json:"trust_level,omitempty"`
+	External   bool             `json:"external"`
+	Output     string           `json:"output"`
+	Receipt    ExecutionReceipt `json:"receipt"`
 }
 
 func (t *InvocationTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
@@ -153,6 +154,7 @@ func (t *InvocationTool) Execute(ctx context.Context, params json.RawMessage) (*
 		TrustLevel: sk.TrustLevel(),
 		External:   sk.External(),
 		Output:     result.Output,
+		Receipt:    result.Receipt,
 	})
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("skill %q: marshal output: %v", name, err)), nil
