@@ -126,7 +126,12 @@ Interactive `elnath run` also supports session-local slash controls:
   example `/model kimi-k2` when `openai_responses` points at a compatible
   provider.
 - `/model default` uses the configured provider's default model.
-- `/provider status` shows the active provider and reasoning-effort capability.
+- `/provider status` shows the active provider, request timeout, reasoning-
+  effort capability, and configured provider candidates.
+- `/provider status --json` and `/provider candidates` expose the same provider
+  control-plane metadata without calling the LLM. Provider switching still
+  requires config or `ELNATH_PROVIDER` plus restart; use `/model` and `/effort`
+  for in-session overrides.
 - `/effort auto` lets Elnath choose request effort per task.
 - `/effort low|medium|high|xhigh` pins request effort for the current session
   when the active provider supports it.

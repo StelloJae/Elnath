@@ -2486,6 +2486,178 @@ func TestExecutionRuntimeRunTaskProviderSlashCommandReportsCapabilities(t *testi
 	}
 }
 
+func TestExecutionRuntimeRunTaskProviderSlashCommandJSONReportsConfiguredCandidates(t *testing.T) {
+	provider := &capabilityCountingProvider{}
+	rt := newTestExecutionRuntimeWithConfig(t, provider, false, func(cfg *config.Config) {
+		cfg.OpenAIResponses.APIKey = "sk-test"
+		cfg.OpenAIResponses.Model = "kimi-k2"
+		cfg.OpenAIResponses.BaseURL = "https://api.moonshot.ai/v1"
+		cfg.OpenAIResponses.ReasoningEffort = "high"
+		cfg.OpenAIResponses.Timeout = 120
+		cfg.Anthropic.APIKey = "anthropic-test"
+		cfg.Anthropic.Model = "claude-sonnet-4-6"
+		cfg.Anthropic.Timeout = 90
+	})
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	_, summary, err := rt.runTask(context.Background(), sess, nil, "/provider status --json", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask /provider status --json: %v", err)
+	}
+	if provider.streamCalls != 0 || provider.chatCalls != 0 {
+		t.Fatalf("provider calls = chat:%d stream:%d, want none for local provider command", provider.chatCalls, provider.streamCalls)
+	}
+
+	var out providerStatusView
+	if err := json.Unmarshal([]byte(summary), &out); err != nil {
+		t.Fatalf("summary is not JSON: %v\n%s", err, summary)
+	}
+	if out.Provider != "openai-responses" || out.ProviderEffort != llm.ReasoningEffortNativeWithUnsupportedRetry {
+		t.Fatalf("provider status = %+v, want active provider capabilities", out)
+	}
+	if len(out.ConfiguredProviders) != 2 {
+		t.Fatalf("configured providers = %+v, want openai-responses and anthropic", out.ConfiguredProviders)
+	}
+	var responses providerConfigCandidateView
+	for _, candidate := range out.ConfiguredProviders {
+		if candidate.Provider == "openai-responses" {
+			responses = candidate
+		}
+		if strings.Contains(candidate.Model, "sk-test") || strings.Contains(candidate.BaseURL, "sk-test") {
+			t.Fatalf("candidate leaked API key: %+v", candidate)
+		}
+	}
+	if responses.Model != "kimi-k2" || responses.BaseURL != "https://api.moonshot.ai/v1" || responses.ReasoningEffort != "high" || responses.RequestTimeoutSeconds != 120 {
+		t.Fatalf("openai-responses candidate = %+v, want configured Responses-compatible metadata", responses)
+	}
+}
+
+func TestExecutionRuntimeRunTaskProviderSlashCommandJSONUsesSessionEffortOverride(t *testing.T) {
+	provider := &capabilityCountingProvider{}
+	rt := newTestExecutionRuntimeWithConfig(t, provider, false, func(cfg *config.Config) {
+		cfg.Reasoning.EffortMode = "auto"
+		cfg.Reasoning.Effort = "medium"
+	})
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	messages, _, err := rt.runTask(context.Background(), sess, nil, "/effort max", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask /effort max: %v", err)
+	}
+	_, summary, err := rt.runTask(context.Background(), sess, messages, "/provider status --json", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask /provider status --json: %v", err)
+	}
+
+	var out providerStatusView
+	if err := json.Unmarshal([]byte(summary), &out); err != nil {
+		t.Fatalf("summary is not JSON: %v\n%s", err, summary)
+	}
+	if out.ReasoningEffortMode != "manual" || out.ConfiguredEffort != "xhigh" {
+		t.Fatalf("runtime reasoning = mode %q effort %q, want manual/xhigh", out.ReasoningEffortMode, out.ConfiguredEffort)
+	}
+}
+
+func TestExecutionRuntimeRunTaskProviderSlashCommandListsCandidates(t *testing.T) {
+	provider := &capabilityCountingProvider{}
+	rt := newTestExecutionRuntimeWithConfig(t, provider, false, func(cfg *config.Config) {
+		cfg.OpenAIResponses.APIKey = "sk-test"
+		cfg.OpenAIResponses.Model = "minimax-m2.7"
+		cfg.OpenAIResponses.BaseURL = "https://api.minimax.io/v1"
+		cfg.OpenAIResponses.Timeout = 150
+	})
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	_, summary, err := rt.runTask(context.Background(), sess, nil, "/provider candidates", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask /provider candidates: %v", err)
+	}
+	if provider.streamCalls != 0 || provider.chatCalls != 0 {
+		t.Fatalf("provider calls = chat:%d stream:%d, want none for local provider command", provider.chatCalls, provider.streamCalls)
+	}
+	for _, want := range []string{"Configured providers:", "openai-responses", "minimax-m2.7", "https://api.minimax.io/v1", "150s"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary=%q missing %q", summary, want)
+		}
+	}
+	if strings.Contains(summary, "sk-test") {
+		t.Fatalf("summary leaked API key: %q", summary)
+	}
+}
+
+func TestExecutionRuntimeRunTaskProviderSlashCommandRedactsCredentialBearingBaseURL(t *testing.T) {
+	provider := &capabilityCountingProvider{}
+	rt := newTestExecutionRuntimeWithConfig(t, provider, false, func(cfg *config.Config) {
+		cfg.OpenAIResponses.APIKey = "sk-test"
+		cfg.OpenAIResponses.Model = "kimi-k2"
+		cfg.OpenAIResponses.BaseURL = "https://alice:wonder@api.moonshot.ai/v1?api_key=secret-value&region=us&token=tok-value"
+	})
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	_, summary, err := rt.runTask(context.Background(), sess, nil, "/provider candidates", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask /provider candidates: %v", err)
+	}
+	for _, leaked := range []string{"alice", "wonder", "secret-value", "tok-value", "sk-test"} {
+		if strings.Contains(summary, leaked) {
+			t.Fatalf("summary leaked %q: %q", leaked, summary)
+		}
+	}
+	for _, want := range []string{"api.moonshot.ai", "region=us", "api_key=REDACTED", "token=REDACTED"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary=%q missing %q", summary, want)
+		}
+	}
+
+	_, jsonSummary, err := rt.runTask(context.Background(), sess, nil, "/provider status --json", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask /provider status --json: %v", err)
+	}
+	for _, leaked := range []string{"alice", "wonder", "secret-value", "tok-value", "sk-test"} {
+		if strings.Contains(jsonSummary, leaked) {
+			t.Fatalf("json summary leaked %q: %q", leaked, jsonSummary)
+		}
+	}
+}
+
+func TestExecutionRuntimeRunTaskProviderSlashCommandRedactsUnparseableBaseURL(t *testing.T) {
+	provider := &capabilityCountingProvider{}
+	rt := newTestExecutionRuntimeWithConfig(t, provider, false, func(cfg *config.Config) {
+		cfg.OpenAIResponses.APIKey = "sk-test"
+		cfg.OpenAIResponses.Model = "kimi-k2"
+		cfg.OpenAIResponses.BaseURL = "https://alice:%zz@api.moonshot.ai/v1?api_key=secret-value&token=tok-value"
+	})
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	_, summary, err := rt.runTask(context.Background(), sess, nil, "/provider candidates", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask /provider candidates: %v", err)
+	}
+	for _, leaked := range []string{"alice", "%zz", "secret-value", "tok-value", "sk-test"} {
+		if strings.Contains(summary, leaked) {
+			t.Fatalf("summary leaked %q: %q", leaked, summary)
+		}
+	}
+	if !strings.Contains(summary, "base_url=REDACTED_INVALID_URL") {
+		t.Fatalf("summary = %q, want invalid URL placeholder", summary)
+	}
+}
+
 func TestExecutionRuntimeRunTaskCommandsSlashCommandListsCatalog(t *testing.T) {
 	provider := &countingProvider{streamText: "runtime answer"}
 	rt := newTestExecutionRuntime(t, provider)
