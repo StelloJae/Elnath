@@ -57,9 +57,12 @@ type OutcomeRecord struct {
 }
 
 type ConditionalSkillMatch struct {
-	SkillName string `json:"skill_name"`
-	Pattern   string `json:"pattern"`
-	Path      string `json:"path"`
+	SkillName  string `json:"skill_name"`
+	Pattern    string `json:"pattern"`
+	Path       string `json:"path"`
+	Source     string `json:"source,omitempty"`
+	TrustLevel string `json:"trust_level,omitempty"`
+	External   bool   `json:"external"`
 }
 
 // IsSuccessful returns true for workflow outcomes that count as completion in

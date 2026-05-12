@@ -9,9 +9,12 @@ import (
 
 // ConditionalSkillMatch records why a conditional skill matched a file path.
 type ConditionalSkillMatch struct {
-	SkillName string `json:"skill_name"`
-	Pattern   string `json:"pattern"`
-	Path      string `json:"path"`
+	SkillName  string `json:"skill_name"`
+	Pattern    string `json:"pattern"`
+	Path       string `json:"path"`
+	Source     string `json:"source,omitempty"`
+	TrustLevel string `json:"trust_level,omitempty"`
+	External   bool   `json:"external"`
 }
 
 // ConditionalMatchesForPaths returns conditional skill matches for the given
@@ -39,9 +42,12 @@ func (r *Registry) ConditionalMatchesForPaths(filePaths []string, cwd string) []
 			for _, path := range paths {
 				if conditionalPatternMatches(pattern, path) {
 					matches = append(matches, ConditionalSkillMatch{
-						SkillName: sk.Name,
-						Pattern:   pattern,
-						Path:      path,
+						SkillName:  sk.Name,
+						Pattern:    pattern,
+						Path:       path,
+						Source:     sk.Source,
+						TrustLevel: sk.TrustLevel(),
+						External:   sk.External(),
 					})
 				}
 			}

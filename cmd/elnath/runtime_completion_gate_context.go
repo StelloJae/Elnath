@@ -65,9 +65,12 @@ func completionSkillMatchesToAgentic(src []completionConditionalSkillMatch) []ag
 	out := make([]agenticcompletion.ConditionalSkillMatch, 0, len(src))
 	for _, match := range src {
 		out = append(out, agenticcompletion.ConditionalSkillMatch{
-			SkillName: match.SkillName,
-			Pattern:   match.Pattern,
-			Path:      match.Path,
+			SkillName:  match.SkillName,
+			Pattern:    match.Pattern,
+			Path:       match.Path,
+			Source:     match.Source,
+			TrustLevel: match.TrustLevel,
+			External:   match.External,
 		})
 	}
 	return out

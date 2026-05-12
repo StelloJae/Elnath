@@ -199,8 +199,8 @@ func TestCatalogToolRecommendsSkillsByQuery(t *testing.T) {
 
 func TestCatalogToolMatchesConditionalSkillPaths(t *testing.T) {
 	reg := NewRegistry()
-	reg.Add(&Skill{Name: "go-review", Paths: []string{"internal/**/*.go"}, Status: "active"})
-	reg.Add(&Skill{Name: "docs-review", Paths: []string{"docs"}, Status: "active"})
+	reg.Add(&Skill{Name: "go-review", Paths: []string{"internal/**/*.go"}, Status: "active", Source: "claude-skill"})
+	reg.Add(&Skill{Name: "docs-review", Paths: []string{"docs"}, Status: "active", Source: "codex-plugin-skill"})
 	reg.Add(&Skill{Name: "always-on", Status: "active"})
 
 	root := t.TempDir()
@@ -230,9 +230,12 @@ func TestCatalogToolMatchesConditionalSkillPaths(t *testing.T) {
 	var out struct {
 		Action  string `json:"action"`
 		Matches []struct {
-			SkillName string `json:"skill_name"`
-			Pattern   string `json:"pattern"`
-			Path      string `json:"path"`
+			SkillName  string `json:"skill_name"`
+			Pattern    string `json:"pattern"`
+			Path       string `json:"path"`
+			Source     string `json:"source"`
+			TrustLevel string `json:"trust_level"`
+			External   bool   `json:"external"`
 		} `json:"matches"`
 	}
 	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
@@ -244,8 +247,14 @@ func TestCatalogToolMatchesConditionalSkillPaths(t *testing.T) {
 	if out.Matches[0].SkillName != "docs-review" || out.Matches[0].Path != "docs/roadmap.md" {
 		t.Fatalf("first match = %+v, want docs-review docs/roadmap.md", out.Matches[0])
 	}
+	if out.Matches[0].Source != "codex-plugin-skill" || out.Matches[0].TrustLevel != "plugin_cache" || !out.Matches[0].External {
+		t.Fatalf("first trust metadata = %+v, want plugin_cache external match", out.Matches[0])
+	}
 	if out.Matches[1].SkillName != "go-review" || out.Matches[1].Path != "internal/skill/catalog_tool.go" {
 		t.Fatalf("second match = %+v, want go-review internal/skill/catalog_tool.go", out.Matches[1])
+	}
+	if out.Matches[1].Source != "claude-skill" || out.Matches[1].TrustLevel != "local_compatible" || out.Matches[1].External {
+		t.Fatalf("second trust metadata = %+v, want local_compatible non-external match", out.Matches[1])
 	}
 }
 

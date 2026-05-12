@@ -283,7 +283,7 @@ func TestCompletionContractSummaryRecordsConditionalSkillMatches(t *testing.T) {
 			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
 				llm.ToolUseBlock{ID: "skill-1", Name: "skill_catalog", Input: json.RawMessage(`{"action":"match_paths","paths":["internal/skill/skill.go"]}`)},
 			}},
-			llm.NewToolResultMessage("skill-1", `{"action":"match_paths","matches":[{"skill_name":"go-review","pattern":"internal/**/*.go","path":"internal/skill/skill.go"}]}`, false),
+			llm.NewToolResultMessage("skill-1", `{"action":"match_paths","matches":[{"skill_name":"go-review","pattern":"internal/**/*.go","path":"internal/skill/skill.go","source":"claude-skill","trust_level":"local_compatible","external":false}]}`, false),
 			llm.NewAssistantMessage("Done."),
 		},
 		FinishReason: "stop",
@@ -296,6 +296,9 @@ func TestCompletionContractSummaryRecordsConditionalSkillMatches(t *testing.T) {
 	match := summary.ConditionalSkillMatches[0]
 	if match.SkillName != "go-review" || match.Pattern != "internal/**/*.go" || match.Path != "internal/skill/skill.go" {
 		t.Fatalf("match = %+v, want go-review/internal/**/*.go/internal/skill/skill.go", match)
+	}
+	if match.Source != "claude-skill" || match.TrustLevel != "local_compatible" || match.External {
+		t.Fatalf("match trust metadata = %+v, want claude-skill/local_compatible/non-external", match)
 	}
 }
 
@@ -345,7 +348,7 @@ func TestRecordOutcomePersistsCompletionObservability(t *testing.T) {
 			RetryDecision:           completionRetryDecisionRetrySmallerScope,
 			RetryReason:             "final_response_reports_incomplete",
 			ConditionalSkillMatches: []completionConditionalSkillMatch{
-				{SkillName: "go-review", Pattern: "internal/**/*.go", Path: "internal/skill/skill.go"},
+				{SkillName: "go-review", Pattern: "internal/**/*.go", Path: "internal/skill/skill.go", Source: "claude-skill", TrustLevel: "local_compatible", External: false},
 			},
 		},
 	})
@@ -384,7 +387,7 @@ func TestCompletionGateContextProviderConsumesRuntimeSummary(t *testing.T) {
 		ProviderEffortNote:    "retry_without_reasoning_on_400_or_422_unsupported_effort",
 		LoadedDeferredTools:   []string{"mcp_github_issue"},
 		ConditionalSkillMatches: []completionConditionalSkillMatch{
-			{SkillName: "go-review", Pattern: "internal/**/*.go", Path: "internal/skill/skill.go"},
+			{SkillName: "go-review", Pattern: "internal/**/*.go", Path: "internal/skill/skill.go", Source: "claude-skill", TrustLevel: "local_compatible", External: false},
 		},
 		CorrectionAttempted:     true,
 		CorrectionAttempts:      1,
@@ -429,6 +432,9 @@ func TestCompletionGateContextProviderConsumesRuntimeSummary(t *testing.T) {
 	}
 	if len(summary.ConditionalSkillMatches) != 1 || summary.ConditionalSkillMatches[0].SkillName != "go-review" {
 		t.Fatalf("ConditionalSkillMatches = %+v", summary.ConditionalSkillMatches)
+	}
+	if summary.ConditionalSkillMatches[0].Source != "claude-skill" || summary.ConditionalSkillMatches[0].TrustLevel != "local_compatible" || summary.ConditionalSkillMatches[0].External {
+		t.Fatalf("ConditionalSkillMatches[0] trust metadata = %+v", summary.ConditionalSkillMatches[0])
 	}
 	if !summary.CorrectionAttempted || summary.CorrectionAttempts != 1 || summary.CorrectionDecision != completionRetryDecisionRetrySmallerScope || summary.CorrectionReason != "final_response_reports_incomplete" {
 		t.Fatalf("correction context = attempted %v attempts %d decision %q reason %q", summary.CorrectionAttempted, summary.CorrectionAttempts, summary.CorrectionDecision, summary.CorrectionReason)
@@ -609,6 +615,9 @@ func assertCompletionOutcome(t *testing.T, rec learning.OutcomeRecord) {
 	}
 	if rec.ConditionalSkillMatches[0].SkillName != "go-review" || rec.ConditionalSkillMatches[0].Path != "internal/skill/skill.go" {
 		t.Fatalf("ConditionalSkillMatches[0] = %+v", rec.ConditionalSkillMatches[0])
+	}
+	if rec.ConditionalSkillMatches[0].Source != "claude-skill" || rec.ConditionalSkillMatches[0].TrustLevel != "local_compatible" || rec.ConditionalSkillMatches[0].External {
+		t.Fatalf("ConditionalSkillMatches[0] trust metadata = %+v", rec.ConditionalSkillMatches[0])
 	}
 	if !rec.CorrectionAttempted || rec.CorrectionAttempts != 1 || rec.CorrectionDecision != completionRetryDecisionRetrySmallerScope || rec.CorrectionReason != "final_response_reports_incomplete" {
 		t.Fatalf("correction = attempted %v attempts %d decision %q reason %q", rec.CorrectionAttempted, rec.CorrectionAttempts, rec.CorrectionDecision, rec.CorrectionReason)

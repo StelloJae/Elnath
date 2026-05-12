@@ -10,8 +10,8 @@ func TestRegistryConditionalMatchesForPaths(t *testing.T) {
 	t.Parallel()
 
 	reg := NewRegistry()
-	reg.Add(&Skill{Name: "go-review", Paths: []string{"internal/**/*.go"}})
-	reg.Add(&Skill{Name: "docs-review", Paths: []string{"docs"}})
+	reg.Add(&Skill{Name: "go-review", Paths: []string{"internal/**/*.go"}, Source: "claude-skill"})
+	reg.Add(&Skill{Name: "docs-review", Paths: []string{"docs"}, Source: "codex-plugin-skill"})
 	reg.Add(&Skill{Name: "always-on"})
 
 	root := t.TempDir()
@@ -23,8 +23,8 @@ func TestRegistryConditionalMatchesForPaths(t *testing.T) {
 	}, root)
 
 	want := []ConditionalSkillMatch{
-		{SkillName: "docs-review", Pattern: "docs", Path: "docs/roadmap.md"},
-		{SkillName: "go-review", Pattern: "internal/**/*.go", Path: "internal/skill/skill.go"},
+		{SkillName: "docs-review", Pattern: "docs", Path: "docs/roadmap.md", Source: "codex-plugin-skill", TrustLevel: "plugin_cache", External: true},
+		{SkillName: "go-review", Pattern: "internal/**/*.go", Path: "internal/skill/skill.go", Source: "claude-skill", TrustLevel: "local_compatible", External: false},
 	}
 	if !reflect.DeepEqual(matches, want) {
 		t.Fatalf("matches = %#v, want %#v", matches, want)

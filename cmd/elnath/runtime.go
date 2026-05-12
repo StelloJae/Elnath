@@ -1419,9 +1419,12 @@ func completionSkillMatchesToLearning(src []completionConditionalSkillMatch) []l
 	out := make([]learning.ConditionalSkillMatch, 0, len(src))
 	for _, match := range src {
 		out = append(out, learning.ConditionalSkillMatch{
-			SkillName: match.SkillName,
-			Pattern:   match.Pattern,
-			Path:      match.Path,
+			SkillName:  match.SkillName,
+			Pattern:    match.Pattern,
+			Path:       match.Path,
+			Source:     match.Source,
+			TrustLevel: match.TrustLevel,
+			External:   match.External,
 		})
 	}
 	return out

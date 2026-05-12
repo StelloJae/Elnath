@@ -36,9 +36,12 @@ type completionContractSummary struct {
 }
 
 type completionConditionalSkillMatch struct {
-	SkillName string `json:"skill_name"`
-	Pattern   string `json:"pattern"`
-	Path      string `json:"path"`
+	SkillName  string `json:"skill_name"`
+	Pattern    string `json:"pattern"`
+	Path       string `json:"path"`
+	Source     string `json:"source,omitempty"`
+	TrustLevel string `json:"trust_level,omitempty"`
+	External   bool   `json:"external"`
 }
 
 const (
@@ -148,6 +151,8 @@ func conditionalSkillMatchesFromCatalogOutput(output string) []completionConditi
 		match.SkillName = strings.TrimSpace(match.SkillName)
 		match.Pattern = strings.TrimSpace(match.Pattern)
 		match.Path = strings.TrimSpace(match.Path)
+		match.Source = strings.TrimSpace(match.Source)
+		match.TrustLevel = strings.TrimSpace(match.TrustLevel)
 		if match.SkillName == "" || match.Pattern == "" || match.Path == "" {
 			continue
 		}
