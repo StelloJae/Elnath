@@ -37,6 +37,7 @@ type providerConfigCandidateView struct {
 
 type providerSelectionCheckView struct {
 	RequestedProvider              string   `json:"requested_provider"`
+	PreviousProvider               string   `json:"previous_provider,omitempty"`
 	Provider                       string   `json:"provider"`
 	Model                          string   `json:"model"`
 	ProviderEffort                 string   `json:"provider_effort"`
@@ -44,6 +45,7 @@ type providerSelectionCheckView struct {
 	AutoEffortCompatible           bool     `json:"auto_effort_compatible"`
 	RequestTimeoutSeconds          int      `json:"request_timeout_seconds"`
 	WouldSwitch                    bool     `json:"would_switch"`
+	Switched                       bool     `json:"switched"`
 	RuntimeProviderSwitchAvailable bool     `json:"runtime_provider_switch_available"`
 	ProviderSwitchBoundaries       []string `json:"provider_switch_boundaries,omitempty"`
 }
@@ -334,10 +336,18 @@ func formatProviderSwitchBoundary(boundaries []string) string {
 	if len(boundaries) == 0 {
 		return "Provider switching: unavailable."
 	}
-	if containsProviderSwitchBoundary(boundaries, providerSwitchBoundaryReflectionStartupBound) {
+	reflectionBound := containsProviderSwitchBoundary(boundaries, providerSwitchBoundaryReflectionStartupBound)
+	compressionBound := containsProviderSwitchBoundary(boundaries, providerSwitchBoundaryCompressionStartupBound)
+	switch {
+	case reflectionBound && compressionBound:
 		return "Provider switching: restart required. Runtime skill provider resolution is dynamic, but reflection provider and compression budget remain startup-bound."
+	case reflectionBound:
+		return "Provider switching: restart required. Runtime skill provider resolution is dynamic, but reflection provider remains startup-bound."
+	case compressionBound:
+		return "Provider switching: restart required. Runtime skill provider resolution is dynamic, but compression budget remains startup-bound."
+	default:
+		return "Provider switching: restart required."
 	}
-	return "Provider switching: restart required. Runtime skill provider resolution is dynamic, and compression budget remains startup-bound."
 }
 
 func containsProviderSwitchBoundary(boundaries []string, want string) bool {

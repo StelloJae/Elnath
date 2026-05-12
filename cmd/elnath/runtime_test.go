@@ -2549,9 +2549,9 @@ func TestExecutionRuntimeRunTaskProviderSlashCommandJSONReportsConfiguredCandida
 		t.Fatalf("openai-responses candidate = %+v, want configured Responses-compatible metadata", responses)
 	}
 	if out.RuntimeProviderSwitchAvailable {
-		t.Fatalf("runtime provider switch available = true, want false until hot-switch seam is complete")
+		t.Fatalf("runtime provider switch available = true, want false while reflection is startup-bound")
 	}
-	for _, want := range []string{"restart_required", "reflection_provider_startup_bound", "compression_budget_startup_bound"} {
+	for _, want := range []string{"restart_required", "reflection_provider_startup_bound"} {
 		if !containsString(out.ProviderSwitchBoundaries, want) {
 			t.Fatalf("provider switch boundaries = %+v, missing %q", out.ProviderSwitchBoundaries, want)
 		}
@@ -2579,8 +2579,8 @@ func TestExecutionRuntimeRunTaskProviderSlashCommandOmitsReflectionBoundaryWhenS
 	if containsString(out.ProviderSwitchBoundaries, "reflection_provider_startup_bound") {
 		t.Fatalf("provider switch boundaries = %+v, should omit reflection boundary when self-healing is disabled", out.ProviderSwitchBoundaries)
 	}
-	if !containsString(out.ProviderSwitchBoundaries, "compression_budget_startup_bound") {
-		t.Fatalf("provider switch boundaries = %+v, missing compression boundary", out.ProviderSwitchBoundaries)
+	if !out.RuntimeProviderSwitchAvailable || len(out.ProviderSwitchBoundaries) != 0 {
+		t.Fatalf("provider switch availability = %t boundaries = %+v, want available with no boundaries", out.RuntimeProviderSwitchAvailable, out.ProviderSwitchBoundaries)
 	}
 }
 
@@ -2676,11 +2676,74 @@ func TestExecutionRuntimeRunTaskProviderSlashCommandChecksCandidateWithoutSwitch
 	if out.Model != "claude-sonnet-4-6" || out.RequestTimeoutSeconds != 90 {
 		t.Fatalf("provider check = %+v, want anthropic model and timeout", out)
 	}
-	if out.WouldSwitch || out.RuntimeProviderSwitchAvailable {
-		t.Fatalf("provider check switch fields = would_switch:%t runtime_available:%t, want false/false", out.WouldSwitch, out.RuntimeProviderSwitchAvailable)
+	if !out.WouldSwitch || !out.RuntimeProviderSwitchAvailable {
+		t.Fatalf("provider check switch fields = would_switch:%t runtime_available:%t, want true/true", out.WouldSwitch, out.RuntimeProviderSwitchAvailable)
 	}
 	if rt.provider.Name() != "openai-responses" || rt.wfCfg.Model != "mock-model" {
 		t.Fatalf("runtime provider/model changed to %s/%s, want openai-responses/mock-model", rt.provider.Name(), rt.wfCfg.Model)
+	}
+}
+
+func TestExecutionRuntimeRunTaskProviderSlashCommandSwitchesProvider(t *testing.T) {
+	provider := &capabilityCountingProvider{}
+	rt := newTestExecutionRuntimeWithConfig(t, provider, false, func(cfg *config.Config) {
+		cfg.OpenAIResponses.APIKey = "sk-test"
+		cfg.OpenAIResponses.Model = "kimi-k2"
+		cfg.Anthropic.APIKey = "anthropic-test"
+		cfg.Anthropic.Model = "claude-sonnet-4-6"
+		cfg.Anthropic.Timeout = 90
+	})
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	_, summary, err := rt.runTask(context.Background(), sess, nil, "/provider use anthropic --json", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask /provider use: %v", err)
+	}
+	if provider.streamCalls != 0 || provider.chatCalls != 0 {
+		t.Fatalf("provider calls = chat:%d stream:%d, want none for local provider use", provider.chatCalls, provider.streamCalls)
+	}
+
+	var out providerSelectionCheckView
+	if err := json.Unmarshal([]byte(summary), &out); err != nil {
+		t.Fatalf("summary is not JSON: %v\n%s", err, summary)
+	}
+	if !out.Switched || out.PreviousProvider != "openai-responses" || out.Provider != "anthropic" {
+		t.Fatalf("provider switch = %+v, want switched openai-responses->anthropic", out)
+	}
+	if out.Model != "claude-sonnet-4-6" || out.RequestTimeoutSeconds != 90 {
+		t.Fatalf("provider switch = %+v, want anthropic model and timeout", out)
+	}
+	if rt.provider.Name() != "anthropic" || rt.wfCfg.Model != "claude-sonnet-4-6" {
+		t.Fatalf("runtime provider/model = %s/%s, want anthropic/claude-sonnet-4-6", rt.provider.Name(), rt.wfCfg.Model)
+	}
+}
+
+func TestExecutionRuntimeRunTaskProviderSlashCommandBlocksSwitchWhenReflectionBound(t *testing.T) {
+	provider := &capabilityCountingProvider{}
+	rt := newTestExecutionRuntimeWithConfig(t, provider, false, func(cfg *config.Config) {
+		cfg.SelfHealing.Enabled = true
+		cfg.OpenAIResponses.APIKey = "sk-test"
+		cfg.OpenAIResponses.Model = "kimi-k2"
+		cfg.Anthropic.APIKey = "anthropic-test"
+		cfg.Anthropic.Model = "claude-sonnet-4-6"
+	})
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	_, summary, err := rt.runTask(context.Background(), sess, nil, "/provider use anthropic", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask /provider use: %v", err)
+	}
+	if !strings.Contains(summary, "restart required") || !strings.Contains(summary, "reflection provider") {
+		t.Fatalf("summary = %q, want restart boundary", summary)
+	}
+	if rt.provider.Name() != "openai-responses" || rt.wfCfg.Model != "mock-model" {
+		t.Fatalf("runtime provider/model changed to %s/%s, want unchanged", rt.provider.Name(), rt.wfCfg.Model)
 	}
 }
 
@@ -2698,10 +2761,13 @@ func TestExecutionRuntimeRunTaskProviderSlashCommandExplainsSwitchBoundary(t *te
 	if err != nil {
 		t.Fatalf("runTask /provider status: %v", err)
 	}
-	for _, want := range []string{"Provider switching: restart required", "reflection provider", "compression budget"} {
+	for _, want := range []string{"Provider switching: restart required", "reflection provider"} {
 		if !strings.Contains(summary, want) {
 			t.Fatalf("summary=%q missing %q", summary, want)
 		}
+	}
+	if strings.Contains(summary, "compression budget") {
+		t.Fatalf("summary=%q should not report compression budget startup-bound after dynamic budget update", summary)
 	}
 }
 

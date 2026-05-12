@@ -39,6 +39,31 @@ func TestNoopCaller_IgnoresPromptAndFlag(t *testing.T) {
 	}
 }
 
+func TestDynamicSecondaryModelCallerUsesLatestProvider(t *testing.T) {
+	var provider Provider
+	c := NewDynamicSecondaryModelCaller(func() Provider {
+		return provider
+	})
+
+	got, err := c.Extract(context.Background(), "original markdown", "extract", true)
+	if err != nil {
+		t.Fatalf("dynamic noop Extract error: %v", err)
+	}
+	if got != "original markdown" {
+		t.Fatalf("dynamic noop output = %q, want original markdown", got)
+	}
+
+	next := &mockSecondaryProvider{name: "openai-responses", respText: "focused extract"}
+	provider = next
+	got, err = c.Extract(context.Background(), "## H1", "extract", true)
+	if err != nil {
+		t.Fatalf("dynamic Extract error: %v", err)
+	}
+	if got != "focused extract" || next.callCount != 1 {
+		t.Fatalf("dynamic output = %q calls=%d, want focused extract with one provider call", got, next.callCount)
+	}
+}
+
 // TestMakeSecondaryModelPrompt_PreapprovedGuideline pins the prompt.ts
 // branch that fires for trusted documentation hosts — no quote cap,
 // explicit permission to include code examples / documentation excerpts.

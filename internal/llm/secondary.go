@@ -37,6 +37,21 @@ func NewNoopSecondaryModelCaller() SecondaryModelCaller {
 	return noopCaller{}
 }
 
+type dynamicSecondaryModelCaller struct {
+	provider func() Provider
+}
+
+func NewDynamicSecondaryModelCaller(provider func() Provider) SecondaryModelCaller {
+	if provider == nil {
+		return noopCaller{}
+	}
+	return dynamicSecondaryModelCaller{provider: provider}
+}
+
+func (c dynamicSecondaryModelCaller) Extract(ctx context.Context, markdown, prompt string, isPreapproved bool) (string, error) {
+	return NewSecondaryModelCaller(c.provider()).Extract(ctx, markdown, prompt, isPreapproved)
+}
+
 // secondaryModelByProvider maps a Provider.Name() value to the small/fast
 // model id that should handle secondary extracts. Ollama intentionally has
 // no entry — local setups lack a reliable "fast" tier, so the noop caller

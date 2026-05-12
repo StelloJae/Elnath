@@ -445,6 +445,7 @@ func buildExecutionRuntime(
 		effectiveWorkDir, _ = os.Getwd()
 	}
 	guard := tools.NewPathGuard(effectiveWorkDir, protectedPaths)
+	var rt *executionRuntime
 	// buildBashRunnerForConfig returns a shareable facade. Stateful
 	// sandbox/proxy runners are created inside each Run so daemon workers do
 	// not share proxy decision buffers or drain goroutines.
@@ -453,7 +454,12 @@ func buildExecutionRuntime(
 		return nil, err
 	}
 	app.RegisterCloser("bash runner", bashRunnerCloser{runner: runner})
-	reg := buildToolRegistry(guard, provider, runner)
+	reg := buildToolRegistryWithSecondaryCaller(guard, runner, llm.NewDynamicSecondaryModelCaller(func() llm.Provider {
+		if rt == nil {
+			return provider
+		}
+		return rt.provider
+	}))
 	planModeController := agent.NewPlanModeController(perm)
 	reg.Register(agent.NewEnterPlanModeTool(planModeController))
 	reg.Register(agent.NewExitPlanModeTool(planModeController))
@@ -549,7 +555,6 @@ func buildExecutionRuntime(
 	if hooks == nil {
 		hooks = agent.NewHookRegistry()
 	}
-	var rt *executionRuntime
 	reg.Register(skill.NewInvocationTool(skill.InvocationToolConfig{
 		Registry: skillReg,
 		ProviderResolver: func() llm.Provider {
