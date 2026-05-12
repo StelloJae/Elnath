@@ -484,6 +484,8 @@ func buildExecutionRuntime(
 		EnforcementMode:    cfg.Agentic.Enforcement.Mode,
 		CompletionGateMode: cfg.Agentic.CompletionGate.Mode,
 	})}))
+	reg.Register(agentictools.NewActorMessageSendTool(agenticStore))
+	reg.Register(agentictools.NewActorMessageListTool(agenticStore))
 	schedulePath := resolveRuntimeScheduledTasksPath(cfg)
 	reg.Register(scheduler.NewScheduleCreateTool(schedulePath))
 	reg.Register(scheduler.NewScheduleListTool(schedulePath))
