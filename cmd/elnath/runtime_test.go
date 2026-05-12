@@ -84,8 +84,9 @@ type recordingRuntimeTool struct {
 type stubWorkflow struct{ name string }
 
 type captureRetryWorkflow struct {
-	name  string
-	input orchestrator.WorkflowInput
+	name     string
+	response string
+	input    orchestrator.WorkflowInput
 }
 
 type failingRetryWorkflow struct {
@@ -133,9 +134,13 @@ func (w *captureRetryWorkflow) Name() string { return w.name }
 
 func (w *captureRetryWorkflow) Run(_ context.Context, input orchestrator.WorkflowInput) (*orchestrator.WorkflowResult, error) {
 	w.input = input
+	response := w.response
+	if response == "" {
+		response = w.name + " workflow"
+	}
 	return &orchestrator.WorkflowResult{
-		Messages: append(input.Messages, llm.NewAssistantMessage(w.name+" workflow")),
-		Summary:  w.name + " workflow",
+		Messages: append(input.Messages, llm.NewAssistantMessage(response)),
+		Summary:  response,
 		Workflow: w.name,
 	}, nil
 }
@@ -3487,6 +3492,40 @@ func TestCompletionRetryRecordsFailedCorrectionAttempt(t *testing.T) {
 	}
 	if gotSummary.CorrectionStatus != "failed" || gotSummary.CorrectionFailureFamily != "workflow_error" {
 		t.Fatalf("correction failure = status %q family %q", gotSummary.CorrectionStatus, gotSummary.CorrectionFailureFamily)
+	}
+}
+
+func TestCompletionRetryMarksUnresolvedWarningFailed(t *testing.T) {
+	rt := newTestExecutionRuntimeWithConfig(t, &countingProvider{}, false, func(cfg *config.Config) {
+		cfg.SelfHealing.Enabled = true
+		cfg.SelfHealing.ObserveOnly = false
+	})
+	rt.completionRetryMax = 1
+	wf := &captureRetryWorkflow{name: "single", response: "I still could not finish the patch."}
+	result := &orchestrator.WorkflowResult{
+		Messages:     []llm.Message{llm.NewAssistantMessage("I could not finish the patch.")},
+		Summary:      "I could not finish the patch.",
+		FinishReason: "stop",
+		Workflow:     "single",
+	}
+	summary := completionContractSummary{
+		CompletionWarning: "final_response_reports_incomplete",
+		RetryDecision:     completionRetryDecisionRetrySmallerScope,
+		RetryReason:       "final_response_reports_incomplete",
+	}
+
+	_, gotSummary := rt.maybeRunCompletionRetry(context.Background(), wf, orchestrator.WorkflowInput{
+		Provider: rt.provider,
+	}, result, summary)
+
+	if !gotSummary.CorrectionAttempted || gotSummary.CorrectionAttempts != 1 {
+		t.Fatalf("correction attempt = attempted %v attempts %d", gotSummary.CorrectionAttempted, gotSummary.CorrectionAttempts)
+	}
+	if gotSummary.CompletionWarning != "final_response_reports_incomplete" {
+		t.Fatalf("CompletionWarning = %q, want unresolved incomplete warning", gotSummary.CompletionWarning)
+	}
+	if gotSummary.CorrectionStatus != "failed" || gotSummary.CorrectionFailureFamily != "completion_warning_unresolved" {
+		t.Fatalf("correction status = %q family %q, want failed completion_warning_unresolved", gotSummary.CorrectionStatus, gotSummary.CorrectionFailureFamily)
 	}
 }
 

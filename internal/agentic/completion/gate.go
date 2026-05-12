@@ -134,6 +134,9 @@ func (g *Gate) Evaluate(ctx context.Context, task daemon.Task, agenticTaskID int
 	if started := summary[agentic.ReceiptStatusStarted]; started > 0 {
 		return g.record(ctx, task, agenticTaskID, run.ID, agentic.CompletionGateStatusBlocked, fmt.Sprintf("non-terminal receipt started=%d", started), summaryJSON)
 	}
+	if completionContext.CompletionWarning != "" {
+		return g.record(ctx, task, agenticTaskID, run.ID, agentic.CompletionGateStatusBlocked, "completion warning: "+completionContext.CompletionWarning, summaryJSON)
+	}
 	return g.record(ctx, task, agenticTaskID, run.ID, agentic.CompletionGateStatusPassed, "verification passed", summaryJSON)
 }
 

@@ -522,8 +522,8 @@ func TestCompletionGateReceiptSummaryIncludesRuntimeContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Evaluate: %v", err)
 	}
-	if !decision.Passed || decision.VerificationRunID != run.ID {
-		t.Fatalf("decision = %+v, want passed with verification run %d", decision, run.ID)
+	if decision.Passed || decision.VerificationRunID != run.ID || decision.Status != agentic.CompletionGateStatusBlocked || !strings.Contains(decision.Reason, "completion warning") {
+		t.Fatalf("decision = %+v, want completion warning block with verification run %d", decision, run.ID)
 	}
 	gates, err := rt.agenticStore.ListCompletionGatesByTask(ctx, task.ID)
 	if err != nil {

@@ -120,6 +120,27 @@ func TestCompletionGate_NonTerminalReceiptBlocksCompletion(t *testing.T) {
 	}
 }
 
+func TestCompletionGate_CompletionWarningBlocksCompletion(t *testing.T) {
+	ctx := context.Background()
+	_, store := newCompletionTestStore(t)
+	task := createCompletionTestTask(t, ctx, store)
+	started := time.Now().Add(-time.Minute).UTC()
+	run := createCompletionTestVerificationAt(t, ctx, store, task.ID, agentic.VerificationVerdictPassed, started.Add(time.Second))
+
+	gate := NewGate(store, ModeVerification, WithCompletionContextProvider(completionContextProviderFunc(
+		func(context.Context, daemon.Task, int64) (CompletionContext, error) {
+			return CompletionContext{CompletionWarning: "unsupported_verification_success_claim"}, nil
+		},
+	)))
+	decision, err := gate.Evaluate(ctx, completionQueueTask(task.ID, started), task.ID)
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if decision.Passed || decision.Status != agentic.CompletionGateStatusBlocked || decision.VerificationRunID != run.ID || !strings.Contains(decision.Reason, "completion warning") {
+		t.Fatalf("decision = %+v, want completion warning block with verifier %d", decision, run.ID)
+	}
+}
+
 func TestCompletionGate_TerminalReceiptsDoNotBypassVerifier(t *testing.T) {
 	ctx := context.Background()
 	_, store := newCompletionTestStore(t)
