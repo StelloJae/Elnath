@@ -440,6 +440,8 @@ func buildExecutionRuntime(
 	reg.Register(daemon.NewTaskUpdateTool(taskQueue))
 	reg.Register(agentictools.NewActorGraphTool(agenticStore))
 	reg.Register(agentictools.NewTaskEvidenceTool(agenticStore))
+	reg.Register(agentictools.NewDelegateCreateTool(agenticStore))
+	reg.Register(agentictools.NewDelegateListTool(agenticStore))
 	schedulePath := resolveRuntimeScheduledTasksPath(cfg)
 	reg.Register(scheduler.NewScheduleCreateTool(schedulePath))
 	reg.Register(scheduler.NewScheduleListTool(schedulePath))

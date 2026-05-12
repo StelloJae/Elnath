@@ -149,6 +149,18 @@ func TestToolGateway_AgenticTaskEvidenceIsReadOnly(t *testing.T) {
 	}
 }
 
+func TestToolGateway_AgenticDelegateListIsReadOnly(t *testing.T) {
+	if !isReadOnlyTool(DelegateListToolName) {
+		t.Fatal("agentic_delegate_list should be classified as read-only")
+	}
+}
+
+func TestToolGateway_DelegateCreateIsMutating(t *testing.T) {
+	if isReadOnlyTool(DelegateCreateToolName) {
+		t.Fatal("agentic_delegate_create should not be classified as read-only")
+	}
+}
+
 func TestToolGateway_MutatingActionRequiresApprovalAndDoesNotExecute(t *testing.T) {
 	ctx := context.Background()
 	db, store, approvalBridge, task := newGatewayTestStore(t)

@@ -943,6 +943,38 @@ func TestAgenticStore_InsertReadTaskEdge(t *testing.T) {
 	}
 }
 
+func TestAgenticStore_ListTaskEdgesByParent(t *testing.T) {
+	ctx := context.Background()
+	_, store := newTestStore(t)
+	parent := createTestTask(t, ctx, store)
+	childOne := createTestTask(t, ctx, store)
+	childTwo := createTestTask(t, ctx, store)
+	otherParent := createTestTask(t, ctx, store)
+	otherChild := createTestTask(t, ctx, store)
+
+	for _, edge := range []TaskEdge{
+		{ParentID: parent.ID, ChildID: childOne.ID, EdgeType: "delegates_to"},
+		{ParentID: parent.ID, ChildID: childTwo.ID, EdgeType: "delegates_to"},
+		{ParentID: parent.ID, ChildID: otherChild.ID, EdgeType: "depends_on"},
+		{ParentID: otherParent.ID, ChildID: otherChild.ID, EdgeType: "delegates_to"},
+	} {
+		if _, err := store.CreateTaskEdge(ctx, edge); err != nil {
+			t.Fatalf("CreateTaskEdge: %v", err)
+		}
+	}
+
+	edges, err := store.ListTaskEdgesByParent(ctx, parent.ID, "delegates_to")
+	if err != nil {
+		t.Fatalf("ListTaskEdgesByParent: %v", err)
+	}
+	if len(edges) != 2 {
+		t.Fatalf("edges = %+v, want two delegates_to edges", edges)
+	}
+	if edges[0].ChildID != childOne.ID || edges[1].ChildID != childTwo.ID {
+		t.Fatalf("edges = %+v, want child ids in insertion order", edges)
+	}
+}
+
 func TestAgenticStore_InsertReadAgentActor(t *testing.T) {
 	ctx := context.Background()
 	_, store := newTestStore(t)
