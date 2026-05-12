@@ -77,6 +77,70 @@ func TestInvocationToolExecutesSkillWithArgsAndToolFilter(t *testing.T) {
 	}
 }
 
+func TestInvocationToolResolvesProviderAndModelAtExecutionTime(t *testing.T) {
+	t.Parallel()
+
+	skillReg := NewRegistry()
+	skillReg.Add(&Skill{
+		Name:   "probe",
+		Prompt: "Probe runtime provider.",
+		Status: "active",
+	})
+
+	var firstCalls, secondCalls int
+	first := &mockProvider{
+		streamFn: func(_ context.Context, _ llm.ChatRequest, cb func(llm.StreamEvent)) error {
+			firstCalls++
+			cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: "first"})
+			cb(llm.StreamEvent{Type: llm.EventDone})
+			return nil
+		},
+	}
+	var captured llm.ChatRequest
+	second := &mockProvider{
+		streamFn: func(_ context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
+			secondCalls++
+			captured = req
+			cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: "second"})
+			cb(llm.StreamEvent{Type: llm.EventDone})
+			return nil
+		},
+	}
+
+	currentProvider := llm.Provider(first)
+	currentModel := "first-model"
+	invoke := NewInvocationTool(InvocationToolConfig{
+		Registry: skillReg,
+		Tools:    tools.NewRegistry(),
+		ProviderResolver: func() llm.Provider {
+			return currentProvider
+		},
+		ModelResolver: func() string {
+			return currentModel
+		},
+		Permission: agent.NewPermission(agent.WithMode(agent.ModeBypass)),
+	})
+
+	currentProvider = second
+	currentModel = "second-model"
+	res, err := invoke.Execute(context.Background(), json.RawMessage(`{"skill":"probe"}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("Execute returned error result: %s", res.Output)
+	}
+	if firstCalls != 0 {
+		t.Fatalf("first provider calls = %d, want 0 after resolver switch", firstCalls)
+	}
+	if secondCalls != 1 {
+		t.Fatalf("second provider calls = %d, want 1", secondCalls)
+	}
+	if captured.Model != "second-model" {
+		t.Fatalf("captured model = %q, want second-model", captured.Model)
+	}
+}
+
 func TestInvocationToolUnknownSkillReturnsErrorResult(t *testing.T) {
 	t.Parallel()
 

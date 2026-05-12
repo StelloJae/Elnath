@@ -2766,6 +2766,41 @@ func TestExecutionRuntimeRunTaskSkillsSlashCommandJSONListsCatalog(t *testing.T)
 	}
 }
 
+func TestExecutionRuntimeSkillInvocationToolUsesCurrentProviderModel(t *testing.T) {
+	first := &countingProvider{streamText: "first provider"}
+	second := &countingProvider{streamText: "second provider"}
+	rt := newTestExecutionRuntime(t, first)
+	rt.skillReg.Add(&skill.Skill{
+		Name:   "probe",
+		Prompt: "Probe current provider.",
+		Status: "active",
+	})
+
+	tool, ok := rt.reg.Get("skill")
+	if !ok {
+		t.Fatal("runtime registry missing skill invocation tool")
+	}
+
+	rt.provider = second
+	rt.wfCfg.Model = "second-model"
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"skill":"probe"}`))
+	if err != nil {
+		t.Fatalf("Execute skill tool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("skill tool returned error: %s", res.Output)
+	}
+	if first.streamCalls != 0 {
+		t.Fatalf("first provider stream calls = %d, want 0 after runtime provider switch", first.streamCalls)
+	}
+	if second.streamCalls != 1 {
+		t.Fatalf("second provider stream calls = %d, want 1", second.streamCalls)
+	}
+	if second.lastModel != "second-model" {
+		t.Fatalf("second provider model = %q, want second-model", second.lastModel)
+	}
+}
+
 func TestExecutionRuntimeRunTaskHelpSlashCommandListsCatalog(t *testing.T) {
 	provider := &countingProvider{streamText: "runtime answer"}
 	rt := newTestExecutionRuntime(t, provider)
