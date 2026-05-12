@@ -128,12 +128,13 @@ Interactive `elnath run` also supports session-local slash controls:
 - `/model default` uses the configured provider's default model.
 - `/provider status` shows the active provider, request timeout, reasoning-
   effort capability, and configured provider candidates.
-- `/provider status --json` and `/provider candidates` expose the same provider
-  control-plane metadata without calling the LLM. Model-callable skill
-  invocation follows the current runtime provider/model, but full provider
-  switching is still restart-bound because compression budget, and reflection
-  when enabled, are startup-bound; use `/model` and `/effort` for in-session
-  overrides.
+- `/provider status --json`, `/provider candidates`, and
+  `/provider check <provider> [--json]` expose provider control-plane metadata
+  without calling the LLM. `check` validates a configured candidate without
+  switching the current session. Model-callable skill invocation follows the
+  current runtime provider/model, but full provider switching is still
+  restart-bound because compression budget, and reflection when enabled, are
+  startup-bound; use `/model` and `/effort` for in-session overrides.
 - `/effort auto` lets Elnath choose request effort per task.
 - `/effort low|medium|high|xhigh` pins request effort for the current session
   when the active provider supports it.

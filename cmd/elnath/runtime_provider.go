@@ -11,7 +11,7 @@ import (
 	"github.com/stello/elnath/internal/llm"
 )
 
-const providerCommandUsage = "Usage: /provider [status [--json]|candidates|help]"
+const providerCommandUsage = "Usage: /provider [status [--json]|candidates [--json]|check <provider> [--json]|help]"
 
 func (rt *executionRuntime) tryProviderCommand(
 	sess *agent.Session,
@@ -63,6 +63,8 @@ func (rt *executionRuntime) applyProviderCommand(args []string) string {
 		return rt.applyProviderStatusCommand(args[1:])
 	case "candidates":
 		return rt.applyProviderCandidatesCommand(args[1:])
+	case "check":
+		return rt.applyProviderCheckCommand(args[1:])
 	default:
 		return "Runtime provider switching is not available in this session. Set provider in config.yaml or ELNATH_PROVIDER, then restart Elnath."
 	}
@@ -90,6 +92,79 @@ func (rt *executionRuntime) applyProviderCandidatesCommand(args []string) string
 		return string(raw)
 	}
 	return invalidProviderArgument(args)
+}
+
+func (rt *executionRuntime) applyProviderCheckCommand(args []string) string {
+	if len(args) == 0 || len(args) > 2 {
+		return invalidProviderArgument(args)
+	}
+	jsonOut := false
+	providerName := ""
+	for _, arg := range args {
+		arg = strings.TrimSpace(arg)
+		if arg == "" {
+			continue
+		}
+		if strings.EqualFold(arg, "--json") {
+			jsonOut = true
+			continue
+		}
+		if providerName != "" {
+			return invalidProviderArgument(args)
+		}
+		providerName = arg
+	}
+	if providerName == "" {
+		return invalidProviderArgument(args)
+	}
+
+	view, err := rt.providerSelectionCheckView(providerName)
+	if err != nil {
+		return fmt.Sprintf("Provider check failed: %v", err)
+	}
+	if jsonOut {
+		raw, err := json.MarshalIndent(view, "", "  ")
+		if err != nil {
+			return fmt.Sprintf("provider check: marshal JSON: %v", err)
+		}
+		return string(raw)
+	}
+	msg := fmt.Sprintf("Provider check: %s configured. Model: %s. Reasoning effort: %s. Request timeout: %ds.",
+		view.Provider,
+		view.Model,
+		view.ProviderEffort,
+		view.RequestTimeoutSeconds,
+	)
+	if view.ProviderEffortNote != "" {
+		msg += " Fallback: " + view.ProviderEffortNote + "."
+	}
+	msg += " This does not switch the current session."
+	msg += "\n" + formatProviderSwitchBoundary(view.ProviderSwitchBoundaries)
+	return msg
+}
+
+func (rt *executionRuntime) providerSelectionCheckView(providerName string) (providerSelectionCheckView, error) {
+	selected := config.NormalizeProviderName(providerName)
+	if selected == "" {
+		return providerSelectionCheckView{}, fmt.Errorf("provider name is required")
+	}
+	provider, model, err := buildProviderForSelection(rt.currentConfig(), selected)
+	if err != nil {
+		return providerSelectionCheckView{}, err
+	}
+	caps := llm.CapabilitiesOf(provider)
+	return providerSelectionCheckView{
+		RequestedProvider:              selected,
+		Provider:                       caps.Name,
+		Model:                          model,
+		ProviderEffort:                 caps.ReasoningEffort,
+		ProviderEffortNote:             caps.ReasoningEffortFallback,
+		AutoEffortCompatible:           autoEffortCompatible(caps.ReasoningEffort),
+		RequestTimeoutSeconds:          caps.RequestTimeoutSeconds,
+		WouldSwitch:                    false,
+		RuntimeProviderSwitchAvailable: false,
+		ProviderSwitchBoundaries:       providerSwitchBoundaries(rt.reflectPool != nil),
+	}, nil
 }
 
 func (rt *executionRuntime) currentProviderMessage() string {

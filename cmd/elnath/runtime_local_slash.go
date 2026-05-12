@@ -17,7 +17,7 @@ func runtimeLocalSlashCommandSpecs() []localSlashCommandSpec {
 	return []localSlashCommandSpec{
 		{Name: "/effort", Description: "Inspect or set session reasoning effort."},
 		{Name: "/model", Description: "Inspect or set the session request model."},
-		{Name: "/provider", Description: "Inspect active provider capabilities and configured candidates."},
+		{Name: "/provider", Description: "Inspect active provider capabilities, configured candidates, and safe candidate checks."},
 		{Name: "/commands", Description: "List local command catalog entries."},
 		{Name: "/help", Description: "Alias for the local command catalog."},
 		{Name: "/skills", Description: "List registered skills without executing them."},

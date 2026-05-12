@@ -35,6 +35,19 @@ type providerConfigCandidateView struct {
 	RequestTimeoutSeconds int    `json:"request_timeout_seconds"`
 }
 
+type providerSelectionCheckView struct {
+	RequestedProvider              string   `json:"requested_provider"`
+	Provider                       string   `json:"provider"`
+	Model                          string   `json:"model"`
+	ProviderEffort                 string   `json:"provider_effort"`
+	ProviderEffortNote             string   `json:"provider_effort_note,omitempty"`
+	AutoEffortCompatible           bool     `json:"auto_effort_compatible"`
+	RequestTimeoutSeconds          int      `json:"request_timeout_seconds"`
+	WouldSwitch                    bool     `json:"would_switch"`
+	RuntimeProviderSwitchAvailable bool     `json:"runtime_provider_switch_available"`
+	ProviderSwitchBoundaries       []string `json:"provider_switch_boundaries,omitempty"`
+}
+
 const (
 	providerSwitchBoundaryRestartRequired         = "restart_required"
 	providerSwitchBoundaryReflectionStartupBound  = "reflection_provider_startup_bound"

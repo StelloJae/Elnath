@@ -2638,6 +2638,47 @@ func TestExecutionRuntimeRunTaskProviderSlashCommandListsCandidates(t *testing.T
 	}
 }
 
+func TestExecutionRuntimeRunTaskProviderSlashCommandChecksCandidateWithoutSwitching(t *testing.T) {
+	provider := &capabilityCountingProvider{}
+	rt := newTestExecutionRuntimeWithConfig(t, provider, false, func(cfg *config.Config) {
+		cfg.OpenAIResponses.APIKey = "sk-test"
+		cfg.OpenAIResponses.Model = "kimi-k2"
+		cfg.OpenAIResponses.BaseURL = "https://api.moonshot.ai/v1"
+		cfg.Anthropic.APIKey = "anthropic-test"
+		cfg.Anthropic.Model = "claude-sonnet-4-6"
+		cfg.Anthropic.Timeout = 90
+	})
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	_, summary, err := rt.runTask(context.Background(), sess, nil, "/provider check anthropic --json", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask /provider check: %v", err)
+	}
+	if provider.streamCalls != 0 || provider.chatCalls != 0 {
+		t.Fatalf("provider calls = chat:%d stream:%d, want none for local provider check", provider.chatCalls, provider.streamCalls)
+	}
+
+	var out providerSelectionCheckView
+	if err := json.Unmarshal([]byte(summary), &out); err != nil {
+		t.Fatalf("summary is not JSON: %v\n%s", err, summary)
+	}
+	if out.RequestedProvider != "anthropic" || out.Provider != "anthropic" {
+		t.Fatalf("provider check = %+v, want requested/active anthropic candidate", out)
+	}
+	if out.Model != "claude-sonnet-4-6" || out.RequestTimeoutSeconds != 90 {
+		t.Fatalf("provider check = %+v, want anthropic model and timeout", out)
+	}
+	if out.WouldSwitch || out.RuntimeProviderSwitchAvailable {
+		t.Fatalf("provider check switch fields = would_switch:%t runtime_available:%t, want false/false", out.WouldSwitch, out.RuntimeProviderSwitchAvailable)
+	}
+	if rt.provider.Name() != "openai-responses" || rt.wfCfg.Model != "mock-model" {
+		t.Fatalf("runtime provider/model changed to %s/%s, want openai-responses/mock-model", rt.provider.Name(), rt.wfCfg.Model)
+	}
+}
+
 func TestExecutionRuntimeRunTaskProviderSlashCommandExplainsSwitchBoundary(t *testing.T) {
 	provider := &capabilityCountingProvider{}
 	rt := newTestExecutionRuntimeWithConfig(t, provider, false, func(cfg *config.Config) {
