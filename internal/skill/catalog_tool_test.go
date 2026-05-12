@@ -51,6 +51,8 @@ func TestCatalogToolListsSkillsWithoutPromptsByDefault(t *testing.T) {
 			BaseDir       string   `json:"base_dir"`
 			Status        string   `json:"status"`
 			Source        string   `json:"source"`
+			TrustLevel    string   `json:"trust_level"`
+			External      bool     `json:"external"`
 			Prompt        string   `json:"prompt,omitempty"`
 		} `json:"skills"`
 	}
@@ -70,8 +72,47 @@ func TestCatalogToolListsSkillsWithoutPromptsByDefault(t *testing.T) {
 	if got.BaseDir != "/tmp/elnath-skills/review-pr" {
 		t.Fatalf("base_dir = %q, want skill base dir", got.BaseDir)
 	}
+	if got.TrustLevel != "local_compatible" || got.External {
+		t.Fatalf("trust metadata = level %q external %v, want local_compatible false", got.TrustLevel, got.External)
+	}
 	if got.Prompt != "" {
 		t.Fatalf("prompt = %q, want omitted by default", got.Prompt)
+	}
+}
+
+func TestCatalogToolMarksPluginCacheSkillsAsExternal(t *testing.T) {
+	reg := NewRegistry()
+	reg.Add(&Skill{
+		Name:   "browser",
+		Status: "active",
+		Source: "codex-plugin-skill",
+	})
+
+	tool := NewCatalogTool(reg)
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"show","skill":"browser"}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("Execute returned error result: %s", res.Output)
+	}
+
+	var out struct {
+		Skill struct {
+			Name       string `json:"name"`
+			Source     string `json:"source"`
+			TrustLevel string `json:"trust_level"`
+			External   bool   `json:"external"`
+		} `json:"skill"`
+	}
+	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, res.Output)
+	}
+	if out.Skill.Name != "browser" || out.Skill.Source != "codex-plugin-skill" {
+		t.Fatalf("skill = %+v, want browser plugin source", out.Skill)
+	}
+	if out.Skill.TrustLevel != "plugin_cache" || !out.Skill.External {
+		t.Fatalf("trust metadata = level %q external %v, want plugin_cache true", out.Skill.TrustLevel, out.Skill.External)
 	}
 }
 

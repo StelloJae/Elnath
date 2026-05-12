@@ -2950,6 +2950,7 @@ func TestExecutionRuntimeRunTaskSkillsSlashCommandListsCatalog(t *testing.T) {
 		Description: "Review PR with security and quality focus",
 		Trigger:     "/pr-review <pr_number>",
 		BaseDir:     "/tmp/elnath-skills/pr-review",
+		Source:      "codex-plugin-skill",
 		Prompt:      "Review PR #{pr_number}",
 	})
 	sess, err := rt.mgr.NewSession()
@@ -2989,6 +2990,7 @@ func TestExecutionRuntimeRunTaskSkillsSlashCommandJSONListsCatalog(t *testing.T)
 		Description: "Review PR with security and quality focus",
 		Trigger:     "/pr-review <pr_number>",
 		BaseDir:     "/tmp/elnath-skills/pr-review",
+		Source:      "codex-plugin-skill",
 		Prompt:      "Review PR #{pr_number}",
 	})
 	sess, err := rt.mgr.NewSession()
@@ -3011,6 +3013,9 @@ func TestExecutionRuntimeRunTaskSkillsSlashCommandJSONListsCatalog(t *testing.T)
 			Description string `json:"description"`
 			Trigger     string `json:"trigger"`
 			BaseDir     string `json:"base_dir"`
+			Source      string `json:"source"`
+			TrustLevel  string `json:"trust_level"`
+			External    bool   `json:"external"`
 		} `json:"skills"`
 	}
 	if err := json.Unmarshal([]byte(summary), &out); err != nil {
@@ -3021,6 +3026,9 @@ func TestExecutionRuntimeRunTaskSkillsSlashCommandJSONListsCatalog(t *testing.T)
 	}
 	if got := out.Skills[0]; got.Name != "pr-review" || got.Trigger != "/pr-review <pr_number>" || got.BaseDir != "/tmp/elnath-skills/pr-review" {
 		t.Fatalf("skill entry = %+v, want pr-review trigger metadata", got)
+	}
+	if got := out.Skills[0]; got.Source != "codex-plugin-skill" || got.TrustLevel != "plugin_cache" || !got.External {
+		t.Fatalf("trust metadata = %+v, want plugin_cache external", got)
 	}
 }
 
@@ -4164,6 +4172,64 @@ func TestExecutionRuntimeBuildsSkillCatalogFromCodexSkillRoots(t *testing.T) {
 		t.Fatalf("buildExecutionRuntime: %v", err)
 	}
 	want := []string{"agent-skill", "github", "project-codex", "user-codex"}
+	if got := rt.skillReg.Names(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("skillReg names = %v, want %v", got, want)
+	}
+}
+
+func TestExecutionRuntimeCanDisablePluginCacheSkillRoots(t *testing.T) {
+	root := t.TempDir()
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	writeRuntimeCompatSkill(t, filepath.Join(root, ".codex", "skills", "project-codex"), "Project Codex")
+	writeRuntimeCompatSkill(t, filepath.Join(homeDir, ".codex", "plugins", "cache", "openai-curated", "github", "63976030", "skills", "github"), "GitHub")
+
+	cfg := &config.Config{
+		DataDir:  filepath.Join(root, "data"),
+		WikiDir:  filepath.Join(root, "wiki"),
+		LogLevel: "error",
+		Permission: config.PermissionConfig{
+			Mode: "bypass",
+		},
+		Skills: config.SkillsConfig{
+			PluginCache: config.SkillPluginCacheModeDisabled,
+		},
+	}
+	app, err := core.New(cfg)
+	if err != nil {
+		t.Fatalf("core.New: %v", err)
+	}
+	db, err := core.OpenDB(cfg.DataDir)
+	if err != nil {
+		t.Fatalf("core.OpenDB: %v", err)
+	}
+	app.RegisterCloser("database", db)
+	t.Cleanup(func() {
+		if err := app.Close(); err != nil {
+			t.Fatalf("app.Close: %v", err)
+		}
+	})
+
+	rt, err := buildExecutionRuntime(
+		context.Background(),
+		cfg,
+		app,
+		db,
+		&countingProvider{streamText: "runtime answer"},
+		"mock-model",
+		self.New(cfg.DataDir),
+		"",
+		agent.NewPermission(agent.WithMode(agent.ModeBypass)),
+		root,
+		nil,
+		identity.LegacyPrincipal(),
+		false,
+	)
+	if err != nil {
+		t.Fatalf("buildExecutionRuntime: %v", err)
+	}
+	want := []string{"project-codex"}
 	if got := rt.skillReg.Names(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("skillReg names = %v, want %v", got, want)
 	}

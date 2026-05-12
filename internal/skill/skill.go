@@ -22,6 +22,37 @@ type Skill struct {
 	Source        string
 }
 
+func (s *Skill) TrustLevel() string {
+	if s == nil {
+		return ""
+	}
+	return TrustLevelForSource(s.Source)
+}
+
+func (s *Skill) External() bool {
+	if s == nil {
+		return false
+	}
+	return SkillSourceIsExternal(s.Source)
+}
+
+func TrustLevelForSource(source string) string {
+	switch strings.TrimSpace(source) {
+	case codexPluginSkillSource:
+		return "plugin_cache"
+	case claudeSkillSource, claudeCommandSkillSource, codexSkillSource:
+		return "local_compatible"
+	case "":
+		return "wiki"
+	default:
+		return "declared"
+	}
+}
+
+func SkillSourceIsExternal(source string) bool {
+	return strings.TrimSpace(source) == codexPluginSkillSource
+}
+
 func FromPage(page *wiki.Page) *Skill {
 	if page == nil || !hasTag(page.Tags, "skill") {
 		return nil

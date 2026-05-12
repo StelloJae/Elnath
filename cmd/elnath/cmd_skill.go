@@ -30,6 +30,8 @@ type skillListEntry struct {
 	Effort        string   `json:"effort,omitempty"`
 	Status        string   `json:"status,omitempty"`
 	Source        string   `json:"source,omitempty"`
+	TrustLevel    string   `json:"trust_level,omitempty"`
+	External      bool     `json:"external"`
 }
 
 func cmdSkill(ctx context.Context, args []string) error {
@@ -121,7 +123,8 @@ func loadSkillList(showAll, includeCompatible bool) ([]*skill.Skill, error) {
 	if includeCompatible {
 		projectRoot, _ := os.Getwd()
 		homeDir, _ := os.UserHomeDir()
-		for _, root := range skill.DefaultCompatibleSkillRoots(projectRoot, homeDir) {
+		rootOpts := skill.CompatibleSkillRootOptions{DisablePluginCache: !config.SkillsPluginCacheEnabled(cfg)}
+		for _, root := range skill.DefaultCompatibleSkillRootsWithOptions(projectRoot, homeDir, rootOpts) {
 			compatibleSkills, err := skill.LoadCompatibleSkillRoot(root)
 			if err != nil {
 				return nil, err
@@ -162,6 +165,8 @@ func skillListEntries(skills []*skill.Skill) []skillListEntry {
 			Effort:        sk.Effort,
 			Status:        sk.Status,
 			Source:        sk.Source,
+			TrustLevel:    sk.TrustLevel(),
+			External:      sk.External(),
 		})
 	}
 	return out

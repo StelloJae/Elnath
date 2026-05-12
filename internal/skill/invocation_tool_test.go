@@ -23,6 +23,7 @@ func TestInvocationToolExecutesSkillWithArgsAndToolFilter(t *testing.T) {
 		Model:         "skill-model",
 		Prompt:        "Review $ARGUMENTS in {target}",
 		Status:        "active",
+		Source:        "codex-plugin-skill",
 	})
 	toolReg := tools.NewRegistry()
 	toolReg.Register(&mockTool{name: "read_file"})
@@ -56,8 +57,22 @@ func TestInvocationToolExecutesSkillWithArgsAndToolFilter(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("Execute returned error result: %s", res.Output)
 	}
-	if !strings.Contains(res.Output, `"skill":"review-pr"`) || !strings.Contains(res.Output, `"status":"completed"`) {
-		t.Fatalf("output = %s", res.Output)
+	var out struct {
+		Skill      string `json:"skill"`
+		Status     string `json:"status"`
+		Source     string `json:"source"`
+		TrustLevel string `json:"trust_level"`
+		External   bool   `json:"external"`
+		Output     string `json:"output"`
+	}
+	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, res.Output)
+	}
+	if out.Skill != "review-pr" || out.Status != "completed" || out.Output != "skill done" {
+		t.Fatalf("output = %+v, want completed review-pr output", out)
+	}
+	if out.Source != "codex-plugin-skill" || out.TrustLevel != "plugin_cache" || !out.External {
+		t.Fatalf("trust metadata = %+v, want plugin_cache external", out)
 	}
 	if captured.Model != "skill-model" {
 		t.Fatalf("captured model = %q, want skill-model", captured.Model)

@@ -519,7 +519,8 @@ func buildExecutionRuntime(
 		}
 	}
 	homeDir, _ := os.UserHomeDir()
-	for _, root := range skill.DefaultCompatibleSkillRoots(effectiveWorkDir, homeDir) {
+	rootOpts := skill.CompatibleSkillRootOptions{DisablePluginCache: !config.SkillsPluginCacheEnabled(cfg)}
+	for _, root := range skill.DefaultCompatibleSkillRootsWithOptions(effectiveWorkDir, homeDir, rootOpts) {
 		if err := skillReg.LoadCompatibleSkillRoots([]skill.CompatibleSkillRoot{root}); err != nil {
 			app.Logger.Warn("compatible skill registry load failed", "root", root.Path, "source", root.Source, "error", err)
 		}
