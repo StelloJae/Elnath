@@ -901,6 +901,9 @@ func buildToolDefsWithLoaded(reg *tools.Registry, mode ToolExposureMode, loadedD
 			InputSchema: t.Schema(),
 		})
 	}
+	sort.Slice(defs, func(i, j int) bool {
+		return defs[i].Name < defs[j].Name
+	})
 	return defs
 }
 
