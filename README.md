@@ -116,6 +116,8 @@ Recent hardening also closed two structural follow-ups behind this operator flow
 | `chaos report` | Render a chaos run as Markdown | `elnath chaos report latest` |
 | `errors` | Look up an ELN-XXX error code | `elnath errors ELN-001` or `elnath errors list` |
 | `provider status` | Inspect configured provider and effort support | `elnath provider status --json` |
+| `provider candidates` | List configured provider candidates | `elnath provider candidates --json` |
+| `provider check` | Validate one provider candidate without switching | `elnath provider check openai_responses --json` |
 | `version` | Show version | `elnath version` |
 | `help` | Show command help | `elnath help` |
 

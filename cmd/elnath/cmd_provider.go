@@ -61,6 +61,10 @@ func cmdProvider(_ context.Context, args []string) error {
 	switch args[0] {
 	case "status":
 		return providerStatus(args[1:])
+	case "candidates":
+		return providerCandidates(args[1:])
+	case "check":
+		return providerCheck(args[1:])
 	case "help", "-h", "--help":
 		return providerUsage()
 	default:
@@ -69,7 +73,7 @@ func cmdProvider(_ context.Context, args []string) error {
 }
 
 func providerUsage() error {
-	fmt.Fprintln(os.Stdout, "Usage: elnath provider status [--json]")
+	fmt.Fprintln(os.Stdout, "Usage: elnath provider [status [--json]|candidates [--json]|check <provider> [--json]]")
 	return nil
 }
 
@@ -150,6 +154,76 @@ func providerStatus(args []string) error {
 	return nil
 }
 
+func providerCandidates(args []string) error {
+	jsonOut := false
+	for _, arg := range args {
+		switch arg {
+		case "--json":
+			jsonOut = true
+		case "help", "-h", "--help":
+			return providerUsage()
+		default:
+			return fmt.Errorf("provider candidates: unknown flag %q", arg)
+		}
+	}
+
+	cfg, err := loadProviderCommandConfig()
+	if err != nil {
+		return fmt.Errorf("provider candidates: %w", err)
+	}
+	candidates := configuredProviderCandidates(cfg)
+	if jsonOut {
+		enc := json.NewEncoder(os.Stdout)
+		return enc.Encode(candidates)
+	}
+	fmt.Fprintln(os.Stdout, formatProviderCandidates(candidates))
+	return nil
+}
+
+func providerCheck(args []string) error {
+	providerName := ""
+	jsonOut := false
+	for _, arg := range args {
+		switch {
+		case arg == "--json":
+			jsonOut = true
+		case arg == "help" || arg == "-h" || arg == "--help":
+			return providerUsage()
+		case providerName == "":
+			providerName = arg
+		default:
+			return fmt.Errorf("provider check: unexpected argument %q", arg)
+		}
+	}
+	if providerName == "" {
+		return fmt.Errorf("provider check: provider is required")
+	}
+
+	cfg, err := loadProviderCommandConfig()
+	if err != nil {
+		return fmt.Errorf("provider check: %w", err)
+	}
+	view, err := providerSelectionCheckViewForConfig(cfg, providerName)
+	if err != nil {
+		return fmt.Errorf("provider check: %w", err)
+	}
+	if jsonOut {
+		enc := json.NewEncoder(os.Stdout)
+		return enc.Encode(view)
+	}
+	fmt.Fprintf(os.Stdout, "Provider check: %s configured\n", view.Provider)
+	fmt.Fprintf(os.Stdout, "Model: %s\n", view.Model)
+	fmt.Fprintf(os.Stdout, "Reasoning effort capability: %s\n", view.ProviderEffort)
+	if view.ProviderEffortNote != "" {
+		fmt.Fprintf(os.Stdout, "Reasoning effort note: %s\n", view.ProviderEffortNote)
+	}
+	fmt.Fprintf(os.Stdout, "Auto effort compatible: %t\n", view.AutoEffortCompatible)
+	fmt.Fprintf(os.Stdout, "Request timeout: %ds\n", view.RequestTimeoutSeconds)
+	fmt.Fprintln(os.Stdout, "This does not switch any running session.")
+	fmt.Fprintln(os.Stdout, formatProviderSwitchBoundary(view.ProviderSwitchBoundaries))
+	return nil
+}
+
 func configuredProviderCandidates(cfg *config.Config) []providerConfigCandidateView {
 	if cfg == nil {
 		return nil
@@ -203,6 +277,30 @@ func providerConfigModel(model, fallback string) string {
 		return model
 	}
 	return fallback
+}
+
+func providerSelectionCheckViewForConfig(cfg *config.Config, providerName string) (providerSelectionCheckView, error) {
+	selected := config.NormalizeProviderName(providerName)
+	if selected == "" {
+		return providerSelectionCheckView{}, fmt.Errorf("provider name is required")
+	}
+	provider, model, err := buildProviderForSelection(cfg, selected)
+	if err != nil {
+		return providerSelectionCheckView{}, err
+	}
+	caps := llm.CapabilitiesOf(provider)
+	return providerSelectionCheckView{
+		RequestedProvider:              selected,
+		Provider:                       caps.Name,
+		Model:                          model,
+		ProviderEffort:                 caps.ReasoningEffort,
+		ProviderEffortNote:             caps.ReasoningEffortFallback,
+		AutoEffortCompatible:           autoEffortCompatible(caps.ReasoningEffort),
+		RequestTimeoutSeconds:          caps.RequestTimeoutSeconds,
+		WouldSwitch:                    false,
+		RuntimeProviderSwitchAvailable: false,
+		ProviderSwitchBoundaries:       providerSwitchBoundaries(cfg != nil && cfg.SelfHealing.Enabled),
+	}, nil
 }
 
 func providerSwitchBoundaries(reflectionStartupBound bool) []string {
@@ -276,4 +374,17 @@ func autoEffortCompatible(providerEffort string) bool {
 	default:
 		return false
 	}
+}
+
+func loadProviderCommandConfig() (*config.Config, error) {
+	cfgPath := extractConfigFlag(os.Args)
+	if cfgPath == "" {
+		cfgPath = config.DefaultConfigPath()
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return nil, fmt.Errorf("load config: %w", err)
+	}
+	applyGlobalFlagOverrides(cfg, os.Args)
+	return cfg, nil
 }

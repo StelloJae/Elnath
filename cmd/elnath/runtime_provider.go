@@ -144,27 +144,12 @@ func (rt *executionRuntime) applyProviderCheckCommand(args []string) string {
 }
 
 func (rt *executionRuntime) providerSelectionCheckView(providerName string) (providerSelectionCheckView, error) {
-	selected := config.NormalizeProviderName(providerName)
-	if selected == "" {
-		return providerSelectionCheckView{}, fmt.Errorf("provider name is required")
-	}
-	provider, model, err := buildProviderForSelection(rt.currentConfig(), selected)
+	view, err := providerSelectionCheckViewForConfig(rt.currentConfig(), providerName)
 	if err != nil {
 		return providerSelectionCheckView{}, err
 	}
-	caps := llm.CapabilitiesOf(provider)
-	return providerSelectionCheckView{
-		RequestedProvider:              selected,
-		Provider:                       caps.Name,
-		Model:                          model,
-		ProviderEffort:                 caps.ReasoningEffort,
-		ProviderEffortNote:             caps.ReasoningEffortFallback,
-		AutoEffortCompatible:           autoEffortCompatible(caps.ReasoningEffort),
-		RequestTimeoutSeconds:          caps.RequestTimeoutSeconds,
-		WouldSwitch:                    false,
-		RuntimeProviderSwitchAvailable: false,
-		ProviderSwitchBoundaries:       providerSwitchBoundaries(rt.reflectPool != nil),
-	}, nil
+	view.ProviderSwitchBoundaries = providerSwitchBoundaries(rt.reflectPool != nil)
+	return view, nil
 }
 
 func (rt *executionRuntime) currentProviderMessage() string {
