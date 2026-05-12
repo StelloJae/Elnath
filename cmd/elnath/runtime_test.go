@@ -3091,6 +3091,18 @@ func TestExecutionRuntimeRegistersWorktreePruneTool(t *testing.T) {
 	}
 }
 
+func TestExecutionRuntimeRegistersWorktreeRunTool(t *testing.T) {
+	rt := newTestExecutionRuntime(t, &countingProvider{streamText: "unused"})
+
+	tool, ok := rt.reg.Get("worktree_run")
+	if !ok {
+		t.Fatal("runtime registry missing worktree_run tool")
+	}
+	if tool.IsConcurrencySafe(nil) || tool.Reversible() {
+		t.Fatalf("worktree_run metadata = concurrency:%t reversible:%t, want mutating execution metadata", tool.IsConcurrencySafe(nil), tool.Reversible())
+	}
+}
+
 func TestExecutionRuntimeRegistersAgenticActorGraphTool(t *testing.T) {
 	rt := newTestExecutionRuntime(t, &countingProvider{streamText: "unused"})
 
@@ -3260,7 +3272,7 @@ func TestExecutionRuntimeRegistersDeferredControlSurfaceTools(t *testing.T) {
 	for _, name := range []string{
 		"task_create", "task_list", "task_get", "task_stop", "task_output", "task_monitor", "task_update",
 		"schedule_create", "schedule_list", "schedule_delete",
-		"enter_worktree", "worktree_list", "worktree_prune", "exit_worktree",
+		"enter_worktree", "worktree_list", "worktree_run", "worktree_prune", "exit_worktree",
 		"agentic_actor_graph", "agentic_task_evidence", "agentic_delegate_create", "agentic_delegate_list", "agentic_delegate_enqueue",
 		"agentic_message_send", "agentic_message_list",
 	} {
