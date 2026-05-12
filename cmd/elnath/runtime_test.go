@@ -3097,6 +3097,43 @@ func TestExecutionRuntimeRunTaskStatusSlashCommandJSON(t *testing.T) {
 	}
 }
 
+func TestExecutionRuntimeRunTaskPlanSlashCommandSwitchesAndRestoresMode(t *testing.T) {
+	provider := &countingProvider{streamText: "runtime answer"}
+	rt := newTestExecutionRuntime(t, provider)
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	messages, summary, err := rt.runTask(context.Background(), sess, nil, "/plan", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask /plan: %v", err)
+	}
+	if provider.streamCalls != 0 || provider.chatCalls != 0 {
+		t.Fatalf("provider calls = chat:%d stream:%d, want none for local plan command", provider.chatCalls, provider.streamCalls)
+	}
+	if rt.wfCfg.Permission.Mode() != agent.ModePlan {
+		t.Fatalf("permission mode = %s, want plan", rt.wfCfg.Permission.Mode())
+	}
+	if !strings.Contains(summary, "Entered plan mode") {
+		t.Fatalf("summary = %q, want plan mode entry", summary)
+	}
+	if len(messages) != 2 {
+		t.Fatalf("messages len = %d, want 2", len(messages))
+	}
+
+	_, summary, err = rt.runTask(context.Background(), sess, messages, "/plan exit", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask /plan exit: %v", err)
+	}
+	if rt.wfCfg.Permission.Mode() != agent.ModeBypass {
+		t.Fatalf("permission mode = %s, want restored bypass", rt.wfCfg.Permission.Mode())
+	}
+	if !strings.Contains(summary, "Exited plan mode") {
+		t.Fatalf("summary = %q, want plan mode exit", summary)
+	}
+}
+
 func TestExecutionRuntimeRunTaskCommandsSlashCommandJSONIncludesRuntimeControls(t *testing.T) {
 	provider := &countingProvider{streamText: "runtime answer"}
 	rt := newTestExecutionRuntime(t, provider)
@@ -3121,7 +3158,7 @@ func TestExecutionRuntimeRunTaskCommandsSlashCommandJSONIncludesRuntimeControls(
 	for _, entry := range entries {
 		seen[entry.Name] = entry
 	}
-	for _, want := range []string{"/effort", "/model", "/provider", "/help", "/skills", "/version", "/status"} {
+	for _, want := range []string{"/effort", "/model", "/provider", "/help", "/skills", "/version", "/status", "/plan"} {
 		entry, ok := seen[want]
 		if !ok {
 			t.Fatalf("missing runtime command %s in JSON catalog: %+v", want, entries)
@@ -3156,7 +3193,7 @@ func TestRuntimeLocalSlashCommandRegistry(t *testing.T) {
 		}
 		names[spec.Name] = true
 	}
-	for _, want := range []string{"/effort", "/model", "/provider", "/commands", "/help", "/skills", "/version", "/status"} {
+	for _, want := range []string{"/effort", "/model", "/provider", "/commands", "/help", "/skills", "/version", "/status", "/plan"} {
 		if !names[want] {
 			t.Fatalf("runtime local slash registry missing %s; got %+v", want, specs)
 		}

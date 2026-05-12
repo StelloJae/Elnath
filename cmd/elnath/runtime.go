@@ -232,6 +232,7 @@ type executionRuntime struct {
 	completionRetryMax int
 	completionCtxMu    sync.Mutex
 	completionCtxs     map[int64]completionContractSummary
+	planModeController *agent.PlanModeController
 }
 
 type agenticRuntimeEnforcementKey struct{}
@@ -720,6 +721,7 @@ func buildExecutionRuntime(
 		reflectMaxTurns:    reflectMaxTurns,
 		reflectTimeout:     reflectTimeout,
 		completionRetryMax: completionRetryMax,
+		planModeController: planModeController,
 	}
 	return rt, nil
 }

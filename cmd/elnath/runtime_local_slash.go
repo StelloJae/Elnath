@@ -24,6 +24,7 @@ func runtimeLocalSlashCommandSpecs() []localSlashCommandSpec {
 		{Name: "/skills", Description: "List registered skills without executing them.", ArgumentHint: "[--json]"},
 		{Name: "/version", Description: "Print the Elnath version for this session.", ArgumentHint: "[--json]"},
 		{Name: "/status", Description: "Show local runtime session status.", ArgumentHint: "[--json]"},
+		{Name: "/plan", Description: "Enter, inspect, or exit local planning mode.", ArgumentHint: "[status|exit|<description>]"},
 	}
 }
 
@@ -53,6 +54,8 @@ func (rt *executionRuntime) tryLocalSlashCommand(
 		return rt.tryVersionCommand(sess, messages, input, bus)
 	case "/status":
 		return rt.tryStatusCommand(sess, messages, input, bus)
+	case "/plan":
+		return rt.tryPlanCommand(sess, messages, input, bus)
 	default:
 		return nil, "", false, nil
 	}
