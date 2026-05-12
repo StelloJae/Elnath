@@ -286,6 +286,28 @@ func TestEditTool(t *testing.T) {
 		}
 	})
 
+	t.Run("identical replacement is rejected", func(t *testing.T) {
+		dir, tool := setup(t, "hello world\n")
+		res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{
+			"file_path":  "edit.txt",
+			"old_string": "hello",
+			"new_string": "hello",
+		}))
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		if !res.IsError {
+			t.Fatalf("expected error for identical replacement")
+		}
+		if !strings.Contains(res.Output, "old_string and new_string are identical") {
+			t.Fatalf("error = %q, want identical replacement message", res.Output)
+		}
+		data, _ := os.ReadFile(filepath.Join(dir, "edit.txt"))
+		if got, want := string(data), "hello world\n"; got != want {
+			t.Fatalf("file content = %q, want unchanged %q", got, want)
+		}
+	})
+
 	t.Run("multiline replacement tolerates shifted indentation", func(t *testing.T) {
 		dir, tool := setup(t, "\tif ok {\n\t\told()\n\t}\n")
 		res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{

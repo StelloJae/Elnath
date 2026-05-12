@@ -234,14 +234,26 @@ func editIntentDetected(messages []llm.Message) bool {
 }
 
 func mutationObservedInMessages(messages []llm.Message) bool {
+	mutatingToolUseIDs := make(map[string]struct{})
 	for _, msg := range messages {
 		for _, block := range msg.Content {
-			toolUse, ok := block.(llm.ToolUseBlock)
-			if !ok {
-				continue
-			}
-			if mutatingToolUseObserved(toolUse) {
-				return true
+			switch b := block.(type) {
+			case llm.ToolUseBlock:
+				if !mutatingToolUseObserved(b) {
+					continue
+				}
+				if b.ID == "" {
+					return true
+				}
+				mutatingToolUseIDs[b.ID] = struct{}{}
+			case llm.ToolResultBlock:
+				if _, ok := mutatingToolUseIDs[b.ToolUseID]; !ok {
+					continue
+				}
+				if !b.IsError {
+					return true
+				}
+				delete(mutatingToolUseIDs, b.ToolUseID)
 			}
 		}
 	}

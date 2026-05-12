@@ -138,6 +138,37 @@ func TestCompletionContractSummaryDetectsEditToolMutation(t *testing.T) {
 	}
 }
 
+func TestCompletionContractSummaryDoesNotCountFailedEditToolAsMutation(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("fix the bug in the daemon and run tests"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "edit-1", Name: "edit_file", Input: json.RawMessage(`{"file_path":"internal/daemon/daemon.go","old_string":"old","new_string":"old"}`)},
+			}},
+			llm.NewToolResultMessage("edit-1", "edit_file: old_string and new_string are identical", true),
+			llm.NewAssistantMessage("Done."),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(&orchestrator.RoutingContext{VerificationHint: true}, orchestrator.WorkflowConfig{}, result)
+
+	if !summary.EditIntent {
+		t.Fatal("EditIntent = false, want true")
+	}
+	if summary.EditObserved == nil {
+		t.Fatal("EditObserved = nil, want explicit false")
+	}
+	if *summary.EditObserved {
+		t.Fatal("EditObserved = true, want failed edit tool not counted as mutation")
+	}
+	if summary.CompletionWarning != "edit_intent_without_mutation" {
+		t.Fatalf("CompletionWarning = %q, want edit_intent_without_mutation", summary.CompletionWarning)
+	}
+	if summary.RetryDecision != completionRetryDecisionRetrySmallerScope || summary.RetryReason != "edit_intent_without_mutation" {
+		t.Fatalf("retry plan = %q/%q, want retry_smaller_scope/edit_intent_without_mutation", summary.RetryDecision, summary.RetryReason)
+	}
+}
+
 func TestCompletionContractSummaryRecordsReasoningConfig(t *testing.T) {
 	result := &orchestrator.WorkflowResult{
 		Messages:              []llm.Message{llm.NewAssistantMessage("Done.")},

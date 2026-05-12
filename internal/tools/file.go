@@ -275,6 +275,9 @@ func (t *EditTool) Execute(ctx context.Context, params json.RawMessage) (*Result
 		return ErrorResult(fmt.Sprintf("edit_file read: %v", err)), nil
 	}
 	original := string(data)
+	if p.OldString == p.NewString {
+		return ErrorResult(fmt.Sprintf("edit_file: old_string and new_string are identical in %s", p.FilePath)), nil
+	}
 
 	count := strings.Count(original, p.OldString)
 	if count == 0 {
