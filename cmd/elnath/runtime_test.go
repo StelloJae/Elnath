@@ -2342,6 +2342,7 @@ func TestExecutionRuntimeEffortStatusExplainsAutoRoutingPolicy(t *testing.T) {
 		"simple/status/summary -> low",
 		"implementation/debug/benchmark/CI -> high",
 		"root-cause/security/architecture/autonomous -> xhigh",
+		"Auto routing is heuristic",
 		"Manual override: /effort <level>",
 	} {
 		if !strings.Contains(summary, want) {

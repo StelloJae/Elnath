@@ -96,6 +96,7 @@ func autoEffortPolicyMessage() string {
 		"- implementation/debug/benchmark/CI -> high",
 		"- root-cause/security/architecture/autonomous -> xhigh",
 		"- otherwise -> medium",
+		"Auto routing is heuristic; use manual override when precision matters.",
 		"Manual override: /effort <level>",
 	}, "\n")
 }

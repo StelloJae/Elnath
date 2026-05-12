@@ -295,6 +295,12 @@ func TestProviderCommandStatusJSON(t *testing.T) {
 		"  api_key: test-key\n" +
 		"  model: gpt-5.5\n" +
 		"  timeout_seconds: 45\n" +
+		"openai_responses:\n" +
+		"  api_key: responses-key\n" +
+		"  base_url: https://api.moonshot.ai/v1\n" +
+		"  model: kimi-k2\n" +
+		"  reasoning_effort: high\n" +
+		"  timeout_seconds: 77\n" +
 		"reasoning:\n" +
 		"  effort_mode: auto\n" +
 		"  effort: medium\n" +
@@ -327,6 +333,13 @@ func TestProviderCommandStatusJSON(t *testing.T) {
 		ProviderEffortNote    string `json:"provider_effort_note,omitempty"`
 		AutoEffortCompatible  bool   `json:"auto_effort_compatible"`
 		RequestTimeoutSeconds int    `json:"request_timeout_seconds"`
+		ConfiguredProviders   []struct {
+			Provider              string `json:"provider"`
+			Model                 string `json:"model"`
+			BaseURL               string `json:"base_url,omitempty"`
+			ReasoningEffort       string `json:"reasoning_effort,omitempty"`
+			RequestTimeoutSeconds int    `json:"request_timeout_seconds"`
+		} `json:"configured_providers"`
 	}
 	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
 		t.Fatalf("provider status json: %v\n%s", err, stdout)
@@ -342,6 +355,31 @@ func TestProviderCommandStatusJSON(t *testing.T) {
 	}
 	if got.RequestTimeoutSeconds != 45 {
 		t.Fatalf("request timeout seconds = %d, want 45", got.RequestTimeoutSeconds)
+	}
+	seen := map[string]struct {
+		Model                 string
+		BaseURL               string
+		ReasoningEffort       string
+		RequestTimeoutSeconds int
+	}{}
+	for _, candidate := range got.ConfiguredProviders {
+		seen[candidate.Provider] = struct {
+			Model                 string
+			BaseURL               string
+			ReasoningEffort       string
+			RequestTimeoutSeconds int
+		}{
+			Model:                 candidate.Model,
+			BaseURL:               candidate.BaseURL,
+			ReasoningEffort:       candidate.ReasoningEffort,
+			RequestTimeoutSeconds: candidate.RequestTimeoutSeconds,
+		}
+	}
+	if got := seen["openai"]; got.Model != "gpt-5.5" || got.RequestTimeoutSeconds != 45 {
+		t.Fatalf("configured openai = %+v, want model gpt-5.5 timeout 45", got)
+	}
+	if got := seen["openai-responses"]; got.Model != "kimi-k2" || got.BaseURL != "https://api.moonshot.ai/v1" || got.ReasoningEffort != "high" || got.RequestTimeoutSeconds != 77 {
+		t.Fatalf("configured openai-responses = %+v, want moonshot/kimi/high/77", got)
 	}
 }
 
