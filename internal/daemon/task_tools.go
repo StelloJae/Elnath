@@ -37,6 +37,13 @@ const (
 	taskOutputRetrievalTimeout  = "timeout"
 )
 
+const (
+	taskMonitorRetrievalSnapshot = "snapshot"
+	taskMonitorRetrievalChanged  = "changed"
+	taskMonitorRetrievalTerminal = "terminal"
+	taskMonitorRetrievalTimeout  = "timeout"
+)
+
 type TaskCreateTool struct {
 	queue *Queue
 }
@@ -398,9 +405,12 @@ type taskStopToolInput struct {
 type taskStopToolOutput struct {
 	TaskID         int64      `json:"task_id"`
 	Stopped        bool       `json:"stopped"`
+	Accepted       bool       `json:"accepted"`
+	Terminal       bool       `json:"terminal"`
 	PreviousStatus TaskStatus `json:"previous_status"`
 	Status         TaskStatus `json:"status"`
 	Reason         string     `json:"reason"`
+	FollowupTool   string     `json:"followup_tool,omitempty"`
 }
 
 func (t *TaskStopTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
@@ -428,6 +438,7 @@ func (t *TaskStopTool) Execute(ctx context.Context, params json.RawMessage) (*to
 	output := taskStopToolOutput{
 		TaskID:         input.ID,
 		Stopped:        true,
+		Accepted:       true,
 		PreviousStatus: task.Status,
 		Reason:         reason,
 	}
@@ -437,6 +448,7 @@ func (t *TaskStopTool) Execute(ctx context.Context, params json.RawMessage) (*to
 			return tools.ErrorResult(fmt.Sprintf("task_stop: %v", err)), nil
 		}
 		output.Status = StatusFailed
+		output.Terminal = true
 	case StatusRunning:
 		if t.runningCanceller == nil {
 			return tools.ErrorResult("task_stop: running task cancellation unavailable"), nil
@@ -449,6 +461,8 @@ func (t *TaskStopTool) Execute(ctx context.Context, params json.RawMessage) (*to
 			return tools.ErrorResult(fmt.Sprintf("task_stop: task %d is running but no active runner was found", input.ID)), nil
 		}
 		output.Status = StatusRunning
+		output.Terminal = false
+		output.FollowupTool = TaskMonitorToolName
 	default:
 		return tools.ErrorResult(fmt.Sprintf("task_stop: task %d is %s; only pending or running tasks can be stopped", input.ID, task.Status)), nil
 	}
@@ -614,8 +628,11 @@ func (t *TaskMonitorTool) Description() string {
 
 func (t *TaskMonitorTool) Schema() json.RawMessage {
 	return tools.Object(map[string]tools.Property{
-		"id":        tools.Int("Daemon task ID."),
-		"max_chars": tools.Int("Maximum trailing result characters to return. Defaults to 4000 and caps at 20000."),
+		"id":               tools.Int("Daemon task ID."),
+		"max_chars":        tools.Int("Maximum trailing result characters to return. Defaults to 4000 and caps at 20000."),
+		"wait_for_update":  tools.Bool("When true, wait until updated_at changes, the task reaches a terminal state, or timeout_ms expires."),
+		"since_updated_at": tools.String("Prior updated_at value from an earlier task_monitor call. Required when wait_for_update is true."),
+		"timeout_ms":       tools.Int("Maximum wait time in milliseconds when wait_for_update is true. Defaults to 30000 and caps at 600000."),
 	}, []string{"id"})
 }
 
@@ -630,13 +647,17 @@ func (t *TaskMonitorTool) ShouldCancelSiblingsOnError() bool { return false }
 func (t *TaskMonitorTool) DeferInitialToolSchema() bool { return true }
 
 type taskMonitorToolInput struct {
-	ID       int64 `json:"id"`
-	MaxChars int   `json:"max_chars"`
+	ID             int64  `json:"id"`
+	MaxChars       int    `json:"max_chars"`
+	WaitForUpdate  bool   `json:"wait_for_update"`
+	SinceUpdatedAt string `json:"since_updated_at"`
+	TimeoutMS      int    `json:"timeout_ms"`
 }
 
 type taskMonitorToolOutput struct {
 	TaskID             int64      `json:"task_id"`
 	Status             TaskStatus `json:"status"`
+	RetrievalStatus    string     `json:"retrieval_status"`
 	Terminal           bool       `json:"terminal"`
 	NextPollSeconds    int        `json:"next_poll_seconds"`
 	ObservedAt         string     `json:"observed_at,omitempty"`
@@ -675,6 +696,24 @@ func (t *TaskMonitorTool) Execute(ctx context.Context, params json.RawMessage) (
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("task_monitor: %v", err)), nil
 	}
+	retrievalStatus := taskMonitorRetrievalSnapshot
+	if input.WaitForUpdate {
+		since := strings.TrimSpace(input.SinceUpdatedAt)
+		if since == "" {
+			return tools.ErrorResult("task_monitor: since_updated_at is required when wait_for_update is true"), nil
+		}
+		sinceTime, err := time.Parse(time.RFC3339Nano, since)
+		if err != nil {
+			return tools.ErrorResult(fmt.Sprintf("task_monitor: since_updated_at must be RFC3339Nano: %v", err)), nil
+		}
+		since = formatTaskToolTime(sinceTime)
+		task, retrievalStatus, err = t.waitForMonitorUpdate(ctx, input.ID, since, normalizeTaskOutputTimeout(input.TimeoutMS))
+		if err != nil {
+			return tools.ErrorResult(fmt.Sprintf("task_monitor: %v", err)), nil
+		}
+	} else if isTerminalTaskStatus(task.Status) {
+		retrievalStatus = taskMonitorRetrievalTerminal
+	}
 	limit := normalizeTaskOutputLimit(input.MaxChars)
 	tail, total, truncated := tailTaskOutput(task.Result, limit)
 	terminal := isTerminalTaskStatus(task.Status)
@@ -687,6 +726,7 @@ func (t *TaskMonitorTool) Execute(ctx context.Context, params json.RawMessage) (
 	output := taskMonitorToolOutput{
 		TaskID:             task.ID,
 		Status:             task.Status,
+		RetrievalStatus:    retrievalStatus,
 		Terminal:           terminal,
 		NextPollSeconds:    nextPollSeconds,
 		ObservedAt:         formatTaskToolTime(now),
@@ -711,6 +751,48 @@ func (t *TaskMonitorTool) Execute(ctx context.Context, params json.RawMessage) (
 		return tools.ErrorResult(fmt.Sprintf("task_monitor: marshal output: %v", err)), nil
 	}
 	return tools.SuccessResult(string(raw)), nil
+}
+
+func (t *TaskMonitorTool) waitForMonitorUpdate(ctx context.Context, id int64, sinceUpdatedAt string, timeout time.Duration) (*Task, string, error) {
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+
+	ticker := time.NewTicker(taskOutputPollInterval)
+	defer ticker.Stop()
+
+	var last *Task
+	for {
+		task, err := t.queue.Get(ctx, id)
+		if err != nil {
+			return nil, "", err
+		}
+		last = task
+		status := monitorRetrievalStatus(task, sinceUpdatedAt)
+		if status != taskMonitorRetrievalSnapshot {
+			return task, status, nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return last, "", ctx.Err()
+		case <-deadline.C:
+			return last, taskMonitorRetrievalTimeout, nil
+		case <-ticker.C:
+		}
+	}
+}
+
+func monitorRetrievalStatus(task *Task, sinceUpdatedAt string) string {
+	if task == nil {
+		return taskMonitorRetrievalSnapshot
+	}
+	if isTerminalTaskStatus(task.Status) {
+		return taskMonitorRetrievalTerminal
+	}
+	if formatTaskToolTime(task.UpdatedAt) != strings.TrimSpace(sinceUpdatedAt) {
+		return taskMonitorRetrievalChanged
+	}
+	return taskMonitorRetrievalSnapshot
 }
 
 func (t *TaskMonitorTool) observeTime() time.Time {

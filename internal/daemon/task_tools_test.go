@@ -351,8 +351,8 @@ func TestTaskStopToolCancelsPendingTask(t *testing.T) {
 	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
 		t.Fatalf("unmarshal output: %v", err)
 	}
-	if output.TaskID != id || !output.Stopped || output.PreviousStatus != StatusPending || output.Status != StatusFailed {
-		t.Fatalf("output = %+v, want stopped pending->failed", output)
+	if output.TaskID != id || !output.Stopped || !output.Accepted || !output.Terminal || output.PreviousStatus != StatusPending || output.Status != StatusFailed {
+		t.Fatalf("output = %+v, want accepted terminal pending->failed stop", output)
 	}
 
 	task, err := queue.Get(ctx, id)
@@ -409,8 +409,8 @@ func TestTaskStopToolCancelsRunningTaskWithCanceller(t *testing.T) {
 	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
 		t.Fatalf("unmarshal output: %v", err)
 	}
-	if output.TaskID != task.ID || !output.Stopped || output.PreviousStatus != StatusRunning || output.Status != StatusRunning {
-		t.Fatalf("output = %+v, want accepted running stop request", output)
+	if output.TaskID != task.ID || !output.Stopped || !output.Accepted || output.Terminal || output.PreviousStatus != StatusRunning || output.Status != StatusRunning || output.FollowupTool != TaskMonitorToolName {
+		t.Fatalf("output = %+v, want accepted non-terminal running stop request with task_monitor followup", output)
 	}
 	stillRunning, err := queue.Get(ctx, task.ID)
 	if err != nil {
@@ -711,6 +711,144 @@ func TestTaskMonitorToolReportsTimingAndTimeoutMetadata(t *testing.T) {
 	}
 	if output.TimeoutClass != string(TimeoutClassIdle) || output.IdleTimeoutCount != 2 || output.ActiveTimeoutCount != 1 {
 		t.Fatalf("timeout metadata = class %q idle %d active %d", output.TimeoutClass, output.IdleTimeoutCount, output.ActiveTimeoutCount)
+	}
+}
+
+func TestTaskMonitorToolWaitsForUpdate(t *testing.T) {
+	ctx := context.Background()
+	queue := newTaskToolTestQueue(t)
+	if _, _, err := queue.Enqueue(ctx, "waited task", ""); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	task, err := queue.Next(ctx)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if task == nil {
+		t.Fatal("Next returned nil")
+	}
+
+	initial, err := queue.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("Get initial task: %v", err)
+	}
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		_, _ = queue.UpdateAnnotation(ctx, task.ID, "new progress", "updated")
+	}()
+
+	result, err := NewTaskMonitorTool(queue).Execute(ctx, json.RawMessage(`{"id":`+jsonInt(task.ID)+`,"wait_for_update":true,"since_updated_at":"`+initial.UpdatedAt.Format(time.RFC3339Nano)+`","timeout_ms":500}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute returned error result: %s", result.Output)
+	}
+
+	var output taskMonitorToolOutput
+	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if output.RetrievalStatus != taskMonitorRetrievalChanged {
+		t.Fatalf("RetrievalStatus = %q, want changed", output.RetrievalStatus)
+	}
+	if output.Progress != "new progress" || output.Summary != "updated" {
+		t.Fatalf("progress/summary = %q/%q, want new progress/updated", output.Progress, output.Summary)
+	}
+}
+
+func TestTaskMonitorToolWaitsForTerminalUpdate(t *testing.T) {
+	ctx := context.Background()
+	queue := newTaskToolTestQueue(t)
+	if _, _, err := queue.Enqueue(ctx, "terminal task", ""); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	task, err := queue.Next(ctx)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if task == nil {
+		t.Fatal("Next returned nil")
+	}
+
+	initial, err := queue.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("Get initial task: %v", err)
+	}
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		_ = queue.MarkDone(ctx, task.ID, "terminal result", "done summary")
+	}()
+
+	result, err := NewTaskMonitorTool(queue).Execute(ctx, json.RawMessage(`{"id":`+jsonInt(task.ID)+`,"wait_for_update":true,"since_updated_at":"`+initial.UpdatedAt.Format(time.RFC3339Nano)+`","timeout_ms":500}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute returned error result: %s", result.Output)
+	}
+
+	var output taskMonitorToolOutput
+	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if output.RetrievalStatus != taskMonitorRetrievalTerminal || output.Status != StatusDone || !output.Terminal {
+		t.Fatalf("output = %+v, want terminal done task", output)
+	}
+	if output.ResultTail != "terminal result" || output.Summary != "done summary" {
+		t.Fatalf("result/summary = %q/%q, want terminal result/done summary", output.ResultTail, output.Summary)
+	}
+}
+
+func TestTaskMonitorToolWaitForUpdateTimeoutReturnsCurrentSnapshot(t *testing.T) {
+	ctx := context.Background()
+	queue := newTaskToolTestQueue(t)
+	if _, _, err := queue.Enqueue(ctx, "quiet task", ""); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	task, err := queue.Next(ctx)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if task == nil {
+		t.Fatal("Next returned nil")
+	}
+
+	initial, err := queue.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("Get initial task: %v", err)
+	}
+	result, err := NewTaskMonitorTool(queue).Execute(ctx, json.RawMessage(`{"id":`+jsonInt(task.ID)+`,"wait_for_update":true,"since_updated_at":"`+initial.UpdatedAt.Format(time.RFC3339Nano)+`","timeout_ms":1}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute returned error result: %s", result.Output)
+	}
+
+	var output taskMonitorToolOutput
+	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if output.RetrievalStatus != taskMonitorRetrievalTimeout || output.Status != StatusRunning || output.Terminal {
+		t.Fatalf("output = %+v, want timeout with current running snapshot", output)
+	}
+}
+
+func TestTaskMonitorToolRejectsWaitForUpdateWithoutBaseline(t *testing.T) {
+	ctx := context.Background()
+	queue := newTaskToolTestQueue(t)
+	id, _, err := queue.Enqueue(ctx, "baseline required", "")
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	result, err := NewTaskMonitorTool(queue).Execute(ctx, json.RawMessage(`{"id":`+jsonInt(id)+`,"wait_for_update":true}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if !result.IsError || !strings.Contains(result.Output, "since_updated_at is required") {
+		t.Fatalf("result = %+v, want since_updated_at error", result)
 	}
 }
 
