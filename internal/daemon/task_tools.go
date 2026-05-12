@@ -578,10 +578,11 @@ func (t *TaskOutputTool) waitForTerminalTask(ctx context.Context, id int64, time
 
 type TaskMonitorTool struct {
 	queue *Queue
+	now   func() time.Time
 }
 
 func NewTaskMonitorTool(queue *Queue) *TaskMonitorTool {
-	return &TaskMonitorTool{queue: queue}
+	return &TaskMonitorTool{queue: queue, now: time.Now}
 }
 
 func (t *TaskMonitorTool) Name() string { return TaskMonitorToolName }
@@ -613,17 +614,26 @@ type taskMonitorToolInput struct {
 }
 
 type taskMonitorToolOutput struct {
-	TaskID           int64      `json:"task_id"`
-	Status           TaskStatus `json:"status"`
-	Terminal         bool       `json:"terminal"`
-	NextPollSeconds  int        `json:"next_poll_seconds"`
-	Progress         string     `json:"progress,omitempty"`
-	Summary          string     `json:"summary,omitempty"`
-	ResultTail       string     `json:"result_tail,omitempty"`
-	ResultTotalChars int        `json:"result_total_chars"`
-	ResultTruncated  bool       `json:"result_truncated"`
-	UpdatedAt        string     `json:"updated_at,omitempty"`
-	CompletedAt      string     `json:"completed_at,omitempty"`
+	TaskID             int64      `json:"task_id"`
+	Status             TaskStatus `json:"status"`
+	Terminal           bool       `json:"terminal"`
+	NextPollSeconds    int        `json:"next_poll_seconds"`
+	ObservedAt         string     `json:"observed_at,omitempty"`
+	CreatedAt          string     `json:"created_at,omitempty"`
+	UpdatedAt          string     `json:"updated_at,omitempty"`
+	StartedAt          string     `json:"started_at,omitempty"`
+	CompletedAt        string     `json:"completed_at,omitempty"`
+	AgeSeconds         int64      `json:"age_seconds,omitempty"`
+	RunningSeconds     int64      `json:"running_seconds,omitempty"`
+	IdleSeconds        int64      `json:"idle_seconds,omitempty"`
+	Progress           string     `json:"progress,omitempty"`
+	Summary            string     `json:"summary,omitempty"`
+	ResultTail         string     `json:"result_tail,omitempty"`
+	ResultTotalChars   int        `json:"result_total_chars"`
+	ResultTruncated    bool       `json:"result_truncated"`
+	TimeoutClass       string     `json:"timeout_class,omitempty"`
+	IdleTimeoutCount   int        `json:"idle_timeout_count,omitempty"`
+	ActiveTimeoutCount int        `json:"active_timeout_count,omitempty"`
 }
 
 func (t *TaskMonitorTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
@@ -647,29 +657,46 @@ func (t *TaskMonitorTool) Execute(ctx context.Context, params json.RawMessage) (
 	limit := normalizeTaskOutputLimit(input.MaxChars)
 	tail, total, truncated := tailTaskOutput(task.Result, limit)
 	terminal := isTerminalTaskStatus(task.Status)
+	now := t.observeTime()
 	nextPollSeconds := defaultTaskMonitorPollSeconds
 	if terminal {
 		nextPollSeconds = 0
 	}
 
 	output := taskMonitorToolOutput{
-		TaskID:           task.ID,
-		Status:           task.Status,
-		Terminal:         terminal,
-		NextPollSeconds:  nextPollSeconds,
-		Progress:         task.Progress,
-		Summary:          task.Summary,
-		ResultTail:       tail,
-		ResultTotalChars: total,
-		ResultTruncated:  truncated,
-		UpdatedAt:        formatTaskToolTime(task.UpdatedAt),
-		CompletedAt:      formatTaskToolTime(task.CompletedAt),
+		TaskID:             task.ID,
+		Status:             task.Status,
+		Terminal:           terminal,
+		NextPollSeconds:    nextPollSeconds,
+		ObservedAt:         formatTaskToolTime(now),
+		CreatedAt:          formatTaskToolTime(task.CreatedAt),
+		UpdatedAt:          formatTaskToolTime(task.UpdatedAt),
+		StartedAt:          formatTaskToolTime(task.StartedAt),
+		CompletedAt:        formatTaskToolTime(task.CompletedAt),
+		AgeSeconds:         taskAgeSeconds(*task, now),
+		RunningSeconds:     taskRunningSeconds(*task, now),
+		IdleSeconds:        taskIdleSeconds(*task, now),
+		Progress:           task.Progress,
+		Summary:            task.Summary,
+		ResultTail:         tail,
+		ResultTotalChars:   total,
+		ResultTruncated:    truncated,
+		TimeoutClass:       string(task.TimeoutClass),
+		IdleTimeoutCount:   task.IdleTimeoutCount,
+		ActiveTimeoutCount: task.ActiveTimeoutCount,
 	}
 	raw, err := json.Marshal(output)
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("task_monitor: marshal output: %v", err)), nil
 	}
 	return tools.SuccessResult(string(raw)), nil
+}
+
+func (t *TaskMonitorTool) observeTime() time.Time {
+	if t != nil && t.now != nil {
+		return t.now()
+	}
+	return time.Now()
 }
 
 type TaskUpdateTool struct {
@@ -822,6 +849,38 @@ func taskOutputField(task *Task, field string) string {
 
 func isTerminalTaskStatus(status TaskStatus) bool {
 	return status == StatusDone || status == StatusFailed
+}
+
+func taskAgeSeconds(task Task, now time.Time) int64 {
+	if task.CreatedAt.IsZero() || task.CreatedAt.UnixMilli() == 0 {
+		return 0
+	}
+	return nonNegativeSeconds(now.Sub(task.CreatedAt))
+}
+
+func taskRunningSeconds(task Task, now time.Time) int64 {
+	if task.StartedAt.IsZero() || task.StartedAt.UnixMilli() == 0 {
+		return 0
+	}
+	end := now
+	if isTerminalTaskStatus(task.Status) && !task.CompletedAt.IsZero() && task.CompletedAt.UnixMilli() != 0 {
+		end = task.CompletedAt
+	}
+	return nonNegativeSeconds(end.Sub(task.StartedAt))
+}
+
+func taskIdleSeconds(task Task, now time.Time) int64 {
+	if task.UpdatedAt.IsZero() || task.UpdatedAt.UnixMilli() == 0 || isTerminalTaskStatus(task.Status) {
+		return 0
+	}
+	return nonNegativeSeconds(now.Sub(task.UpdatedAt))
+}
+
+func nonNegativeSeconds(d time.Duration) int64 {
+	if d <= 0 {
+		return 0
+	}
+	return int64(d / time.Second)
 }
 
 func tailTaskOutput(s string, maxRunes int) (string, int, bool) {

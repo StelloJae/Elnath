@@ -551,6 +551,61 @@ func TestTaskMonitorToolReturnsRunningSnapshot(t *testing.T) {
 	}
 }
 
+func TestTaskMonitorToolReportsTimingAndTimeoutMetadata(t *testing.T) {
+	ctx := context.Background()
+	queue := newTaskToolTestQueue(t)
+	if _, _, err := queue.Enqueue(ctx, "timed task", ""); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	task, err := queue.Next(ctx)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if task == nil {
+		t.Fatal("Next returned nil")
+	}
+
+	now := time.Date(2026, 5, 13, 4, 0, 0, 0, time.UTC)
+	created := now.Add(-30 * time.Second)
+	started := now.Add(-20 * time.Second)
+	updated := now.Add(-7 * time.Second)
+	if _, err := queue.db.ExecContext(ctx, `
+		UPDATE task_queue
+		SET created_at = ?, started_at = ?, updated_at = ?, timeout_class = ?, idle_timeout_count = ?, active_timeout_count = ?
+		WHERE id = ?`,
+		created.UnixMilli(), started.UnixMilli(), updated.UnixMilli(), string(TimeoutClassIdle), 2, 1, task.ID,
+	); err != nil {
+		t.Fatalf("update task timestamps: %v", err)
+	}
+
+	tool := NewTaskMonitorTool(queue)
+	tool.now = func() time.Time { return now }
+	result, err := tool.Execute(ctx, json.RawMessage(`{"id":`+jsonInt(task.ID)+`}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute returned error result: %s", result.Output)
+	}
+
+	var output taskMonitorToolOutput
+	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if output.ObservedAt != now.Format(time.RFC3339Nano) {
+		t.Fatalf("ObservedAt = %q, want %q", output.ObservedAt, now.Format(time.RFC3339Nano))
+	}
+	if output.CreatedAt != created.Format(time.RFC3339Nano) || output.StartedAt != started.Format(time.RFC3339Nano) || output.UpdatedAt != updated.Format(time.RFC3339Nano) {
+		t.Fatalf("timestamps = created %q started %q updated %q", output.CreatedAt, output.StartedAt, output.UpdatedAt)
+	}
+	if output.AgeSeconds != 30 || output.RunningSeconds != 20 || output.IdleSeconds != 7 {
+		t.Fatalf("durations = age %d running %d idle %d", output.AgeSeconds, output.RunningSeconds, output.IdleSeconds)
+	}
+	if output.TimeoutClass != string(TimeoutClassIdle) || output.IdleTimeoutCount != 2 || output.ActiveTimeoutCount != 1 {
+		t.Fatalf("timeout metadata = class %q idle %d active %d", output.TimeoutClass, output.IdleTimeoutCount, output.ActiveTimeoutCount)
+	}
+}
+
 func TestTaskMonitorToolReturnsTerminalResultTail(t *testing.T) {
 	ctx := context.Background()
 	queue := newTaskToolTestQueue(t)
