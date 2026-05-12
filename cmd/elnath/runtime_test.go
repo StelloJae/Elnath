@@ -2963,6 +2963,24 @@ func TestExecutionRuntimeRegistersWorktreeListTool(t *testing.T) {
 	}
 }
 
+func TestExecutionRuntimeRegistersDeferredControlSurfaceTools(t *testing.T) {
+	rt := newTestExecutionRuntime(t, &countingProvider{streamText: "unused"})
+
+	for _, name := range []string{
+		"task_create", "task_list", "task_get", "task_stop", "task_output", "task_monitor", "task_update",
+		"schedule_create", "schedule_list", "schedule_delete",
+		"enter_worktree", "worktree_list", "exit_worktree",
+	} {
+		tool, ok := rt.reg.Get(name)
+		if !ok {
+			t.Fatalf("runtime registry missing %s tool", name)
+		}
+		if !tools.ShouldDeferToolSchema(tool) {
+			t.Fatalf("%s should defer initial schema", name)
+		}
+	}
+}
+
 func TestExecutionRuntimeRunTaskHelpSlashCommandListsCatalog(t *testing.T) {
 	provider := &countingProvider{streamText: "runtime answer"}
 	rt := newTestExecutionRuntime(t, provider)
