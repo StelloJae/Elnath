@@ -196,7 +196,7 @@ func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testi
 				ReasoningEffort:      "high",
 				ReasoningEffortMode:  "auto",
 				ConditionalSkillMatches: []ConditionalSkillMatch{
-					{SkillName: "go-review", Pattern: "internal/**/*.go", Path: "internal/skill/skill.go"},
+					{SkillName: "go-review", Pattern: "internal/**/*.go", Path: "internal/skill/skill.go", Source: "claude-skill", TrustLevel: "local_compatible", External: false},
 				},
 				RetryDecision: "retry_smaller_scope",
 				RetryReason:   "final_response_reports_incomplete",
@@ -243,6 +243,10 @@ func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testi
 	matches, ok := summary["conditional_skill_matches"].([]any)
 	if !ok || len(matches) != 1 {
 		t.Fatalf("conditional_skill_matches missing: summary=%v", summary)
+	}
+	match, ok := matches[0].(map[string]any)
+	if !ok || match["source"] != "claude-skill" || match["trust_level"] != "local_compatible" || match["external"] != false {
+		t.Fatalf("conditional_skill_matches trust metadata missing: match=%v summary=%v", matches[0], summary)
 	}
 	if summary["retry_decision"] != "retry_smaller_scope" || summary["retry_reason"] != "final_response_reports_incomplete" {
 		t.Fatalf("retry fields missing: summary=%v", summary)

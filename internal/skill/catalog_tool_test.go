@@ -197,10 +197,133 @@ func TestCatalogToolRecommendsSkillsByQuery(t *testing.T) {
 	}
 }
 
+func TestCatalogToolFiltersByAllowedTrustLevels(t *testing.T) {
+	reg := NewRegistry()
+	reg.Add(&Skill{Name: "wiki-review", Description: "Review wiki-native notes", Status: "active"})
+	reg.Add(&Skill{Name: "local-review", Description: "Review local code", Status: "active", Source: "claude-skill"})
+	reg.Add(&Skill{Name: "plugin-review", Description: "Review with plugin skill", Status: "active", Source: "codex-plugin-skill"})
+
+	tool := NewCatalogTool(reg)
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"list","allow_trust_levels":["wiki","local_compatible"]}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("Execute returned error result: %s", res.Output)
+	}
+
+	var out struct {
+		Skills []struct {
+			Name       string `json:"name"`
+			TrustLevel string `json:"trust_level"`
+			External   bool   `json:"external"`
+		} `json:"skills"`
+	}
+	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, res.Output)
+	}
+	if len(out.Skills) != 2 {
+		t.Fatalf("skills = %+v, want wiki/local only", out.Skills)
+	}
+	seen := map[string]struct{}{}
+	for _, got := range out.Skills {
+		seen[got.Name] = struct{}{}
+		if got.TrustLevel == "plugin_cache" || got.External {
+			t.Fatalf("filtered skill leaked plugin-cache metadata: %+v", got)
+		}
+	}
+	if _, ok := seen["wiki-review"]; !ok {
+		t.Fatalf("wiki-review missing: %+v", out.Skills)
+	}
+	if _, ok := seen["local-review"]; !ok {
+		t.Fatalf("local-review missing: %+v", out.Skills)
+	}
+	if _, ok := seen["plugin-review"]; ok {
+		t.Fatalf("plugin-review leaked through trust filter: %+v", out.Skills)
+	}
+}
+
+func TestCatalogToolTrustFilterAppliesToRecommendShowAndMatchPaths(t *testing.T) {
+	reg := NewRegistry()
+	reg.Add(&Skill{Name: "local-review", Description: "Review code", Paths: []string{"internal"}, Status: "active", Source: "claude-skill"})
+	reg.Add(&Skill{Name: "plugin-review", Description: "Review code", Paths: []string{"internal"}, Status: "active", Source: "codex-plugin-skill"})
+
+	tool := NewCatalogTool(reg)
+	recommend, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"recommend","query":"review code","allow_trust_levels":["plugin_cache"]}`))
+	if err != nil {
+		t.Fatalf("recommend Execute error = %v", err)
+	}
+	if recommend.IsError {
+		t.Fatalf("recommend returned error result: %s", recommend.Output)
+	}
+	var recOut struct {
+		Skills []struct {
+			Name       string `json:"name"`
+			TrustLevel string `json:"trust_level"`
+		} `json:"skills"`
+	}
+	if err := json.Unmarshal([]byte(recommend.Output), &recOut); err != nil {
+		t.Fatalf("recommend output is not JSON: %v\n%s", err, recommend.Output)
+	}
+	if len(recOut.Skills) != 1 || recOut.Skills[0].Name != "plugin-review" || recOut.Skills[0].TrustLevel != "plugin_cache" {
+		t.Fatalf("recommend skills = %+v, want plugin-review only", recOut.Skills)
+	}
+
+	show, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"show","skill":"plugin-review","allow_trust_levels":["local_compatible"]}`))
+	if err != nil {
+		t.Fatalf("show Execute error = %v", err)
+	}
+	if !show.IsError || !strings.Contains(show.Output, "filtered by allow_trust_levels") {
+		t.Fatalf("show result = %+v, want trust-filter error", show)
+	}
+
+	root := t.TempDir()
+	params := map[string]any{
+		"action":             "match_paths",
+		"cwd":                root,
+		"allow_trust_levels": []string{"local_compatible"},
+		"paths":              []string{filepath.Join(root, "internal", "skill", "catalog_tool.go")},
+	}
+	raw, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("Marshal params error = %v", err)
+	}
+	matches, err := tool.Execute(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("match_paths Execute error = %v", err)
+	}
+	if matches.IsError {
+		t.Fatalf("match_paths returned error result: %s", matches.Output)
+	}
+	var matchOut struct {
+		Matches []struct {
+			SkillName  string `json:"skill_name"`
+			TrustLevel string `json:"trust_level"`
+		} `json:"matches"`
+	}
+	if err := json.Unmarshal([]byte(matches.Output), &matchOut); err != nil {
+		t.Fatalf("match_paths output is not JSON: %v\n%s", err, matches.Output)
+	}
+	if len(matchOut.Matches) != 1 || matchOut.Matches[0].SkillName != "local-review" || matchOut.Matches[0].TrustLevel != "local_compatible" {
+		t.Fatalf("matches = %+v, want local-review only", matchOut.Matches)
+	}
+}
+
+func TestCatalogToolRejectsUnknownTrustLevelFilter(t *testing.T) {
+	tool := NewCatalogTool(NewRegistry())
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"list","allow_trust_levels":["mystery"]}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if !res.IsError || !strings.Contains(res.Output, "unsupported trust level") {
+		t.Fatalf("result = %+v, want unsupported trust level error", res)
+	}
+}
+
 func TestCatalogToolMatchesConditionalSkillPaths(t *testing.T) {
 	reg := NewRegistry()
-	reg.Add(&Skill{Name: "go-review", Paths: []string{"internal/**/*.go"}, Status: "active"})
-	reg.Add(&Skill{Name: "docs-review", Paths: []string{"docs"}, Status: "active"})
+	reg.Add(&Skill{Name: "go-review", Paths: []string{"internal/**/*.go"}, Status: "active", Source: "claude-skill"})
+	reg.Add(&Skill{Name: "docs-review", Paths: []string{"docs"}, Status: "active", Source: "codex-plugin-skill"})
 	reg.Add(&Skill{Name: "always-on", Status: "active"})
 
 	root := t.TempDir()
@@ -230,9 +353,12 @@ func TestCatalogToolMatchesConditionalSkillPaths(t *testing.T) {
 	var out struct {
 		Action  string `json:"action"`
 		Matches []struct {
-			SkillName string `json:"skill_name"`
-			Pattern   string `json:"pattern"`
-			Path      string `json:"path"`
+			SkillName  string `json:"skill_name"`
+			Pattern    string `json:"pattern"`
+			Path       string `json:"path"`
+			Source     string `json:"source"`
+			TrustLevel string `json:"trust_level"`
+			External   bool   `json:"external"`
 		} `json:"matches"`
 	}
 	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
@@ -244,8 +370,14 @@ func TestCatalogToolMatchesConditionalSkillPaths(t *testing.T) {
 	if out.Matches[0].SkillName != "docs-review" || out.Matches[0].Path != "docs/roadmap.md" {
 		t.Fatalf("first match = %+v, want docs-review docs/roadmap.md", out.Matches[0])
 	}
+	if out.Matches[0].Source != "codex-plugin-skill" || out.Matches[0].TrustLevel != "plugin_cache" || !out.Matches[0].External {
+		t.Fatalf("first trust metadata = %+v, want plugin_cache external match", out.Matches[0])
+	}
 	if out.Matches[1].SkillName != "go-review" || out.Matches[1].Path != "internal/skill/catalog_tool.go" {
 		t.Fatalf("second match = %+v, want go-review internal/skill/catalog_tool.go", out.Matches[1])
+	}
+	if out.Matches[1].Source != "claude-skill" || out.Matches[1].TrustLevel != "local_compatible" || out.Matches[1].External {
+		t.Fatalf("second trust metadata = %+v, want local_compatible non-external match", out.Matches[1])
 	}
 }
 
