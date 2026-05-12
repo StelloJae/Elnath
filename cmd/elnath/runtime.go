@@ -493,6 +493,7 @@ func buildExecutionRuntime(
 	worktreeManager := worktree.NewManager(effectiveWorkDir)
 	reg.Register(worktree.NewEnterTool(worktreeManager))
 	reg.Register(worktree.NewListTool(worktreeManager))
+	reg.Register(worktree.NewPruneTool(worktreeManager))
 	reg.Register(worktree.NewExitTool(worktreeManager))
 	gitSync, wikiIdx := registerWikiTools(reg, cfg.WikiDir, db.Wiki)
 	reg.Register(conversation.NewConversationSearchTool(historyStore))
