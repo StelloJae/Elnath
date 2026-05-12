@@ -66,6 +66,9 @@ type claudeSkillFrontmatter struct {
 	RequiredTools          stringList `yaml:"required_tools"`
 	Tools                  stringList `yaml:"tools"`
 	Paths                  stringList `yaml:"paths"`
+	ArgumentHint           string     `yaml:"argument-hint"`
+	ArgumentHintUnderscore string     `yaml:"argument_hint"`
+	Arguments              stringList `yaml:"arguments"`
 	Model                  string     `yaml:"model"`
 	Effort                 string     `yaml:"effort"`
 }
@@ -340,9 +343,10 @@ func parseCompatibleSkillFileWithSource(nameHint string, raw []byte, source, kin
 	return &Skill{
 		Name:          name,
 		Description:   compatibleSkillDescription(fm, kind),
-		Trigger:       "/" + name,
+		Trigger:       compatibleSkillTrigger(name, fm),
 		RequiredTools: collectClaudeSkillTools(fm),
 		Paths:         normalizeSkillPaths(fm.Paths),
+		ArgumentNames: normalizeSkillArgumentNames(fm.Arguments),
 		Model:         strings.TrimSpace(fm.Model),
 		Effort:        strings.TrimSpace(fm.Effort),
 		BaseDir:       strings.TrimSpace(baseDir),
@@ -363,6 +367,25 @@ func compatibleSkillDescription(fm claudeSkillFrontmatter, kind string) string {
 		return "Custom command"
 	}
 	return description
+}
+
+func compatibleSkillTrigger(name string, fm claudeSkillFrontmatter) string {
+	trigger := "/" + name
+	hint := strings.TrimSpace(fm.ArgumentHint)
+	if hint == "" {
+		hint = strings.TrimSpace(fm.ArgumentHintUnderscore)
+	}
+	if hint == "" {
+		var placeholders []string
+		for _, arg := range normalizeSkillArgumentNames(fm.Arguments) {
+			placeholders = append(placeholders, "<"+arg+">")
+		}
+		hint = strings.Join(placeholders, " ")
+	}
+	if hint != "" {
+		trigger += " " + hint
+	}
+	return trigger
 }
 
 func splitClaudeSkillFrontmatter(raw []byte) (yamlBlock, body string, err error) {

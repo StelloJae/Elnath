@@ -1617,7 +1617,7 @@ func (rt *executionRuntime) trySkillExecution(
 		return nil, "", false, nil
 	}
 
-	args := parseSkillArgs(sk.Trigger, fields[1:])
+	args := skillInvocationArgs(sk, fields[1:])
 
 	rt.app.Logger.Info("executing skill", "name", skillName, "args", args)
 	bus.Emit(event.TextDeltaEvent{Base: event.NewBase(), Content: fmt.Sprintf("Executing skill: %s\n", skillName)})
@@ -1708,6 +1708,48 @@ func parseSkillArgs(trigger string, values []string) map[string]string {
 			continue
 		}
 		if i == len(placeholders)-1 {
+			args[name] = strings.Join(values[idx:], " ")
+			idx = len(values)
+			continue
+		}
+		args[name] = values[idx]
+		idx++
+	}
+	return args
+}
+
+func skillInvocationArgs(sk *skill.Skill, values []string) map[string]string {
+	args := make(map[string]string)
+	if sk == nil {
+		return args
+	}
+	for key, value := range parseSkillArgs(sk.Trigger, values) {
+		args[key] = value
+	}
+	for key, value := range parseSkillNamedArgs(sk.ArgumentNames, values) {
+		args[key] = value
+	}
+	if raw := strings.Join(values, " "); raw != "" {
+		args["arguments"] = raw
+		args["ARGUMENTS"] = raw
+		args["args"] = raw
+	}
+	return args
+}
+
+func parseSkillNamedArgs(names []string, values []string) map[string]string {
+	args := make(map[string]string)
+	idx := 0
+	for i, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if idx >= len(values) {
+			args[name] = ""
+			continue
+		}
+		if i == len(names)-1 {
 			args[name] = strings.Join(values[idx:], " ")
 			idx = len(values)
 			continue

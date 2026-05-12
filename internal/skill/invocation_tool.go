@@ -42,7 +42,7 @@ func (t *InvocationTool) Schema() json.RawMessage {
 	return tools.Object(map[string]tools.Property{
 		"skill":      tools.String(`Skill name, with or without leading slash. Example: "review-pr" or "/review-pr".`),
 		"args":       tools.String("Optional positional arguments passed to $ARGUMENTS and {arguments}."),
-		"named_args": {Type: "object", Description: "Optional JSON object of named placeholder values for {name}-style skill prompts."},
+		"named_args": {Type: "object", Description: "Optional JSON object of named placeholder values for {name}- or $name-style skill prompts."},
 		"allow_trust_levels": tools.Array(
 			"Optional invocation trust-level allowlist. Supported values: wiki, local_compatible, plugin_cache, declared.",
 			"string",
@@ -122,6 +122,12 @@ func (t *InvocationTool) Execute(ctx context.Context, params json.RawMessage) (*
 	if strings.TrimSpace(input.Args) != "" {
 		args["arguments"] = input.Args
 		args["ARGUMENTS"] = input.Args
+		args["args"] = input.Args
+		for key, value := range positionalNamedArgs(sk.ArgumentNames, strings.Fields(input.Args)) {
+			if _, exists := args[key]; !exists {
+				args[key] = value
+			}
+		}
 	}
 
 	result, err := t.cfg.Registry.Execute(ctx, ExecuteParams{
@@ -134,6 +140,7 @@ func (t *InvocationTool) Execute(ctx context.Context, params json.RawMessage) (*
 		Permission: t.cfg.Permission,
 		Hooks:      t.cfg.Hooks,
 		Locale:     t.cfg.Locale,
+		SessionID:  tools.SessionIDFrom(ctx),
 	})
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("skill %q: %v", name, err)), nil
@@ -151,6 +158,29 @@ func (t *InvocationTool) Execute(ctx context.Context, params json.RawMessage) (*
 		return tools.ErrorResult(fmt.Sprintf("skill %q: marshal output: %v", name, err)), nil
 	}
 	return tools.SuccessResult(string(raw)), nil
+}
+
+func positionalNamedArgs(names []string, values []string) map[string]string {
+	args := make(map[string]string)
+	idx := 0
+	for i, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if idx >= len(values) {
+			args[name] = ""
+			continue
+		}
+		if i == len(names)-1 {
+			args[name] = strings.Join(values[idx:], " ")
+			idx = len(values)
+			continue
+		}
+		args[name] = values[idx]
+		idx++
+	}
+	return args
 }
 
 func (t *InvocationTool) resolveProvider() llm.Provider {

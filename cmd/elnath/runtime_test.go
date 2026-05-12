@@ -2137,6 +2137,21 @@ func TestParseSkillArgs(t *testing.T) {
 	}
 }
 
+func TestSkillInvocationArgsIncludeRawAndNamedArguments(t *testing.T) {
+	t.Parallel()
+
+	got := skillInvocationArgs(&skill.Skill{
+		Trigger:       "/review-pr",
+		ArgumentNames: []string{"pr_number", "base"},
+	}, []string{"42", "release", "branch"})
+	if got["ARGUMENTS"] != "42 release branch" || got["arguments"] != "42 release branch" {
+		t.Fatalf("raw args = %#v, want ARGUMENTS and arguments", got)
+	}
+	if got["pr_number"] != "42" || got["base"] != "release branch" {
+		t.Fatalf("named args = %#v, want pr_number=42 base='release branch'", got)
+	}
+}
+
 func startRuntimeDaemonForTest(t *testing.T, d *daemon.Daemon, store *agentic.Store) func() {
 	t.Helper()
 	d.WithTaskEnvelope(agenticruntime.NewDaemonEnvelope(store))
@@ -2946,12 +2961,13 @@ func TestExecutionRuntimeRunTaskSkillsSlashCommandListsCatalog(t *testing.T) {
 	rt := newTestExecutionRuntime(t, provider)
 	rt.skillReg = skill.NewRegistry()
 	rt.skillReg.Add(&skill.Skill{
-		Name:        "pr-review",
-		Description: "Review PR with security and quality focus",
-		Trigger:     "/pr-review <pr_number>",
-		BaseDir:     "/tmp/elnath-skills/pr-review",
-		Source:      "codex-plugin-skill",
-		Prompt:      "Review PR #{pr_number}",
+		Name:          "pr-review",
+		Description:   "Review PR with security and quality focus",
+		Trigger:       "/pr-review <pr_number>",
+		ArgumentNames: []string{"pr_number"},
+		BaseDir:       "/tmp/elnath-skills/pr-review",
+		Source:        "codex-plugin-skill",
+		Prompt:        "Review PR #{pr_number}",
 	})
 	sess, err := rt.mgr.NewSession()
 	if err != nil {
@@ -2986,12 +3002,13 @@ func TestExecutionRuntimeRunTaskSkillsSlashCommandJSONListsCatalog(t *testing.T)
 	rt := newTestExecutionRuntime(t, provider)
 	rt.skillReg = skill.NewRegistry()
 	rt.skillReg.Add(&skill.Skill{
-		Name:        "pr-review",
-		Description: "Review PR with security and quality focus",
-		Trigger:     "/pr-review <pr_number>",
-		BaseDir:     "/tmp/elnath-skills/pr-review",
-		Source:      "codex-plugin-skill",
-		Prompt:      "Review PR #{pr_number}",
+		Name:          "pr-review",
+		Description:   "Review PR with security and quality focus",
+		Trigger:       "/pr-review <pr_number>",
+		ArgumentNames: []string{"pr_number"},
+		BaseDir:       "/tmp/elnath-skills/pr-review",
+		Source:        "codex-plugin-skill",
+		Prompt:        "Review PR #{pr_number}",
 	})
 	sess, err := rt.mgr.NewSession()
 	if err != nil {
@@ -3009,13 +3026,14 @@ func TestExecutionRuntimeRunTaskSkillsSlashCommandJSONListsCatalog(t *testing.T)
 	var out struct {
 		Action string `json:"action"`
 		Skills []struct {
-			Name        string `json:"name"`
-			Description string `json:"description"`
-			Trigger     string `json:"trigger"`
-			BaseDir     string `json:"base_dir"`
-			Source      string `json:"source"`
-			TrustLevel  string `json:"trust_level"`
-			External    bool   `json:"external"`
+			Name          string   `json:"name"`
+			Description   string   `json:"description"`
+			Trigger       string   `json:"trigger"`
+			ArgumentNames []string `json:"arguments"`
+			BaseDir       string   `json:"base_dir"`
+			Source        string   `json:"source"`
+			TrustLevel    string   `json:"trust_level"`
+			External      bool     `json:"external"`
 		} `json:"skills"`
 	}
 	if err := json.Unmarshal([]byte(summary), &out); err != nil {
@@ -3026,6 +3044,9 @@ func TestExecutionRuntimeRunTaskSkillsSlashCommandJSONListsCatalog(t *testing.T)
 	}
 	if got := out.Skills[0]; got.Name != "pr-review" || got.Trigger != "/pr-review <pr_number>" || got.BaseDir != "/tmp/elnath-skills/pr-review" {
 		t.Fatalf("skill entry = %+v, want pr-review trigger metadata", got)
+	}
+	if got := out.Skills[0].ArgumentNames; !reflect.DeepEqual(got, []string{"pr_number"}) {
+		t.Fatalf("arguments = %v, want [pr_number]", got)
 	}
 	if got := out.Skills[0]; got.Source != "codex-plugin-skill" || got.TrustLevel != "plugin_cache" || !got.External {
 		t.Fatalf("trust metadata = %+v, want plugin_cache external", got)

@@ -202,7 +202,7 @@ func (r *Registry) Execute(ctx context.Context, params ExecuteParams) (*ExecuteR
 		return nil, fmt.Errorf("skill %q not found", params.SkillName)
 	}
 
-	rendered := skill.RenderPrompt(params.Args)
+	rendered := skill.RenderPromptWithRuntime(params.Args, strings.TrimSpace(skill.BaseDir), strings.TrimSpace(params.SessionID))
 	if baseDir := strings.TrimSpace(skill.BaseDir); baseDir != "" {
 		rendered = "Skill directory: " + baseDir + "\nResolve relative paths mentioned by this skill from that directory.\n\n" + rendered
 	}

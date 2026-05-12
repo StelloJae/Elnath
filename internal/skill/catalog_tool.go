@@ -67,6 +67,7 @@ type catalogSkillEntry struct {
 	Trigger       string   `json:"trigger,omitempty"`
 	RequiredTools []string `json:"required_tools,omitempty"`
 	Paths         []string `json:"paths,omitempty"`
+	ArgumentNames []string `json:"arguments,omitempty"`
 	Model         string   `json:"model,omitempty"`
 	Effort        string   `json:"effort,omitempty"`
 	BaseDir       string   `json:"base_dir,omitempty"`
@@ -201,6 +202,7 @@ func skillCatalogEntry(sk *Skill, includePrompt bool) catalogSkillEntry {
 		Trigger:       sk.Trigger,
 		RequiredTools: append([]string(nil), sk.RequiredTools...),
 		Paths:         append([]string(nil), sk.Paths...),
+		ArgumentNames: append([]string(nil), sk.ArgumentNames...),
 		Model:         sk.Model,
 		Effort:        sk.Effort,
 		BaseDir:       sk.BaseDir,

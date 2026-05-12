@@ -18,6 +18,7 @@ func TestCatalogToolListsSkillsWithoutPromptsByDefault(t *testing.T) {
 		Trigger:       "/review-pr",
 		RequiredTools: []string{"read_file", "grep"},
 		Paths:         []string{"internal/**/*.go"},
+		ArgumentNames: []string{"pr_number"},
 		Model:         "gpt-5.5",
 		Effort:        "high",
 		BaseDir:       "/tmp/elnath-skills/review-pr",
@@ -46,6 +47,7 @@ func TestCatalogToolListsSkillsWithoutPromptsByDefault(t *testing.T) {
 			Trigger       string   `json:"trigger"`
 			RequiredTools []string `json:"required_tools"`
 			Paths         []string `json:"paths"`
+			ArgumentNames []string `json:"arguments"`
 			Model         string   `json:"model"`
 			Effort        string   `json:"effort"`
 			BaseDir       string   `json:"base_dir"`
@@ -71,6 +73,9 @@ func TestCatalogToolListsSkillsWithoutPromptsByDefault(t *testing.T) {
 	}
 	if got.BaseDir != "/tmp/elnath-skills/review-pr" {
 		t.Fatalf("base_dir = %q, want skill base dir", got.BaseDir)
+	}
+	if len(got.ArgumentNames) != 1 || got.ArgumentNames[0] != "pr_number" {
+		t.Fatalf("arguments = %v, want [pr_number]", got.ArgumentNames)
 	}
 	if got.TrustLevel != "local_compatible" || got.External {
 		t.Fatalf("trust metadata = level %q external %v, want local_compatible false", got.TrustLevel, got.External)
@@ -118,7 +123,7 @@ func TestCatalogToolMarksPluginCacheSkillsAsExternal(t *testing.T) {
 
 func TestCatalogToolShowsSkillPromptOnlyWhenRequested(t *testing.T) {
 	reg := NewRegistry()
-	reg.Add(&Skill{Name: "audit", Prompt: "Detailed audit prompt", Status: "active"})
+	reg.Add(&Skill{Name: "audit", ArgumentNames: []string{"target"}, Prompt: "Detailed audit prompt", Status: "active"})
 
 	tool := NewCatalogTool(reg)
 	res, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"show","skill":"audit","include_prompt":true}`))
@@ -132,8 +137,9 @@ func TestCatalogToolShowsSkillPromptOnlyWhenRequested(t *testing.T) {
 	var out struct {
 		Action string `json:"action"`
 		Skill  struct {
-			Name   string `json:"name"`
-			Prompt string `json:"prompt"`
+			Name          string   `json:"name"`
+			ArgumentNames []string `json:"arguments"`
+			Prompt        string   `json:"prompt"`
 		} `json:"skill"`
 	}
 	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
@@ -141,6 +147,9 @@ func TestCatalogToolShowsSkillPromptOnlyWhenRequested(t *testing.T) {
 	}
 	if out.Action != "show" || out.Skill.Name != "audit" || out.Skill.Prompt != "Detailed audit prompt" {
 		t.Fatalf("output = %+v, want audit prompt only when requested", out)
+	}
+	if len(out.Skill.ArgumentNames) != 1 || out.Skill.ArgumentNames[0] != "target" {
+		t.Fatalf("arguments = %v, want [target]", out.Skill.ArgumentNames)
 	}
 }
 
