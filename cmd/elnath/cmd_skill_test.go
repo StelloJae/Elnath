@@ -93,6 +93,19 @@ func TestCmdSkillList(t *testing.T) {
 			"status":      "draft",
 		},
 	})
+	writeSkillPage(t, wikiDir, &wiki.Page{
+		Path:    "skills/background-review.md",
+		Title:   "Background Review",
+		Type:    wiki.PageTypeAnalysis,
+		Tags:    []string{"skill"},
+		Content: "Run background review.",
+		Extra: map[string]any{
+			"name":           "background-review",
+			"description":    "Background review helper",
+			"status":         "active",
+			"user_invocable": false,
+		},
+	})
 
 	stdout, _ := captureOutput(t, func() {
 		if err := cmdSkill(context.Background(), []string{"list"}); err != nil {
@@ -104,6 +117,9 @@ func TestCmdSkillList(t *testing.T) {
 	}
 	if strings.Contains(stdout, "deploy-check") {
 		t.Fatalf("stdout = %q, should hide draft skills by default", stdout)
+	}
+	if !strings.Contains(stdout, "background-review") || !strings.Contains(stdout, "hidden") {
+		t.Fatalf("stdout = %q, want hidden marker for non-user-invocable skill", stdout)
 	}
 
 	stdout, _ = captureOutput(t, func() {
@@ -135,6 +151,19 @@ func TestCmdSkillListJSON(t *testing.T) {
 			"source":         "user",
 		},
 	})
+	writeSkillPage(t, wikiDir, &wiki.Page{
+		Path:    "skills/background-review.md",
+		Title:   "Background Review",
+		Type:    wiki.PageTypeAnalysis,
+		Tags:    []string{"skill"},
+		Content: "Run background review.",
+		Extra: map[string]any{
+			"name":           "background-review",
+			"description":    "Background review helper",
+			"status":         "active",
+			"user_invocable": false,
+		},
+	})
 
 	stdout, _ := captureOutput(t, func() {
 		if err := cmdSkill(context.Background(), []string{"list", "--json"}); err != nil {
@@ -151,23 +180,58 @@ func TestCmdSkillListJSON(t *testing.T) {
 			Source        string   `json:"source"`
 			TrustLevel    string   `json:"trust_level"`
 			External      bool     `json:"external"`
+			UserInvocable bool     `json:"user_invocable"`
 		} `json:"skills"`
 	}
 	if err := json.Unmarshal([]byte(stdout), &out); err != nil {
 		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout)
 	}
-	if len(out.Skills) != 1 {
-		t.Fatalf("skills = %+v, want one skill", out.Skills)
+	if len(out.Skills) != 2 {
+		t.Fatalf("skills = %+v, want two skills", out.Skills)
 	}
-	got := out.Skills[0]
-	if got.Name != "pr-review" || got.Trigger != "/pr-review <number>" || got.Source != "user" {
-		t.Fatalf("skill = %+v, want pr-review metadata", got)
+	seen := map[string]struct {
+		Trigger       string
+		Source        string
+		TrustLevel    string
+		External      bool
+		RequiredTools []string
+		UserInvocable bool
+	}{}
+	for _, got := range out.Skills {
+		seen[got.Name] = struct {
+			Trigger       string
+			Source        string
+			TrustLevel    string
+			External      bool
+			RequiredTools []string
+			UserInvocable bool
+		}{
+			Trigger:       got.Trigger,
+			Source:        got.Source,
+			TrustLevel:    got.TrustLevel,
+			External:      got.External,
+			RequiredTools: append([]string(nil), got.RequiredTools...),
+			UserInvocable: got.UserInvocable,
+		}
+	}
+	got := seen["pr-review"]
+	if _, ok := seen["pr-review"]; !ok {
+		t.Fatalf("skills = %+v, want pr-review", out.Skills)
+	}
+	if got.Trigger != "/pr-review <number>" || got.Source != "user" {
+		t.Fatalf("skill = %+v, want pr-review metadata", seen["pr-review"])
 	}
 	if got.TrustLevel != "declared" || got.External {
 		t.Fatalf("trust metadata = level %q external %v, want declared false", got.TrustLevel, got.External)
 	}
 	if len(got.RequiredTools) != 2 || got.RequiredTools[0] != "bash" || got.RequiredTools[1] != "read_file" {
 		t.Fatalf("required_tools = %v, want [bash read_file]", got.RequiredTools)
+	}
+	if !seen["pr-review"].UserInvocable {
+		t.Fatalf("pr-review user_invocable = false, want true")
+	}
+	if seen["background-review"].UserInvocable {
+		t.Fatalf("background-review user_invocable = true, want false")
 	}
 }
 

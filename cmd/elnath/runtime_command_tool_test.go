@@ -126,6 +126,67 @@ func TestCommandCatalogToolListsSkillBackedSlashCommands(t *testing.T) {
 	}
 }
 
+func TestCommandCatalogToolHidesNonUserInvocableSkillBackedCommandsByDefault(t *testing.T) {
+	reg := skill.NewRegistry()
+	reg.Add(&skill.Skill{
+		Name:        "visible-review",
+		Description: "Visible review",
+		Trigger:     "/visible-review",
+		Prompt:      "Review.",
+	})
+	reg.Add(&skill.Skill{
+		Name:        "background-review",
+		Description: "Background review",
+		Trigger:     "/background-review <target>",
+		Prompt:      "Review in background.",
+		Hidden:      true,
+	})
+	tool := newCommandCatalogTool(reg)
+
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"list"}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("Execute returned error result: %s", res.Output)
+	}
+	var out struct {
+		Commands []commandCatalogEntry `json:"commands"`
+	}
+	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, res.Output)
+	}
+	seen := map[string]commandCatalogEntry{}
+	for _, entry := range out.Commands {
+		seen[entry.Name] = entry
+	}
+	if _, ok := seen["/visible-review"]; !ok {
+		t.Fatalf("commands = %+v, want visible skill command", out.Commands)
+	}
+	if _, ok := seen["/background-review"]; ok {
+		t.Fatalf("commands = %+v, hidden skill command should be omitted by default", out.Commands)
+	}
+
+	res, err = tool.Execute(context.Background(), json.RawMessage(`{"action":"list","include_hidden":true}`))
+	if err != nil {
+		t.Fatalf("Execute include hidden error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("Execute include hidden returned error result: %s", res.Output)
+	}
+	out.Commands = nil
+	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
+		t.Fatalf("include hidden output is not JSON: %v\n%s", err, res.Output)
+	}
+	seen = map[string]commandCatalogEntry{}
+	for _, entry := range out.Commands {
+		seen[entry.Name] = entry
+	}
+	if entry, ok := seen["/background-review"]; !ok || !entry.Hidden || entry.ArgumentHint != "<target>" {
+		t.Fatalf("commands = %+v, want hidden background-review with argument hint", out.Commands)
+	}
+}
+
 func TestCommandCatalogToolUsesSkillNameWhenTriggerIsNotSlashCommand(t *testing.T) {
 	reg := skill.NewRegistry()
 	reg.Add(&skill.Skill{
