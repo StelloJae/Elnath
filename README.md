@@ -114,6 +114,7 @@ Recent hardening also closed two structural follow-ups behind this operator flow
 | `chaos list` | List fault-injection scenarios | `elnath chaos list` |
 | `chaos run` | Execute a fault-injection scenario | `elnath chaos run tool-bash-transient-fail` |
 | `chaos report` | Render a chaos run as Markdown | `elnath chaos report latest` |
+| `doctor` | Run read-only local readiness diagnostics | `elnath doctor --json` |
 | `errors` | Look up an ELN-XXX error code | `elnath errors ELN-001` or `elnath errors list` |
 | `provider status` | Inspect configured provider and effort support | `elnath provider status --json` |
 | `provider candidates` | List configured provider candidates | `elnath provider candidates --json` |

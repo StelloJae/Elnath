@@ -89,6 +89,9 @@ func summarizeCompletionContract(routeCtx *orchestrator.RoutingContext, cfg orch
 	if summary.CompletionWarning == "" && verificationFailed {
 		summary.CompletionWarning = "verification_command_failed"
 	}
+	if summary.CompletionWarning == "" && verificationCommand == "" && finalAssistantClaimsVerificationSuccess(result.Messages) {
+		summary.CompletionWarning = "unsupported_verification_success_claim"
+	}
 	if summary.CompletionWarning == "" && editIntent && !editObserved {
 		summary.CompletionWarning = "edit_intent_without_mutation"
 	}
@@ -169,6 +172,9 @@ func completionRetryPlan(summary completionContractSummary) (string, string) {
 		return completionRetryDecisionRetrySmallerScope, summary.CompletionWarning
 	}
 	if summary.CompletionWarning == "verification_command_failed" {
+		return completionRetryDecisionRetrySmallerScope, summary.CompletionWarning
+	}
+	if summary.CompletionWarning == "unsupported_verification_success_claim" {
 		return completionRetryDecisionRetrySmallerScope, summary.CompletionWarning
 	}
 	if summary.VerificationObserved != nil && !*summary.VerificationObserved {
@@ -353,6 +359,36 @@ func finalAssistantReportsIncomplete(messages []llm.Message) bool {
 			"완료하지 못",
 			"아직 완료",
 			"아직 남",
+		} {
+			if strings.Contains(text, marker) {
+				return true
+			}
+		}
+		return false
+	}
+	return false
+}
+
+func finalAssistantClaimsVerificationSuccess(messages []llm.Message) bool {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role != llm.RoleAssistant {
+			continue
+		}
+		text := strings.ToLower(strings.TrimSpace(messages[i].Text()))
+		if text == "" {
+			return false
+		}
+		for _, marker := range []string{
+			"all tests pass",
+			"all tests passed",
+			"tests pass",
+			"tests passed",
+			"test suite passes",
+			"test suite passed",
+			"verification passed",
+			"verified successfully",
+			"검증 통과",
+			"테스트 통과",
 		} {
 			if strings.Contains(text, marker) {
 				return true

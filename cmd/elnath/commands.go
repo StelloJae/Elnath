@@ -56,6 +56,7 @@ func commandSpecs() []commandSpec {
 		{Name: "help", Runner: cmdHelp, Description: "Show the top-level Elnath help.", Category: "core"},
 		{Name: "commands", Runner: cmdCommands, Description: "List the structured Elnath command catalog.", Category: "core", ArgumentHint: "[--json] [--all]"},
 		{Name: "chaos", Runner: cmdChaos, Description: "Run chaos and resilience probes.", Category: "verification"},
+		{Name: "doctor", Runner: cmdDoctor, Description: "Run read-only local readiness diagnostics.", Category: "verification", ArgumentHint: "[--json]"},
 		{Name: "run", Runner: cmdRun, Description: "Start an interactive or non-interactive agent session.", Category: "runtime", ArgumentHint: "[prompt]"},
 		{Name: "setup", Runner: cmdSetup, Description: "Create or update local Elnath configuration.", Category: "configuration"},
 		{Name: "sandbox", Runner: cmdSandbox, Description: "Inspect or exercise sandbox execution support.", Category: "runtime"},

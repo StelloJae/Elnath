@@ -103,6 +103,7 @@ Commands:
   run       Interactive chat mode
   setup     Re-run the setup wizard
   sandbox   Sandbox configuration helpers
+  doctor    Read-only local readiness diagnostics
   errors    Error catalog lookup
   daemon    Background daemon mode
   portability Export/import encrypted portability bundles
@@ -158,6 +159,19 @@ EXAMPLES
 
 SEE ALSO
   elnath setup, elnath daemon, elnath wiki`,
+		"cmd.doctor.help": `USAGE
+  elnath doctor [--json]
+
+DESCRIPTION
+  Run read-only local readiness diagnostics for config, provider selection,
+  local data/wiki paths, daemon socket presence, database file initialization,
+  and configured timeout policy.
+
+  This command does not call the LLM, start the daemon, create database files,
+  rebuild wiki indexes, or auto-fix issues.
+
+FLAGS
+  --json    Print the diagnostic report as JSON`,
 		"cmd.sandbox.help": `USAGE
   elnath sandbox print-starter-allowlist [--list-groups]
   elnath sandbox print-starter-allowlist --mode <seatbelt|bwrap> --group <groups>
@@ -432,6 +446,7 @@ SEE ALSO
   run       대화형 채팅 모드
   setup     설정 마법사 다시 실행
   sandbox   샌드박스 설정 도우미
+  doctor    읽기 전용 로컬 준비 상태 진단
   daemon    백그라운드 데몬 모드
   research  리서치 작업 유틸리티
   agentic   에이전틱 상태/라인리지 읽기 전용 조회
@@ -455,6 +470,18 @@ SEE ALSO
 		"cli.write_config_error": "설정 쓰기: %s",
 		"cli.no_provider":        "LLM 프로바이더가 설정되지 않았습니다. ELNATH_ANTHROPIC_API_KEY를 설정하거나 config.yaml에 anthropic.api_key를 추가하세요",
 		"cmd.run.help":           "",
+		"cmd.doctor.help": `사용법
+  elnath doctor [--json]
+
+설명
+  config, provider 선택, 로컬 data/wiki 경로, daemon socket 존재 여부,
+  database file 초기화 여부, timeout policy를 읽기 전용으로 진단합니다.
+
+  이 명령은 LLM을 호출하거나, daemon을 시작하거나, database file을 만들거나,
+  wiki index를 rebuild하거나, 문제를 자동 수정하지 않습니다.
+
+플래그
+  --json    진단 보고서를 JSON으로 출력`,
 		"cmd.sandbox.help": `사용법
   elnath sandbox print-starter-allowlist [--list-groups]
   elnath sandbox print-starter-allowlist --mode <seatbelt|bwrap> --group <groups>

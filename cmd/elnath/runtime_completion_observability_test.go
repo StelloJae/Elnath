@@ -96,6 +96,31 @@ func TestCompletionContractSummaryDetectsFailedBashVerification(t *testing.T) {
 	}
 }
 
+func TestCompletionContractSummaryWarnsOnUnsupportedVerificationSuccessClaim(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("fix the bug in the daemon"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "edit-1", Name: "edit_file", Input: json.RawMessage(`{"file_path":"internal/daemon/daemon.go","old_string":"old","new_string":"new"}`)},
+			}},
+			llm.NewToolResultMessage("edit-1", "ok", false),
+			llm.NewAssistantMessage("Done. All tests pass."),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(nil, orchestrator.WorkflowConfig{}, result)
+
+	if summary.VerificationCommand != "" {
+		t.Fatalf("VerificationCommand = %q, want empty", summary.VerificationCommand)
+	}
+	if summary.CompletionWarning != "unsupported_verification_success_claim" {
+		t.Fatalf("CompletionWarning = %q, want unsupported_verification_success_claim", summary.CompletionWarning)
+	}
+	if summary.RetryDecision != completionRetryDecisionRetrySmallerScope || summary.RetryReason != "unsupported_verification_success_claim" {
+		t.Fatalf("retry plan = %q/%q, want retry_smaller_scope/unsupported_verification_success_claim", summary.RetryDecision, summary.RetryReason)
+	}
+}
+
 func TestCompletionContractSummaryUsesLatestBashVerificationResult(t *testing.T) {
 	result := &orchestrator.WorkflowResult{
 		Messages: []llm.Message{

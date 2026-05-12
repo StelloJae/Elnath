@@ -216,3 +216,17 @@ func TestPrintCommandHelp_AgenticMatchesDispatcher(t *testing.T) {
 		}
 	}
 }
+
+func TestPrintCommandHelp_DoctorMatchesDispatcher(t *testing.T) {
+	stdout, stderr := captureOutput(t, func() {
+		if err := printCommandHelp("doctor"); err != nil {
+			t.Fatalf("printCommandHelp(doctor) error = %v", err)
+		}
+	})
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+	if !strings.Contains(stdout, "elnath doctor [--json]") {
+		t.Fatalf("stdout = %q, want doctor usage", stdout)
+	}
+}
