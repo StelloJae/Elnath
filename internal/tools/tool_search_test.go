@@ -16,6 +16,7 @@ type testToolSearchOutput struct {
 		Description           string `json:"description"`
 		SchemaPreview         string `json:"schema_preview"`
 		Deferred              bool   `json:"deferred"`
+		DeferReason           string `json:"defer_reason,omitempty"`
 		ConcurrencySafe       bool   `json:"concurrency_safe"`
 		Reversible            bool   `json:"reversible"`
 		CancelSiblingsOnError bool   `json:"cancel_siblings_on_error"`
@@ -28,6 +29,7 @@ type toolSearchMetadataTool struct {
 	safe        bool
 	reversible  bool
 	cancel      bool
+	deferSchema bool
 }
 
 func (t *toolSearchMetadataTool) Name() string        { return t.name }
@@ -39,6 +41,7 @@ func (t *toolSearchMetadataTool) IsConcurrencySafe(json.RawMessage) bool { retur
 func (t *toolSearchMetadataTool) Reversible() bool                       { return t.reversible }
 func (t *toolSearchMetadataTool) Scope(json.RawMessage) ToolScope        { return ConservativeScope() }
 func (t *toolSearchMetadataTool) ShouldCancelSiblingsOnError() bool      { return t.cancel }
+func (t *toolSearchMetadataTool) DeferInitialToolSchema() bool           { return t.deferSchema }
 func (t *toolSearchMetadataTool) Execute(context.Context, json.RawMessage) (*Result, error) {
 	return SuccessResult("ok"), nil
 }
@@ -153,8 +156,35 @@ func TestToolSearchReportsStableMetadata(t *testing.T) {
 	if !match.Deferred {
 		t.Fatalf("Deferred = false, want true for mcp_* tool")
 	}
+	if match.DeferReason != "mcp_prefix" {
+		t.Fatalf("DeferReason = %q, want mcp_prefix", match.DeferReason)
+	}
 	if !match.ConcurrencySafe || !match.Reversible || !match.CancelSiblingsOnError {
 		t.Fatalf("metadata = %+v, want safe/reversible/cancel true", match)
+	}
+}
+
+func TestToolSearchReportsDeclaredDeferReason(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(&toolSearchMetadataTool{
+		name:        "task_create",
+		description: "Create daemon task",
+		deferSchema: true,
+	})
+	search := NewToolSearchTool(reg)
+	reg.Register(search)
+
+	out := executeToolSearch(t, search, `{"query":"task","max_results":5}`)
+
+	if len(out.Matches) != 1 {
+		t.Fatalf("matches len = %d, want 1", len(out.Matches))
+	}
+	match := out.Matches[0]
+	if !match.Deferred {
+		t.Fatalf("Deferred = false, want true for declared deferred tool")
+	}
+	if match.DeferReason != "tool_declared_deferred" {
+		t.Fatalf("DeferReason = %q, want tool_declared_deferred", match.DeferReason)
 	}
 }
 

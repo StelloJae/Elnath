@@ -63,6 +63,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Tools.ExposureMode != ToolExposureModeStandard {
 		t.Errorf("expected Tools.ExposureMode default %q, got %q", ToolExposureModeStandard, cfg.Tools.ExposureMode)
 	}
+	if cfg.SelfHealing.CompletionRetryMax != 1 {
+		t.Errorf("expected SelfHealing.CompletionRetryMax default %d, got %d", 1, cfg.SelfHealing.CompletionRetryMax)
+	}
 }
 
 func TestDefaultConfig_SandboxConfigIsDirectZeroValue(t *testing.T) {
@@ -715,6 +718,16 @@ func TestValidate(t *testing.T) {
 			name:    "unsupported tools exposure mode",
 			mutate:  func(c *Config) { c.Tools.ExposureMode = "all_at_once" },
 			wantErr: "tools.exposure_mode",
+		},
+		{
+			name:    "negative self healing completion retry max",
+			mutate:  func(c *Config) { c.SelfHealing.CompletionRetryMax = -1 },
+			wantErr: "self_healing.completion_retry_max",
+		},
+		{
+			name:    "unsupported self healing completion retry max above current executor limit",
+			mutate:  func(c *Config) { c.SelfHealing.CompletionRetryMax = 2 },
+			wantErr: "self_healing.completion_retry_max",
 		},
 		{
 			name: "openai responses base url requires api key",

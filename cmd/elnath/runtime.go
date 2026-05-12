@@ -586,7 +586,13 @@ func buildExecutionRuntime(
 	}
 	completionRetryMax := 0
 	if cfg.SelfHealing.Enabled && !cfg.SelfHealing.ObserveOnly {
-		completionRetryMax = 1
+		completionRetryMax = cfg.SelfHealing.CompletionRetryMax
+		if completionRetryMax < 0 {
+			completionRetryMax = 0
+		}
+		if completionRetryMax > 1 {
+			completionRetryMax = 1
+		}
 	}
 	hooks.Add(secret.NewSecretScanHook(secret.NewDetector(), auditTrail))
 	wrappedCtxWindow := newCompressionHookContextWindow(

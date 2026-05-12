@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,6 +15,22 @@ import (
 	"github.com/stello/elnath/internal/skill"
 	"github.com/stello/elnath/internal/wiki"
 )
+
+type skillListOutput struct {
+	Skills []skillListEntry `json:"skills"`
+}
+
+type skillListEntry struct {
+	Name          string   `json:"name"`
+	Description   string   `json:"description,omitempty"`
+	Trigger       string   `json:"trigger,omitempty"`
+	RequiredTools []string `json:"required_tools,omitempty"`
+	Paths         []string `json:"paths,omitempty"`
+	Model         string   `json:"model,omitempty"`
+	Effort        string   `json:"effort,omitempty"`
+	Status        string   `json:"status,omitempty"`
+	Source        string   `json:"source,omitempty"`
+}
 
 func cmdSkill(ctx context.Context, args []string) error {
 	if len(args) == 0 {
@@ -39,44 +56,115 @@ func cmdSkill(ctx context.Context, args []string) error {
 }
 
 func cmdSkillList(_ context.Context, args []string) error {
-	cfg, err := loadSkillConfig()
-	if err != nil {
-		return err
-	}
-	store, err := wiki.NewStore(cfg.WikiDir)
-	if err != nil {
-		return err
-	}
 	showAll := hasFlag(args, "--all")
-	pages, err := store.List()
+	includeCompatible := hasFlag(args, "--compatible")
+	asJSON := hasFlag(args, "--json")
+	skills, err := loadSkillList(showAll, includeCompatible)
 	if err != nil {
 		return err
 	}
 
-	var skills []*skill.Skill
-	for _, page := range pages {
-		sk := skill.FromPage(page)
+	if asJSON {
+		raw, err := json.MarshalIndent(skillListOutput{Skills: skillListEntries(skills)}, "", "  ")
+		if err != nil {
+			return fmt.Errorf("skill list: marshal JSON: %w", err)
+		}
+		fmt.Println(string(raw))
+		return nil
+	}
+	if len(skills) == 0 {
+		fmt.Println("No skills found.")
+		return nil
+	}
+	for _, sk := range skills {
+		var markers []string
+		if sk.Status == "draft" {
+			markers = append(markers, "draft")
+		}
+		if includeCompatible && sk.Source != "" {
+			markers = append(markers, sk.Source)
+		}
+		suffix := ""
+		if len(markers) > 0 {
+			suffix = " [" + strings.Join(markers, ", ") + "]"
+		}
+		fmt.Printf("  /%s — %s%s\n", sk.Name, sk.Description, suffix)
+	}
+	return nil
+}
+
+func loadSkillList(showAll, includeCompatible bool) ([]*skill.Skill, error) {
+	cfg, err := loadSkillConfig()
+	if err != nil {
+		return nil, err
+	}
+	store, err := wiki.NewStore(cfg.WikiDir)
+	if err != nil {
+		return nil, err
+	}
+	wikiSkills, err := skill.ListAllFromStore(store)
+	if err != nil {
+		return nil, err
+	}
+
+	byName := make(map[string]*skill.Skill)
+	for _, sk := range wikiSkills {
 		if sk == nil {
 			continue
 		}
 		if !showAll && sk.Status == "draft" {
 			continue
 		}
+		byName[sk.Name] = sk
+	}
+
+	if includeCompatible {
+		projectRoot, _ := os.Getwd()
+		homeDir, _ := os.UserHomeDir()
+		for _, root := range skill.DefaultCompatibleSkillRoots(projectRoot, homeDir) {
+			compatibleSkills, err := skill.LoadCompatibleSkillRoot(root)
+			if err != nil {
+				return nil, err
+			}
+			for _, sk := range compatibleSkills {
+				if sk == nil {
+					continue
+				}
+				if !showAll && sk.Status == "draft" {
+					continue
+				}
+				byName[sk.Name] = sk
+			}
+		}
+	}
+
+	skills := make([]*skill.Skill, 0, len(byName))
+	for _, sk := range byName {
 		skills = append(skills, sk)
 	}
-	if len(skills) == 0 {
-		fmt.Println("No skills found.")
-		return nil
-	}
 	sort.Slice(skills, func(i, j int) bool { return skills[i].Name < skills[j].Name })
+	return skills, nil
+}
+
+func skillListEntries(skills []*skill.Skill) []skillListEntry {
+	out := make([]skillListEntry, 0, len(skills))
 	for _, sk := range skills {
-		suffix := ""
-		if sk.Status == "draft" {
-			suffix = " [draft]"
+		if sk == nil {
+			continue
 		}
-		fmt.Printf("  /%s — %s%s\n", sk.Name, sk.Description, suffix)
+		out = append(out, skillListEntry{
+			Name:          sk.Name,
+			Description:   sk.Description,
+			Trigger:       sk.Trigger,
+			RequiredTools: append([]string(nil), sk.RequiredTools...),
+			Paths:         append([]string(nil), sk.Paths...),
+			Model:         sk.Model,
+			Effort:        sk.Effort,
+			Status:        sk.Status,
+			Source:        sk.Source,
+		})
 	}
-	return nil
+	return out
 }
 
 func cmdSkillShow(_ context.Context, args []string) error {

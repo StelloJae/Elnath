@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -112,6 +113,116 @@ func TestCmdSkillList(t *testing.T) {
 	})
 	if !strings.Contains(stdout, "deploy-check") || !strings.Contains(stdout, "[draft]") {
 		t.Fatalf("stdout = %q, want draft skill with marker", stdout)
+	}
+}
+
+func TestCmdSkillListJSON(t *testing.T) {
+	cfgPath, _, wikiDir := writeSkillTestConfig(t)
+	withArgs(t, []string{"elnath", "--config", cfgPath})
+
+	writeSkillPage(t, wikiDir, &wiki.Page{
+		Path:    "skills/pr-review.md",
+		Title:   "PR Review",
+		Type:    wiki.PageTypeAnalysis,
+		Tags:    []string{"skill"},
+		Content: "Review PR {pr_number}",
+		Extra: map[string]any{
+			"name":           "pr-review",
+			"description":    "Review PRs",
+			"trigger":        "/pr-review <number>",
+			"required_tools": []string{"bash", "read_file"},
+			"status":         "active",
+			"source":         "user",
+		},
+	})
+
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdSkill(context.Background(), []string{"list", "--json"}); err != nil {
+			t.Fatalf("cmdSkill(list --json) error = %v", err)
+		}
+	})
+	var out struct {
+		Skills []struct {
+			Name          string   `json:"name"`
+			Description   string   `json:"description"`
+			Trigger       string   `json:"trigger"`
+			RequiredTools []string `json:"required_tools"`
+			Status        string   `json:"status"`
+			Source        string   `json:"source"`
+		} `json:"skills"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &out); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout)
+	}
+	if len(out.Skills) != 1 {
+		t.Fatalf("skills = %+v, want one skill", out.Skills)
+	}
+	got := out.Skills[0]
+	if got.Name != "pr-review" || got.Trigger != "/pr-review <number>" || got.Source != "user" {
+		t.Fatalf("skill = %+v, want pr-review metadata", got)
+	}
+	if len(got.RequiredTools) != 2 || got.RequiredTools[0] != "bash" || got.RequiredTools[1] != "read_file" {
+		t.Fatalf("required_tools = %v, want [bash read_file]", got.RequiredTools)
+	}
+}
+
+func TestCmdSkillListCompatibleIncludesSkillRoots(t *testing.T) {
+	cfgPath, _, wikiDir := writeSkillTestConfig(t)
+	withArgs(t, []string{"elnath", "--config", cfgPath})
+
+	root := t.TempDir()
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(oldWD); err != nil {
+			t.Fatalf("restore Chdir: %v", err)
+		}
+	})
+
+	writeSkillPage(t, wikiDir, &wiki.Page{
+		Path:    "skills/wiki-skill.md",
+		Title:   "Wiki Skill",
+		Type:    wiki.PageTypeAnalysis,
+		Tags:    []string{"skill"},
+		Content: "Use wiki context.",
+		Extra: map[string]any{
+			"name":        "wiki-skill",
+			"description": "Wiki skill",
+			"status":      "active",
+		},
+	})
+	writeRuntimeCompatSkill(t, filepath.Join(root, ".codex", "skills", "project-codex"), "Project Codex")
+
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdSkill(context.Background(), []string{"list", "--compatible", "--json"}); err != nil {
+			t.Fatalf("cmdSkill(list --compatible --json) error = %v", err)
+		}
+	})
+	var out struct {
+		Skills []struct {
+			Name   string `json:"name"`
+			Source string `json:"source"`
+		} `json:"skills"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &out); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout)
+	}
+	seen := map[string]string{}
+	for _, sk := range out.Skills {
+		seen[sk.Name] = sk.Source
+	}
+	if _, ok := seen["wiki-skill"]; !ok {
+		t.Fatalf("skills = %+v, want wiki skill included", out.Skills)
+	}
+	if seen["project-codex"] != "codex-skill" {
+		t.Fatalf("project-codex source = %q, want codex-skill; skills=%+v", seen["project-codex"], out.Skills)
 	}
 }
 
