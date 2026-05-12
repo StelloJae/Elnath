@@ -334,7 +334,7 @@ func isReadOnlyTool(name string) bool {
 	case "read_file", "glob", "grep", "web_fetch", "web_search",
 		"wiki_search", "wiki_read",
 		"conversation_search", "cross_project_search", "cross_project_conversation_search",
-		ActorGraphToolName, TaskEvidenceToolName:
+		ActorGraphToolName, TaskEvidenceToolName, DelegateListToolName:
 		return true
 	}
 	return false

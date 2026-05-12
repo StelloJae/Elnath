@@ -712,6 +712,40 @@ func (s *Store) GetTaskEdge(ctx context.Context, parentID, childID int64, edgeTy
 	return &edge, nil
 }
 
+func (s *Store) ListTaskEdgesByParent(ctx context.Context, parentID int64, edgeType string) ([]TaskEdge, error) {
+	query := `
+		SELECT parent_id, child_id, edge_type, created_at
+		FROM task_edges
+		WHERE parent_id = ?
+	`
+	args := []any{parentID}
+	if strings.TrimSpace(edgeType) != "" {
+		query += ` AND edge_type = ?`
+		args = append(args, edgeType)
+	}
+	query += ` ORDER BY created_at, child_id`
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var edges []TaskEdge
+	for rows.Next() {
+		var edge TaskEdge
+		var createdAt int64
+		if err := rows.Scan(&edge.ParentID, &edge.ChildID, &edge.EdgeType, &createdAt); err != nil {
+			return nil, err
+		}
+		edge.CreatedAt = millisTime(createdAt)
+		edges = append(edges, edge)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return edges, nil
+}
+
 func (s *Store) CreateAgentActor(ctx context.Context, actor AgentActor) (*AgentActor, error) {
 	now := nowTime()
 	if actor.CreatedAt.IsZero() {

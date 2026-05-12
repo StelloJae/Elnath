@@ -2993,6 +2993,36 @@ func TestExecutionRuntimeRegistersAgenticTaskEvidenceTool(t *testing.T) {
 	}
 }
 
+func TestExecutionRuntimeRegistersAgenticDelegateCreateTool(t *testing.T) {
+	rt := newTestExecutionRuntime(t, &countingProvider{streamText: "unused"})
+
+	tool, ok := rt.reg.Get("agentic_delegate_create")
+	if !ok {
+		t.Fatal("runtime registry missing agentic_delegate_create tool")
+	}
+	if tool.IsConcurrencySafe(nil) || tool.Reversible() {
+		t.Fatalf("agentic_delegate_create metadata = concurrency:%t reversible:%t, want mutating metadata", tool.IsConcurrencySafe(nil), tool.Reversible())
+	}
+	if !tools.ShouldDeferToolSchema(tool) {
+		t.Fatal("agentic_delegate_create should defer initial schema")
+	}
+}
+
+func TestExecutionRuntimeRegistersAgenticDelegateListTool(t *testing.T) {
+	rt := newTestExecutionRuntime(t, &countingProvider{streamText: "unused"})
+
+	tool, ok := rt.reg.Get("agentic_delegate_list")
+	if !ok {
+		t.Fatal("runtime registry missing agentic_delegate_list tool")
+	}
+	if !tool.IsConcurrencySafe(nil) || !tool.Reversible() {
+		t.Fatalf("agentic_delegate_list metadata = concurrency:%t reversible:%t, want read-only metadata", tool.IsConcurrencySafe(nil), tool.Reversible())
+	}
+	if !tools.ShouldDeferToolSchema(tool) {
+		t.Fatal("agentic_delegate_list should defer initial schema")
+	}
+}
+
 func TestExecutionRuntimeRegistersDeferredControlSurfaceTools(t *testing.T) {
 	rt := newTestExecutionRuntime(t, &countingProvider{streamText: "unused"})
 
@@ -3000,7 +3030,7 @@ func TestExecutionRuntimeRegistersDeferredControlSurfaceTools(t *testing.T) {
 		"task_create", "task_list", "task_get", "task_stop", "task_output", "task_monitor", "task_update",
 		"schedule_create", "schedule_list", "schedule_delete",
 		"enter_worktree", "worktree_list", "exit_worktree",
-		"agentic_actor_graph", "agentic_task_evidence",
+		"agentic_actor_graph", "agentic_task_evidence", "agentic_delegate_create", "agentic_delegate_list",
 	} {
 		tool, ok := rt.reg.Get(name)
 		if !ok {
