@@ -43,6 +43,9 @@ func TestTaskCreateToolEnqueuesPendingTask(t *testing.T) {
 	if output.SessionID != "sess-123" {
 		t.Fatalf("SessionID = %q, want sess-123", output.SessionID)
 	}
+	if output.Receipt.Tool != TaskCreateToolName || output.Receipt.Action != "create" || output.Receipt.ReadOnly || !output.Receipt.Persistent || !output.Receipt.QueueBacked || output.Receipt.TaskID != output.TaskID {
+		t.Fatalf("receipt = %+v, want task_create queue-backed mutation receipt", output.Receipt)
+	}
 
 	task, err := queue.Get(ctx, output.TaskID)
 	if err != nil {
@@ -120,6 +123,9 @@ func TestTaskListToolListsQueueTasks(t *testing.T) {
 	}
 	if output.TotalReturned != 2 {
 		t.Fatalf("TotalReturned = %d, want 2", output.TotalReturned)
+	}
+	if output.Receipt.Tool != TaskListToolName || output.Receipt.Action != "list" || !output.Receipt.ReadOnly || output.Receipt.Persistent || output.Receipt.TotalReturned != 2 || output.Receipt.Limit != 10 {
+		t.Fatalf("receipt = %+v, want task_list read-only observation receipt", output.Receipt)
 	}
 	if output.Limit != 10 {
 		t.Fatalf("Limit = %d, want 10", output.Limit)
@@ -253,6 +259,9 @@ func TestTaskGetToolReturnsDetails(t *testing.T) {
 	if !output.Found || output.Task == nil {
 		t.Fatalf("output = %+v, want found task", output)
 	}
+	if output.Receipt.Tool != TaskGetToolName || output.Receipt.Action != "get" || !output.Receipt.ReadOnly || output.Receipt.Persistent || output.Receipt.TaskID != id || !output.Receipt.Found {
+		t.Fatalf("receipt = %+v, want task_get read-only receipt", output.Receipt)
+	}
 	if output.Task.ID != id {
 		t.Fatalf("ID = %d, want %d", output.Task.ID, id)
 	}
@@ -353,6 +362,9 @@ func TestTaskStopToolCancelsPendingTask(t *testing.T) {
 	}
 	if output.TaskID != id || !output.Stopped || !output.Accepted || !output.Terminal || output.PreviousStatus != StatusPending || output.Status != StatusFailed {
 		t.Fatalf("output = %+v, want accepted terminal pending->failed stop", output)
+	}
+	if output.Receipt.Tool != TaskStopToolName || output.Receipt.Action != "stop" || output.Receipt.ReadOnly || !output.Receipt.Persistent || output.Receipt.TaskID != id || output.Receipt.PreviousStatus != StatusPending || output.Receipt.Status != StatusFailed {
+		t.Fatalf("receipt = %+v, want task_stop mutation receipt", output.Receipt)
 	}
 
 	task, err := queue.Get(ctx, id)
@@ -475,6 +487,9 @@ func TestTaskOutputToolReturnsBoundedResultTail(t *testing.T) {
 	}
 	if output.Field != "result" || output.Content != "def" || output.TotalChars != 6 || !output.Truncated {
 		t.Fatalf("output = %+v, want result tail def", output)
+	}
+	if output.Receipt.Tool != TaskOutputToolName || output.Receipt.Action != "output" || !output.Receipt.ReadOnly || output.Receipt.TaskID != task.ID || output.Receipt.Field != "result" || output.Receipt.RetrievalStatus != taskOutputRetrievalSuccess {
+		t.Fatalf("receipt = %+v, want task_output observation receipt", output.Receipt)
 	}
 }
 
@@ -656,6 +671,9 @@ func TestTaskMonitorToolReturnsRunningSnapshot(t *testing.T) {
 	}
 	if output.NextPollSeconds != defaultTaskMonitorPollSeconds {
 		t.Fatalf("NextPollSeconds = %d, want %d", output.NextPollSeconds, defaultTaskMonitorPollSeconds)
+	}
+	if output.Receipt.Tool != TaskMonitorToolName || output.Receipt.Action != "monitor" || !output.Receipt.ReadOnly || output.Receipt.TaskID != task.ID || output.Receipt.RetrievalStatus != taskMonitorRetrievalSnapshot {
+		t.Fatalf("receipt = %+v, want task_monitor observation receipt", output.Receipt)
 	}
 }
 
@@ -951,6 +969,9 @@ func TestTaskUpdateToolAnnotatesPendingTask(t *testing.T) {
 	}
 	if output.TaskID != id || output.Status != StatusPending || output.Progress != "queued for review" || output.Summary != "waiting" || !output.Updated {
 		t.Fatalf("output = %+v, want pending annotation", output)
+	}
+	if output.Receipt.Tool != TaskUpdateToolName || output.Receipt.Action != "update" || output.Receipt.ReadOnly || !output.Receipt.Persistent || output.Receipt.TaskID != id || output.Receipt.Status != StatusPending {
+		t.Fatalf("receipt = %+v, want task_update annotation receipt", output.Receipt)
 	}
 
 	task, err := queue.Get(ctx, id)
