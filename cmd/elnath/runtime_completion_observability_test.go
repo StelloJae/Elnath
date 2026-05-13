@@ -338,6 +338,62 @@ func TestCompletionContractSummaryDoesNotCountFailedEditToolAsMutation(t *testin
 	}
 }
 
+func TestCompletionContractSummaryDoesNotCountNoopBashMutationAsMutation(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("fix the bug in the daemon and run tests"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "bash-1", Name: "bash", Input: json.RawMessage(`{"command":"apply_patch <<'PATCH'\n*** Begin Patch\n*** End Patch\nPATCH"}`)},
+			}},
+			llm.NewToolResultMessage("bash-1", "No changes.", false),
+			llm.NewAssistantMessage("Done."),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(&orchestrator.RoutingContext{VerificationHint: true}, orchestrator.WorkflowConfig{}, result)
+
+	if !summary.EditIntent {
+		t.Fatal("EditIntent = false, want true")
+	}
+	if summary.EditObserved == nil {
+		t.Fatal("EditObserved = nil, want explicit false")
+	}
+	if *summary.EditObserved {
+		t.Fatal("EditObserved = true, want no-op bash mutation not counted as mutation")
+	}
+	if summary.CompletionWarning != "edit_intent_without_mutation" {
+		t.Fatalf("CompletionWarning = %q, want edit_intent_without_mutation", summary.CompletionWarning)
+	}
+}
+
+func TestCompletionContractSummaryDoesNotCountNoopWriteFileResultAsMutation(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("update the daemon file and run tests"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "write-1", Name: "write_file", Input: json.RawMessage(`{"file_path":"internal/daemon/daemon.go","content":"same"}`)},
+			}},
+			llm.NewToolResultMessage("write-1", "write_file: content already matches internal/daemon/daemon.go", false),
+			llm.NewAssistantMessage("Done."),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(&orchestrator.RoutingContext{VerificationHint: true}, orchestrator.WorkflowConfig{}, result)
+
+	if !summary.EditIntent {
+		t.Fatal("EditIntent = false, want true")
+	}
+	if summary.EditObserved == nil {
+		t.Fatal("EditObserved = nil, want explicit false")
+	}
+	if *summary.EditObserved {
+		t.Fatal("EditObserved = true, want no-op write_file result not counted as mutation")
+	}
+	if summary.CompletionWarning != "edit_intent_without_mutation" {
+		t.Fatalf("CompletionWarning = %q, want edit_intent_without_mutation", summary.CompletionWarning)
+	}
+}
+
 func TestCompletionContractSummaryRecordsReasoningConfig(t *testing.T) {
 	result := &orchestrator.WorkflowResult{
 		Messages:              []llm.Message{llm.NewAssistantMessage("Done.")},
