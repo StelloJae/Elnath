@@ -186,6 +186,7 @@ func TestAgentReasoningEffortAuto(t *testing.T) {
 		{name: "simple status", message: "quick status summary", want: "low"},
 		{name: "ci status question", message: "PR CI를 지금 로컬에서 하고 있는거야?", want: "low"},
 		{name: "provider status question", message: "provider status", want: "low"},
+		{name: "korean progress percentage report", message: "완성도 보고. 퍼센티지로. 진행도가 너무 느림", want: "low"},
 		{name: "implementation", message: "implement provider policy and run tests", want: "high"},
 		{name: "ci repair remains high", message: "fix CI failure and rerun tests", want: "high"},
 		{name: "benchmark failure question remains high", message: "Why is the benchmark failing?", want: "high"},
@@ -281,6 +282,21 @@ func TestAgentReasoningEffortAutoSkipsKnownIgnoredProvider(t *testing.T) {
 	decision := a.resolveReasoningEffortDecision([]llm.Message{llm.NewUserMessage("implement provider policy and run tests")})
 	if decision.Reason != "provider_effort_ignored" {
 		t.Fatalf("decision reason = %q, want provider_effort_ignored", decision.Reason)
+	}
+}
+
+func TestAgentReasoningEffortAutoEmptyTaskSkipsKnownIgnoredProvider(t *testing.T) {
+	provider := &capabilityMockProvider{reasoningEffort: llm.ReasoningEffortIgnored}
+	a := New(provider, tools.NewRegistry(),
+		WithReasoningEffortMode("auto"),
+	)
+
+	decision := a.resolveReasoningEffortDecision(nil)
+	if decision.Effort != "" {
+		t.Fatalf("Effort = %q, want empty for provider that ignores auto effort", decision.Effort)
+	}
+	if decision.Reason != "provider_effort_ignored" {
+		t.Fatalf("Reason = %q, want provider_effort_ignored", decision.Reason)
 	}
 }
 

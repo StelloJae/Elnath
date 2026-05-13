@@ -14,15 +14,18 @@ import (
 const statusCommandUsage = "Usage: /status [--json]"
 
 type runtimeStatusView struct {
-	Version        string `json:"version"`
-	Provider       string `json:"provider"`
-	Model          string `json:"model"`
-	EffortMode     string `json:"effort_mode"`
-	Effort         string `json:"effort,omitempty"`
-	PermissionMode string `json:"permission_mode"`
-	ToolExposure   string `json:"tool_exposure"`
-	WorkDir        string `json:"work_dir"`
-	DaemonMode     bool   `json:"daemon_mode"`
+	Version              string `json:"version"`
+	Provider             string `json:"provider"`
+	Model                string `json:"model"`
+	EffortMode           string `json:"effort_mode"`
+	Effort               string `json:"effort,omitempty"`
+	ProviderEffort       string `json:"provider_effort"`
+	ProviderEffortNote   string `json:"provider_effort_note,omitempty"`
+	AutoEffortCompatible bool   `json:"auto_effort_compatible"`
+	PermissionMode       string `json:"permission_mode"`
+	ToolExposure         string `json:"tool_exposure"`
+	WorkDir              string `json:"work_dir"`
+	DaemonMode           bool   `json:"daemon_mode"`
 }
 
 func (rt *executionRuntime) tryStatusCommand(
@@ -98,9 +101,16 @@ func (rt *executionRuntime) runtimeStatusView() runtimeStatusView {
 	}
 	if rt.provider != nil {
 		view.Provider = rt.provider.Name()
+		caps := llm.CapabilitiesOf(rt.provider)
+		view.ProviderEffort = caps.ReasoningEffort
+		view.ProviderEffortNote = caps.ReasoningEffortFallback
+		view.AutoEffortCompatible = autoEffortCompatible(caps.ReasoningEffort)
 	}
 	if view.Provider == "" {
 		view.Provider = "unknown"
+	}
+	if view.ProviderEffort == "" {
+		view.ProviderEffort = llm.ReasoningEffortUnknown
 	}
 	if model := strings.TrimSpace(rt.wfCfg.Model); model != "" {
 		view.Model = model

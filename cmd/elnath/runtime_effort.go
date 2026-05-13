@@ -92,7 +92,7 @@ func (rt *executionRuntime) currentEffortMessage() string {
 func autoEffortPolicyMessage() string {
 	return strings.Join([]string{
 		"Auto routing policy:",
-		"- simple/status/summary -> low",
+		"- simple/status/progress/summary -> low",
 		"- implementation/debug/benchmark/CI -> high",
 		"- root-cause/security/architecture/autonomous -> xhigh",
 		"- otherwise -> medium",
