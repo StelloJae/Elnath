@@ -32,6 +32,8 @@ type CompletionContext struct {
 	VerificationHint         bool
 	VerificationObserved     *bool
 	VerificationCommand      string
+	VerificationClass        string
+	VerificationOwnership    string
 	CompletionWarning        string
 	UserInputRequired        bool
 	EditIntent               bool
@@ -407,6 +409,12 @@ func encodeReceiptSummary(summary map[string]int, completionContext CompletionCo
 	}
 	if completionContext.VerificationCommand != "" {
 		payload["verification_command"] = completionContext.VerificationCommand
+	}
+	if completionContext.VerificationClass != "" {
+		payload["verification_class"] = completionContext.VerificationClass
+	}
+	if completionContext.VerificationOwnership != "" {
+		payload["verification_ownership"] = completionContext.VerificationOwnership
 	}
 	if completionContext.CompletionWarning != "" {
 		payload["completion_warning"] = completionContext.CompletionWarning

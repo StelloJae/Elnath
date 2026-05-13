@@ -38,6 +38,8 @@ type OutcomeRecord struct {
 	VerificationHint         bool                       `json:"verification_hint,omitempty"`
 	VerificationObserved     *bool                      `json:"verification_observed,omitempty"`
 	VerificationCommand      string                     `json:"verification_command,omitempty"`
+	VerificationClass        string                     `json:"verification_class,omitempty"`
+	VerificationOwnership    string                     `json:"verification_ownership,omitempty"`
 	CompletionWarning        string                     `json:"completion_warning,omitempty"`
 	UserInputRequired        bool                       `json:"user_input_required,omitempty"`
 	ReasoningEffort          string                     `json:"reasoning_effort,omitempty"`

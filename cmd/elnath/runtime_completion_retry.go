@@ -114,7 +114,13 @@ func (rt *executionRuntime) runSmallerScopeCompletionRetry(
 }
 
 func completionWarningFailsClosed(warning string) bool {
-	return warning == "scope_drift"
+	return completionFailureFamilyFailsClosed(warning)
+}
+
+func completionFailureFamilyFailsClosed(failureFamily string) bool {
+	return failureFamily == "scope_drift" ||
+		failureFamily == completionWarningBroadVerificationFailed ||
+		failureFamily == completionWarningHarnessVerificationFailed
 }
 
 func completionRetryRoutingContext(summary completionContractSummary) *orchestrator.RoutingContext {
@@ -133,6 +139,10 @@ func completionCorrectionFailedSummary(summary completionContractSummary, failur
 	updated.CorrectionReason = summary.RetryReason
 	updated.CorrectionStatus = "failed"
 	updated.CorrectionFailureFamily = failureFamily
+	if completionFailureFamilyFailsClosed(failureFamily) {
+		updated.RetryDecision = ""
+		updated.RetryReason = ""
+	}
 	updated.CorrectionAttemptDetails = appendCompletionCorrectionAttemptDetail(summary, completionCorrectionAttemptReceipt{
 		Attempt:       attempt,
 		Decision:      summary.RetryDecision,
@@ -201,7 +211,7 @@ func (rt *executionRuntime) runVerificationCompletionRetry(
 	if command == "" {
 		return result, completionCorrectionSkippedSummary(summary, "missing_explicit_verification_command", attempt)
 	}
-	summary = completionVerificationObservedSummary(summary, command)
+	summary = completionVerificationObservedSummary(summary, command, input.Config.VerificationPolicy)
 	exec := completionVerificationExecutor(input)
 	if exec == nil {
 		return result, completionCorrectionSkippedSummary(summary, "missing_verification_executor", attempt)
@@ -227,7 +237,7 @@ func (rt *executionRuntime) runVerificationCompletionRetry(
 			"reason", summary.RetryReason,
 			"command", command,
 		)
-		return result, completionCorrectionFailedSummary(summary, "verification_command_failed", attempt)
+		return result, completionCorrectionFailedSummary(summary, completionVerificationFailureWarning(summary.VerificationClass, summary.VerificationOwnership), attempt)
 	}
 
 	updated := summary
@@ -249,11 +259,14 @@ func (rt *executionRuntime) runVerificationCompletionRetry(
 	return result, updated
 }
 
-func completionVerificationObservedSummary(summary completionContractSummary, command string) completionContractSummary {
+func completionVerificationObservedSummary(summary completionContractSummary, command string, policy orchestrator.VerificationPolicy) completionContractSummary {
 	observed := true
+	class, ownership := classifyCompletionVerification(command, policy)
 	updated := summary
 	updated.VerificationObserved = &observed
 	updated.VerificationCommand = command
+	updated.VerificationClass = class
+	updated.VerificationOwnership = ownership
 	return updated
 }
 

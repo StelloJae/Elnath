@@ -703,6 +703,7 @@ func buildExecutionRuntime(
 		ContextWindow:        wrappedCtxWindow,
 		CompressionMaxTokens: compressionBudget,
 		CorrectionScope:      runtimeCorrectionScopeFromEnv(),
+		VerificationPolicy:   runtimeVerificationPolicyFromEnv(),
 	}
 	learningPath := filepath.Join(cfg.DataDir, "lessons.jsonl")
 	learningStore := learning.NewStore(
@@ -1411,6 +1412,8 @@ func (rt *executionRuntime) recordOutcome(ctx context.Context, in outcomeInput) 
 		VerificationHint:         in.completion.VerificationHint,
 		VerificationObserved:     in.completion.VerificationObserved,
 		VerificationCommand:      in.completion.VerificationCommand,
+		VerificationClass:        in.completion.VerificationClass,
+		VerificationOwnership:    in.completion.VerificationOwnership,
 		CompletionWarning:        in.completion.CompletionWarning,
 		UserInputRequired:        in.completion.UserInputRequired,
 		ReasoningEffort:          in.completion.ReasoningEffort,
@@ -2081,6 +2084,13 @@ func runtimeCorrectionScopeFromEnv() orchestrator.CorrectionScope {
 		Label:          strings.TrimSpace(os.Getenv("ELNATH_CORRECTION_SCOPE_LABEL")),
 		AllowedPaths:   splitEnvPathList(os.Getenv("ELNATH_CORRECTION_SCOPE_ALLOWED_PATHS")),
 		ForbiddenPaths: splitEnvPathList(os.Getenv("ELNATH_CORRECTION_SCOPE_FORBIDDEN_PATHS")),
+	}
+}
+
+func runtimeVerificationPolicyFromEnv() orchestrator.VerificationPolicy {
+	return orchestrator.VerificationPolicy{
+		Class:     strings.TrimSpace(os.Getenv("ELNATH_VERIFICATION_CLASS")),
+		Ownership: strings.TrimSpace(os.Getenv("ELNATH_VERIFICATION_OWNERSHIP")),
 	}
 }
 

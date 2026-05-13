@@ -88,11 +88,69 @@ func TestCompletionContractSummaryDetectsFailedBashVerification(t *testing.T) {
 	if summary.VerificationCommand != "go test ./internal/llm -count=1" {
 		t.Fatalf("VerificationCommand = %q", summary.VerificationCommand)
 	}
+	if summary.VerificationClass != "focused" || summary.VerificationOwnership != "model" {
+		t.Fatalf("verification policy = class %q ownership %q, want focused/model", summary.VerificationClass, summary.VerificationOwnership)
+	}
 	if summary.CompletionWarning != "verification_command_failed" {
 		t.Fatalf("CompletionWarning = %q, want verification_command_failed", summary.CompletionWarning)
 	}
 	if summary.RetryDecision != completionRetryDecisionRetrySmallerScope || summary.RetryReason != "verification_command_failed" {
 		t.Fatalf("retry plan = %q/%q, want retry_smaller_scope/verification_command_failed", summary.RetryDecision, summary.RetryReason)
+	}
+}
+
+func TestCompletionContractSummaryStopsOnBroadVerificationFailure(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("fix the daemon and run broad tests"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "bash-1", Name: "bash", Input: json.RawMessage(`{"command":"go test ./..."}`)},
+			}},
+			llm.NewToolResultMessage("bash-1", "FAIL", true),
+			llm.NewAssistantMessage("Broad verification failed."),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(&orchestrator.RoutingContext{VerificationHint: true}, orchestrator.WorkflowConfig{}, result)
+
+	if summary.VerificationClass != "broad" || summary.VerificationOwnership != "harness" {
+		t.Fatalf("verification policy = class %q ownership %q, want broad/harness", summary.VerificationClass, summary.VerificationOwnership)
+	}
+	if summary.CompletionWarning != "broad_verification_failed" {
+		t.Fatalf("CompletionWarning = %q, want broad_verification_failed", summary.CompletionWarning)
+	}
+	if summary.RetryDecision != "" || summary.RetryReason != "" {
+		t.Fatalf("retry plan = %q/%q, want fail-closed empty retry", summary.RetryDecision, summary.RetryReason)
+	}
+}
+
+func TestCompletionContractSummaryHonorsHarnessVerificationOverride(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("fix the daemon and run harness check"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "bash-1", Name: "bash", Input: json.RawMessage(`{"command":"go test ./cmd/elnath -count=1"}`)},
+			}},
+			llm.NewToolResultMessage("bash-1", "FAIL", true),
+			llm.NewAssistantMessage("Harness verification failed."),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(&orchestrator.RoutingContext{VerificationHint: true}, orchestrator.WorkflowConfig{
+		VerificationPolicy: orchestrator.VerificationPolicy{
+			Class:     "focused",
+			Ownership: "harness",
+		},
+	}, result)
+
+	if summary.VerificationClass != "focused" || summary.VerificationOwnership != "harness" {
+		t.Fatalf("verification policy = class %q ownership %q, want focused/harness", summary.VerificationClass, summary.VerificationOwnership)
+	}
+	if summary.CompletionWarning != "harness_verification_failed" {
+		t.Fatalf("CompletionWarning = %q, want harness_verification_failed", summary.CompletionWarning)
+	}
+	if summary.RetryDecision != "" || summary.RetryReason != "" {
+		t.Fatalf("retry plan = %q/%q, want fail-closed empty retry", summary.RetryDecision, summary.RetryReason)
 	}
 }
 
@@ -331,6 +389,17 @@ func TestRuntimeCorrectionScopeFromEnv(t *testing.T) {
 	}
 	if got, want := scope.ForbiddenPaths, []string{"tests/integration"}; len(got) != len(want) || got[0] != want[0] {
 		t.Fatalf("ForbiddenPaths = %#v, want %#v", got, want)
+	}
+}
+
+func TestRuntimeVerificationPolicyFromEnv(t *testing.T) {
+	t.Setenv("ELNATH_VERIFICATION_CLASS", "broad")
+	t.Setenv("ELNATH_VERIFICATION_OWNERSHIP", "harness")
+
+	policy := runtimeVerificationPolicyFromEnv()
+
+	if policy.Class != "broad" || policy.Ownership != "harness" {
+		t.Fatalf("verification policy = class %q ownership %q, want broad/harness", policy.Class, policy.Ownership)
 	}
 }
 

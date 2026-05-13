@@ -4355,6 +4355,52 @@ func TestCompletionRetryRecordsFailedVerificationCommand(t *testing.T) {
 	}
 }
 
+func TestCompletionRetryFailsClosedOnBroadVerificationCommand(t *testing.T) {
+	rt := newTestExecutionRuntimeWithConfig(t, &countingProvider{}, false, func(cfg *config.Config) {
+		cfg.SelfHealing.Enabled = true
+		cfg.SelfHealing.ObserveOnly = false
+	})
+	rt.completionRetryMax = 1
+	reg := tools.NewRegistry()
+	bash := &recordingRuntimeTool{name: "bash", output: "FAIL", isError: true}
+	reg.Register(bash)
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("fix the daemon\n\ngo test ./..."),
+			llm.NewAssistantMessage("Done."),
+		},
+		Summary:      "Done.",
+		FinishReason: "stop",
+		Workflow:     "single",
+	}
+	observed := false
+	summary := completionContractSummary{
+		VerificationHint:     true,
+		VerificationObserved: &observed,
+		RetryDecision:        completionRetryDecisionRunVerification,
+		RetryReason:          "verification_hint_not_observed",
+	}
+
+	_, gotSummary := rt.maybeRunCompletionRetry(context.Background(), &stubWorkflow{name: "single"}, orchestrator.WorkflowInput{
+		Session:  &agent.Session{ID: "verify-session"},
+		Tools:    reg,
+		Provider: rt.provider,
+	}, result, summary)
+
+	if bash.calls != 1 || bash.command != "go test ./..." {
+		t.Fatalf("bash calls = %d command = %q, want broad verification command", bash.calls, bash.command)
+	}
+	if gotSummary.VerificationClass != "broad" || gotSummary.VerificationOwnership != "harness" {
+		t.Fatalf("verification policy = class %q ownership %q, want broad/harness", gotSummary.VerificationClass, gotSummary.VerificationOwnership)
+	}
+	if gotSummary.CorrectionStatus != "failed" || gotSummary.CorrectionFailureFamily != "broad_verification_failed" {
+		t.Fatalf("correction failure = status %q family %q, want failed/broad_verification_failed", gotSummary.CorrectionStatus, gotSummary.CorrectionFailureFamily)
+	}
+	if gotSummary.RetryDecision != "" || gotSummary.RetryReason != "" {
+		t.Fatalf("retry = %q/%q, want fail-closed empty retry", gotSummary.RetryDecision, gotSummary.RetryReason)
+	}
+}
+
 func TestCompletionRetryRecordsVerificationExecutorErrorCommand(t *testing.T) {
 	rt := newTestExecutionRuntimeWithConfig(t, &countingProvider{}, false, func(cfg *config.Config) {
 		cfg.SelfHealing.Enabled = true

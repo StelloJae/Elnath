@@ -15,6 +15,8 @@ type completionContractSummary struct {
 	VerificationHint         bool
 	VerificationObserved     *bool
 	VerificationCommand      string
+	VerificationClass        string
+	VerificationOwnership    string
 	CompletionWarning        string
 	UserInputRequired        bool
 	EditIntent               bool
@@ -215,6 +217,19 @@ type completionControlToolReceipt struct {
 const (
 	completionRetryDecisionRunVerification   = "run_verification"
 	completionRetryDecisionRetrySmallerScope = "retry_smaller_scope"
+
+	completionVerificationClassFocused = "focused"
+	completionVerificationClassBroad   = "broad"
+	completionVerificationClassUnknown = "unknown"
+
+	completionVerificationOwnershipModel      = "model"
+	completionVerificationOwnershipHarness    = "harness"
+	completionVerificationOwnershipDiagnostic = "diagnostic"
+	completionVerificationOwnershipUnknown    = "unknown"
+
+	completionWarningVerificationCommandFailed = "verification_command_failed"
+	completionWarningBroadVerificationFailed   = "broad_verification_failed"
+	completionWarningHarnessVerificationFailed = "harness_verification_failed"
 )
 
 var verificationCommandRE = regexp.MustCompile(`(?i)(^|[;&|()\s])((go\s+test|go\s+vet|git\s+diff\s+--check|bash\s+-n|make\s+(test|lint|vet)|npm\s+(test|run\s+test|run\s+lint)|pnpm\s+(test|run\s+test|run\s+lint)|yarn\s+(test|run\s+test|run\s+lint)|bun\s+test|pytest|python\d*(\.\d+)?\s+-m\s+pytest|ruff\s+check|cargo\s+test|mvn\s+test|gradle\s+test))([;&|()\s]|$)`)
@@ -256,11 +271,19 @@ func summarizeCompletionContract(routeCtx *orchestrator.RoutingContext, cfg orch
 	summary.UserInputRequired = controlToolReceiptsContain(summary.ControlToolReceipts, "ask_user_question", "request")
 
 	verificationCommand, verificationFailed := observedVerificationCommandStatus(result.Messages)
+	verificationClass, verificationOwnership := classifyCompletionVerification(
+		verificationCommand,
+		cfg.VerificationPolicy,
+	)
 	observed := verificationCommand != ""
 	if summary.VerificationHint || observed {
 		summary.VerificationObserved = &observed
 	}
 	summary.VerificationCommand = verificationCommand
+	if observed {
+		summary.VerificationClass = verificationClass
+		summary.VerificationOwnership = verificationOwnership
+	}
 	editIntent := editIntentDetected(result.Messages)
 	editObserved := mutationObservedInMessages(result.Messages)
 	mutatedPaths := observedMutatingPaths(result.Messages)
@@ -274,7 +297,7 @@ func summarizeCompletionContract(routeCtx *orchestrator.RoutingContext, cfg orch
 		summary.CompletionWarning = "final_response_reports_incomplete"
 	}
 	if summary.CompletionWarning == "" && verificationFailed {
-		summary.CompletionWarning = "verification_command_failed"
+		summary.CompletionWarning = completionVerificationFailureWarning(verificationClass, verificationOwnership)
 	}
 	if summary.CompletionWarning == "" && verificationCommand == "" && finalAssistantClaimsVerificationSuccess(result.Messages) {
 		summary.CompletionWarning = "unsupported_verification_success_claim"
@@ -692,13 +715,16 @@ func completionRetryPlan(summary completionContractSummary) (string, string) {
 	if summary.CompletionWarning == "scope_drift" {
 		return "", ""
 	}
+	if summary.CompletionWarning == completionWarningBroadVerificationFailed || summary.CompletionWarning == completionWarningHarnessVerificationFailed {
+		return "", ""
+	}
 	if summary.CompletionWarning == "final_response_reports_incomplete" {
 		return completionRetryDecisionRetrySmallerScope, summary.CompletionWarning
 	}
 	if summary.CompletionWarning == "edit_intent_without_mutation" {
 		return completionRetryDecisionRetrySmallerScope, summary.CompletionWarning
 	}
-	if summary.CompletionWarning == "verification_command_failed" {
+	if summary.CompletionWarning == completionWarningVerificationCommandFailed {
 		return completionRetryDecisionRetrySmallerScope, summary.CompletionWarning
 	}
 	if summary.CompletionWarning == "unsupported_verification_success_claim" {
@@ -769,6 +795,117 @@ func bashCommandFromToolInput(input json.RawMessage) string {
 
 func isVerificationCommand(command string) bool {
 	return verificationCommandRE.MatchString(command)
+}
+
+func classifyCompletionVerification(command string, policy orchestrator.VerificationPolicy) (string, string) {
+	class := normalizeCompletionVerificationClass(policy.Class)
+	if class == "" {
+		class = inferCompletionVerificationClass(command)
+	}
+	ownership := normalizeCompletionVerificationOwnership(policy.Ownership)
+	if ownership == "" {
+		ownership = inferCompletionVerificationOwnership(class)
+	}
+	return class, ownership
+}
+
+func completionVerificationFailureWarning(class string, ownership string) string {
+	if class == completionVerificationClassBroad {
+		return completionWarningBroadVerificationFailed
+	}
+	if ownership == completionVerificationOwnershipHarness {
+		return completionWarningHarnessVerificationFailed
+	}
+	return completionWarningVerificationCommandFailed
+}
+
+func inferCompletionVerificationOwnership(class string) string {
+	switch class {
+	case completionVerificationClassBroad:
+		return completionVerificationOwnershipHarness
+	case completionVerificationClassFocused:
+		return completionVerificationOwnershipModel
+	default:
+		return completionVerificationOwnershipUnknown
+	}
+}
+
+func normalizeCompletionVerificationClass(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "auto":
+		return ""
+	case completionVerificationClassFocused, "target", "task":
+		return completionVerificationClassFocused
+	case completionVerificationClassBroad, "global", "repo":
+		return completionVerificationClassBroad
+	case completionVerificationClassUnknown:
+		return completionVerificationClassUnknown
+	default:
+		return completionVerificationClassUnknown
+	}
+}
+
+func normalizeCompletionVerificationOwnership(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "auto":
+		return ""
+	case completionVerificationOwnershipModel, "agent":
+		return completionVerificationOwnershipModel
+	case completionVerificationOwnershipHarness, "runner":
+		return completionVerificationOwnershipHarness
+	case completionVerificationOwnershipDiagnostic, "diagnostics":
+		return completionVerificationOwnershipDiagnostic
+	case completionVerificationOwnershipUnknown:
+		return completionVerificationOwnershipUnknown
+	default:
+		return completionVerificationOwnershipUnknown
+	}
+}
+
+func inferCompletionVerificationClass(command string) string {
+	command = strings.ToLower(strings.TrimSpace(command))
+	if command == "" {
+		return completionVerificationClassUnknown
+	}
+	if completionVerificationCommandLooksBroad(command) {
+		return completionVerificationClassBroad
+	}
+	return completionVerificationClassFocused
+}
+
+func completionVerificationCommandLooksBroad(command string) bool {
+	command = strings.Join(strings.Fields(command), " ")
+	if command == "" {
+		return false
+	}
+	if strings.Contains(command, " ./...") || strings.HasSuffix(command, " ./...") {
+		return true
+	}
+	broadExact := map[string]struct{}{
+		"make test":         {},
+		"make lint":         {},
+		"make vet":          {},
+		"npm test":          {},
+		"npm run test":      {},
+		"npm run lint":      {},
+		"pnpm test":         {},
+		"pnpm run test":     {},
+		"pnpm run lint":     {},
+		"yarn test":         {},
+		"yarn run test":     {},
+		"yarn run lint":     {},
+		"yarn jest":         {},
+		"bun test":          {},
+		"pytest":            {},
+		"python -m pytest":  {},
+		"python3 -m pytest": {},
+		"ruff check":        {},
+		"cargo test":        {},
+		"mvn test":          {},
+		"gradle test":       {},
+	}
+	_, ok := broadExact[command]
+	return ok
 }
 
 func editIntentDetected(messages []llm.Message) bool {
