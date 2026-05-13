@@ -208,6 +208,26 @@ func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testi
 					MaxResults:        5,
 					Query:             "review code",
 				}},
+				SkillExecutionReceipts: []SkillExecutionReceipt{{
+					Tool:                "skill",
+					Action:              "execute",
+					Skill:               "review-pr",
+					Status:              "completed",
+					Provider:            "openai-responses",
+					Model:               "gpt-5.5",
+					ReasoningEffort:     "high",
+					ReasoningEffortMode: "manual",
+					PermissionMode:      "bypass",
+					MaxIterations:       8,
+					RequiredTools:       []string{"read_file"},
+					AvailableTools:      []string{"read_file", "grep"},
+					ToolFilterApplied:   true,
+					BaseDir:             "/tmp/skills/review-pr",
+					Source:              "codex-plugin-skill",
+					TrustLevel:          "plugin_cache",
+					External:            true,
+					UserInvocable:       true,
+				}},
 				CommandCatalogReceipts: []CommandCatalogReceipt{{
 					Tool:               "command_catalog",
 					Action:             "recommend",
@@ -322,6 +342,14 @@ func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testi
 	receipts, ok := summary["skill_catalog_receipts"].([]any)
 	if !ok || len(receipts) != 1 {
 		t.Fatalf("skill_catalog_receipts missing: summary=%v", summary)
+	}
+	skillExecutionReceipts, ok := summary["skill_execution_receipts"].([]any)
+	if !ok || len(skillExecutionReceipts) != 1 {
+		t.Fatalf("skill_execution_receipts missing: summary=%v", summary)
+	}
+	skillExecutionReceipt, ok := skillExecutionReceipts[0].(map[string]any)
+	if !ok || skillExecutionReceipt["skill"] != "review-pr" || skillExecutionReceipt["model"] != "gpt-5.5" || skillExecutionReceipt["tool_filter_applied"] != true {
+		t.Fatalf("skill execution receipt missing fields: receipt=%v summary=%v", skillExecutionReceipts[0], summary)
 	}
 	commandReceipts, ok := summary["command_catalog_receipts"].([]any)
 	if !ok || len(commandReceipts) != 1 {

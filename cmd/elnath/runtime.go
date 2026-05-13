@@ -1393,6 +1393,7 @@ func (rt *executionRuntime) recordOutcome(ctx context.Context, in outcomeInput) 
 		ProviderEffortNote:      in.completion.ProviderEffortNote,
 		LoadedDeferredTools:     append([]string(nil), in.completion.LoadedDeferredTools...),
 		SkillCatalogReceipts:    completionSkillCatalogReceiptsToLearning(in.completion.SkillCatalogReceipts),
+		SkillExecutionReceipts:  completionSkillExecutionReceiptsToLearning(in.completion.SkillExecutionReceipts),
 		CommandCatalogReceipts:  completionCommandCatalogReceiptsToLearning(in.completion.CommandCatalogReceipts),
 		ToolSearchReceipts:      completionToolSearchReceiptsToLearning(in.completion.ToolSearchReceipts),
 		ControlToolReceipts:     completionControlToolReceiptsToLearning(in.completion.ControlToolReceipts),
@@ -1468,6 +1469,36 @@ func completionSkillCatalogReceiptsToLearning(src []completionSkillCatalogReceip
 			PathCount:          receipt.PathCount,
 			CWDSet:             receipt.CWDSet,
 			IncludePrompt:      receipt.IncludePrompt,
+		})
+	}
+	return out
+}
+
+func completionSkillExecutionReceiptsToLearning(src []completionSkillExecutionReceipt) []learning.SkillExecutionReceipt {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]learning.SkillExecutionReceipt, 0, len(src))
+	for _, receipt := range src {
+		out = append(out, learning.SkillExecutionReceipt{
+			Tool:                receipt.Tool,
+			Action:              receipt.Action,
+			Skill:               receipt.Skill,
+			Status:              receipt.Status,
+			Provider:            receipt.Provider,
+			Model:               receipt.Model,
+			ReasoningEffort:     receipt.ReasoningEffort,
+			ReasoningEffortMode: receipt.ReasoningEffortMode,
+			PermissionMode:      receipt.PermissionMode,
+			MaxIterations:       receipt.MaxIterations,
+			RequiredTools:       append([]string(nil), receipt.RequiredTools...),
+			AvailableTools:      append([]string(nil), receipt.AvailableTools...),
+			ToolFilterApplied:   receipt.ToolFilterApplied,
+			BaseDir:             receipt.BaseDir,
+			Source:              receipt.Source,
+			TrustLevel:          receipt.TrustLevel,
+			External:            receipt.External,
+			UserInvocable:       receipt.UserInvocable,
 		})
 	}
 	return out

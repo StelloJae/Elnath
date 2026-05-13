@@ -43,6 +43,7 @@ type CompletionContext struct {
 	ProviderEffortNote      string
 	LoadedDeferredTools     []string
 	SkillCatalogReceipts    []SkillCatalogReceipt
+	SkillExecutionReceipts  []SkillExecutionReceipt
 	CommandCatalogReceipts  []CommandCatalogReceipt
 	ToolSearchReceipts      []ToolSearchReceipt
 	ControlToolReceipts     []ControlToolReceipt
@@ -83,6 +84,27 @@ type SkillCatalogReceipt struct {
 	PathCount          int      `json:"path_count,omitempty"`
 	CWDSet             bool     `json:"cwd_set,omitempty"`
 	IncludePrompt      bool     `json:"include_prompt,omitempty"`
+}
+
+type SkillExecutionReceipt struct {
+	Tool                string   `json:"tool"`
+	Action              string   `json:"action"`
+	Skill               string   `json:"skill"`
+	Status              string   `json:"status,omitempty"`
+	Provider            string   `json:"provider,omitempty"`
+	Model               string   `json:"model,omitempty"`
+	ReasoningEffort     string   `json:"reasoning_effort,omitempty"`
+	ReasoningEffortMode string   `json:"reasoning_effort_mode,omitempty"`
+	PermissionMode      string   `json:"permission_mode,omitempty"`
+	MaxIterations       int      `json:"max_iterations,omitempty"`
+	RequiredTools       []string `json:"required_tools,omitempty"`
+	AvailableTools      []string `json:"available_tools,omitempty"`
+	ToolFilterApplied   bool     `json:"tool_filter_applied"`
+	BaseDir             string   `json:"base_dir,omitempty"`
+	Source              string   `json:"source,omitempty"`
+	TrustLevel          string   `json:"trust_level,omitempty"`
+	External            bool     `json:"external"`
+	UserInvocable       bool     `json:"user_invocable"`
 }
 
 type CommandCatalogReceipt struct {
@@ -381,6 +403,9 @@ func encodeReceiptSummary(summary map[string]int, completionContext CompletionCo
 	}
 	if len(completionContext.SkillCatalogReceipts) > 0 {
 		payload["skill_catalog_receipts"] = completionContext.SkillCatalogReceipts
+	}
+	if len(completionContext.SkillExecutionReceipts) > 0 {
+		payload["skill_execution_receipts"] = completionContext.SkillExecutionReceipts
 	}
 	if len(completionContext.CommandCatalogReceipts) > 0 {
 		payload["command_catalog_receipts"] = completionContext.CommandCatalogReceipts
