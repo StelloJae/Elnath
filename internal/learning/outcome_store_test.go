@@ -219,6 +219,7 @@ func TestOutcomeRecordCompletionObservabilityJSONCompatibility(t *testing.T) {
 		ModelCallableCommands: 1,
 		MaxResults:            2,
 		Query:                 "commands",
+		FollowupTool:          "skill",
 	}}
 	rec.ToolSearchReceipts = []ToolSearchReceipt{{
 		Tool:               "tool_search",
@@ -310,6 +311,7 @@ func TestOutcomeRecordCompletionObservabilityJSONCompatibility(t *testing.T) {
 		`"command_catalog_receipts":[{"tool":"command_catalog","action":"recommend"`,
 		`"executable_commands":11`,
 		`"model_callable_commands":1`,
+		`"followup_tool":"skill"`,
 		`"tool_search_receipts":[{"tool":"tool_search","action":"search"`,
 		`"control_tool_receipts":[{"tool":"task_create","action":"create"`,
 		`"followup_tool":"task_monitor"`,

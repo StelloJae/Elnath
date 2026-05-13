@@ -241,6 +241,7 @@ func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testi
 					ModelCallableCommands: 1,
 					MaxResults:            2,
 					Query:                 "commands",
+					FollowupTool:          "skill",
 				}},
 				ToolSearchReceipts: []ToolSearchReceipt{{
 					Tool:               "tool_search",
@@ -373,6 +374,9 @@ func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testi
 	commandReceipt, ok := commandReceipts[0].(map[string]any)
 	if !ok || commandReceipt["executable_commands"] != float64(11) || commandReceipt["model_callable_commands"] != float64(1) {
 		t.Fatalf("command_catalog_receipt execution counts missing: receipt=%v summary=%v", commandReceipts[0], summary)
+	}
+	if commandReceipt["followup_tool"] != "skill" {
+		t.Fatalf("command_catalog_receipt followup missing: receipt=%v summary=%v", commandReceipts[0], summary)
 	}
 	toolSearchReceipts, ok := summary["tool_search_receipts"].([]any)
 	if !ok || len(toolSearchReceipts) != 1 {

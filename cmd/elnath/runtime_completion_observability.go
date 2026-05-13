@@ -115,6 +115,7 @@ type completionCommandCatalogReceipt struct {
 	MaxResults            int    `json:"max_results,omitempty"`
 	Query                 string `json:"query,omitempty"`
 	Command               string `json:"command,omitempty"`
+	FollowupTool          string `json:"followup_tool,omitempty"`
 }
 
 type completionToolSearchReceipt struct {
@@ -460,6 +461,7 @@ func commandCatalogReceiptFromOutput(output string) (completionCommandCatalogRec
 	parsed.Receipt.ExecutionPolicy = strings.TrimSpace(parsed.Receipt.ExecutionPolicy)
 	parsed.Receipt.Query = strings.TrimSpace(parsed.Receipt.Query)
 	parsed.Receipt.Command = strings.TrimSpace(parsed.Receipt.Command)
+	parsed.Receipt.FollowupTool = strings.TrimSpace(parsed.Receipt.FollowupTool)
 	if parsed.Receipt.Tool != "command_catalog" || parsed.Receipt.Action == "" {
 		return completionCommandCatalogReceipt{}, false
 	}

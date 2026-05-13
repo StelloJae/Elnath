@@ -129,6 +129,7 @@ func TestCommandCatalogToolIncludesDiscoveryReceipt(t *testing.T) {
 			ModelCallableCommands int    `json:"model_callable_commands"`
 			MaxResults            int    `json:"max_results"`
 			Query                 string `json:"query"`
+			FollowupTool          string `json:"followup_tool"`
 		} `json:"receipt"`
 	}
 	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
@@ -151,6 +152,9 @@ func TestCommandCatalogToolIncludesDiscoveryReceipt(t *testing.T) {
 	}
 	if out.Receipt.MaxResults != 2 || out.Receipt.Query != "reasoning effort" {
 		t.Fatalf("receipt request bounds = %+v", out.Receipt)
+	}
+	if out.Receipt.FollowupTool != "" {
+		t.Fatalf("receipt followup = %q, want empty for non-model-callable recommendation", out.Receipt.FollowupTool)
 	}
 }
 
@@ -192,6 +196,79 @@ func TestCommandCatalogToolListsSkillBackedSlashCommands(t *testing.T) {
 	}
 	if found.Category != "skill" || found.ArgumentHint != "<pr_number>" || found.Source != "claude-command-skill" {
 		t.Fatalf("skill-backed command = %+v", found)
+	}
+}
+
+func TestCommandCatalogToolAddsSkillFollowupForModelCallableRecommendation(t *testing.T) {
+	reg := skill.NewRegistry()
+	reg.Add(&skill.Skill{
+		Name:        "review-pr",
+		Description: "Review pull requests",
+		Trigger:     "/review-pr <pr_number>",
+		Source:      "claude-command-skill",
+		Prompt:      "Review the PR.",
+	})
+	tool := newCommandCatalogTool(reg)
+
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"recommend","query":"review pull request","max_results":1}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("Execute returned error result: %s", res.Output)
+	}
+
+	var out struct {
+		Commands []commandCatalogEntry `json:"commands"`
+		Receipt  struct {
+			Tool         string `json:"tool"`
+			Action       string `json:"action"`
+			FollowupTool string `json:"followup_tool"`
+		} `json:"receipt"`
+	}
+	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, res.Output)
+	}
+	if len(out.Commands) != 1 || out.Commands[0].Name != "/review-pr" || !out.Commands[0].ModelCallable {
+		t.Fatalf("commands = %+v, want one model-callable /review-pr command", out.Commands)
+	}
+	if out.Receipt.Tool != "command_catalog" || out.Receipt.Action != "recommend" || out.Receipt.FollowupTool != "skill" {
+		t.Fatalf("receipt = %+v, want skill followup", out.Receipt)
+	}
+}
+
+func TestCommandCatalogToolAddsSkillFollowupForModelCallableShow(t *testing.T) {
+	reg := skill.NewRegistry()
+	reg.Add(&skill.Skill{
+		Name:        "review-pr",
+		Description: "Review pull requests",
+		Trigger:     "/review-pr <pr_number>",
+		Prompt:      "Review the PR.",
+	})
+	tool := newCommandCatalogTool(reg)
+
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"show","command":"/review-pr"}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("Execute returned error result: %s", res.Output)
+	}
+
+	var out struct {
+		Command *commandCatalogEntry `json:"command"`
+		Receipt struct {
+			FollowupTool string `json:"followup_tool"`
+		} `json:"receipt"`
+	}
+	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, res.Output)
+	}
+	if out.Command == nil || out.Command.Name != "/review-pr" || !out.Command.ModelCallable {
+		t.Fatalf("command = %+v, want model-callable /review-pr", out.Command)
+	}
+	if out.Receipt.FollowupTool != "skill" {
+		t.Fatalf("receipt followup = %q, want skill", out.Receipt.FollowupTool)
 	}
 }
 

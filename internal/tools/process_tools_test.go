@@ -24,6 +24,7 @@ type processStartTestOutput struct {
 		Terminal        bool   `json:"terminal"`
 		TimeoutMS       int    `json:"timeout_ms"`
 		CWD             string `json:"cwd"`
+		FollowupTool    string `json:"followup_tool"`
 	} `json:"receipt"`
 }
 
@@ -53,6 +54,7 @@ type processMonitorTestOutput struct {
 		StderrRawBytes  int64  `json:"stderr_raw_bytes"`
 		StdoutTruncated bool   `json:"stdout_truncated"`
 		StderrTruncated bool   `json:"stderr_truncated"`
+		FollowupTool    string `json:"followup_tool"`
 	} `json:"receipt"`
 }
 
@@ -73,6 +75,7 @@ type processStopTestOutput struct {
 		Terminal        bool   `json:"terminal"`
 		Found           bool   `json:"found"`
 		StopSignal      string `json:"stop_signal"`
+		FollowupTool    string `json:"followup_tool"`
 	} `json:"receipt"`
 }
 
@@ -151,6 +154,9 @@ func TestProcessToolsStartMonitorTerminalReceipt(t *testing.T) {
 	if start.Receipt.ReadOnly || !start.Receipt.Persistent || start.Receipt.Terminal {
 		t.Fatalf("start receipt flags = %+v", start.Receipt)
 	}
+	if start.Receipt.FollowupTool != ProcessMonitorToolName {
+		t.Fatalf("start followup tool = %q, want %q", start.Receipt.FollowupTool, ProcessMonitorToolName)
+	}
 
 	mon := waitProcessTerminal(t, NewProcessMonitorTool(mgr), start.ProcessID)
 	if mon.Status != "completed" || !mon.Terminal {
@@ -170,6 +176,40 @@ func TestProcessToolsStartMonitorTerminalReceipt(t *testing.T) {
 	}
 	if mon.Receipt.ExitCode == nil || *mon.Receipt.ExitCode != 0 || mon.Receipt.StdoutRawBytes == 0 || mon.Receipt.StderrRawBytes == 0 {
 		t.Fatalf("monitor receipt completion/output metadata = %+v", mon.Receipt)
+	}
+	if mon.Receipt.FollowupTool != "" {
+		t.Fatalf("terminal monitor followup tool = %q, want empty", mon.Receipt.FollowupTool)
+	}
+}
+
+func TestProcessToolsReportRunningMonitorFollowup(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process group cleanup not implemented on windows")
+	}
+	mgr := NewProcessManager(NewPathGuard(t.TempDir(), nil))
+	t.Cleanup(func() { _ = mgr.Close(context.Background()) })
+
+	start := executeProcessStart(t, NewProcessStartTool(mgr), map[string]any{
+		"command":    "sleep 10",
+		"timeout_ms": 10000,
+	})
+	mon := executeProcessMonitor(t, NewProcessMonitorTool(mgr), start.ProcessID, 1000)
+	if !mon.Found || mon.Status != "running" || mon.Terminal {
+		t.Fatalf("monitor = %+v, want running non-terminal process", mon)
+	}
+	if mon.Receipt.FollowupTool != ProcessMonitorToolName {
+		t.Fatalf("running monitor followup tool = %q, want %q", mon.Receipt.FollowupTool, ProcessMonitorToolName)
+	}
+
+	raw, err := json.Marshal(map[string]any{"process_id": start.ProcessID, "reason": "cleanup"})
+	if err != nil {
+		t.Fatalf("marshal stop: %v", err)
+	}
+	if res, err := NewProcessStopTool(mgr).Execute(context.Background(), raw); err != nil || res.IsError {
+		if err != nil {
+			t.Fatalf("cleanup stop error = %v", err)
+		}
+		t.Fatalf("cleanup stop returned error: %s", res.Output)
 	}
 }
 
@@ -204,6 +244,9 @@ func TestProcessStopTerminatesRunningProcess(t *testing.T) {
 	}
 	if stop.Receipt.Tool != ProcessStopToolName || stop.Receipt.ExecutionPolicy != "session_process_stop" || stop.Receipt.StopSignal != "SIGTERM" {
 		t.Fatalf("stop receipt = %+v", stop.Receipt)
+	}
+	if stop.Receipt.FollowupTool != ProcessMonitorToolName {
+		t.Fatalf("stop followup tool = %q, want %q", stop.Receipt.FollowupTool, ProcessMonitorToolName)
 	}
 }
 

@@ -457,7 +457,7 @@ func TestCompletionContractSummaryRecordsCommandCatalogReceipt(t *testing.T) {
 			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
 				llm.ToolUseBlock{ID: "command-1", Name: "command_catalog", Input: json.RawMessage(`{"action":"recommend","query":"reasoning effort"}`)},
 			}},
-			llm.NewToolResultMessage("command-1", `{"action":"recommend","query":"reasoning effort","commands":[],"receipt":{"tool":"command_catalog","action":"recommend","read_only":true,"registry_available":true,"execution_available":false,"execution_policy":"metadata_only","total_commands":12,"returned_commands":0,"executable_commands":11,"model_callable_commands":1,"include_hidden":false,"max_results":5,"query":"reasoning effort"}}`, false),
+			llm.NewToolResultMessage("command-1", `{"action":"recommend","query":"reasoning effort","commands":[],"receipt":{"tool":"command_catalog","action":"recommend","read_only":true,"registry_available":true,"execution_available":false,"execution_policy":"metadata_only","total_commands":12,"returned_commands":0,"executable_commands":11,"model_callable_commands":1,"include_hidden":false,"max_results":5,"query":"reasoning effort","followup_tool":"skill"}}`, false),
 			llm.NewAssistantMessage("Done."),
 		},
 		FinishReason: "stop",
@@ -474,7 +474,7 @@ func TestCompletionContractSummaryRecordsCommandCatalogReceipt(t *testing.T) {
 	if receipt.ExecutionAvailable || receipt.ExecutionPolicy != "metadata_only" {
 		t.Fatalf("receipt execution boundary = %+v", receipt)
 	}
-	if receipt.TotalCommands != 12 || receipt.ReturnedCommands != 0 || receipt.ExecutableCommands != 11 || receipt.ModelCallableCommands != 1 || receipt.MaxResults != 5 || receipt.Query != "reasoning effort" {
+	if receipt.TotalCommands != 12 || receipt.ReturnedCommands != 0 || receipt.ExecutableCommands != 11 || receipt.ModelCallableCommands != 1 || receipt.MaxResults != 5 || receipt.Query != "reasoning effort" || receipt.FollowupTool != "skill" {
 		t.Fatalf("receipt counts/bounds = %+v", receipt)
 	}
 }
@@ -546,7 +546,7 @@ func TestCompletionContractSummaryRecordsProcessToolReceipts(t *testing.T) {
 			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
 				llm.ToolUseBlock{ID: "process-1", Name: "process_start", Input: json.RawMessage(`{"command":"sleep 1"}`)},
 			}},
-			llm.NewToolResultMessage("process-1", `{"process_id":4,"status":"running","receipt":{"tool":"process_start","action":"start","read_only":false,"persistent":true,"execution_policy":"session_process_start","process_id":4,"status":"running","timeout_ms":600000,"cwd":"/tmp/work"}}`, false),
+			llm.NewToolResultMessage("process-1", `{"process_id":4,"status":"running","receipt":{"tool":"process_start","action":"start","read_only":false,"persistent":true,"execution_policy":"session_process_start","process_id":4,"status":"running","timeout_ms":600000,"cwd":"/tmp/work","followup_tool":"process_monitor"}}`, false),
 			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
 				llm.ToolUseBlock{ID: "process-2", Name: "process_monitor", Input: json.RawMessage(`{"process_id":4}`)},
 			}},
@@ -554,7 +554,7 @@ func TestCompletionContractSummaryRecordsProcessToolReceipts(t *testing.T) {
 			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
 				llm.ToolUseBlock{ID: "process-3", Name: "process_stop", Input: json.RawMessage(`{"process_id":4}`)},
 			}},
-			llm.NewToolResultMessage("process-3", `{"process_id":4,"status":"stopped","receipt":{"tool":"process_stop","action":"stop","read_only":false,"persistent":true,"execution_policy":"session_process_stop","process_id":4,"status":"stopped","terminal":true,"found":true,"stop_signal":"SIGTERM","cwd":"/tmp/work"}}`, false),
+			llm.NewToolResultMessage("process-3", `{"process_id":4,"status":"stopped","receipt":{"tool":"process_stop","action":"stop","read_only":false,"persistent":true,"execution_policy":"session_process_stop","process_id":4,"status":"stopped","terminal":true,"found":true,"stop_signal":"SIGTERM","cwd":"/tmp/work","followup_tool":"process_monitor"}}`, false),
 		},
 		FinishReason: "stop",
 	}
@@ -564,7 +564,7 @@ func TestCompletionContractSummaryRecordsProcessToolReceipts(t *testing.T) {
 		t.Fatalf("ControlToolReceipts = %#v, want three process receipts", summary.ControlToolReceipts)
 	}
 	start := summary.ControlToolReceipts[0]
-	if start.Tool != "process_start" || start.Action != "start" || start.ProcessID != 4 || start.TimeoutMS != 600000 || start.CWD != "/tmp/work" {
+	if start.Tool != "process_start" || start.Action != "start" || start.ProcessID != 4 || start.TimeoutMS != 600000 || start.CWD != "/tmp/work" || start.FollowupTool != "process_monitor" {
 		t.Fatalf("start receipt = %+v", start)
 	}
 	monitor := summary.ControlToolReceipts[1]
@@ -575,7 +575,7 @@ func TestCompletionContractSummaryRecordsProcessToolReceipts(t *testing.T) {
 		t.Fatalf("monitor receipt output metadata = %+v", monitor)
 	}
 	stop := summary.ControlToolReceipts[2]
-	if stop.Tool != "process_stop" || stop.Action != "stop" || stop.ProcessID != 4 || stop.StopSignal != "SIGTERM" || !stop.Terminal || !stop.Found {
+	if stop.Tool != "process_stop" || stop.Action != "stop" || stop.ProcessID != 4 || stop.StopSignal != "SIGTERM" || !stop.Terminal || !stop.Found || stop.FollowupTool != "process_monitor" {
 		t.Fatalf("stop receipt = %+v", stop)
 	}
 }
@@ -668,6 +668,7 @@ func TestProcessControlReceiptsConvertToLearningAndAgentic(t *testing.T) {
 		Status:          "running",
 		TimeoutMS:       600000,
 		CWD:             "/tmp/work",
+		FollowupTool:    "process_monitor",
 	}, {
 		Tool:            "process_monitor",
 		Action:          "monitor",
@@ -693,14 +694,15 @@ func TestProcessControlReceiptsConvertToLearningAndAgentic(t *testing.T) {
 		Found:           true,
 		StopSignal:      "SIGTERM",
 		CWD:             "/tmp/work",
+		FollowupTool:    "process_monitor",
 	}}
 
 	learningReceipts := completionControlToolReceiptsToLearning(src)
-	if len(learningReceipts) != 3 || learningReceipts[0].ProcessID != 4 || learningReceipts[0].TimeoutMS != 600000 || learningReceipts[1].TailBytes != 4000 || learningReceipts[1].StdoutRawBytes != 5 || !learningReceipts[1].StderrTruncated || learningReceipts[2].StopSignal != "SIGTERM" {
+	if len(learningReceipts) != 3 || learningReceipts[0].ProcessID != 4 || learningReceipts[0].TimeoutMS != 600000 || learningReceipts[0].FollowupTool != "process_monitor" || learningReceipts[1].TailBytes != 4000 || learningReceipts[1].StdoutRawBytes != 5 || !learningReceipts[1].StderrTruncated || learningReceipts[2].StopSignal != "SIGTERM" || learningReceipts[2].FollowupTool != "process_monitor" {
 		t.Fatalf("learning receipts = %+v", learningReceipts)
 	}
 	agenticReceipts := completionControlToolReceiptsToAgentic(src)
-	if len(agenticReceipts) != 3 || agenticReceipts[0].ProcessID != 4 || agenticReceipts[0].CWD != "/tmp/work" || agenticReceipts[1].TailBytes != 4000 || agenticReceipts[1].StderrRawBytes != 4 || agenticReceipts[2].StopSignal != "SIGTERM" {
+	if len(agenticReceipts) != 3 || agenticReceipts[0].ProcessID != 4 || agenticReceipts[0].CWD != "/tmp/work" || agenticReceipts[0].FollowupTool != "process_monitor" || agenticReceipts[1].TailBytes != 4000 || agenticReceipts[1].StderrRawBytes != 4 || agenticReceipts[2].StopSignal != "SIGTERM" || agenticReceipts[2].FollowupTool != "process_monitor" {
 		t.Fatalf("agentic receipts = %+v", agenticReceipts)
 	}
 }
@@ -807,6 +809,7 @@ func TestRecordOutcomePersistsCompletionObservability(t *testing.T) {
 				ModelCallableCommands: 1,
 				MaxResults:            2,
 				Query:                 "commands",
+				FollowupTool:          "skill",
 			}},
 			ToolSearchReceipts: []completionToolSearchReceipt{{
 				Tool:               "tool_search",
@@ -929,6 +932,7 @@ func TestCompletionGateContextProviderConsumesRuntimeSummary(t *testing.T) {
 			ModelCallableCommands: 1,
 			MaxResults:            2,
 			Query:                 "commands",
+			FollowupTool:          "skill",
 		}},
 		ToolSearchReceipts: []completionToolSearchReceipt{{
 			Tool:               "tool_search",
@@ -1011,7 +1015,7 @@ func TestCompletionGateContextProviderConsumesRuntimeSummary(t *testing.T) {
 	if len(summary.SkillExecutionReceipts) != 1 || summary.SkillExecutionReceipts[0].Skill != "review-pr" || summary.SkillExecutionReceipts[0].Model != "gpt-5.5" {
 		t.Fatalf("SkillExecutionReceipts = %+v", summary.SkillExecutionReceipts)
 	}
-	if len(summary.CommandCatalogReceipts) != 1 || summary.CommandCatalogReceipts[0].ExecutionPolicy != "metadata_only" || summary.CommandCatalogReceipts[0].ExecutableCommands != 11 || summary.CommandCatalogReceipts[0].ModelCallableCommands != 1 {
+	if len(summary.CommandCatalogReceipts) != 1 || summary.CommandCatalogReceipts[0].ExecutionPolicy != "metadata_only" || summary.CommandCatalogReceipts[0].ExecutableCommands != 11 || summary.CommandCatalogReceipts[0].ModelCallableCommands != 1 || summary.CommandCatalogReceipts[0].FollowupTool != "skill" {
 		t.Fatalf("CommandCatalogReceipts = %+v", summary.CommandCatalogReceipts)
 	}
 	if len(summary.ToolSearchReceipts) != 1 || summary.ToolSearchReceipts[0].ExecutionPolicy != "metadata_only" {
@@ -1140,6 +1144,7 @@ func TestCompletionGateReceiptSummaryIncludesRuntimeContext(t *testing.T) {
 			ModelCallableCommands: 1,
 			MaxResults:            2,
 			Query:                 "commands",
+			FollowupTool:          "skill",
 		}},
 		ToolSearchReceipts: []completionToolSearchReceipt{{
 			Tool:               "tool_search",
@@ -1323,7 +1328,7 @@ func assertCompletionOutcome(t *testing.T, rec learning.OutcomeRecord) {
 	if len(rec.SkillExecutionReceipts) != 1 || rec.SkillExecutionReceipts[0].Skill != "review-pr" || rec.SkillExecutionReceipts[0].Model != "gpt-5.5" || !rec.SkillExecutionReceipts[0].ToolFilterApplied {
 		t.Fatalf("SkillExecutionReceipts = %+v", rec.SkillExecutionReceipts)
 	}
-	if len(rec.CommandCatalogReceipts) != 1 || rec.CommandCatalogReceipts[0].ExecutionPolicy != "metadata_only" || rec.CommandCatalogReceipts[0].ExecutableCommands != 11 || rec.CommandCatalogReceipts[0].ModelCallableCommands != 1 {
+	if len(rec.CommandCatalogReceipts) != 1 || rec.CommandCatalogReceipts[0].ExecutionPolicy != "metadata_only" || rec.CommandCatalogReceipts[0].ExecutableCommands != 11 || rec.CommandCatalogReceipts[0].ModelCallableCommands != 1 || rec.CommandCatalogReceipts[0].FollowupTool != "skill" {
 		t.Fatalf("CommandCatalogReceipts = %+v", rec.CommandCatalogReceipts)
 	}
 	if len(rec.ToolSearchReceipts) != 1 || rec.ToolSearchReceipts[0].ExecutionPolicy != "metadata_only" {
