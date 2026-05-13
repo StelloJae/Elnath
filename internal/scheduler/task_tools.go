@@ -141,6 +141,7 @@ type scheduleToolReceipt struct {
 	TaskCountBefore    int    `json:"task_count_before"`
 	TaskCountAfter     int    `json:"task_count_after"`
 	TaskName           string `json:"task_name,omitempty"`
+	FollowupTool       string `json:"followup_tool,omitempty"`
 }
 
 var staticScheduleRuntime = scheduleRuntimeSemantics{
@@ -360,6 +361,16 @@ func scheduleReceipt(toolName, action string, readOnly, persistent bool, configP
 		TaskCountBefore:    before,
 		TaskCountAfter:     after,
 		TaskName:           strings.TrimSpace(taskName),
+		FollowupTool:       scheduleReceiptFollowupTool(toolName),
+	}
+}
+
+func scheduleReceiptFollowupTool(toolName string) string {
+	switch toolName {
+	case ScheduleCreateToolName, ScheduleDeleteToolName:
+		return ScheduleListToolName
+	default:
+		return ""
 	}
 }
 

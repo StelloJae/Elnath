@@ -1589,6 +1589,7 @@ func completionControlToolReceiptsToLearning(src []completionControlToolReceipt)
 			RegistryBacked:          receipt.RegistryBacked,
 			ExecutionAvailable:      receipt.ExecutionAvailable,
 			ExecutionPolicy:         receipt.ExecutionPolicy,
+			FollowupTool:            receipt.FollowupTool,
 			TaskID:                  receipt.TaskID,
 			ParentTaskID:            receipt.ParentTaskID,
 			ChildTaskID:             receipt.ChildTaskID,

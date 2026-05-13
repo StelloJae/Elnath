@@ -43,7 +43,7 @@ func TestTaskCreateToolEnqueuesPendingTask(t *testing.T) {
 	if output.SessionID != "sess-123" {
 		t.Fatalf("SessionID = %q, want sess-123", output.SessionID)
 	}
-	if output.Receipt.Tool != TaskCreateToolName || output.Receipt.Action != "create" || output.Receipt.ReadOnly || !output.Receipt.Persistent || !output.Receipt.QueueBacked || output.Receipt.TaskID != output.TaskID {
+	if output.Receipt.Tool != TaskCreateToolName || output.Receipt.Action != "create" || output.Receipt.ReadOnly || !output.Receipt.Persistent || !output.Receipt.QueueBacked || output.Receipt.TaskID != output.TaskID || output.Receipt.FollowupTool != TaskMonitorToolName {
 		t.Fatalf("receipt = %+v, want task_create queue-backed mutation receipt", output.Receipt)
 	}
 

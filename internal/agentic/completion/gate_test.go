@@ -261,6 +261,7 @@ func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testi
 					Persistent:      true,
 					QueueBacked:     true,
 					ExecutionPolicy: "daemon_queue_enqueue",
+					FollowupTool:    "task_monitor",
 					TaskID:          7,
 					Status:          "pending",
 				}, {
@@ -268,6 +269,7 @@ func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testi
 					Action:          "enqueue",
 					Persistent:      true,
 					ExecutionPolicy: "agentic_delegation_enqueue",
+					FollowupTool:    "agentic_delegate_status",
 					ParentTaskID:    3,
 					ChildTaskID:     9,
 					QueueTaskID:     44,
