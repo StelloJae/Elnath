@@ -223,6 +223,34 @@ func TestCompletionContractSummaryDetectsEditToolMutation(t *testing.T) {
 	}
 }
 
+func TestCompletionContractSummaryDetectsBudgetExceededAfterEditIntent(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("fix the bug in the daemon and add a regression test"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "bash-1", Name: "bash", Input: json.RawMessage(`{"command":"cat > internal/daemon/daemon.go <<'EOF'\npatched\nEOF"}`)},
+			}},
+			llm.NewToolResultMessage("bash-1", "ok", false),
+			llm.NewAssistantMessage("I will add the regression test next."),
+		},
+		FinishReason: "budget_exceeded",
+	}
+	summary := summarizeCompletionContract(&orchestrator.RoutingContext{VerificationHint: true}, orchestrator.WorkflowConfig{}, result)
+
+	if !summary.EditIntent {
+		t.Fatal("EditIntent = false, want true")
+	}
+	if summary.EditObserved == nil || !*summary.EditObserved {
+		t.Fatalf("EditObserved = %v, want true", summary.EditObserved)
+	}
+	if summary.CompletionWarning != "budget_exceeded_after_edit_intent" {
+		t.Fatalf("CompletionWarning = %q, want budget_exceeded_after_edit_intent", summary.CompletionWarning)
+	}
+	if summary.RetryDecision != completionRetryDecisionRetrySmallerScope || summary.RetryReason != "budget_exceeded_after_edit_intent" {
+		t.Fatalf("retry plan = %q/%q, want retry_smaller_scope/budget_exceeded_after_edit_intent", summary.RetryDecision, summary.RetryReason)
+	}
+}
+
 func TestCompletionContractSummaryDetectsWorktreeRunMutation(t *testing.T) {
 	result := &orchestrator.WorkflowResult{
 		Messages: []llm.Message{
