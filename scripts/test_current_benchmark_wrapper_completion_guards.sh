@@ -59,6 +59,8 @@ required = [
     "`api/internal/accumulator/namereferencetransformer_test.go`",
     "Do not finish with only `go.work.sum`",
     "Immediately edit 'api/internal/accumulator/namereferencetransformer_test.go'",
+    "Use a real existing insertion anchor such as `func TestNameReferenceUnhappyRun(t *testing.T) {`, or append to the end if the anchor is missing.",
+    "`git diff --name-only -- api/internal/accumulator/namereferencetransformer_test.go`",
     "finish only if both 'api/internal/accumulator/namereferencetransformer.go' and 'api/internal/accumulator/namereferencetransformer_test.go' remain changed",
 ]
 missing = [snippet for snippet in required if snippet not in text]

@@ -760,6 +760,8 @@ V8-MIX-BF-001 kustomize deterministic transformer guidance:
 - Use `api/internal/accumulator/namereferencetransformer_test.go` for focused regression coverage.
 - The high-signal behavior is deterministic name-reference transformer application order. Preserve resource order from `m.Resources()` instead of iterating over a map.
 - Add focused regression coverage in the existing kyaml/name-reference test area before final verification; do not finish with a production-only diff.
+- Use a real existing insertion anchor such as `func TestNameReferenceUnhappyRun(t *testing.T) {`, or append to the end if the anchor is missing.
+- After editing the test file, run `git diff --name-only -- api/internal/accumulator/namereferencetransformer_test.go` and do not run broad verification until that command shows the test file.
 - Do not finish with only `go.work.sum` as non-production evidence.
 - Do not leave `go.work.sum` churn as the only non-production evidence. If tooling mutates `go.work.sum`, keep the behavioral test diff too or revert incidental checksum churn when it is not required.
 - Retained failure evidence showed `cd kyaml && go test ./...` passing but the final response self-reported incomplete regression evidence. Do not report incomplete work after verification; finish only after the focused regression exists and the exact command passes.
@@ -1652,7 +1654,7 @@ recover_passed_task_specific_failure() {
       "Task ID: ${TASK_ID}" \
       "The verification command '${VERIFY_CMD}' passed, but the benchmark guard rejected the patch: ${reason}" \
       "Keep the passing 'api/internal/accumulator/namereferencetransformer.go' production diff intact. Do not rerun broad baseline checks or re-read unrelated packages before editing the missing regression." \
-      "Immediately edit 'api/internal/accumulator/namereferencetransformer_test.go' and add a focused deterministic name-reference regression that proves transformer application/RefBy order follows 'm.Resources()' order for multiple referencing resources. Do not finish with only 'go.work.sum' as non-production evidence. Then run '${VERIFY_CMD}' and finish only if both 'api/internal/accumulator/namereferencetransformer.go' and 'api/internal/accumulator/namereferencetransformer_test.go' remain changed."
+      "Immediately edit 'api/internal/accumulator/namereferencetransformer_test.go' and add a focused deterministic name-reference regression that proves transformer application/RefBy order follows 'm.Resources()' order for multiple referencing resources. Use a real existing insertion anchor such as \`func TestNameReferenceUnhappyRun(t *testing.T) {\`, or append to the end if the anchor is missing. After editing, run \`git diff --name-only -- api/internal/accumulator/namereferencetransformer_test.go\`; if it prints nothing, the edit was a no-op and you must edit the test file before running broad verification. Do not finish with only 'go.work.sum' as non-production evidence. Then run '${VERIFY_CMD}' and finish only if both 'api/internal/accumulator/namereferencetransformer.go' and 'api/internal/accumulator/namereferencetransformer_test.go' remain changed."
   else
     printf -v TASK_SPECIFIC_PROMPT '%s\n\n%s\n\n%s' \
       "$BENCHMARK_PROMPT" \
