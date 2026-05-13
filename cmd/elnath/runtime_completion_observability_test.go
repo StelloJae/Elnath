@@ -571,7 +571,7 @@ func TestCompletionContractSummaryRecordsAskUserQuestionReceipt(t *testing.T) {
 			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
 				llm.ToolUseBlock{ID: "ask-1", Name: "ask_user_question", Input: json.RawMessage(`{"question":"Which branch?","options":["main","new"],"allow_free_text":false,"timeout_seconds":120}`)},
 			}},
-			llm.NewToolResultMessage("ask-1", `{"type":"user_input_required","question":"Which branch?","options":["main","new"],"allow_free_text":false,"timeout_seconds":120,"request_id":"req-123","session_id":"sess-123","receipt":{"tool":"ask_user_question","action":"request","read_only":true,"execution_policy":"user_input_request","question_chars":13,"option_count":2,"allow_free_text":false,"timeout_seconds":120,"request_id":"req-123","session_id":"sess-123"}}`, false),
+			llm.NewToolResultMessage("ask-1", `{"type":"user_input_required","question":"Which branch?","options":["main","new"],"allow_free_text":false,"timeout_seconds":120,"request_id":"req-123","session_id":"sess-123","receipt":{"tool":"ask_user_question","action":"request","read_only":true,"execution_policy":"user_input_request","question":"Which branch?","question_chars":13,"option_count":2,"allow_free_text":false,"timeout_seconds":120,"request_id":"req-123","session_id":"sess-123"}}`, false),
 		},
 		FinishReason: "stop",
 	}
@@ -584,7 +584,7 @@ func TestCompletionContractSummaryRecordsAskUserQuestionReceipt(t *testing.T) {
 	if receipt.Tool != "ask_user_question" || receipt.Action != "request" || !receipt.ReadOnly || receipt.ExecutionPolicy != "user_input_request" {
 		t.Fatalf("receipt identity = %+v", receipt)
 	}
-	if receipt.QuestionChars != 13 || receipt.OptionCount != 2 || receipt.AllowFreeText || receipt.TimeoutSeconds != 120 || receipt.RequestID != "req-123" || receipt.SessionID != "sess-123" {
+	if receipt.Question != "Which branch?" || receipt.QuestionChars != 13 || receipt.OptionCount != 2 || receipt.AllowFreeText || receipt.TimeoutSeconds != 120 || receipt.RequestID != "req-123" || receipt.SessionID != "sess-123" {
 		t.Fatalf("receipt bounds = %+v", receipt)
 	}
 	if !summary.UserInputRequired {
@@ -614,6 +614,28 @@ func TestCompletionContractSummaryRecordsUserQuestionAnswerReceipt(t *testing.T)
 	}
 	if receipt.TaskID != 8 || receipt.RequestID != "req-123" || receipt.SessionID != "sess-123" || receipt.Status != "pending" || receipt.FollowupTool != "task_monitor" || receipt.QuestionChars != 13 {
 		t.Fatalf("receipt routing = %+v", receipt)
+	}
+}
+
+func TestCompletionContractSummaryRecordsUserQuestionListReceipt(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("list pending questions"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "questions-1", Name: "user_question_list", Input: json.RawMessage(`{"session_id":"sess-123"}`)},
+			}},
+			llm.NewToolResultMessage("questions-1", `{"count":1,"pending":[],"receipt":{"tool":"user_question_list","action":"list","read_only":true,"session_id":"sess-123","limit":20,"total_returned":1}}`, false),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(nil, orchestrator.WorkflowConfig{}, result)
+
+	if len(summary.ControlToolReceipts) != 1 {
+		t.Fatalf("ControlToolReceipts = %#v, want one user_question_list receipt", summary.ControlToolReceipts)
+	}
+	receipt := summary.ControlToolReceipts[0]
+	if receipt.Tool != "user_question_list" || receipt.Action != "list" || !receipt.ReadOnly || receipt.SessionID != "sess-123" || receipt.Limit != 20 || receipt.TotalReturned != 1 {
+		t.Fatalf("receipt = %+v, want pending-question list receipt", receipt)
 	}
 }
 
@@ -829,6 +851,7 @@ func TestDelegationControlReceiptsConvertToLearningAndAgentic(t *testing.T) {
 		Enqueued:        true,
 		RequestID:       "req-123",
 		SessionID:       "sess-123",
+		Question:        "Which branch?",
 	}, {
 		Tool:            "agentic_message_send",
 		Action:          "send",
@@ -842,11 +865,11 @@ func TestDelegationControlReceiptsConvertToLearningAndAgentic(t *testing.T) {
 	}}
 
 	learningReceipts := completionControlToolReceiptsToLearning(src)
-	if len(learningReceipts) != 2 || learningReceipts[0].ParentTaskID != 3 || learningReceipts[0].ChildTaskID != 9 || learningReceipts[0].QueueTaskID != 44 || learningReceipts[0].FollowupTool != "agentic_delegate_status" || learningReceipts[0].DecisionID != 7 || !learningReceipts[0].Enqueued || learningReceipts[0].RequestID != "req-123" || learningReceipts[0].SessionID != "sess-123" || learningReceipts[1].HandoffID != 5 || !learningReceipts[1].Delivered {
+	if len(learningReceipts) != 2 || learningReceipts[0].ParentTaskID != 3 || learningReceipts[0].ChildTaskID != 9 || learningReceipts[0].QueueTaskID != 44 || learningReceipts[0].FollowupTool != "agentic_delegate_status" || learningReceipts[0].DecisionID != 7 || !learningReceipts[0].Enqueued || learningReceipts[0].RequestID != "req-123" || learningReceipts[0].SessionID != "sess-123" || learningReceipts[0].Question != "Which branch?" || learningReceipts[1].HandoffID != 5 || !learningReceipts[1].Delivered {
 		t.Fatalf("learning receipts = %+v", learningReceipts)
 	}
 	agenticReceipts := completionControlToolReceiptsToAgentic(src)
-	if len(agenticReceipts) != 2 || agenticReceipts[0].ParentTaskID != 3 || agenticReceipts[0].ChildTaskID != 9 || agenticReceipts[0].QueueTaskID != 44 || agenticReceipts[0].FollowupTool != "agentic_delegate_status" || agenticReceipts[0].DecisionStatus != "enqueued" || agenticReceipts[0].RequestID != "req-123" || agenticReceipts[0].SessionID != "sess-123" || agenticReceipts[1].FromActorID != 1 || agenticReceipts[1].ToActorID != 2 || !agenticReceipts[1].Delivered {
+	if len(agenticReceipts) != 2 || agenticReceipts[0].ParentTaskID != 3 || agenticReceipts[0].ChildTaskID != 9 || agenticReceipts[0].QueueTaskID != 44 || agenticReceipts[0].FollowupTool != "agentic_delegate_status" || agenticReceipts[0].DecisionStatus != "enqueued" || agenticReceipts[0].RequestID != "req-123" || agenticReceipts[0].SessionID != "sess-123" || agenticReceipts[0].Question != "Which branch?" || agenticReceipts[1].FromActorID != 1 || agenticReceipts[1].ToActorID != 2 || !agenticReceipts[1].Delivered {
 		t.Fatalf("agentic receipts = %+v", agenticReceipts)
 	}
 }

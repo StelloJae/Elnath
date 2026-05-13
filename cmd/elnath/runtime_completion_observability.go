@@ -198,6 +198,7 @@ type completionControlToolReceipt struct {
 	Command                 string   `json:"command,omitempty"`
 	Args                    []string `json:"args,omitempty"`
 	StateMutation           bool     `json:"state_mutation,omitempty"`
+	Question                string   `json:"question,omitempty"`
 	QuestionChars           int      `json:"question_chars,omitempty"`
 	OptionCount             int      `json:"option_count,omitempty"`
 	AllowFreeText           bool     `json:"allow_free_text,omitempty"`
@@ -519,6 +520,7 @@ var completionControlToolReceiptNames = map[string]struct{}{
 	"agentic_message_list":     {},
 	"runtime_command":          {},
 	"ask_user_question":        {},
+	"user_question_list":       {},
 }
 
 func observedControlToolReceipts(messages []llm.Message) []completionControlToolReceipt {
@@ -586,6 +588,7 @@ func controlToolReceiptFromOutput(toolName, output string) (completionControlToo
 	receipt.PreviousMode = strings.TrimSpace(receipt.PreviousMode)
 	receipt.CurrentMode = strings.TrimSpace(receipt.CurrentMode)
 	receipt.Command = strings.TrimSpace(receipt.Command)
+	receipt.Question = strings.TrimSpace(receipt.Question)
 	if receipt.Tool != toolName || receipt.Action == "" {
 		return completionControlToolReceipt{}, false
 	}

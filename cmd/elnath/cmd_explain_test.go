@@ -8,8 +8,10 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stello/elnath/internal/config"
+	"github.com/stello/elnath/internal/learning"
 )
 
 func TestCmdExplainTimeoutsJSON(t *testing.T) {
@@ -188,8 +190,8 @@ func TestExplainControlSurfacesJSON(t *testing.T) {
 	if !ok {
 		t.Fatalf("missing control surface user_input in %+v", byName)
 	}
-	if userInput.status != "partial" || !userInput.toolSearchDiscoverable || !userInput.receiptBacked || userInput.toolCount != 2 {
-		t.Fatalf("user_input surface = %+v, want partial ToolSearch-discoverable receipt-backed with two tools", userInput)
+	if userInput.status != "partial" || !userInput.toolSearchDiscoverable || !userInput.receiptBacked || userInput.toolCount != 3 {
+		t.Fatalf("user_input surface = %+v, want partial ToolSearch-discoverable receipt-backed with three tools", userInput)
 	}
 	if len(out.RemainingGaps) == 0 {
 		t.Fatal("remaining_gaps empty, want honest non-complete boundary")
@@ -213,5 +215,90 @@ func TestExplainControlSurfacesText(t *testing.T) {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("stdout missing %q:\n%s", want, stdout)
 		}
+	}
+}
+
+func TestExplainPendingQuestionsJSON(t *testing.T) {
+	store := learning.NewOutcomeStore(filepath.Join(t.TempDir(), "outcomes.jsonl"))
+	askedAt := time.Date(2026, 5, 13, 7, 0, 0, 0, time.UTC)
+	if err := store.Append(learning.OutcomeRecord{
+		ProjectID: "elnath",
+		Intent:    "complex_task",
+		Workflow:  "single",
+		Timestamp: askedAt,
+		ControlToolReceipts: []learning.ControlToolReceipt{{
+			Tool:      "ask_user_question",
+			Action:    "request",
+			RequestID: "req-1",
+			SessionID: "sess-1",
+			Question:  "Which branch?",
+		}},
+	}); err != nil {
+		t.Fatalf("Append ask record: %v", err)
+	}
+
+	stdout, _ := captureOutput(t, func() {
+		if err := explainPendingQuestions(store, []string{"--json", "--session", "sess-1"}); err != nil {
+			t.Fatalf("explainPendingQuestions: %v", err)
+		}
+	})
+
+	var out struct {
+		Count   int `json:"count"`
+		Pending []struct {
+			RequestID string `json:"request_id"`
+			SessionID string `json:"session_id"`
+			Question  string `json:"question"`
+		} `json:"pending"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &out); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout)
+	}
+	if out.Count != 1 || len(out.Pending) != 1 || out.Pending[0].RequestID != "req-1" || out.Pending[0].SessionID != "sess-1" || out.Pending[0].Question != "Which branch?" {
+		t.Fatalf("pending output = %+v, want req-1", out)
+	}
+}
+
+func TestExplainPendingQuestionsTextShowsNoPendingAfterAnswer(t *testing.T) {
+	store := learning.NewOutcomeStore(filepath.Join(t.TempDir(), "outcomes.jsonl"))
+	askedAt := time.Date(2026, 5, 13, 7, 0, 0, 0, time.UTC)
+	answeredAt := askedAt.Add(time.Minute)
+	if err := store.Append(learning.OutcomeRecord{
+		ProjectID: "elnath",
+		Intent:    "complex_task",
+		Workflow:  "single",
+		Timestamp: askedAt,
+		ControlToolReceipts: []learning.ControlToolReceipt{{
+			Tool:      "ask_user_question",
+			Action:    "request",
+			RequestID: "req-1",
+			SessionID: "sess-1",
+			Question:  "Which branch?",
+		}},
+	}); err != nil {
+		t.Fatalf("Append ask record: %v", err)
+	}
+	if err := store.Append(learning.OutcomeRecord{
+		ProjectID: "elnath",
+		Intent:    "complex_task",
+		Workflow:  "single",
+		Timestamp: answeredAt,
+		ControlToolReceipts: []learning.ControlToolReceipt{{
+			Tool:      "user_question_answer",
+			Action:    "answer",
+			RequestID: "req-1",
+			SessionID: "sess-1",
+		}},
+	}); err != nil {
+		t.Fatalf("Append answer record: %v", err)
+	}
+
+	stdout, _ := captureOutput(t, func() {
+		if err := explainPendingQuestions(store, nil); err != nil {
+			t.Fatalf("explainPendingQuestions: %v", err)
+		}
+	})
+	if !strings.Contains(stdout, "No pending user questions.") {
+		t.Fatalf("stdout = %q, want no pending message", stdout)
 	}
 }

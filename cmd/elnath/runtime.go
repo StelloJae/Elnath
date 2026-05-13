@@ -454,6 +454,10 @@ func buildExecutionRuntime(
 		return nil, err
 	}
 	app.RegisterCloser("bash runner", bashRunnerCloser{runner: runner})
+	learningDetector := secret.NewDetector()
+	learningRedactor := learningDetector.RedactString
+	outcomePath := filepath.Join(cfg.DataDir, "outcomes.jsonl")
+	outcomeStore := learning.NewOutcomeStore(outcomePath, learning.WithOutcomeRedactor(learningRedactor))
 	reg := buildToolRegistryWithSecondaryCaller(guard, runner, llm.NewDynamicSecondaryModelCaller(func() llm.Provider {
 		if rt == nil {
 			return provider
@@ -469,6 +473,7 @@ func buildExecutionRuntime(
 	reg.Register(agent.NewEnterPlanModeTool(planModeController))
 	reg.Register(agent.NewExitPlanModeTool(planModeController))
 	reg.Register(agent.NewAskUserQuestionTool())
+	reg.Register(learning.NewUserQuestionListTool(outcomeStore))
 	taskQueue, err := daemon.NewQueueNoRecover(db.Main)
 	if err != nil {
 		return nil, fmt.Errorf("open task queue tools: %w", err)
@@ -676,15 +681,11 @@ func buildExecutionRuntime(
 		CompressionMaxTokens: compressionBudget,
 	}
 	learningPath := filepath.Join(cfg.DataDir, "lessons.jsonl")
-	learningDetector := secret.NewDetector()
-	learningRedactor := learningDetector.RedactString
 	learningStore := learning.NewStore(
 		learningPath,
 		learning.WithRedactor(learningRedactor),
 	)
 	cursorStore := learning.NewCursorStore(filepath.Join(cfg.DataDir, "lesson_cursors.jsonl"))
-	outcomePath := filepath.Join(cfg.DataDir, "outcomes.jsonl")
-	outcomeStore := learning.NewOutcomeStore(outcomePath, learning.WithOutcomeRedactor(learningRedactor))
 	routingAdvisor := learning.NewRoutingAdvisor(outcomeStore)
 	llmMinMessages := cfg.LLMExtraction.MinMessages
 	if llmMinMessages == 0 {
@@ -1648,6 +1649,7 @@ func completionControlToolReceiptsToLearning(src []completionControlToolReceipt)
 			Command:                 receipt.Command,
 			Args:                    append([]string(nil), receipt.Args...),
 			StateMutation:           receipt.StateMutation,
+			Question:                receipt.Question,
 			QuestionChars:           receipt.QuestionChars,
 			OptionCount:             receipt.OptionCount,
 			AllowFreeText:           receipt.AllowFreeText,
