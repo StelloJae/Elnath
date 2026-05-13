@@ -194,6 +194,7 @@ func TestToolSearchReportsStableMetadata(t *testing.T) {
 func TestToolSearchReportsRoutingMetadata(t *testing.T) {
 	reg := NewRegistry()
 	reg.Register(&toolSearchMetadataTool{name: "task_create", description: "Create daemon task"})
+	reg.Register(&toolSearchMetadataTool{name: "user_question_answer", description: "Resume from user answer"})
 	reg.Register(&toolSearchMetadataTool{name: "schedule_list", description: "List scheduled tasks"})
 	reg.Register(&toolSearchMetadataTool{name: "enter_worktree", description: "Create managed worktree"})
 	reg.Register(&toolSearchMetadataTool{name: "skill", description: "Invoke a skill"})
@@ -218,12 +219,13 @@ func TestToolSearchReportsRoutingMetadata(t *testing.T) {
 		category string
 		surface  string
 	}{
-		"task_create":     {category: "task", surface: "daemon"},
-		"schedule_list":   {category: "schedule", surface: "scheduler"},
-		"enter_worktree":  {category: "worktree", surface: "worktree"},
-		"skill":           {category: "skill", surface: "skill"},
-		"command_catalog": {category: "command", surface: "runtime"},
-		"process_monitor": {category: "process", surface: "process"},
+		"task_create":          {category: "task", surface: "daemon"},
+		"user_question_answer": {category: "user_input", surface: "runtime"},
+		"schedule_list":        {category: "schedule", surface: "scheduler"},
+		"enter_worktree":       {category: "worktree", surface: "worktree"},
+		"skill":                {category: "skill", surface: "skill"},
+		"command_catalog":      {category: "command", surface: "runtime"},
+		"process_monitor":      {category: "process", surface: "process"},
 	}
 	for name, wantMeta := range want {
 		gotMeta, ok := got[name]

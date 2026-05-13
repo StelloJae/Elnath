@@ -489,6 +489,7 @@ func commandCatalogReceiptFromOutput(output string) (completionCommandCatalogRec
 
 var completionControlToolReceiptNames = map[string]struct{}{
 	"task_create":              {},
+	"user_question_answer":     {},
 	"task_list":                {},
 	"task_get":                 {},
 	"task_stop":                {},

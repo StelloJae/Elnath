@@ -592,6 +592,31 @@ func TestCompletionContractSummaryRecordsAskUserQuestionReceipt(t *testing.T) {
 	}
 }
 
+func TestCompletionContractSummaryRecordsUserQuestionAnswerReceipt(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("resume with answer"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "answer-1", Name: "user_question_answer", Input: json.RawMessage(`{"session_id":"sess-123","answer":"main"}`)},
+			}},
+			llm.NewToolResultMessage("answer-1", `{"type":"user_input_answer_enqueued","task_id":8,"status":"pending","session_id":"sess-123","answer_chars":4,"receipt":{"tool":"user_question_answer","action":"answer","read_only":false,"persistent":true,"queue_backed":true,"execution_policy":"daemon_queue_user_answer_resume","task_id":8,"session_id":"sess-123","status":"pending","followup_tool":"task_monitor","question_chars":13}}`, false),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(nil, orchestrator.WorkflowConfig{}, result)
+
+	if len(summary.ControlToolReceipts) != 1 {
+		t.Fatalf("ControlToolReceipts = %#v, want one user_question_answer receipt", summary.ControlToolReceipts)
+	}
+	receipt := summary.ControlToolReceipts[0]
+	if receipt.Tool != "user_question_answer" || receipt.Action != "answer" || receipt.ReadOnly || !receipt.Persistent || !receipt.QueueBacked || receipt.ExecutionPolicy != "daemon_queue_user_answer_resume" {
+		t.Fatalf("receipt identity = %+v", receipt)
+	}
+	if receipt.TaskID != 8 || receipt.SessionID != "sess-123" || receipt.Status != "pending" || receipt.FollowupTool != "task_monitor" || receipt.QuestionChars != 13 {
+		t.Fatalf("receipt routing = %+v", receipt)
+	}
+}
+
 func TestCompletionContractSummaryDoesNotRetryWhenUserInputRequired(t *testing.T) {
 	result := &orchestrator.WorkflowResult{
 		Messages: []llm.Message{

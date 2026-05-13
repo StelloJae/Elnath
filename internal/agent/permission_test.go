@@ -161,6 +161,7 @@ func TestPermissionWithActualToolNames(t *testing.T) {
 		{"plan denies bash", ModePlan, "bash", false},
 		{"plan denies git", ModePlan, "git", false},
 		{"plan denies task_create", ModePlan, "task_create", false},
+		{"plan denies user_question_answer", ModePlan, "user_question_answer", false},
 		{"plan denies task_update", ModePlan, "task_update", false},
 		{"plan denies agentic_delegate_create", ModePlan, "agentic_delegate_create", false},
 		{"plan denies agentic_delegate_enqueue", ModePlan, "agentic_delegate_enqueue", false},

@@ -3433,7 +3433,7 @@ func TestExecutionRuntimeRegistersDeferredControlSurfaceTools(t *testing.T) {
 	for _, name := range []string{
 		"code_symbols",
 		"sleep",
-		"task_create", "task_list", "task_get", "task_stop", "task_output", "task_monitor", "task_update",
+		"task_create", "user_question_answer", "task_list", "task_get", "task_stop", "task_output", "task_monitor", "task_update",
 		"schedule_create", "schedule_list", "schedule_delete",
 		"enter_worktree", "worktree_list", "worktree_run", "worktree_prune", "exit_worktree",
 		"agentic_actor_graph", "agentic_task_evidence", "agentic_delegate_create", "agentic_delegate_list", "agentic_delegate_status", "agentic_delegate_enqueue",
