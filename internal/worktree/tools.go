@@ -105,6 +105,7 @@ type ToolReceipt struct {
 	RegistryBacked     bool   `json:"registry_backed"`
 	ExecutionAvailable bool   `json:"execution_available"`
 	ExecutionPolicy    string `json:"execution_policy"`
+	FollowupTool       string `json:"followup_tool,omitempty"`
 	Name               string `json:"name,omitempty"`
 	Path               string `json:"path,omitempty"`
 	Branch             string `json:"branch,omitempty"`
@@ -963,6 +964,7 @@ func worktreeToolReceipt(tool, action string, readOnly, persistent, executionAva
 		RegistryBacked:     true,
 		ExecutionAvailable: executionAvailable,
 		ExecutionPolicy:    policy,
+		FollowupTool:       worktreeFollowupTool(tool, input),
 		Name:               input.Name,
 		Path:               input.Path,
 		Branch:             input.Branch,
@@ -975,6 +977,22 @@ func worktreeToolReceipt(tool, action string, readOnly, persistent, executionAva
 		RemovedCount:       input.RemovedCount,
 		Runner:             input.Runner,
 		IsError:            input.IsError,
+	}
+}
+
+func worktreeFollowupTool(tool string, input worktreeReceiptInput) string {
+	switch tool {
+	case EnterToolName:
+		return RunToolName
+	case ExitToolName:
+		return ListToolName
+	case PruneToolName:
+		if input.DryRun {
+			return PruneToolName
+		}
+		return ListToolName
+	default:
+		return ""
 	}
 }
 

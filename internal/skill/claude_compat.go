@@ -30,31 +30,34 @@ type CompatibleSkillRootOptions struct {
 }
 
 var claudeToolNameMap = map[string]string{
-	"bash":          "bash",
-	"read":          "read_file",
-	"write":         "write_file",
-	"edit":          "edit_file",
-	"multiedit":     "edit_file",
-	"glob":          "glob",
-	"grep":          "grep",
-	"webfetch":      "web_fetch",
-	"websearch":     "web_search",
-	"todowrite":     "todo_write",
-	"toolsearch":    "tool_search",
-	"skill":         "skill",
-	"taskcreate":    "task_create",
-	"taskget":       "task_get",
-	"tasklist":      "task_list",
-	"taskoutput":    "task_output",
-	"taskstop":      "task_stop",
-	"taskupdate":    "task_update",
-	"croncreate":    "schedule_create",
-	"crondelete":    "schedule_delete",
-	"cronlist":      "schedule_list",
-	"enterplanmode": "enter_plan_mode",
-	"exitplanmode":  "exit_plan_mode",
-	"enterworktree": "enter_worktree",
-	"exitworktree":  "exit_worktree",
+	"bash":            "bash",
+	"read":            "read_file",
+	"write":           "write_file",
+	"edit":            "edit_file",
+	"multiedit":       "edit_file",
+	"glob":            "glob",
+	"grep":            "grep",
+	"bashoutput":      "process_monitor",
+	"killbash":        "process_stop",
+	"webfetch":        "web_fetch",
+	"websearch":       "web_search",
+	"todowrite":       "todo_write",
+	"askuserquestion": "ask_user_question",
+	"toolsearch":      "tool_search",
+	"skill":           "skill",
+	"taskcreate":      "task_create",
+	"taskget":         "task_get",
+	"tasklist":        "task_list",
+	"taskoutput":      "task_output",
+	"taskstop":        "task_stop",
+	"taskupdate":      "task_update",
+	"croncreate":      "schedule_create",
+	"crondelete":      "schedule_delete",
+	"cronlist":        "schedule_list",
+	"enterplanmode":   "enter_plan_mode",
+	"exitplanmode":    "exit_plan_mode",
+	"enterworktree":   "enter_worktree",
+	"exitworktree":    "exit_worktree",
 }
 
 type claudeSkillFrontmatter struct {
@@ -483,13 +486,46 @@ func normalizeClaudeToolName(value string) string {
 
 func splitStringList(raw string) []string {
 	var out []string
-	for _, chunk := range strings.Split(raw, ",") {
-		for _, value := range strings.Fields(chunk) {
-			value = strings.TrimSpace(value)
-			if value != "" {
-				out = append(out, value)
-			}
+	for _, value := range splitSkillListTokens(raw) {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			out = append(out, value)
 		}
 	}
+	return out
+}
+
+func splitSkillListTokens(raw string) []string {
+	var out []string
+	var b strings.Builder
+	depth := 0
+	flush := func() {
+		value := strings.TrimSpace(b.String())
+		if value != "" {
+			out = append(out, value)
+		}
+		b.Reset()
+	}
+	for _, r := range raw {
+		switch r {
+		case '(':
+			depth++
+			b.WriteRune(r)
+		case ')':
+			if depth > 0 {
+				depth--
+			}
+			b.WriteRune(r)
+		case ',', ' ', '\t', '\n', '\r':
+			if depth == 0 {
+				flush()
+				continue
+			}
+			b.WriteRune(r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	flush()
 	return out
 }

@@ -101,6 +101,7 @@ type planModeToolReceipt struct {
 	Persistent              bool   `json:"persistent"`
 	ExecutionAvailable      bool   `json:"execution_available"`
 	ExecutionPolicy         string `json:"execution_policy"`
+	FollowupTool            string `json:"followup_tool,omitempty"`
 }
 
 func (t *EnterPlanModeTool) Execute(_ context.Context, _ json.RawMessage) (*tools.Result, error) {
@@ -171,7 +172,15 @@ func planModeReceipt(toolName, action, previousMode, currentMode string, restore
 		Persistent:              false,
 		ExecutionAvailable:      false,
 		ExecutionPolicy:         "permission_mode_transition",
+		FollowupTool:            planModeFollowupTool(toolName),
 	}
+}
+
+func planModeFollowupTool(toolName string) string {
+	if toolName == EnterPlanModeToolName {
+		return ExitPlanModeToolName
+	}
+	return ""
 }
 
 func planModeResult(output planModeToolOutput) (*tools.Result, error) {
