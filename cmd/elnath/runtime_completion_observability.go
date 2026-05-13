@@ -26,6 +26,7 @@ type completionContractSummary struct {
 	LoadedDeferredTools     []string
 	ConditionalSkillMatches []completionConditionalSkillMatch
 	SkillCatalogReceipts    []completionSkillCatalogReceipt
+	CommandCatalogReceipts  []completionCommandCatalogReceipt
 	CorrectionAttempted     bool
 	CorrectionAttempts      int
 	CorrectionMaxAttempts   int
@@ -64,6 +65,21 @@ type completionSkillCatalogReceipt struct {
 	IncludePrompt      bool     `json:"include_prompt,omitempty"`
 }
 
+type completionCommandCatalogReceipt struct {
+	Tool               string `json:"tool"`
+	Action             string `json:"action"`
+	ReadOnly           bool   `json:"read_only"`
+	RegistryAvailable  bool   `json:"registry_available"`
+	ExecutionAvailable bool   `json:"execution_available"`
+	ExecutionPolicy    string `json:"execution_policy"`
+	TotalCommands      int    `json:"total_commands"`
+	ReturnedCommands   int    `json:"returned_commands"`
+	IncludeHidden      bool   `json:"include_hidden"`
+	MaxResults         int    `json:"max_results,omitempty"`
+	Query              string `json:"query,omitempty"`
+	Command            string `json:"command,omitempty"`
+}
+
 const (
 	completionRetryDecisionRunVerification   = "run_verification"
 	completionRetryDecisionRetrySmallerScope = "retry_smaller_scope"
@@ -94,6 +110,7 @@ func summarizeCompletionContract(routeCtx *orchestrator.RoutingContext, cfg orch
 	summary.LoadedDeferredTools = append([]string(nil), result.LoadedDeferredTools...)
 	summary.ConditionalSkillMatches = observedConditionalSkillMatches(result.Messages)
 	summary.SkillCatalogReceipts = observedSkillCatalogReceipts(result.Messages)
+	summary.CommandCatalogReceipts = observedCommandCatalogReceipts(result.Messages)
 
 	verificationCommand, verificationFailed := observedVerificationCommandStatus(result.Messages)
 	observed := verificationCommand != ""
@@ -163,6 +180,51 @@ func skillCatalogReceiptFromOutput(output string) (completionSkillCatalogReceipt
 	parsed.Receipt.Skill = strings.TrimSpace(parsed.Receipt.Skill)
 	if parsed.Receipt.Tool != "skill_catalog" || parsed.Receipt.Action == "" {
 		return completionSkillCatalogReceipt{}, false
+	}
+	return parsed.Receipt, true
+}
+
+func observedCommandCatalogReceipts(messages []llm.Message) []completionCommandCatalogReceipt {
+	toolNamesByID := make(map[string]string)
+	var receipts []completionCommandCatalogReceipt
+	for _, msg := range messages {
+		for _, block := range msg.Content {
+			switch b := block.(type) {
+			case llm.ToolUseBlock:
+				if b.ID != "" {
+					toolNamesByID[b.ID] = b.Name
+				}
+			case llm.ToolResultBlock:
+				if b.IsError || toolNamesByID[b.ToolUseID] != "command_catalog" {
+					continue
+				}
+				receipt, ok := commandCatalogReceiptFromOutput(b.Content)
+				if ok {
+					receipts = append(receipts, receipt)
+				}
+			}
+		}
+	}
+	if len(receipts) == 0 {
+		return nil
+	}
+	return receipts
+}
+
+func commandCatalogReceiptFromOutput(output string) (completionCommandCatalogReceipt, bool) {
+	var parsed struct {
+		Receipt completionCommandCatalogReceipt `json:"receipt"`
+	}
+	if err := json.Unmarshal([]byte(output), &parsed); err != nil {
+		return completionCommandCatalogReceipt{}, false
+	}
+	parsed.Receipt.Tool = strings.TrimSpace(parsed.Receipt.Tool)
+	parsed.Receipt.Action = strings.TrimSpace(parsed.Receipt.Action)
+	parsed.Receipt.ExecutionPolicy = strings.TrimSpace(parsed.Receipt.ExecutionPolicy)
+	parsed.Receipt.Query = strings.TrimSpace(parsed.Receipt.Query)
+	parsed.Receipt.Command = strings.TrimSpace(parsed.Receipt.Command)
+	if parsed.Receipt.Tool != "command_catalog" || parsed.Receipt.Action == "" {
+		return completionCommandCatalogReceipt{}, false
 	}
 	return parsed.Receipt, true
 }

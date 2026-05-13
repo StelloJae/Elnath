@@ -1387,6 +1387,7 @@ func (rt *executionRuntime) recordOutcome(ctx context.Context, in outcomeInput) 
 		ProviderEffortNote:      in.completion.ProviderEffortNote,
 		LoadedDeferredTools:     append([]string(nil), in.completion.LoadedDeferredTools...),
 		SkillCatalogReceipts:    completionSkillCatalogReceiptsToLearning(in.completion.SkillCatalogReceipts),
+		CommandCatalogReceipts:  completionCommandCatalogReceiptsToLearning(in.completion.CommandCatalogReceipts),
 		ConditionalSkillMatches: completionSkillMatchesToLearning(in.completion.ConditionalSkillMatches),
 		CorrectionAttempted:     in.completion.CorrectionAttempted,
 		CorrectionAttempts:      in.completion.CorrectionAttempts,
@@ -1459,6 +1460,30 @@ func completionSkillCatalogReceiptsToLearning(src []completionSkillCatalogReceip
 			PathCount:          receipt.PathCount,
 			CWDSet:             receipt.CWDSet,
 			IncludePrompt:      receipt.IncludePrompt,
+		})
+	}
+	return out
+}
+
+func completionCommandCatalogReceiptsToLearning(src []completionCommandCatalogReceipt) []learning.CommandCatalogReceipt {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]learning.CommandCatalogReceipt, 0, len(src))
+	for _, receipt := range src {
+		out = append(out, learning.CommandCatalogReceipt{
+			Tool:               receipt.Tool,
+			Action:             receipt.Action,
+			ReadOnly:           receipt.ReadOnly,
+			RegistryAvailable:  receipt.RegistryAvailable,
+			ExecutionAvailable: receipt.ExecutionAvailable,
+			ExecutionPolicy:    receipt.ExecutionPolicy,
+			TotalCommands:      receipt.TotalCommands,
+			ReturnedCommands:   receipt.ReturnedCommands,
+			IncludeHidden:      receipt.IncludeHidden,
+			MaxResults:         receipt.MaxResults,
+			Query:              receipt.Query,
+			Command:            receipt.Command,
 		})
 	}
 	return out

@@ -412,6 +412,35 @@ func TestCompletionContractSummaryRecordsSkillCatalogReceipt(t *testing.T) {
 	}
 }
 
+func TestCompletionContractSummaryRecordsCommandCatalogReceipt(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("find command metadata"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "command-1", Name: "command_catalog", Input: json.RawMessage(`{"action":"recommend","query":"reasoning effort"}`)},
+			}},
+			llm.NewToolResultMessage("command-1", `{"action":"recommend","query":"reasoning effort","commands":[],"receipt":{"tool":"command_catalog","action":"recommend","read_only":true,"registry_available":true,"execution_available":false,"execution_policy":"metadata_only","total_commands":12,"returned_commands":0,"include_hidden":false,"max_results":5,"query":"reasoning effort"}}`, false),
+			llm.NewAssistantMessage("Done."),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(nil, orchestrator.WorkflowConfig{}, result)
+
+	if len(summary.CommandCatalogReceipts) != 1 {
+		t.Fatalf("CommandCatalogReceipts = %#v, want one receipt", summary.CommandCatalogReceipts)
+	}
+	receipt := summary.CommandCatalogReceipts[0]
+	if receipt.Tool != "command_catalog" || receipt.Action != "recommend" || !receipt.ReadOnly || !receipt.RegistryAvailable {
+		t.Fatalf("receipt identity = %+v", receipt)
+	}
+	if receipt.ExecutionAvailable || receipt.ExecutionPolicy != "metadata_only" {
+		t.Fatalf("receipt execution boundary = %+v", receipt)
+	}
+	if receipt.TotalCommands != 12 || receipt.ReturnedCommands != 0 || receipt.MaxResults != 5 || receipt.Query != "reasoning effort" {
+		t.Fatalf("receipt counts/bounds = %+v", receipt)
+	}
+}
+
 func TestCompletionContractSummaryRecordsProviderCapabilities(t *testing.T) {
 	summary := withProviderCapabilities(completionContractSummary{}, &capabilityCountingProvider{})
 
@@ -459,6 +488,18 @@ func TestRecordOutcomePersistsCompletionObservability(t *testing.T) {
 				ReturnedSkills:    1,
 				MaxResults:        5,
 				Query:             "review code",
+			}},
+			CommandCatalogReceipts: []completionCommandCatalogReceipt{{
+				Tool:               "command_catalog",
+				Action:             "recommend",
+				ReadOnly:           true,
+				RegistryAvailable:  true,
+				ExecutionAvailable: false,
+				ExecutionPolicy:    "metadata_only",
+				TotalCommands:      12,
+				ReturnedCommands:   1,
+				MaxResults:         2,
+				Query:              "commands",
 			}},
 			CorrectionAttempted:     true,
 			CorrectionAttempts:      1,
@@ -518,6 +559,18 @@ func TestCompletionGateContextProviderConsumesRuntimeSummary(t *testing.T) {
 			MaxResults:        5,
 			Query:             "review code",
 		}},
+		CommandCatalogReceipts: []completionCommandCatalogReceipt{{
+			Tool:               "command_catalog",
+			Action:             "recommend",
+			ReadOnly:           true,
+			RegistryAvailable:  true,
+			ExecutionAvailable: false,
+			ExecutionPolicy:    "metadata_only",
+			TotalCommands:      12,
+			ReturnedCommands:   1,
+			MaxResults:         2,
+			Query:              "commands",
+		}},
 		ConditionalSkillMatches: []completionConditionalSkillMatch{
 			{SkillName: "go-review", Pattern: "internal/**/*.go", Path: "internal/skill/skill.go", Source: "claude-skill", TrustLevel: "local_compatible", External: false},
 		},
@@ -565,6 +618,9 @@ func TestCompletionGateContextProviderConsumesRuntimeSummary(t *testing.T) {
 	}
 	if len(summary.SkillCatalogReceipts) != 1 || summary.SkillCatalogReceipts[0].Action != "recommend" {
 		t.Fatalf("SkillCatalogReceipts = %+v", summary.SkillCatalogReceipts)
+	}
+	if len(summary.CommandCatalogReceipts) != 1 || summary.CommandCatalogReceipts[0].ExecutionPolicy != "metadata_only" {
+		t.Fatalf("CommandCatalogReceipts = %+v", summary.CommandCatalogReceipts)
 	}
 	if len(summary.ConditionalSkillMatches) != 1 || summary.ConditionalSkillMatches[0].SkillName != "go-review" {
 		t.Fatalf("ConditionalSkillMatches = %+v", summary.ConditionalSkillMatches)
@@ -650,6 +706,18 @@ func TestCompletionGateReceiptSummaryIncludesRuntimeContext(t *testing.T) {
 			MaxResults:        5,
 			Query:             "review code",
 		}},
+		CommandCatalogReceipts: []completionCommandCatalogReceipt{{
+			Tool:               "command_catalog",
+			Action:             "recommend",
+			ReadOnly:           true,
+			RegistryAvailable:  true,
+			ExecutionAvailable: false,
+			ExecutionPolicy:    "metadata_only",
+			TotalCommands:      12,
+			ReturnedCommands:   1,
+			MaxResults:         2,
+			Query:              "commands",
+		}},
 		CorrectionAttempted:     true,
 		CorrectionAttempts:      1,
 		CorrectionMaxAttempts:   1,
@@ -721,6 +789,10 @@ func TestCompletionGateReceiptSummaryIncludesRuntimeContext(t *testing.T) {
 	if !ok || len(catalogReceipts) != 1 {
 		t.Fatalf("skill catalog receipts missing from gate summary: %v", summary)
 	}
+	commandCatalogReceipts, ok := summary["command_catalog_receipts"].([]any)
+	if !ok || len(commandCatalogReceipts) != 1 {
+		t.Fatalf("command catalog receipts missing from gate summary: %v", summary)
+	}
 	if summary["correction_attempted"] != true || summary["correction_attempts"] != float64(1) || summary["correction_max_attempts"] != float64(1) {
 		t.Fatalf("correction attempt missing from gate summary: %v", summary)
 	}
@@ -766,6 +838,9 @@ func assertCompletionOutcome(t *testing.T, rec learning.OutcomeRecord) {
 	}
 	if len(rec.SkillCatalogReceipts) != 1 || rec.SkillCatalogReceipts[0].Action != "recommend" {
 		t.Fatalf("SkillCatalogReceipts = %+v", rec.SkillCatalogReceipts)
+	}
+	if len(rec.CommandCatalogReceipts) != 1 || rec.CommandCatalogReceipts[0].ExecutionPolicy != "metadata_only" {
+		t.Fatalf("CommandCatalogReceipts = %+v", rec.CommandCatalogReceipts)
 	}
 	if len(rec.ConditionalSkillMatches) != 1 {
 		t.Fatalf("ConditionalSkillMatches = %#v, want one match", rec.ConditionalSkillMatches)

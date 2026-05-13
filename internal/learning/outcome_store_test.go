@@ -186,6 +186,18 @@ func TestOutcomeRecordCompletionObservabilityJSONCompatibility(t *testing.T) {
 		MaxResults:        5,
 		Query:             "review code",
 	}}
+	rec.CommandCatalogReceipts = []CommandCatalogReceipt{{
+		Tool:               "command_catalog",
+		Action:             "recommend",
+		ReadOnly:           true,
+		RegistryAvailable:  true,
+		ExecutionAvailable: false,
+		ExecutionPolicy:    "metadata_only",
+		TotalCommands:      12,
+		ReturnedCommands:   1,
+		MaxResults:         2,
+		Query:              "commands",
+	}}
 	rec.CorrectionAttempted = true
 	rec.CorrectionAttempts = 1
 	rec.CorrectionMaxAttempts = 1
@@ -213,6 +225,8 @@ func TestOutcomeRecordCompletionObservabilityJSONCompatibility(t *testing.T) {
 		`"provider_effort_note":"retry_without_reasoning_on_400_or_422_unsupported_effort"`,
 		`"loaded_deferred_tools":["mcp_github_issue"]`,
 		`"skill_catalog_receipts":[{"tool":"skill_catalog","action":"recommend"`,
+		`"command_catalog_receipts":[{"tool":"command_catalog","action":"recommend"`,
+		`"execution_policy":"metadata_only"`,
 		`"query":"review code"`,
 		`"correction_attempted":true`,
 		`"correction_attempts":1`,
