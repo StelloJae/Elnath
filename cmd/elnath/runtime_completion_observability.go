@@ -265,6 +265,9 @@ func summarizeCompletionContract(routeCtx *orchestrator.RoutingContext, cfg orch
 	if summary.CompletionWarning == "" && editIntent && !editObserved {
 		summary.CompletionWarning = "edit_intent_without_mutation"
 	}
+	if summary.CompletionWarning == "" && editIntent && strings.EqualFold(strings.TrimSpace(result.FinishReason), "budget_exceeded") {
+		summary.CompletionWarning = "budget_exceeded_after_edit_intent"
+	}
 	summary.RetryDecision, summary.RetryReason = completionRetryPlan(summary)
 	return summary
 }
@@ -676,6 +679,9 @@ func completionRetryPlan(summary completionContractSummary) (string, string) {
 		return completionRetryDecisionRetrySmallerScope, summary.CompletionWarning
 	}
 	if summary.CompletionWarning == "unsupported_verification_success_claim" {
+		return completionRetryDecisionRetrySmallerScope, summary.CompletionWarning
+	}
+	if summary.CompletionWarning == "budget_exceeded_after_edit_intent" {
 		return completionRetryDecisionRetrySmallerScope, summary.CompletionWarning
 	}
 	if summary.VerificationObserved != nil && !*summary.VerificationObserved {
