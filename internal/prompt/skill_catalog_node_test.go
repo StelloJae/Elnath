@@ -77,6 +77,30 @@ func TestSkillCatalogNodeRenderHidesConditionalSkills(t *testing.T) {
 	}
 }
 
+func TestSkillCatalogNodeRenderShowsConditionalSkillsMatchingUserInputPaths(t *testing.T) {
+	t.Parallel()
+
+	reg := skill.NewRegistry()
+	reg.Add(&skill.Skill{Name: "go-review", Description: "Review Go files", Trigger: "/go-review <path>", Paths: []string{"internal/**/*.go"}, Source: "claude-skill"})
+	reg.Add(&skill.Skill{Name: "docs-review", Description: "Review docs", Paths: []string{"docs"}})
+
+	got, err := NewSkillCatalogNode(65, reg).Render(context.Background(), &RenderState{
+		UserInput: "please review `internal/skill/skill.go` and ignore README.md",
+	})
+	if err != nil {
+		t.Fatalf("Render error: %v", err)
+	}
+	if !strings.Contains(got, "Matched conditional skills") {
+		t.Fatalf("Render missing matched conditional section:\n%s", got)
+	}
+	if !strings.Contains(got, "/go-review <path>") || !strings.Contains(got, "matched internal/skill/skill.go") {
+		t.Fatalf("Render missing matched go-review skill:\n%s", got)
+	}
+	if strings.Contains(got, "/docs-review") {
+		t.Fatalf("Render exposed unmatched docs-review skill:\n%s", got)
+	}
+}
+
 func TestSkillCatalogNodeRenderBenchmarkMode(t *testing.T) {
 	t.Parallel()
 
