@@ -263,6 +263,7 @@ func completionControlToolReceiptsToAgentic(src []completionControlToolReceipt) 
 			Command:                 receipt.Command,
 			Args:                    append([]string(nil), receipt.Args...),
 			StateMutation:           receipt.StateMutation,
+			Question:                receipt.Question,
 			QuestionChars:           receipt.QuestionChars,
 			OptionCount:             receipt.OptionCount,
 			AllowFreeText:           receipt.AllowFreeText,

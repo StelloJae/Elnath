@@ -51,7 +51,7 @@ func TestAskUserQuestionToolReturnsStructuredRequest(t *testing.T) {
 	if output.Receipt.Tool != AskUserQuestionToolName || output.Receipt.Action != "request" || !output.Receipt.ReadOnly || output.Receipt.ExecutionPolicy != "user_input_request" {
 		t.Fatalf("Receipt identity = %+v", output.Receipt)
 	}
-	if output.Receipt.QuestionChars != len("Which branch should I use?") || output.Receipt.OptionCount != 2 || output.Receipt.AllowFreeText || output.Receipt.TimeoutSeconds != 120 {
+	if output.Receipt.Question != "Which branch should I use?" || output.Receipt.QuestionChars != len("Which branch should I use?") || output.Receipt.OptionCount != 2 || output.Receipt.AllowFreeText || output.Receipt.TimeoutSeconds != 120 {
 		t.Fatalf("Receipt bounds = %+v", output.Receipt)
 	}
 	if output.Receipt.RequestID != output.RequestID {

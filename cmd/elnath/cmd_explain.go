@@ -57,6 +57,8 @@ func cmdExplain(_ context.Context, args []string) error {
 		return explainTimeouts(cfg, args[1:])
 	case "control-surfaces":
 		return explainControlSurfaces(args[1:])
+	case "pending-questions":
+		return explainPendingQuestions(outcomeStore, args[1:])
 	default:
 		return fmt.Errorf("explain: unknown subcommand %q (try: elnath explain help)", args[0])
 	}
@@ -71,8 +73,77 @@ Subcommands:
   timeouts [--json] Show configured timeout and retry policy
   control-surfaces [--json]
                     Show implemented model-callable control surfaces
+  pending-questions [--json] [--session ID] [--limit N]
+                    Show unanswered user-input requests from outcome receipts
   help              Show this help
 `)
+	return nil
+}
+
+type pendingQuestionsView struct {
+	Pending []learning.PendingUserQuestion `json:"pending"`
+	Count   int                            `json:"count"`
+}
+
+func explainPendingQuestions(outcomeStore *learning.OutcomeStore, args []string) error {
+	jsonOut := false
+	sessionID := ""
+	limit := 20
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--json":
+			jsonOut = true
+		case "--session":
+			value, next, err := parseStringFlag(args, i, "--session")
+			if err != nil {
+				return err
+			}
+			sessionID = value
+			i = next
+		case "--limit":
+			value, next, err := parseIntFlag(args, i, "--limit")
+			if err != nil {
+				return err
+			}
+			if value <= 0 {
+				return fmt.Errorf("explain: pending-questions: --limit must be positive")
+			}
+			limit = value
+			i = next
+		case "help", "-h", "--help":
+			return printExplainUsage()
+		default:
+			return fmt.Errorf("explain: pending-questions: unknown flag %q", args[i])
+		}
+	}
+	records, err := outcomeStore.Recent(0)
+	if err != nil {
+		return fmt.Errorf("explain: pending-questions: %w", err)
+	}
+	pending := learning.PendingUserQuestions(records, sessionID, limit)
+	view := pendingQuestionsView{Pending: pending, Count: len(pending)}
+	if jsonOut {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(view)
+	}
+	if len(pending) == 0 {
+		fmt.Fprintln(os.Stdout, "No pending user questions.")
+		return nil
+	}
+	fmt.Fprintln(os.Stdout, "Pending user questions:")
+	for _, item := range pending {
+		session := item.SessionID
+		if session == "" {
+			session = "(none)"
+		}
+		fmt.Fprintf(os.Stdout, "  - %s session=%s asked=%s question=%q\n",
+			item.RequestID,
+			session,
+			item.AskedAt.UTC().Format("2006-01-02 15:04:05 UTC"),
+			item.Question,
+		)
+	}
 	return nil
 }
 

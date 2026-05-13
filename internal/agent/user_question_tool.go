@@ -65,6 +65,7 @@ type askUserQuestionReceipt struct {
 	Action          string `json:"action"`
 	ReadOnly        bool   `json:"read_only"`
 	ExecutionPolicy string `json:"execution_policy"`
+	Question        string `json:"question,omitempty"`
 	QuestionChars   int    `json:"question_chars"`
 	OptionCount     int    `json:"option_count"`
 	AllowFreeText   bool   `json:"allow_free_text"`
@@ -103,6 +104,7 @@ func (t *AskUserQuestionTool) Execute(ctx context.Context, params json.RawMessag
 		Action:          "request",
 		ReadOnly:        true,
 		ExecutionPolicy: "user_input_request",
+		Question:        question,
 		QuestionChars:   len([]rune(question)),
 		OptionCount:     len(output.Options),
 		AllowFreeText:   output.AllowFreeText,
