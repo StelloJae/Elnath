@@ -485,6 +485,7 @@ func buildExecutionRuntime(
 	reg.Register(agentictools.NewTaskEvidenceTool(agenticStore))
 	reg.Register(agentictools.NewDelegateCreateTool(agenticStore))
 	reg.Register(agentictools.NewDelegateListTool(agenticStore))
+	reg.Register(agentictools.NewDelegateStatusTool(agenticStore, taskQueue))
 	reg.Register(agentictools.NewDelegateEnqueueTool(agenticStore, delegateEnqueueRuntimeService{service: agenticenqueue.NewService(agenticStore, taskQueue, agenticenqueue.Options{
 		EnforcementMode:    cfg.Agentic.Enforcement.Mode,
 		CompletionGateMode: cfg.Agentic.CompletionGate.Mode,

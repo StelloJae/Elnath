@@ -370,6 +370,7 @@ var completionControlToolReceiptNames = map[string]struct{}{
 	"process_stop":             {},
 	"agentic_delegate_create":  {},
 	"agentic_delegate_list":    {},
+	"agentic_delegate_status":  {},
 	"agentic_delegate_enqueue": {},
 	"agentic_message_send":     {},
 	"agentic_message_list":     {},
