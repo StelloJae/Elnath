@@ -26,6 +26,21 @@ func TestExecutionRuntimeRegistersCommandCatalogTool(t *testing.T) {
 	}
 }
 
+func TestExecutionRuntimeRegistersRuntimeCommandTool(t *testing.T) {
+	rt := newTestExecutionRuntime(t, &countingProvider{})
+
+	tool, ok := rt.reg.Get("runtime_command")
+	if !ok {
+		t.Fatal("runtime_command tool missing")
+	}
+	if !tool.IsConcurrencySafe(nil) || !tool.Reversible() {
+		t.Fatal("runtime_command should be read-only and reversible")
+	}
+	if deferred, ok := tool.(interface{ DeferInitialToolSchema() bool }); !ok || !deferred.DeferInitialToolSchema() {
+		t.Fatal("runtime_command should be deferred from initial schema")
+	}
+}
+
 func TestExecutionRuntimeRegistersSkillCatalogTool(t *testing.T) {
 	rt := newTestExecutionRuntime(t, &countingProvider{})
 
@@ -153,8 +168,8 @@ func TestCommandCatalogToolIncludesDiscoveryReceipt(t *testing.T) {
 	if out.Receipt.MaxResults != 2 || out.Receipt.Query != "reasoning effort" {
 		t.Fatalf("receipt request bounds = %+v", out.Receipt)
 	}
-	if out.Receipt.FollowupTool != "" {
-		t.Fatalf("receipt followup = %q, want empty for non-model-callable recommendation", out.Receipt.FollowupTool)
+	if out.Receipt.FollowupTool != "runtime_command" {
+		t.Fatalf("receipt followup = %q, want runtime_command for read-only runtime control", out.Receipt.FollowupTool)
 	}
 }
 
@@ -480,8 +495,8 @@ func TestCommandCatalogToolExposesExecutionPolicyMetadata(t *testing.T) {
 	if got := seen["run"]; got.Surface != "cli" || got.ExecutionPolicy != "cli_dispatch" || !got.ExecutionAvailable || got.ModelCallable {
 		t.Fatalf("run command metadata = %+v, want cli non-model execution policy", got)
 	}
-	if got := seen["/provider"]; got.Surface != "runtime_slash" || got.ExecutionPolicy != "local_runtime_control" || !got.ExecutionAvailable || got.ModelCallable {
-		t.Fatalf("/provider metadata = %+v, want runtime slash non-model execution policy", got)
+	if got := seen["/provider"]; got.Surface != "runtime_slash" || got.ExecutionPolicy != "local_runtime_control" || !got.ExecutionAvailable || !got.ModelCallable {
+		t.Fatalf("/provider metadata = %+v, want runtime slash read-only model-callable execution policy", got)
 	}
 	if got := seen["/review-pr"]; got.Surface != "skill_slash" || got.ExecutionPolicy != "skill_prompt_invocation" || !got.ExecutionAvailable || !got.ModelCallable || got.Source != "claude-command-skill" {
 		t.Fatalf("/review-pr metadata = %+v, want model-callable skill invocation policy", got)
@@ -540,6 +555,9 @@ func TestCommandCatalogToolRecommendsRuntimeControlByQuery(t *testing.T) {
 			Category string `json:"category"`
 			Score    int    `json:"score"`
 		} `json:"commands"`
+		Receipt struct {
+			FollowupTool string `json:"followup_tool"`
+		} `json:"receipt"`
 	}
 	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
 		t.Fatalf("output is not JSON: %v\n%s", err, res.Output)
@@ -549,6 +567,68 @@ func TestCommandCatalogToolRecommendsRuntimeControlByQuery(t *testing.T) {
 	}
 	if got := out.Commands[0]; got.Name != "/effort" || got.Category != "runtime-control" || got.Score == 0 {
 		t.Fatalf("recommendation = %+v, want scored /effort runtime-control", got)
+	}
+	if out.Receipt.FollowupTool != "runtime_command" {
+		t.Fatalf("receipt followup = %q, want runtime_command", out.Receipt.FollowupTool)
+	}
+}
+
+func TestRuntimeCommandToolExecutesStatusReadOnly(t *testing.T) {
+	rt := newTestExecutionRuntime(t, &countingProvider{})
+	tool, ok := rt.reg.Get("runtime_command")
+	if !ok {
+		t.Fatal("runtime_command tool missing")
+	}
+
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"/status","args":["--json"]}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("Execute returned error result: %s", res.Output)
+	}
+
+	var out struct {
+		Command string `json:"command"`
+		Output  string `json:"output"`
+		Receipt struct {
+			Tool               string   `json:"tool"`
+			Action             string   `json:"action"`
+			ReadOnly           bool     `json:"read_only"`
+			ExecutionAvailable bool     `json:"execution_available"`
+			ExecutionPolicy    string   `json:"execution_policy"`
+			Command            string   `json:"command"`
+			Args               []string `json:"args"`
+			StateMutation      bool     `json:"state_mutation"`
+		} `json:"receipt"`
+	}
+	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, res.Output)
+	}
+	if out.Command != "/status" || !strings.Contains(out.Output, `"provider"`) {
+		t.Fatalf("output = %+v, want status JSON", out)
+	}
+	if out.Receipt.Tool != "runtime_command" || out.Receipt.Action != "execute" || !out.Receipt.ReadOnly || !out.Receipt.ExecutionAvailable || out.Receipt.ExecutionPolicy != "local_runtime_control_readonly" {
+		t.Fatalf("receipt identity = %+v", out.Receipt)
+	}
+	if out.Receipt.Command != "/status" || len(out.Receipt.Args) != 1 || out.Receipt.Args[0] != "--json" || out.Receipt.StateMutation {
+		t.Fatalf("receipt command bounds = %+v", out.Receipt)
+	}
+}
+
+func TestRuntimeCommandToolRejectsMutatingEffortCommand(t *testing.T) {
+	rt := newTestExecutionRuntime(t, &countingProvider{})
+	tool, ok := rt.reg.Get("runtime_command")
+	if !ok {
+		t.Fatal("runtime_command tool missing")
+	}
+
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"/effort","args":["high"]}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if !res.IsError || !strings.Contains(res.Output, "read-only") {
+		t.Fatalf("result = %+v, want read-only rejection", res)
 	}
 }
 

@@ -780,6 +780,7 @@ func buildExecutionRuntime(
 		planModeController: planModeController,
 		taskStopTool:       taskStopTool,
 	}
+	reg.Register(newRuntimeCommandTool(func() *executionRuntime { return rt }))
 	return rt, nil
 }
 
@@ -1640,6 +1641,9 @@ func completionControlToolReceiptsToLearning(src []completionControlToolReceipt)
 			HandoffID:               receipt.HandoffID,
 			Box:                     receipt.Box,
 			Delivered:               receipt.Delivered,
+			Command:                 receipt.Command,
+			Args:                    append([]string(nil), receipt.Args...),
+			StateMutation:           receipt.StateMutation,
 		})
 	}
 	return out

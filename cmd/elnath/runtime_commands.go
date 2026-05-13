@@ -90,6 +90,7 @@ func runtimeCommandCatalogWithSkills(skillReg *skill.Registry, includeHidden boo
 			Surface:            "runtime_slash",
 			ExecutionPolicy:    "local_runtime_control",
 			ExecutionAvailable: spec.Handler != nil,
+			ModelCallable:      runtimeSlashCommandModelCallable(spec.Name),
 		})
 	}
 	entries = append(entries, skillBackedCommandCatalogEntries(skillReg, entries, includeHidden)...)
@@ -97,6 +98,15 @@ func runtimeCommandCatalogWithSkills(skillReg *skill.Registry, includeHidden boo
 		return entries[i].Name < entries[j].Name
 	})
 	return entries
+}
+
+func runtimeSlashCommandModelCallable(name string) bool {
+	switch strings.TrimSpace(name) {
+	case "/version", "/status", "/commands", "/help", "/skills", "/provider", "/model", "/effort", "/plan":
+		return true
+	default:
+		return false
+	}
 }
 
 func skillBackedCommandCatalogEntries(skillReg *skill.Registry, existing []commandCatalogEntry, includeHidden bool) []commandCatalogEntry {
