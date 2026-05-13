@@ -135,3 +135,75 @@ func TestCmdExplainTimeoutsTextShowsCorrectionPolicy(t *testing.T) {
 		}
 	}
 }
+
+func TestExplainControlSurfacesJSON(t *testing.T) {
+	stdout, _ := captureOutput(t, func() {
+		if err := explainControlSurfaces([]string{"--json"}); err != nil {
+			t.Fatalf("explainControlSurfaces(--json): %v", err)
+		}
+	})
+
+	var out struct {
+		Surfaces []struct {
+			Name                   string   `json:"name"`
+			Status                 string   `json:"status"`
+			Tools                  []string `json:"tools"`
+			ToolSearchDiscoverable bool     `json:"tool_search_discoverable"`
+			ReceiptBacked          bool     `json:"receipt_backed"`
+		} `json:"surfaces"`
+		RemainingGaps []string `json:"remaining_gaps"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &out); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout)
+	}
+	byName := map[string]struct {
+		status                 string
+		toolSearchDiscoverable bool
+		receiptBacked          bool
+		toolCount              int
+	}{}
+	for _, surface := range out.Surfaces {
+		byName[surface.Name] = struct {
+			status                 string
+			toolSearchDiscoverable bool
+			receiptBacked          bool
+			toolCount              int
+		}{
+			status:                 surface.Status,
+			toolSearchDiscoverable: surface.ToolSearchDiscoverable,
+			receiptBacked:          surface.ReceiptBacked,
+			toolCount:              len(surface.Tools),
+		}
+	}
+	for _, name := range []string{"task", "schedule", "plan", "worktree", "process", "skill", "command"} {
+		entry, ok := byName[name]
+		if !ok {
+			t.Fatalf("missing control surface %q in %+v", name, byName)
+		}
+		if entry.status != "implemented" || !entry.toolSearchDiscoverable || !entry.receiptBacked || entry.toolCount == 0 {
+			t.Fatalf("surface %s = %+v, want implemented ToolSearch-discoverable receipt-backed with tools", name, entry)
+		}
+	}
+	if len(out.RemainingGaps) == 0 {
+		t.Fatal("remaining_gaps empty, want honest non-complete boundary")
+	}
+}
+
+func TestExplainControlSurfacesText(t *testing.T) {
+	stdout, _ := captureOutput(t, func() {
+		if err := explainControlSurfaces(nil); err != nil {
+			t.Fatalf("explainControlSurfaces: %v", err)
+		}
+	})
+
+	for _, want := range []string{
+		"Control surfaces:",
+		"task: implemented",
+		"worktree: implemented",
+		"Remaining gaps:",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout missing %q:\n%s", want, stdout)
+		}
+	}
+}
