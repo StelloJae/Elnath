@@ -39,6 +39,9 @@ func TestPlanModeToolsSwitchAndRestorePermissionMode(t *testing.T) {
 	if !enterOutput.Receipt.ReadOnlyAfterTransition || enterOutput.Receipt.PreviousMode != "accept_edits" || enterOutput.Receipt.CurrentMode != "plan" {
 		t.Fatalf("enter receipt modes = %+v", enterOutput.Receipt)
 	}
+	if enterOutput.Receipt.FollowupTool != ExitPlanModeToolName {
+		t.Fatalf("enter receipt followup = %q, want %q", enterOutput.Receipt.FollowupTool, ExitPlanModeToolName)
+	}
 
 	exitResult, err := NewExitPlanModeTool(controller).Execute(context.Background(), nil)
 	if err != nil {
@@ -66,6 +69,9 @@ func TestPlanModeToolsSwitchAndRestorePermissionMode(t *testing.T) {
 	}
 	if exitOutput.Receipt.ReadOnlyAfterTransition || exitOutput.Receipt.PreviousMode != "accept_edits" || exitOutput.Receipt.CurrentMode != "accept_edits" || !exitOutput.Receipt.Restored {
 		t.Fatalf("exit receipt modes = %+v", exitOutput.Receipt)
+	}
+	if exitOutput.Receipt.FollowupTool != "" {
+		t.Fatalf("exit receipt followup = %q, want empty", exitOutput.Receipt.FollowupTool)
 	}
 }
 

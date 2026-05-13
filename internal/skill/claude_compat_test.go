@@ -133,6 +133,37 @@ Ship the PR.
 	}
 }
 
+func TestLoadClaudeSkillDirParsesPermissionPatternsWithSpaces(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	skillDir := filepath.Join(root, ".claude", "skills", "workflow")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	raw := `---
+description: Run workflow
+allowed-tools: Bash(git diff:*), BashOutput, KillBash, AskUserQuestion
+---
+Run the workflow.
+`
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	skills, err := LoadClaudeSkillDir(root)
+	if err != nil {
+		t.Fatalf("LoadClaudeSkillDir: %v", err)
+	}
+	if len(skills) != 1 {
+		t.Fatalf("len(skills) = %d, want 1", len(skills))
+	}
+	want := []string{"bash", "process_monitor", "process_stop", "ask_user_question"}
+	if !reflect.DeepEqual(skills[0].RequiredTools, want) {
+		t.Fatalf("RequiredTools = %#v, want %#v", skills[0].RequiredTools, want)
+	}
+}
+
 func TestLoadClaudeSkillDirParsesConditionalPaths(t *testing.T) {
 	t.Parallel()
 

@@ -36,6 +36,9 @@ func TestEnterWorktreeCreatesRegistryAndReusesExisting(t *testing.T) {
 	if output.Receipt.Tool != EnterToolName || output.Receipt.Action != "enter" || output.Receipt.ReadOnly || !output.Receipt.Persistent || !output.Receipt.RegistryBacked || output.Receipt.Name != output.Name || output.Receipt.Branch != output.Branch {
 		t.Fatalf("receipt = %+v, want enter_worktree registry mutation receipt", output.Receipt)
 	}
+	if output.Receipt.FollowupTool != RunToolName {
+		t.Fatalf("enter receipt followup = %q, want %q", output.Receipt.FollowupTool, RunToolName)
+	}
 	repoRoot := gitOutput(t, repo, "rev-parse", "--show-toplevel")
 	if !strings.HasPrefix(output.Path, filepath.Join(repoRoot, ".elnath", "worktrees")+string(os.PathSeparator)) {
 		t.Fatalf("worktree path = %q, want under .elnath/worktrees", output.Path)
@@ -122,6 +125,9 @@ func TestExitWorktreeRequiresCleanOrDiscard(t *testing.T) {
 	}
 	if exitOutput.Receipt.Tool != ExitToolName || exitOutput.Receipt.Action != "exit" || exitOutput.Receipt.ReadOnly || !exitOutput.Receipt.Persistent || !exitOutput.Receipt.RegistryBacked || !exitOutput.Receipt.Removed {
 		t.Fatalf("receipt = %+v, want exit_worktree registry mutation receipt", exitOutput.Receipt)
+	}
+	if exitOutput.Receipt.FollowupTool != ListToolName {
+		t.Fatalf("exit receipt followup = %q, want %q", exitOutput.Receipt.FollowupTool, ListToolName)
 	}
 	if _, err := os.Stat(enterOutput.Path); !os.IsNotExist(err) {
 		t.Fatalf("worktree path still exists or stat failed unexpectedly: %v", err)
@@ -267,6 +273,9 @@ func TestWorktreePruneToolDefaultsToDryRun(t *testing.T) {
 	if output.Receipt.Tool != PruneToolName || output.Receipt.Action != "prune" || !output.Receipt.ReadOnly || output.Receipt.Persistent || !output.Receipt.RegistryBacked || !output.Receipt.DryRun {
 		t.Fatalf("receipt = %+v, want dry-run prune read-only receipt", output.Receipt)
 	}
+	if output.Receipt.FollowupTool != PruneToolName {
+		t.Fatalf("dry-run prune receipt followup = %q, want %q", output.Receipt.FollowupTool, PruneToolName)
+	}
 	registry, err := manager.readRegistry(context.Background())
 	if err != nil {
 		t.Fatalf("readRegistry: %v", err)
@@ -310,6 +319,9 @@ func TestWorktreePruneToolRemovesMissingRegistryEntries(t *testing.T) {
 	}
 	if output.DryRun || output.StaleCount != 1 || output.RemovedCount != 1 || output.KeptCount != 0 {
 		t.Fatalf("prune output = %+v, want one stale entry removed", output)
+	}
+	if output.Receipt.FollowupTool != ListToolName {
+		t.Fatalf("prune removal receipt followup = %q, want %q", output.Receipt.FollowupTool, ListToolName)
 	}
 	registry, err := manager.readRegistry(context.Background())
 	if err != nil {
