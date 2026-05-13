@@ -12,6 +12,7 @@ import (
 
 	"github.com/stello/elnath/internal/config"
 	"github.com/stello/elnath/internal/learning"
+	basetools "github.com/stello/elnath/internal/tools"
 	"github.com/stello/elnath/internal/wiki"
 )
 
@@ -161,6 +162,14 @@ type controlSurfacePolicyEntry struct {
 	Notes                  string   `json:"notes,omitempty"`
 }
 
+type controlSurfaceManifestEntry struct {
+	Name          string
+	Status        string
+	Tools         []string
+	ReceiptBacked bool
+	Notes         string
+}
+
 func explainControlSurfaces(args []string) error {
 	jsonOut := false
 	for _, arg := range args {
@@ -199,79 +208,100 @@ func explainControlSurfaces(args []string) error {
 }
 
 func controlSurfacePolicyViewForRuntime() controlSurfacePolicyView {
+	surfaces := make([]controlSurfacePolicyEntry, 0, len(controlSurfaceManifest()))
+	for _, surface := range controlSurfaceManifest() {
+		tools := append([]string(nil), surface.Tools...)
+		surfaces = append(surfaces, controlSurfacePolicyEntry{
+			Name:                   surface.Name,
+			Status:                 surface.Status,
+			Tools:                  tools,
+			ToolSearchDiscoverable: controlSurfaceToolsMatchRouting(surface.Name, tools),
+			ReceiptBacked:          surface.ReceiptBacked,
+			Notes:                  surface.Notes,
+		})
+	}
 	return controlSurfacePolicyView{
-		Surfaces: []controlSurfacePolicyEntry{
-			{
-				Name:                   "task",
-				Status:                 "implemented",
-				Tools:                  []string{"task_create", "task_list", "task_get", "task_stop", "task_output", "task_monitor", "task_update"},
-				ToolSearchDiscoverable: true,
-				ReceiptBacked:          true,
-				Notes:                  "daemon queue task lifecycle",
-			},
-			{
-				Name:                   "user_input",
-				Status:                 "partial",
-				Tools:                  []string{"ask_user_question", "user_question_list", "user_question_answer"},
-				ToolSearchDiscoverable: true,
-				ReceiptBacked:          true,
-				Notes:                  "structured question receipts, pending lookup, strict answer enqueue, and CLI answer surface",
-			},
-			{
-				Name:                   "schedule",
-				Status:                 "implemented",
-				Tools:                  []string{"schedule_create", "schedule_list", "schedule_delete"},
-				ToolSearchDiscoverable: true,
-				ReceiptBacked:          true,
-				Notes:                  "static scheduled daemon tasks",
-			},
-			{
-				Name:                   "plan",
-				Status:                 "implemented",
-				Tools:                  []string{"enter_plan_mode", "exit_plan_mode"},
-				ToolSearchDiscoverable: true,
-				ReceiptBacked:          true,
-				Notes:                  "session permission-mode transition",
-			},
-			{
-				Name:                   "worktree",
-				Status:                 "implemented",
-				Tools:                  []string{"enter_worktree", "worktree_list", "worktree_run", "worktree_prune", "exit_worktree"},
-				ToolSearchDiscoverable: true,
-				ReceiptBacked:          true,
-				Notes:                  "managed git worktree lifecycle and bounded run",
-			},
-			{
-				Name:                   "process",
-				Status:                 "implemented",
-				Tools:                  []string{"process_start", "process_monitor", "process_stop"},
-				ToolSearchDiscoverable: true,
-				ReceiptBacked:          true,
-				Notes:                  "session-scoped long-running command observation",
-			},
-			{
-				Name:                   "skill",
-				Status:                 "implemented",
-				Tools:                  []string{"skill_catalog", "skill", "create_skill"},
-				ToolSearchDiscoverable: true,
-				ReceiptBacked:          true,
-				Notes:                  "SKILL.md-compatible discovery and execution",
-			},
-			{
-				Name:                   "command",
-				Status:                 "implemented",
-				Tools:                  []string{"command_catalog", "runtime_command"},
-				ToolSearchDiscoverable: true,
-				ReceiptBacked:          true,
-				Notes:                  "read-only command catalog and safe runtime slash execution",
-			},
-		},
+		Surfaces: surfaces,
 		RemainingGaps: []string{
 			"blocking wait state and UI-level answer collection are still missing",
 			"bounded self-correction is intentionally closed-enum and not broad silent self-healing",
-			"surface status is static; future manifest-backed metadata can replace this view",
+			"control-surface view is manifest-backed; full runtime registry introspection remains future polish",
 		},
 	}
+}
+
+func controlSurfaceManifest() []controlSurfaceManifestEntry {
+	return []controlSurfaceManifestEntry{
+		{
+			Name:          "task",
+			Status:        "implemented",
+			Tools:         []string{"task_create", "task_list", "task_get", "task_stop", "task_output", "task_monitor", "task_update"},
+			ReceiptBacked: true,
+			Notes:         "daemon queue task lifecycle",
+		},
+		{
+			Name:          "user_input",
+			Status:        "partial",
+			Tools:         []string{"ask_user_question", "user_question_list", "user_question_answer"},
+			ReceiptBacked: true,
+			Notes:         "structured question receipts, pending lookup, strict answer enqueue, and CLI answer surface",
+		},
+		{
+			Name:          "schedule",
+			Status:        "implemented",
+			Tools:         []string{"schedule_create", "schedule_list", "schedule_delete"},
+			ReceiptBacked: true,
+			Notes:         "static scheduled daemon tasks",
+		},
+		{
+			Name:          "plan",
+			Status:        "implemented",
+			Tools:         []string{"enter_plan_mode", "exit_plan_mode"},
+			ReceiptBacked: true,
+			Notes:         "session permission-mode transition",
+		},
+		{
+			Name:          "worktree",
+			Status:        "implemented",
+			Tools:         []string{"enter_worktree", "worktree_list", "worktree_run", "worktree_prune", "exit_worktree"},
+			ReceiptBacked: true,
+			Notes:         "managed git worktree lifecycle and bounded run",
+		},
+		{
+			Name:          "process",
+			Status:        "implemented",
+			Tools:         []string{"process_start", "process_monitor", "process_stop"},
+			ReceiptBacked: true,
+			Notes:         "session-scoped long-running command observation",
+		},
+		{
+			Name:          "skill",
+			Status:        "implemented",
+			Tools:         []string{"skill_catalog", "skill", "create_skill"},
+			ReceiptBacked: true,
+			Notes:         "SKILL.md-compatible discovery and execution",
+		},
+		{
+			Name:          "command",
+			Status:        "implemented",
+			Tools:         []string{"command_catalog", "runtime_command"},
+			ReceiptBacked: true,
+			Notes:         "read-only command catalog and safe runtime slash execution",
+		},
+	}
+}
+
+func controlSurfaceToolsMatchRouting(surface string, names []string) bool {
+	if surface == "" || len(names) == 0 {
+		return false
+	}
+	for _, name := range names {
+		routing := basetools.ToolRoutingMetadataForName(name)
+		if routing.Category != surface || routing.Surface == "" {
+			return false
+		}
+	}
+	return true
 }
 
 type timeoutPolicyView struct {
