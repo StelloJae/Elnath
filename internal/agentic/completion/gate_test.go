@@ -291,6 +291,15 @@ func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testi
 					StderrRawBytes:  4,
 					StderrTruncated: true,
 					CWD:             "/tmp/work",
+				}, {
+					Tool:            "ask_user_question",
+					Action:          "request",
+					ReadOnly:        true,
+					ExecutionPolicy: "user_input_request",
+					QuestionChars:   13,
+					OptionCount:     2,
+					AllowFreeText:   false,
+					TimeoutSeconds:  120,
 				}},
 				CorrectionAttempts:    1,
 				CorrectionMaxAttempts: 1,
@@ -383,7 +392,7 @@ func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testi
 		t.Fatalf("tool_search_receipts missing: summary=%v", summary)
 	}
 	controlToolReceipts, ok := summary["control_tool_receipts"].([]any)
-	if !ok || len(controlToolReceipts) != 3 {
+	if !ok || len(controlToolReceipts) != 4 {
 		t.Fatalf("control_tool_receipts missing: summary=%v", summary)
 	}
 	delegateReceipt, ok := controlToolReceipts[1].(map[string]any)
@@ -393,6 +402,10 @@ func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testi
 	processReceipt, ok := controlToolReceipts[2].(map[string]any)
 	if !ok || processReceipt["tool"] != "process_monitor" || processReceipt["process_id"] != float64(4) || processReceipt["tail_bytes"] != float64(4000) || processReceipt["stdout_raw_bytes"] != float64(5) || processReceipt["stderr_truncated"] != true || processReceipt["cwd"] != "/tmp/work" {
 		t.Fatalf("process control receipt missing fields: receipt=%v summary=%v", controlToolReceipts[2], summary)
+	}
+	askReceipt, ok := controlToolReceipts[3].(map[string]any)
+	if !ok || askReceipt["tool"] != "ask_user_question" || askReceipt["question_chars"] != float64(13) || askReceipt["option_count"] != float64(2) || askReceipt["timeout_seconds"] != float64(120) {
+		t.Fatalf("ask_user_question control receipt missing fields: receipt=%v summary=%v", controlToolReceipts[3], summary)
 	}
 	if summary["correction_attempts"] != float64(1) || summary["correction_max_attempts"] != float64(1) {
 		t.Fatalf("correction budget fields missing: summary=%v", summary)
