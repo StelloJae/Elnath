@@ -228,8 +228,8 @@ reasoning:
 
 self_healing:
   enabled: true
-  observe_only: true # set false to allow one bounded completion correction pass
-  completion_retry_max: 1 # supported: 0 or 1; 0 disables correction retry even when observe_only=false
+  observe_only: true # set false to allow bounded completion correction passes
+  completion_retry_max: 1 # supported: 0, 1, or 2; 0 disables correction retry even when observe_only=false
 
 skills:
   plugin_cache: enabled # enabled|disabled; disabled skips ~/.codex/plugins/cache skills

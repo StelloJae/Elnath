@@ -5,7 +5,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/stello/elnath/internal/config"
 )
 
 func TestCmdExplainTimeoutsJSON(t *testing.T) {
@@ -60,12 +64,14 @@ func TestCmdExplainTimeoutsJSON(t *testing.T) {
 			WorkspaceRetention       string `json:"workspace_retention"`
 		} `json:"daemon"`
 		SelfHealing struct {
-			Enabled                                    bool `json:"enabled"`
-			ObserveOnly                                bool `json:"observe_only"`
-			TimeoutSeconds                             int  `json:"timeout_seconds"`
-			CompletionRetryMax                         int  `json:"completion_retry_max"`
-			VerificationRetryRequiresStandaloneCommand bool `json:"verification_retry_requires_standalone_command"`
-			VerificationRetryInfersCommandFromProse    bool `json:"verification_retry_infers_command_from_prose"`
+			Enabled                                    bool     `json:"enabled"`
+			ObserveOnly                                bool     `json:"observe_only"`
+			TimeoutSeconds                             int      `json:"timeout_seconds"`
+			CompletionRetryMax                         int      `json:"completion_retry_max"`
+			CompletionRetrySupportedMax                int      `json:"completion_retry_supported_max"`
+			CompletionRetryDecisions                   []string `json:"completion_retry_decisions"`
+			VerificationRetryRequiresStandaloneCommand bool     `json:"verification_retry_requires_standalone_command"`
+			VerificationRetryInfersCommandFromProse    bool     `json:"verification_retry_infers_command_from_prose"`
 		} `json:"self_healing"`
 		Telegram struct {
 			PollTimeoutSeconds int `json:"poll_timeout_seconds"`
@@ -91,10 +97,41 @@ func TestCmdExplainTimeoutsJSON(t *testing.T) {
 	if !out.SelfHealing.Enabled || out.SelfHealing.ObserveOnly || out.SelfHealing.TimeoutSeconds != 17 || out.SelfHealing.CompletionRetryMax != 1 {
 		t.Fatalf("self_healing policy = %+v, want configured self-healing timeout policy", out.SelfHealing)
 	}
+	if out.SelfHealing.CompletionRetrySupportedMax != maxCompletionRetryAttempts {
+		t.Fatalf("completion_retry_supported_max = %d, want %d", out.SelfHealing.CompletionRetrySupportedMax, maxCompletionRetryAttempts)
+	}
+	wantDecisions := []string{completionRetryDecisionRetrySmallerScope, completionRetryDecisionRunVerification}
+	if !reflect.DeepEqual(out.SelfHealing.CompletionRetryDecisions, wantDecisions) {
+		t.Fatalf("completion_retry_decisions = %v, want %v", out.SelfHealing.CompletionRetryDecisions, wantDecisions)
+	}
 	if !out.SelfHealing.VerificationRetryRequiresStandaloneCommand || out.SelfHealing.VerificationRetryInfersCommandFromProse {
 		t.Fatalf("self_healing verification retry policy = %+v, want standalone-only without prose inference", out.SelfHealing)
 	}
 	if out.Telegram.PollTimeoutSeconds != 11 {
 		t.Fatalf("telegram poll timeout = %d, want 11", out.Telegram.PollTimeoutSeconds)
+	}
+}
+
+func TestCmdExplainTimeoutsTextShowsCorrectionPolicy(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.SelfHealing.Enabled = true
+	cfg.SelfHealing.ObserveOnly = false
+	cfg.SelfHealing.CompletionRetryMax = 2
+
+	stdout, _ := captureOutput(t, func() {
+		if err := explainTimeouts(cfg, nil); err != nil {
+			t.Fatalf("explainTimeouts: %v", err)
+		}
+	})
+
+	for _, want := range []string{
+		"completion_retry_max=2",
+		"supported_max=2",
+		"decisions=retry_smaller_scope,run_verification",
+		"verification_retry=standalone_command_only",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout missing %q:\n%s", want, stdout)
+		}
 	}
 }
