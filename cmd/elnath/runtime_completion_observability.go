@@ -520,6 +520,7 @@ var completionControlToolReceiptNames = map[string]struct{}{
 	"agentic_message_list":     {},
 	"runtime_command":          {},
 	"ask_user_question":        {},
+	"user_question_list":       {},
 }
 
 func observedControlToolReceipts(messages []llm.Message) []completionControlToolReceipt {

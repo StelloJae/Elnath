@@ -190,8 +190,8 @@ func TestExplainControlSurfacesJSON(t *testing.T) {
 	if !ok {
 		t.Fatalf("missing control surface user_input in %+v", byName)
 	}
-	if userInput.status != "partial" || !userInput.toolSearchDiscoverable || !userInput.receiptBacked || userInput.toolCount != 2 {
-		t.Fatalf("user_input surface = %+v, want partial ToolSearch-discoverable receipt-backed with two tools", userInput)
+	if userInput.status != "partial" || !userInput.toolSearchDiscoverable || !userInput.receiptBacked || userInput.toolCount != 3 {
+		t.Fatalf("user_input surface = %+v, want partial ToolSearch-discoverable receipt-backed with three tools", userInput)
 	}
 	if len(out.RemainingGaps) == 0 {
 		t.Fatal("remaining_gaps empty, want honest non-complete boundary")

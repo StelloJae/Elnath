@@ -212,7 +212,7 @@ func controlSurfacePolicyViewForRuntime() controlSurfacePolicyView {
 			{
 				Name:                   "user_input",
 				Status:                 "partial",
-				Tools:                  []string{"ask_user_question", "user_question_answer"},
+				Tools:                  []string{"ask_user_question", "user_question_list", "user_question_answer"},
 				ToolSearchDiscoverable: true,
 				ReceiptBacked:          true,
 				Notes:                  "structured question receipts and session-bound answer enqueue",

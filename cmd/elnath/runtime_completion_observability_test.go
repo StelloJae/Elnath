@@ -617,6 +617,28 @@ func TestCompletionContractSummaryRecordsUserQuestionAnswerReceipt(t *testing.T)
 	}
 }
 
+func TestCompletionContractSummaryRecordsUserQuestionListReceipt(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("list pending questions"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "questions-1", Name: "user_question_list", Input: json.RawMessage(`{"session_id":"sess-123"}`)},
+			}},
+			llm.NewToolResultMessage("questions-1", `{"count":1,"pending":[],"receipt":{"tool":"user_question_list","action":"list","read_only":true,"session_id":"sess-123","limit":20,"total_returned":1}}`, false),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(nil, orchestrator.WorkflowConfig{}, result)
+
+	if len(summary.ControlToolReceipts) != 1 {
+		t.Fatalf("ControlToolReceipts = %#v, want one user_question_list receipt", summary.ControlToolReceipts)
+	}
+	receipt := summary.ControlToolReceipts[0]
+	if receipt.Tool != "user_question_list" || receipt.Action != "list" || !receipt.ReadOnly || receipt.SessionID != "sess-123" || receipt.Limit != 20 || receipt.TotalReturned != 1 {
+		t.Fatalf("receipt = %+v, want pending-question list receipt", receipt)
+	}
+}
+
 func TestCompletionContractSummaryDoesNotRetryWhenUserInputRequired(t *testing.T) {
 	result := &orchestrator.WorkflowResult{
 		Messages: []llm.Message{
