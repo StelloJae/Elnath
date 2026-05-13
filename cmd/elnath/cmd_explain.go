@@ -215,7 +215,7 @@ func controlSurfacePolicyViewForRuntime() controlSurfacePolicyView {
 				Tools:                  []string{"ask_user_question", "user_question_list", "user_question_answer"},
 				ToolSearchDiscoverable: true,
 				ReceiptBacked:          true,
-				Notes:                  "structured question receipts and session-bound answer enqueue",
+				Notes:                  "structured question receipts, pending lookup, strict answer enqueue, and CLI answer surface",
 			},
 			{
 				Name:                   "schedule",
@@ -267,7 +267,7 @@ func controlSurfacePolicyViewForRuntime() controlSurfacePolicyView {
 			},
 		},
 		RemainingGaps: []string{
-			"blocking wait state and automatic wake after user answer are still missing",
+			"blocking wait state and UI-level answer collection are still missing",
 			"bounded self-correction is intentionally closed-enum and not broad silent self-healing",
 			"surface status is static; future manifest-backed metadata can replace this view",
 		},

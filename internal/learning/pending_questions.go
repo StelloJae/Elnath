@@ -69,3 +69,16 @@ func PendingUserQuestions(records []OutcomeRecord, sessionID string, limit int) 
 	}
 	return out
 }
+
+func FindPendingUserQuestion(records []OutcomeRecord, sessionID, requestID string) (PendingUserQuestion, bool) {
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return PendingUserQuestion{}, false
+	}
+	for _, question := range PendingUserQuestions(records, sessionID, 0) {
+		if question.RequestID == requestID {
+			return question, true
+		}
+	}
+	return PendingUserQuestion{}, false
+}

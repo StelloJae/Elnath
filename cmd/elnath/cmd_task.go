@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
 	"github.com/stello/elnath/internal/config"
 	"github.com/stello/elnath/internal/core"
 	"github.com/stello/elnath/internal/daemon"
+	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/tools"
 )
 
@@ -25,6 +27,7 @@ Subcommands:
   monitor <id>       Show or wait for task monitor snapshot
   output <id>        Read bounded task output
   stop <id>          Stop a pending task
+  answer             Answer a pending user-input request and enqueue resume
   resume <id>        Resume the session created by a task`)
 		return nil
 	}
@@ -39,6 +42,8 @@ Subcommands:
 		return cmdTaskOutput(ctx, args[1:])
 	case "stop":
 		return cmdTaskStop(ctx, args[1:])
+	case "answer":
+		return cmdTaskAnswer(ctx, args[1:])
 	case "resume":
 		return cmdTaskResume(ctx, args[1:])
 	default:
@@ -154,6 +159,20 @@ func cmdTaskStop(ctx context.Context, args []string) error {
 	}
 	defer db.Close()
 	return cmdTaskStopWithQueue(ctx, queue, args)
+}
+
+func cmdTaskAnswer(ctx context.Context, args []string) error {
+	cfg, db, err := openTaskDB()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	queue, err := daemon.NewQueue(db.Main)
+	if err != nil {
+		return fmt.Errorf("open queue: %w", err)
+	}
+	outcomeStore := learning.NewOutcomeStore(filepath.Join(cfg.DataDir, "outcomes.jsonl"))
+	return cmdTaskAnswerWithQueue(ctx, queue, outcomeStore, args)
 }
 
 func cmdTaskMonitorWithQueue(ctx context.Context, queue *daemon.Queue, args []string) error {
@@ -321,6 +340,100 @@ func cmdTaskStopWithQueue(ctx context.Context, queue *daemon.Queue, args []strin
 	return nil
 }
 
+func cmdTaskAnswerWithQueue(ctx context.Context, queue *daemon.Queue, outcomeStore *learning.OutcomeStore, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: elnath task answer --session ID --request ID --answer TEXT [--json] [--question TEXT] [--surface TEXT] [--idempotency-key KEY]")
+	}
+	params := map[string]any{}
+	jsonOut := false
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--json":
+			jsonOut = true
+		case "--session":
+			value, next, err := parseStringFlag(args, i, "--session")
+			if err != nil {
+				return err
+			}
+			params["session_id"] = value
+			i = next
+		case "--request", "--request-id":
+			value, next, err := parseStringFlag(args, i, args[i])
+			if err != nil {
+				return err
+			}
+			params["request_id"] = value
+			i = next
+		case "--answer":
+			value, next, err := parseStringFlag(args, i, "--answer")
+			if err != nil {
+				return err
+			}
+			params["answer"] = value
+			i = next
+		case "--question":
+			value, next, err := parseStringFlag(args, i, "--question")
+			if err != nil {
+				return err
+			}
+			params["question"] = value
+			i = next
+		case "--surface":
+			value, next, err := parseStringFlag(args, i, "--surface")
+			if err != nil {
+				return err
+			}
+			params["surface"] = value
+			i = next
+		case "--idempotency-key":
+			value, next, err := parseStringFlag(args, i, "--idempotency-key")
+			if err != nil {
+				return err
+			}
+			params["idempotency_key"] = value
+			i = next
+		default:
+			return fmt.Errorf("unknown task answer flag: %s", args[i])
+		}
+	}
+
+	output, err := executeTaskTool(ctx, daemon.NewUserQuestionAnswerToolWithValidator(queue, pendingUserQuestionValidator{store: outcomeStore}), params)
+	if err != nil {
+		return err
+	}
+	var view taskAnswerCLIOutput
+	if err := json.Unmarshal([]byte(output), &view); err != nil {
+		return fmt.Errorf("task answer: parse output: %w", err)
+	}
+	if err := recordTaskAnswerOutcome(outcomeStore, view); err != nil {
+		return err
+	}
+	if jsonOut {
+		fmt.Println(output)
+		return nil
+	}
+	printTaskAnswer(view)
+	return nil
+}
+
+func recordTaskAnswerOutcome(outcomeStore *learning.OutcomeStore, view taskAnswerCLIOutput) error {
+	if outcomeStore == nil {
+		return fmt.Errorf("task answer: outcome store unavailable")
+	}
+	if view.Receipt.Tool == "" {
+		return fmt.Errorf("task answer: receipt missing")
+	}
+	return outcomeStore.Append(learning.OutcomeRecord{
+		ProjectID:           "elnath",
+		Intent:              "user_input_answer",
+		Workflow:            "task_answer",
+		FinishReason:        "stop",
+		Success:             true,
+		SessionID:           view.SessionID,
+		ControlToolReceipts: []learning.ControlToolReceipt{view.Receipt},
+	})
+}
+
 func cmdTaskResume(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: elnath task resume <id>")
@@ -437,6 +550,15 @@ type taskStopCLIOutput struct {
 	FollowupTool   string `json:"followup_tool"`
 }
 
+type taskAnswerCLIOutput struct {
+	TaskID      int64                       `json:"task_id"`
+	Status      string                      `json:"status"`
+	RequestID   string                      `json:"request_id"`
+	SessionID   string                      `json:"session_id"`
+	AnswerChars int                         `json:"answer_chars"`
+	Receipt     learning.ControlToolReceipt `json:"receipt"`
+}
+
 func printTaskMonitor(view taskMonitorCLIOutput) {
 	fmt.Printf("ID:           %d\n", view.TaskID)
 	fmt.Printf("Status:       %s\n", view.Status)
@@ -486,6 +608,17 @@ func printTaskStop(view taskStopCLIOutput) {
 		fmt.Printf("Follow-up:       %s\n", view.FollowupTool)
 	}
 	fmt.Printf("Reason:          %s\n", view.Reason)
+}
+
+func printTaskAnswer(view taskAnswerCLIOutput) {
+	fmt.Printf("Answer task:   #%d\n", view.TaskID)
+	fmt.Printf("Status:        %s\n", view.Status)
+	fmt.Printf("Session:       %s\n", view.SessionID)
+	if view.RequestID != "" {
+		fmt.Printf("Request:       %s\n", view.RequestID)
+	}
+	fmt.Printf("Answer chars:  %d\n", view.AnswerChars)
+	fmt.Printf("Next:          elnath task monitor %d\n", view.TaskID)
 }
 
 func parseTaskID(raw string) (int64, error) {

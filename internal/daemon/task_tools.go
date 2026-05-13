@@ -181,11 +181,26 @@ func (t *TaskCreateTool) Execute(ctx context.Context, params json.RawMessage) (*
 }
 
 type UserQuestionAnswerTool struct {
-	queue *Queue
+	queue     *Queue
+	validator UserQuestionAnswerValidator
 }
 
 func NewUserQuestionAnswerTool(queue *Queue) *UserQuestionAnswerTool {
 	return &UserQuestionAnswerTool{queue: queue}
+}
+
+func NewUserQuestionAnswerToolWithValidator(queue *Queue, validator UserQuestionAnswerValidator) *UserQuestionAnswerTool {
+	return &UserQuestionAnswerTool{queue: queue, validator: validator}
+}
+
+type UserQuestionAnswerValidator interface {
+	ValidateUserQuestionAnswer(ctx context.Context, sessionID, requestID string) (UserQuestionAnswerValidation, error)
+}
+
+type UserQuestionAnswerValidation struct {
+	Found         bool
+	Question      string
+	QuestionChars int
 }
 
 func (t *UserQuestionAnswerTool) Name() string { return UserQuestionAnswerToolName }
@@ -258,6 +273,26 @@ func (t *UserQuestionAnswerTool) Execute(ctx context.Context, params json.RawMes
 	}
 	question := strings.TrimSpace(input.Question)
 	requestID := strings.TrimSpace(input.RequestID)
+	questionChars := len([]rune(question))
+	if t.validator != nil {
+		if requestID == "" {
+			return tools.ErrorResult("user_question_answer: request_id is required when pending-question validation is enabled"), nil
+		}
+		validation, err := t.validator.ValidateUserQuestionAnswer(ctx, sessionID, requestID)
+		if err != nil {
+			return tools.ErrorResult(fmt.Sprintf("user_question_answer: validate request_id: %v", err)), nil
+		}
+		if !validation.Found {
+			return tools.ErrorResult("user_question_answer: request_id is not pending for session_id"), nil
+		}
+		if question == "" {
+			question = strings.TrimSpace(validation.Question)
+			questionChars = len([]rune(question))
+			if questionChars == 0 {
+				questionChars = validation.QuestionChars
+			}
+		}
+	}
 	surface := strings.TrimSpace(input.Surface)
 	if surface == "" {
 		surface = "user_question_answer"
@@ -294,7 +329,7 @@ func (t *UserQuestionAnswerTool) Execute(ctx context.Context, params json.RawMes
 			Status:          StatusPending,
 			Deduplicated:    deduped,
 			FollowupTool:    TaskMonitorToolName,
-			QuestionChars:   len([]rune(question)),
+			QuestionChars:   questionChars,
 		},
 	}
 	raw, err := json.Marshal(output)
