@@ -1377,6 +1377,7 @@ func (rt *executionRuntime) recordOutcome(ctx context.Context, in outcomeInput) 
 		ToolStats:               agentToolStatsToLearning(in.toolStats),
 		VerificationHint:        in.completion.VerificationHint,
 		VerificationObserved:    in.completion.VerificationObserved,
+		VerificationCommand:     in.completion.VerificationCommand,
 		CompletionWarning:       in.completion.CompletionWarning,
 		ReasoningEffort:         in.completion.ReasoningEffort,
 		ReasoningEffortMode:     in.completion.ReasoningEffortMode,

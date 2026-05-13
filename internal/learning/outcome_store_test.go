@@ -167,6 +167,7 @@ func TestOutcomeRecordCompletionObservabilityJSONCompatibility(t *testing.T) {
 	observed := false
 	rec.VerificationHint = true
 	rec.VerificationObserved = &observed
+	rec.VerificationCommand = "go test ./cmd/elnath -count=1"
 	rec.CompletionWarning = "final_response_reports_incomplete"
 	rec.ReasoningEffort = "high"
 	rec.ReasoningEffortMode = "auto"
@@ -192,6 +193,7 @@ func TestOutcomeRecordCompletionObservabilityJSONCompatibility(t *testing.T) {
 	for _, want := range []string{
 		`"verification_hint":true`,
 		`"verification_observed":false`,
+		`"verification_command":"go test ./cmd/elnath -count=1"`,
 		`"completion_warning":"final_response_reports_incomplete"`,
 		`"reasoning_effort":"high"`,
 		`"reasoning_effort_mode":"auto"`,

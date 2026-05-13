@@ -415,6 +415,7 @@ func TestRecordOutcomePersistsCompletionObservability(t *testing.T) {
 		completion: completionContractSummary{
 			VerificationHint:        true,
 			VerificationObserved:    &observed,
+			VerificationCommand:     "go test ./cmd/elnath -count=1",
 			CompletionWarning:       "final_response_reports_incomplete",
 			ReasoningEffort:         "high",
 			ReasoningEffortMode:     "auto",
@@ -681,6 +682,9 @@ func assertCompletionOutcome(t *testing.T, rec learning.OutcomeRecord) {
 	}
 	if *rec.VerificationObserved {
 		t.Fatal("VerificationObserved = true, want false")
+	}
+	if rec.VerificationCommand != "go test ./cmd/elnath -count=1" {
+		t.Fatalf("VerificationCommand = %q", rec.VerificationCommand)
 	}
 	if rec.CompletionWarning != "final_response_reports_incomplete" {
 		t.Fatalf("CompletionWarning = %q", rec.CompletionWarning)
