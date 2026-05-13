@@ -54,6 +54,12 @@ required = [
     "Use the known-good focused regression shape: `++foo` must not make `+value` look like an option",
     "Do not chase the optional-value negative-number path first",
     "Run `python3 -m pytest tests/test_parser.py -q` before the final answer",
+    "V8-MIX-BF-001 kustomize deterministic transformer guidance:",
+    "`api/internal/accumulator/namereferencetransformer.go`",
+    "`api/internal/accumulator/namereferencetransformer_test.go`",
+    "Do not finish with only `go.work.sum`",
+    "Immediately edit 'api/internal/accumulator/namereferencetransformer_test.go'",
+    "finish only if both 'api/internal/accumulator/namereferencetransformer.go' and 'api/internal/accumulator/namereferencetransformer_test.go' remain changed",
 ]
 missing = [snippet for snippet in required if snippet not in text]
 if missing:
@@ -241,6 +247,28 @@ GO
 example.com/checksum v1.0.0 h1:abc
 SUMEOF
     echo "Modified files: api/internal/accumulator/namereferencetransformer.go, go.work.sum"
+    echo "Verification: go test ./... passed."
+    ;;
+  v8_mix_bf001_no_fixture_then_test)
+    mkdir -p api/internal/accumulator
+    cat > api/internal/accumulator/namereferencetransformer.go <<'GO'
+package accumulator
+
+func TransformNameReferencesInStableResourceOrder() {}
+GO
+    if [[ "$count" -gt 1 ]]; then
+      cat > api/internal/accumulator/namereferencetransformer_test.go <<'GO'
+package accumulator
+
+import "testing"
+
+func TestNameReferenceTransformerStableResourceOrder(t *testing.T) {}
+GO
+    fi
+    cat > go.work.sum <<'SUMEOF'
+example.com/checksum v1.0.0 h1:abc
+SUMEOF
+    echo "Modified files: api/internal/accumulator/namereferencetransformer.go, api/internal/accumulator/namereferencetransformer_test.go, go.work.sum"
     echo "Verification: go test ./... passed."
     ;;
   go_bug002_unbounded_wait_test)
@@ -473,6 +501,18 @@ assert "api/internal/accumulator/namereferencetransformer.go" in data["changed_f
 assert "go.work.sum" in data["changed_files"], data
 assert "V8-MIX-BF-001" in data["notes"], data
 assert "test/fixture" in data["notes"], data
+'
+
+run_wrapper_case v8_mix_bf001_no_fixture_then_test "$TMP_DIR/v8-mix-bf001-no-fixture-then-test.json" "$SOURCE_REPO" "V8-MIX-BF-001"
+assert_json_case "$TMP_DIR/v8-mix-bf001-no-fixture-then-test.json" '
+assert data["success"] is True, data
+assert data["verification_passed"] is True, data
+assert data["failure_family"] == "", data
+assert data["recovery_attempted"] is True, data
+assert data["recovery_succeeded"] is True, data
+assert "api/internal/accumulator/namereferencetransformer.go" in data["changed_files"], data
+assert "api/internal/accumulator/namereferencetransformer_test.go" in data["changed_files"], data
+assert "go.work.sum" in data["changed_files"], data
 '
 
 run_wrapper_case go_bug002_unbounded_wait_test "$TMP_DIR/go-bug002-unbounded-wait-test.json" "$SOURCE_REPO" "GO-BUG-002"
