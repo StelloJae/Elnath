@@ -752,8 +752,48 @@ func TestTaskMonitorToolWaitsForUpdate(t *testing.T) {
 	if output.RetrievalStatus != taskMonitorRetrievalChanged {
 		t.Fatalf("RetrievalStatus = %q, want changed", output.RetrievalStatus)
 	}
+	if output.Observation.Mode != "wait_for_update" || !output.Observation.WaitForUpdate {
+		t.Fatalf("observation = %+v, want wait_for_update mode", output.Observation)
+	}
+	if output.Observation.SinceUpdatedAt != formatTaskToolTime(initial.UpdatedAt) || output.Observation.TimeoutMS != 500 {
+		t.Fatalf("observation = %+v, want baseline and timeout", output.Observation)
+	}
 	if output.Progress != "new progress" || output.Summary != "updated" {
 		t.Fatalf("progress/summary = %q/%q, want new progress/updated", output.Progress, output.Summary)
+	}
+}
+
+func TestTaskMonitorToolReportsSnapshotObservationReceipt(t *testing.T) {
+	ctx := context.Background()
+	queue := newTaskToolTestQueue(t)
+	if _, _, err := queue.Enqueue(ctx, "snapshot receipt", ""); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	task, err := queue.Next(ctx)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if task == nil {
+		t.Fatal("Next returned nil")
+	}
+
+	result, err := NewTaskMonitorTool(queue).Execute(ctx, json.RawMessage(`{"id":`+jsonInt(task.ID)+`,"max_chars":123}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute returned error result: %s", result.Output)
+	}
+
+	var output taskMonitorToolOutput
+	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if output.Observation.Mode != "snapshot" || output.Observation.WaitForUpdate {
+		t.Fatalf("observation = %+v, want snapshot mode", output.Observation)
+	}
+	if output.Observation.MaxChars != 123 {
+		t.Fatalf("observation max chars = %d, want 123", output.Observation.MaxChars)
 	}
 }
 

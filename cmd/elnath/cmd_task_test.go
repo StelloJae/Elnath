@@ -95,7 +95,7 @@ func TestCmdTaskMonitorWithQueueShowsSnapshot(t *testing.T) {
 			t.Fatalf("cmdTaskMonitorWithQueue: %v", err)
 		}
 	})
-	for _, want := range []string{"ID:", "Status:       running", "Retrieval:    snapshot", "Progress:     working", "Summary:      halfway"} {
+	for _, want := range []string{"ID:", "Status:       running", "Retrieval:    snapshot", "Observation:  mode=snapshot", "Progress:     working", "Summary:      halfway"} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("stdout = %q, want %q", stdout, want)
 		}
@@ -137,7 +137,7 @@ func TestCmdTaskMonitorWithQueueJSONWaitsForUpdate(t *testing.T) {
 			t.Fatalf("cmdTaskMonitorWithQueue: %v", err)
 		}
 	})
-	for _, want := range []string{`"retrieval_status":"changed"`, `"progress":"changed progress"`, `"summary":"changed summary"`} {
+	for _, want := range []string{`"retrieval_status":"changed"`, `"mode":"wait_for_update"`, `"timeout_ms":500`, `"progress":"changed progress"`, `"summary":"changed summary"`} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("stdout = %q, want %q", stdout, want)
 		}
