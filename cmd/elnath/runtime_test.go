@@ -3980,6 +3980,42 @@ func TestCompletionRetryRecordsFailedCorrectionAttempt(t *testing.T) {
 	}
 }
 
+func TestCompletionRetryRecordsMissingRetryWorkflow(t *testing.T) {
+	rt := newTestExecutionRuntimeWithConfig(t, &countingProvider{}, false, func(cfg *config.Config) {
+		cfg.SelfHealing.Enabled = true
+		cfg.SelfHealing.ObserveOnly = false
+	})
+	rt.completionRetryMax = 1
+	result := &orchestrator.WorkflowResult{
+		Messages:     []llm.Message{llm.NewAssistantMessage("I could not finish the patch.")},
+		Summary:      "I could not finish the patch.",
+		FinishReason: "stop",
+		Workflow:     "single",
+	}
+	summary := completionContractSummary{
+		CompletionWarning: "final_response_reports_incomplete",
+		RetryDecision:     completionRetryDecisionRetrySmallerScope,
+		RetryReason:       "final_response_reports_incomplete",
+	}
+
+	gotResult, gotSummary := rt.maybeRunCompletionRetry(context.Background(), nil, orchestrator.WorkflowInput{
+		Provider: rt.provider,
+	}, result, summary)
+
+	if gotResult != result {
+		t.Fatal("missing retry workflow should preserve original result")
+	}
+	if gotSummary.CorrectionAttempted || gotSummary.CorrectionAttempts != 0 || gotSummary.CorrectionMaxAttempts != 1 {
+		t.Fatalf("correction budget = attempted %v attempts %d max %d", gotSummary.CorrectionAttempted, gotSummary.CorrectionAttempts, gotSummary.CorrectionMaxAttempts)
+	}
+	if gotSummary.CorrectionStatus != "skipped" || gotSummary.CorrectionFailureFamily != "missing_retry_workflow" {
+		t.Fatalf("missing workflow skip = status %q family %q", gotSummary.CorrectionStatus, gotSummary.CorrectionFailureFamily)
+	}
+	if gotSummary.CorrectionDecision != completionRetryDecisionRetrySmallerScope || gotSummary.CorrectionReason != "final_response_reports_incomplete" {
+		t.Fatalf("correction decision = %q/%q", gotSummary.CorrectionDecision, gotSummary.CorrectionReason)
+	}
+}
+
 func TestCompletionRetryMarksUnresolvedWarningFailed(t *testing.T) {
 	rt := newTestExecutionRuntimeWithConfig(t, &countingProvider{}, false, func(cfg *config.Config) {
 		cfg.SelfHealing.Enabled = true

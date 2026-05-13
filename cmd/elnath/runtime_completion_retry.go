@@ -27,7 +27,7 @@ func (rt *executionRuntime) maybeRunCompletionRetry(
 	switch summary.RetryDecision {
 	case completionRetryDecisionRetrySmallerScope:
 		if wf == nil {
-			return result, summary
+			return result, completionCorrectionSkippedSummary(summary, "missing_retry_workflow")
 		}
 		return rt.runSmallerScopeCompletionRetry(ctx, wf, input, result, summary)
 	case completionRetryDecisionRunVerification:
