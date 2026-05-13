@@ -580,6 +580,32 @@ func TestCompletionContractSummaryRecordsProcessToolReceipts(t *testing.T) {
 	}
 }
 
+func TestCompletionContractSummaryRecordsSleepToolReceipt(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("wait briefly before checking again"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "sleep-1", Name: "sleep", Input: json.RawMessage(`{"duration_ms":1000}`)},
+			}},
+			llm.NewToolResultMessage("sleep-1", `{"requested_ms":1000,"slept_ms":1000,"receipt":{"tool":"sleep","action":"wait","read_only":true,"persistent":false,"execution_available":true,"execution_policy":"timer_wait","status":"completed","timeout_ms":1000}}`, false),
+			llm.NewAssistantMessage("Done."),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(nil, orchestrator.WorkflowConfig{}, result)
+
+	if len(summary.ControlToolReceipts) != 1 {
+		t.Fatalf("ControlToolReceipts = %#v, want one sleep receipt", summary.ControlToolReceipts)
+	}
+	receipt := summary.ControlToolReceipts[0]
+	if receipt.Tool != "sleep" || receipt.Action != "wait" || !receipt.ReadOnly || receipt.Persistent || !receipt.ExecutionAvailable {
+		t.Fatalf("sleep receipt = %+v", receipt)
+	}
+	if receipt.ExecutionPolicy != "timer_wait" || receipt.Status != "completed" || receipt.TimeoutMS != 1000 {
+		t.Fatalf("sleep receipt execution = %+v", receipt)
+	}
+}
+
 func TestCompletionContractSummaryRecordsDelegationToolReceipts(t *testing.T) {
 	result := &orchestrator.WorkflowResult{
 		Messages: []llm.Message{

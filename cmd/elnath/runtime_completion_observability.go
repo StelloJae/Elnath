@@ -484,6 +484,7 @@ var completionControlToolReceiptNames = map[string]struct{}{
 	"process_start":            {},
 	"process_monitor":          {},
 	"process_stop":             {},
+	"sleep":                    {},
 	"agentic_delegate_create":  {},
 	"agentic_delegate_list":    {},
 	"agentic_delegate_status":  {},

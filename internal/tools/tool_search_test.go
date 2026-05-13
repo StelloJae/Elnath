@@ -231,6 +231,29 @@ func TestToolSearchFindsCodeSymbolsAsDeferredCodeIntelligence(t *testing.T) {
 	}
 }
 
+func TestToolSearchFindsSleepAsDeferredTimerWait(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(NewSleepTool())
+	search := NewToolSearchTool(reg)
+	reg.Register(search)
+
+	out := executeToolSearch(t, search, `{"query":"wait bounded duration shell","max_results":5}`)
+
+	if len(out.Matches) != 1 {
+		t.Fatalf("matches len = %d, want 1: %+v", len(out.Matches), out.Matches)
+	}
+	match := out.Matches[0]
+	if match.Name != SleepToolName {
+		t.Fatalf("match = %q, want %s", match.Name, SleepToolName)
+	}
+	if !match.Deferred || match.DeferReason != "tool_declared_deferred" {
+		t.Fatalf("defer metadata = deferred:%t reason:%q", match.Deferred, match.DeferReason)
+	}
+	if !match.ConcurrencySafe || !match.Reversible || match.CancelSiblingsOnError {
+		t.Fatalf("metadata = %+v, want safe/reversible/no cancel", match)
+	}
+}
+
 func TestToolSearchAllowNamesRestrictsCandidates(t *testing.T) {
 	reg := NewRegistry()
 	reg.Register(&mockTool{name: "grep", result: SuccessResult("")})
