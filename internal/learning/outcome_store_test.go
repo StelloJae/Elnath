@@ -260,6 +260,9 @@ func TestOutcomeRecordCompletionObservabilityJSONCompatibility(t *testing.T) {
 		Terminal:        true,
 		Found:           true,
 		TailBytes:       4000,
+		StdoutRawBytes:  5,
+		StderrRawBytes:  4,
+		StderrTruncated: true,
 		CWD:             "/tmp/work",
 	}}
 	rec.CorrectionAttempted = true
@@ -303,6 +306,8 @@ func TestOutcomeRecordCompletionObservabilityJSONCompatibility(t *testing.T) {
 		`"tool":"process_monitor","action":"monitor"`,
 		`"process_id":4`,
 		`"tail_bytes":4000`,
+		`"stdout_raw_bytes":5`,
+		`"stderr_truncated":true`,
 		`"cwd":"/tmp/work"`,
 		`"execution_policy":"metadata_only"`,
 		`"query":"review code"`,

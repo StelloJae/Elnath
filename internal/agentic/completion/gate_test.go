@@ -282,6 +282,9 @@ func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testi
 					Terminal:        true,
 					Found:           true,
 					TailBytes:       4000,
+					StdoutRawBytes:  5,
+					StderrRawBytes:  4,
+					StderrTruncated: true,
 					CWD:             "/tmp/work",
 				}},
 				CorrectionAttempts:    1,
@@ -368,7 +371,7 @@ func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testi
 		t.Fatalf("delegation control receipt missing fields: receipt=%v summary=%v", controlToolReceipts[1], summary)
 	}
 	processReceipt, ok := controlToolReceipts[2].(map[string]any)
-	if !ok || processReceipt["tool"] != "process_monitor" || processReceipt["process_id"] != float64(4) || processReceipt["tail_bytes"] != float64(4000) || processReceipt["cwd"] != "/tmp/work" {
+	if !ok || processReceipt["tool"] != "process_monitor" || processReceipt["process_id"] != float64(4) || processReceipt["tail_bytes"] != float64(4000) || processReceipt["stdout_raw_bytes"] != float64(5) || processReceipt["stderr_truncated"] != true || processReceipt["cwd"] != "/tmp/work" {
 		t.Fatalf("process control receipt missing fields: receipt=%v summary=%v", controlToolReceipts[2], summary)
 	}
 	if summary["correction_attempts"] != float64(1) || summary["correction_max_attempts"] != float64(1) {
