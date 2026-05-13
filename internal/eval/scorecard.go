@@ -61,6 +61,9 @@ func (s *Scorecard) Validate() error {
 		if result.DurationSeconds < 0 {
 			return fmt.Errorf("validate scorecard: result %q has negative duration_seconds", result.TaskID)
 		}
+		if !validPatchQuality(result.PatchQuality) {
+			return fmt.Errorf("validate scorecard: result %q has invalid patch_quality %q", result.TaskID, result.PatchQuality)
+		}
 		if err := validateScorecardDebugEvidence(result.TaskID, result.DebugEvidence); err != nil {
 			return err
 		}
@@ -92,8 +95,9 @@ func validateScorecardDebugEvidence(taskID string, evidence *DebugEvidence) erro
 // Summary aggregates scorecard metrics overall and by track.
 func (s *Scorecard) Summary() Summary {
 	summary := Summary{
-		ByTrack:         make(map[Track]TrackSummary),
-		FailureFamilies: make(map[string]int),
+		ByTrack:            make(map[Track]TrackSummary),
+		FailureFamilies:    make(map[string]int),
+		PatchQualityCounts: make(map[string]int),
 	}
 	if s == nil {
 		return summary
@@ -141,10 +145,16 @@ func (s *Scorecard) Summary() Summary {
 		if result.FailureFamily != "" {
 			summary.FailureFamilies[result.FailureFamily]++
 		}
+		if result.PatchQuality != "" {
+			summary.PatchQualityCounts[result.PatchQuality]++
+		}
 
 		trackSummary := summary.ByTrack[result.Track]
 		if trackSummary.FailureFamilies == nil {
 			trackSummary.FailureFamilies = make(map[string]int)
+		}
+		if trackSummary.PatchQualityCounts == nil {
+			trackSummary.PatchQualityCounts = make(map[string]int)
 		}
 		trackSummary.Total++
 		if result.Success {
@@ -167,6 +177,9 @@ func (s *Scorecard) Summary() Summary {
 		}
 		if result.FailureFamily != "" {
 			trackSummary.FailureFamilies[result.FailureFamily]++
+		}
+		if result.PatchQuality != "" {
+			trackSummary.PatchQualityCounts[result.PatchQuality]++
 		}
 		summary.ByTrack[result.Track] = trackSummary
 	}

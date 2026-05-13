@@ -79,6 +79,8 @@ type RunResult struct {
 	Notes                   string         `json:"notes,omitempty"`
 	RegressionTriggered     bool           `json:"regression_triggered,omitempty"`
 	ChangedFiles            []string       `json:"changed_files,omitempty"`
+	PatchQuality            string         `json:"patch_quality,omitempty"`
+	PatchQualityFindings    []string       `json:"patch_quality_findings,omitempty"`
 	EditIntentDetected      bool           `json:"edit_intent_detected,omitempty"`
 	FinalIncompleteDetected bool           `json:"final_incomplete_detected,omitempty"`
 	TraceSummary            string         `json:"trace_summary,omitempty"`
@@ -128,6 +130,7 @@ type TrackSummary struct {
 	RecoverySuccesses      int
 	RecoverySuccessRate    float64
 	FailureFamilies        map[string]int
+	PatchQualityCounts     map[string]int
 	RegressionsTriggered   int
 	RegressionRate         float64
 	SuccessDurationMean    float64
@@ -148,6 +151,7 @@ type Summary struct {
 	RecoverySuccesses      int
 	RecoverySuccessRate    float64
 	FailureFamilies        map[string]int
+	PatchQualityCounts     map[string]int
 	ByTrack                map[Track]TrackSummary
 	RegressionsTriggered   int
 	RegressionRate         float64

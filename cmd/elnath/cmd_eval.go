@@ -104,6 +104,12 @@ Subcommands:
 				fmt.Printf("  %s=%d\n", family, count)
 			}
 		}
+		if len(summary.PatchQualityCounts) > 0 {
+			fmt.Println("Patch quality:")
+			for quality, count := range summary.PatchQualityCounts {
+				fmt.Printf("  %s=%d\n", quality, count)
+			}
+		}
 		return nil
 	case "diff":
 		if len(args) < 3 {

@@ -110,6 +110,7 @@ func RunBaselinePlan(plan *BaselineRunPlan) (*Scorecard, error) {
 			if result.Language == "" {
 				result.Language = task.Language
 			}
+			enrichPatchQuality(task, result)
 			if keepTmp {
 				if err := materializeDebugEvidence(result, sidecarPath, stdoutPath, stderrPath, plan.OutputPath); err != nil {
 					return nil, err
