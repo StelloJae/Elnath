@@ -33,6 +33,7 @@ type CompletionContext struct {
 	VerificationObserved     *bool
 	VerificationCommand      string
 	CompletionWarning        string
+	UserInputRequired        bool
 	EditIntent               bool
 	EditObserved             *bool
 	ReasoningEffort          string
@@ -400,6 +401,9 @@ func encodeReceiptSummary(summary map[string]int, completionContext CompletionCo
 	}
 	if completionContext.CompletionWarning != "" {
 		payload["completion_warning"] = completionContext.CompletionWarning
+	}
+	if completionContext.UserInputRequired {
+		payload["user_input_required"] = true
 	}
 	if completionContext.EditIntent {
 		payload["edit_intent"] = true

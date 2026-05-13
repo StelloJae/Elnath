@@ -1386,6 +1386,7 @@ func (rt *executionRuntime) recordOutcome(ctx context.Context, in outcomeInput) 
 		VerificationObserved:     in.completion.VerificationObserved,
 		VerificationCommand:      in.completion.VerificationCommand,
 		CompletionWarning:        in.completion.CompletionWarning,
+		UserInputRequired:        in.completion.UserInputRequired,
 		ReasoningEffort:          in.completion.ReasoningEffort,
 		ReasoningEffortMode:      in.completion.ReasoningEffortMode,
 		ReasoningEffortReason:    in.completion.ReasoningEffortReason,

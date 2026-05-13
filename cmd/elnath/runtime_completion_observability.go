@@ -15,6 +15,7 @@ type completionContractSummary struct {
 	VerificationObserved     *bool
 	VerificationCommand      string
 	CompletionWarning        string
+	UserInputRequired        bool
 	EditIntent               bool
 	EditObserved             *bool
 	ReasoningEffort          string
@@ -235,6 +236,7 @@ func summarizeCompletionContract(routeCtx *orchestrator.RoutingContext, cfg orch
 	summary.CommandCatalogReceipts = observedCommandCatalogReceipts(result.Messages)
 	summary.ToolSearchReceipts = observedToolSearchReceipts(result.Messages)
 	summary.ControlToolReceipts = observedControlToolReceipts(result.Messages)
+	summary.UserInputRequired = controlToolReceiptsContain(summary.ControlToolReceipts, "ask_user_question", "request")
 
 	verificationCommand, verificationFailed := observedVerificationCommandStatus(result.Messages)
 	observed := verificationCommand != ""
@@ -262,6 +264,15 @@ func summarizeCompletionContract(routeCtx *orchestrator.RoutingContext, cfg orch
 	}
 	summary.RetryDecision, summary.RetryReason = completionRetryPlan(summary)
 	return summary
+}
+
+func controlToolReceiptsContain(receipts []completionControlToolReceipt, tool string, action string) bool {
+	for _, receipt := range receipts {
+		if receipt.Tool == tool && (action == "" || receipt.Action == action) {
+			return true
+		}
+	}
+	return false
 }
 
 func observedSkillCatalogReceipts(messages []llm.Message) []completionSkillCatalogReceipt {
