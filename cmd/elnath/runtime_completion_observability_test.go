@@ -539,6 +539,36 @@ func TestCompletionContractSummaryRecordsProcessToolReceipts(t *testing.T) {
 	}
 }
 
+func TestCompletionContractSummaryRecordsDelegationToolReceipts(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("spawn delegated child and send actor message"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "delegate-1", Name: "agentic_delegate_enqueue", Input: json.RawMessage(`{"child_task_id":9}`)},
+			}},
+			llm.NewToolResultMessage("delegate-1", `{"child_task_id":9,"parent_task_id":3,"queue_task_id":44,"receipt":{"tool":"agentic_delegate_enqueue","action":"enqueue","read_only":false,"persistent":true,"execution_policy":"agentic_delegation_enqueue","parent_task_id":3,"child_task_id":9,"queue_task_id":44,"decision_id":7,"decision_status":"enqueued","enqueued":true}}`, false),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "message-1", Name: "agentic_message_send", Input: json.RawMessage(`{"task_id":3,"from_actor_id":1,"to_actor_id":2,"message":"go"}`)},
+			}},
+			llm.NewToolResultMessage("message-1", `{"task_id":3,"from_actor_id":1,"to_actor_id":2,"handoff_id":5,"receipt":{"tool":"agentic_message_send","action":"send","read_only":false,"persistent":true,"execution_policy":"agentic_actor_message_send","task_id":3,"from_actor_id":1,"to_actor_id":2,"handoff_id":5,"delivered":true}}`, false),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(nil, orchestrator.WorkflowConfig{}, result)
+
+	if len(summary.ControlToolReceipts) != 2 {
+		t.Fatalf("ControlToolReceipts = %#v, want delegation and message receipts", summary.ControlToolReceipts)
+	}
+	delegateReceipt := summary.ControlToolReceipts[0]
+	if delegateReceipt.Tool != "agentic_delegate_enqueue" || delegateReceipt.ParentTaskID != 3 || delegateReceipt.ChildTaskID != 9 || delegateReceipt.QueueTaskID != 44 || delegateReceipt.DecisionID != 7 || delegateReceipt.DecisionStatus != "enqueued" || !delegateReceipt.Enqueued {
+		t.Fatalf("delegate receipt = %+v", delegateReceipt)
+	}
+	messageReceipt := summary.ControlToolReceipts[1]
+	if messageReceipt.Tool != "agentic_message_send" || messageReceipt.TaskID != 3 || messageReceipt.FromActorID != 1 || messageReceipt.ToActorID != 2 || messageReceipt.HandoffID != 5 || !messageReceipt.Delivered {
+		t.Fatalf("message receipt = %+v", messageReceipt)
+	}
+}
+
 func TestCompletionContractSummaryRecordsProviderCapabilities(t *testing.T) {
 	summary := withProviderCapabilities(completionContractSummary{}, &capabilityCountingProvider{})
 
@@ -593,6 +623,40 @@ func TestProcessControlReceiptsConvertToLearningAndAgentic(t *testing.T) {
 	}
 	agenticReceipts := completionControlToolReceiptsToAgentic(src)
 	if len(agenticReceipts) != 3 || agenticReceipts[0].ProcessID != 4 || agenticReceipts[0].CWD != "/tmp/work" || agenticReceipts[1].TailBytes != 4000 || agenticReceipts[2].StopSignal != "SIGTERM" {
+		t.Fatalf("agentic receipts = %+v", agenticReceipts)
+	}
+}
+
+func TestDelegationControlReceiptsConvertToLearningAndAgentic(t *testing.T) {
+	src := []completionControlToolReceipt{{
+		Tool:            "agentic_delegate_enqueue",
+		Action:          "enqueue",
+		Persistent:      true,
+		ExecutionPolicy: "agentic_delegation_enqueue",
+		ParentTaskID:    3,
+		ChildTaskID:     9,
+		QueueTaskID:     44,
+		DecisionID:      7,
+		DecisionStatus:  "enqueued",
+		Enqueued:        true,
+	}, {
+		Tool:            "agentic_message_send",
+		Action:          "send",
+		Persistent:      true,
+		ExecutionPolicy: "agentic_actor_message_send",
+		TaskID:          3,
+		FromActorID:     1,
+		ToActorID:       2,
+		HandoffID:       5,
+		Delivered:       true,
+	}}
+
+	learningReceipts := completionControlToolReceiptsToLearning(src)
+	if len(learningReceipts) != 2 || learningReceipts[0].ParentTaskID != 3 || learningReceipts[0].ChildTaskID != 9 || learningReceipts[0].QueueTaskID != 44 || learningReceipts[0].DecisionID != 7 || !learningReceipts[0].Enqueued || learningReceipts[1].HandoffID != 5 || !learningReceipts[1].Delivered {
+		t.Fatalf("learning receipts = %+v", learningReceipts)
+	}
+	agenticReceipts := completionControlToolReceiptsToAgentic(src)
+	if len(agenticReceipts) != 2 || agenticReceipts[0].ParentTaskID != 3 || agenticReceipts[0].ChildTaskID != 9 || agenticReceipts[0].QueueTaskID != 44 || agenticReceipts[0].DecisionStatus != "enqueued" || agenticReceipts[1].FromActorID != 1 || agenticReceipts[1].ToActorID != 2 || !agenticReceipts[1].Delivered {
 		t.Fatalf("agentic receipts = %+v", agenticReceipts)
 	}
 }

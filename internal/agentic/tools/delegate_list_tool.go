@@ -56,6 +56,7 @@ type delegateListToolOutput struct {
 	ParentTaskID int64                   `json:"parent_task_id"`
 	Total        int                     `json:"total"`
 	Children     []delegateListChildItem `json:"children"`
+	Receipt      agenticToolReceipt      `json:"receipt"`
 }
 
 type delegateListChildItem struct {
@@ -117,6 +118,15 @@ func (t *DelegateListTool) Execute(ctx context.Context, params json.RawMessage) 
 		ParentTaskID: input.ParentTaskID,
 		Total:        len(children),
 		Children:     children,
+		Receipt: agenticToolReceipt{
+			Tool:            DelegateListToolName,
+			Action:          "list",
+			ReadOnly:        true,
+			Persistent:      false,
+			ExecutionPolicy: "agentic_delegation_observation",
+			ParentTaskID:    input.ParentTaskID,
+			Total:           len(children),
+		},
 	}
 	raw, err := json.Marshal(output)
 	if err != nil {

@@ -242,6 +242,17 @@ func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testi
 					TaskID:          7,
 					Status:          "pending",
 				}, {
+					Tool:            "agentic_delegate_enqueue",
+					Action:          "enqueue",
+					Persistent:      true,
+					ExecutionPolicy: "agentic_delegation_enqueue",
+					ParentTaskID:    3,
+					ChildTaskID:     9,
+					QueueTaskID:     44,
+					DecisionID:      7,
+					DecisionStatus:  "enqueued",
+					Enqueued:        true,
+				}, {
 					Tool:            "process_monitor",
 					Action:          "monitor",
 					ReadOnly:        true,
@@ -321,12 +332,16 @@ func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testi
 		t.Fatalf("tool_search_receipts missing: summary=%v", summary)
 	}
 	controlToolReceipts, ok := summary["control_tool_receipts"].([]any)
-	if !ok || len(controlToolReceipts) != 2 {
+	if !ok || len(controlToolReceipts) != 3 {
 		t.Fatalf("control_tool_receipts missing: summary=%v", summary)
 	}
-	processReceipt, ok := controlToolReceipts[1].(map[string]any)
+	delegateReceipt, ok := controlToolReceipts[1].(map[string]any)
+	if !ok || delegateReceipt["tool"] != "agentic_delegate_enqueue" || delegateReceipt["parent_task_id"] != float64(3) || delegateReceipt["child_task_id"] != float64(9) || delegateReceipt["queue_task_id"] != float64(44) || delegateReceipt["decision_id"] != float64(7) || delegateReceipt["decision_status"] != "enqueued" || delegateReceipt["enqueued"] != true {
+		t.Fatalf("delegation control receipt missing fields: receipt=%v summary=%v", controlToolReceipts[1], summary)
+	}
+	processReceipt, ok := controlToolReceipts[2].(map[string]any)
 	if !ok || processReceipt["tool"] != "process_monitor" || processReceipt["process_id"] != float64(4) || processReceipt["tail_bytes"] != float64(4000) || processReceipt["cwd"] != "/tmp/work" {
-		t.Fatalf("process control receipt missing fields: receipt=%v summary=%v", controlToolReceipts[1], summary)
+		t.Fatalf("process control receipt missing fields: receipt=%v summary=%v", controlToolReceipts[2], summary)
 	}
 	if summary["correction_attempts"] != float64(1) || summary["correction_max_attempts"] != float64(1) {
 		t.Fatalf("correction budget fields missing: summary=%v", summary)

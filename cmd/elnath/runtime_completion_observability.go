@@ -107,7 +107,12 @@ type completionControlToolReceipt struct {
 	ExecutionAvailable      bool   `json:"execution_available,omitempty"`
 	ExecutionPolicy         string `json:"execution_policy,omitempty"`
 	TaskID                  int64  `json:"task_id,omitempty"`
+	ParentTaskID            int64  `json:"parent_task_id,omitempty"`
+	ChildTaskID             int64  `json:"child_task_id,omitempty"`
+	QueueTaskID             int64  `json:"queue_task_id,omitempty"`
 	ProcessID               int64  `json:"process_id,omitempty"`
+	DecisionID              int64  `json:"decision_id,omitempty"`
+	DecisionStatus          string `json:"decision_status,omitempty"`
 	Status                  string `json:"status,omitempty"`
 	PreviousStatus          string `json:"previous_status,omitempty"`
 	Terminal                bool   `json:"terminal,omitempty"`
@@ -116,6 +121,9 @@ type completionControlToolReceipt struct {
 	CWD                     string `json:"cwd,omitempty"`
 	TailBytes               int    `json:"tail_bytes,omitempty"`
 	StopSignal              string `json:"stop_signal,omitempty"`
+	EdgeType                string `json:"edge_type,omitempty"`
+	Enqueued                bool   `json:"enqueued,omitempty"`
+	Deduplicated            bool   `json:"deduplicated,omitempty"`
 	TotalReturned           int    `json:"total_returned,omitempty"`
 	Limit                   int    `json:"limit,omitempty"`
 	Field                   string `json:"field,omitempty"`
@@ -136,6 +144,12 @@ type completionControlToolReceipt struct {
 	CurrentMode             string `json:"current_mode,omitempty"`
 	Restored                bool   `json:"restored,omitempty"`
 	ReadOnlyAfterTransition bool   `json:"read_only_after_transition,omitempty"`
+	FromActorID             int64  `json:"from_actor_id,omitempty"`
+	ToActorID               int64  `json:"to_actor_id,omitempty"`
+	ActorID                 int64  `json:"actor_id,omitempty"`
+	HandoffID               int64  `json:"handoff_id,omitempty"`
+	Box                     string `json:"box,omitempty"`
+	Delivered               bool   `json:"delivered,omitempty"`
 }
 
 const (
@@ -334,26 +348,31 @@ func commandCatalogReceiptFromOutput(output string) (completionCommandCatalogRec
 }
 
 var completionControlToolReceiptNames = map[string]struct{}{
-	"task_create":     {},
-	"task_list":       {},
-	"task_get":        {},
-	"task_stop":       {},
-	"task_output":     {},
-	"task_monitor":    {},
-	"task_update":     {},
-	"schedule_create": {},
-	"schedule_list":   {},
-	"schedule_delete": {},
-	"enter_plan_mode": {},
-	"exit_plan_mode":  {},
-	"enter_worktree":  {},
-	"exit_worktree":   {},
-	"worktree_list":   {},
-	"worktree_run":    {},
-	"worktree_prune":  {},
-	"process_start":   {},
-	"process_monitor": {},
-	"process_stop":    {},
+	"task_create":              {},
+	"task_list":                {},
+	"task_get":                 {},
+	"task_stop":                {},
+	"task_output":              {},
+	"task_monitor":             {},
+	"task_update":              {},
+	"schedule_create":          {},
+	"schedule_list":            {},
+	"schedule_delete":          {},
+	"enter_plan_mode":          {},
+	"exit_plan_mode":           {},
+	"enter_worktree":           {},
+	"exit_worktree":            {},
+	"worktree_list":            {},
+	"worktree_run":             {},
+	"worktree_prune":           {},
+	"process_start":            {},
+	"process_monitor":          {},
+	"process_stop":             {},
+	"agentic_delegate_create":  {},
+	"agentic_delegate_list":    {},
+	"agentic_delegate_enqueue": {},
+	"agentic_message_send":     {},
+	"agentic_message_list":     {},
 }
 
 func observedControlToolReceipts(messages []llm.Message) []completionControlToolReceipt {
@@ -404,6 +423,9 @@ func controlToolReceiptFromOutput(toolName, output string) (completionControlToo
 	receipt.PreviousStatus = strings.TrimSpace(receipt.PreviousStatus)
 	receipt.CWD = strings.TrimSpace(receipt.CWD)
 	receipt.StopSignal = strings.TrimSpace(receipt.StopSignal)
+	receipt.DecisionStatus = strings.TrimSpace(receipt.DecisionStatus)
+	receipt.EdgeType = strings.TrimSpace(receipt.EdgeType)
+	receipt.Box = strings.TrimSpace(receipt.Box)
 	receipt.Field = strings.TrimSpace(receipt.Field)
 	receipt.RetrievalStatus = strings.TrimSpace(receipt.RetrievalStatus)
 	receipt.Name = strings.TrimSpace(receipt.Name)

@@ -125,7 +125,12 @@ type ControlToolReceipt struct {
 	ExecutionAvailable      bool   `json:"execution_available,omitempty"`
 	ExecutionPolicy         string `json:"execution_policy,omitempty"`
 	TaskID                  int64  `json:"task_id,omitempty"`
+	ParentTaskID            int64  `json:"parent_task_id,omitempty"`
+	ChildTaskID             int64  `json:"child_task_id,omitempty"`
+	QueueTaskID             int64  `json:"queue_task_id,omitempty"`
 	ProcessID               int64  `json:"process_id,omitempty"`
+	DecisionID              int64  `json:"decision_id,omitempty"`
+	DecisionStatus          string `json:"decision_status,omitempty"`
 	Status                  string `json:"status,omitempty"`
 	PreviousStatus          string `json:"previous_status,omitempty"`
 	Terminal                bool   `json:"terminal,omitempty"`
@@ -134,6 +139,9 @@ type ControlToolReceipt struct {
 	CWD                     string `json:"cwd,omitempty"`
 	TailBytes               int    `json:"tail_bytes,omitempty"`
 	StopSignal              string `json:"stop_signal,omitempty"`
+	EdgeType                string `json:"edge_type,omitempty"`
+	Enqueued                bool   `json:"enqueued,omitempty"`
+	Deduplicated            bool   `json:"deduplicated,omitempty"`
 	TotalReturned           int    `json:"total_returned,omitempty"`
 	Limit                   int    `json:"limit,omitempty"`
 	Field                   string `json:"field,omitempty"`
@@ -154,6 +162,12 @@ type ControlToolReceipt struct {
 	CurrentMode             string `json:"current_mode,omitempty"`
 	Restored                bool   `json:"restored,omitempty"`
 	ReadOnlyAfterTransition bool   `json:"read_only_after_transition,omitempty"`
+	FromActorID             int64  `json:"from_actor_id,omitempty"`
+	ToActorID               int64  `json:"to_actor_id,omitempty"`
+	ActorID                 int64  `json:"actor_id,omitempty"`
+	HandoffID               int64  `json:"handoff_id,omitempty"`
+	Box                     string `json:"box,omitempty"`
+	Delivered               bool   `json:"delivered,omitempty"`
 }
 
 type CompletionContextProvider interface {

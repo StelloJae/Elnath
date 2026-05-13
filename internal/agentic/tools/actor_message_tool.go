@@ -72,13 +72,14 @@ type actorMessageSendToolInput struct {
 }
 
 type actorMessageSendToolOutput struct {
-	TaskID      int64  `json:"task_id"`
-	FromActorID int64  `json:"from_actor_id"`
-	ToActorID   int64  `json:"to_actor_id"`
-	HandoffID   int64  `json:"handoff_id"`
-	Summary     string `json:"summary,omitempty"`
-	Delivered   bool   `json:"delivered"`
-	Boundary    string `json:"boundary"`
+	TaskID      int64              `json:"task_id"`
+	FromActorID int64              `json:"from_actor_id"`
+	ToActorID   int64              `json:"to_actor_id"`
+	HandoffID   int64              `json:"handoff_id"`
+	Summary     string             `json:"summary,omitempty"`
+	Delivered   bool               `json:"delivered"`
+	Boundary    string             `json:"boundary"`
+	Receipt     agenticToolReceipt `json:"receipt"`
 }
 
 type actorMailboxMessage struct {
@@ -182,6 +183,18 @@ func (t *ActorMessageSendTool) Execute(ctx context.Context, params json.RawMessa
 		Summary:     summary,
 		Delivered:   true,
 		Boundary:    "mailbox record only; no actor is resumed or executed automatically",
+		Receipt: agenticToolReceipt{
+			Tool:            ActorMessageSendToolName,
+			Action:          "send",
+			ReadOnly:        false,
+			Persistent:      true,
+			ExecutionPolicy: "agentic_actor_message_send",
+			TaskID:          input.TaskID,
+			FromActorID:     from.ID,
+			ToActorID:       to.ID,
+			HandoffID:       handoff.ID,
+			Delivered:       true,
+		},
 	}
 	raw, err := json.Marshal(output)
 	if err != nil {
@@ -248,6 +261,7 @@ type actorMessageListToolOutput struct {
 	Box      string                `json:"box"`
 	Total    int                   `json:"total"`
 	Messages []actorMailboxMessage `json:"messages"`
+	Receipt  agenticToolReceipt    `json:"receipt"`
 }
 
 func (t *ActorMessageListTool) Execute(ctx context.Context, params json.RawMessage) (*basetools.Result, error) {
@@ -298,6 +312,17 @@ func (t *ActorMessageListTool) Execute(ctx context.Context, params json.RawMessa
 		Box:      box,
 		Total:    len(messages),
 		Messages: messages,
+		Receipt: agenticToolReceipt{
+			Tool:            ActorMessageListToolName,
+			Action:          "list",
+			ReadOnly:        true,
+			Persistent:      false,
+			ExecutionPolicy: "agentic_actor_message_observation",
+			TaskID:          input.TaskID,
+			ActorID:         actor.ID,
+			Box:             box,
+			Total:           len(messages),
+		},
 	}
 	raw, err := json.Marshal(output)
 	if err != nil {

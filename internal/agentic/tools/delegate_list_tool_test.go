@@ -36,6 +36,9 @@ func TestDelegateListToolListsProposedChildren(t *testing.T) {
 	if out.Children[0].Status != agentic.TaskStatusProposed || out.Children[0].Enqueued {
 		t.Fatalf("child boundary = %+v, want proposed non-enqueued", out.Children[0])
 	}
+	if out.Receipt.Tool != DelegateListToolName || out.Receipt.Action != "list" || !out.Receipt.ReadOnly || out.Receipt.Persistent || out.Receipt.ParentTaskID != parent.ID || out.Receipt.Total != 2 || out.Receipt.ExecutionPolicy != "agentic_delegation_observation" {
+		t.Fatalf("receipt = %+v, want delegation list receipt", out.Receipt)
+	}
 }
 
 func TestDelegateListToolRequiresParentTaskID(t *testing.T) {

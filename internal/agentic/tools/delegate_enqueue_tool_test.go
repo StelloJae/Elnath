@@ -64,6 +64,9 @@ func TestDelegateEnqueueToolEnqueuesDelegatedChild(t *testing.T) {
 	if out.DecisionStatus != agentic.TaskEnqueueStatusEnqueued || !strings.Contains(out.Boundary, "daemon queue") {
 		t.Fatalf("output boundary = %+v, want explicit queue boundary", out)
 	}
+	if out.Receipt.Tool != DelegateEnqueueToolName || out.Receipt.Action != "enqueue" || out.Receipt.ParentTaskID != parent.ID || out.Receipt.ChildTaskID != created.ChildTaskID || out.Receipt.QueueTaskID != out.QueueTaskID || out.Receipt.DecisionID != out.DecisionID || out.Receipt.ExecutionPolicy != "agentic_delegation_enqueue" || !out.Receipt.Enqueued {
+		t.Fatalf("receipt = %+v, want delegated enqueue receipt", out.Receipt)
+	}
 	if service.req.TaskID != created.ChildTaskID || service.req.OperatorID != "model" || service.req.Reason != "bounded delegated execution" {
 		t.Fatalf("service request = %+v, want delegated child enqueue request", service.req)
 	}
