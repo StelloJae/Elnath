@@ -386,6 +386,32 @@ func TestCompletionContractSummaryRecordsConditionalSkillMatches(t *testing.T) {
 	}
 }
 
+func TestCompletionContractSummaryRecordsSkillCatalogReceipt(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("find a matching skill"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "skill-1", Name: "skill_catalog", Input: json.RawMessage(`{"action":"recommend","query":"review code"}`)},
+			}},
+			llm.NewToolResultMessage("skill-1", `{"action":"recommend","query":"review code","skills":[],"receipt":{"tool":"skill_catalog","action":"recommend","read_only":true,"registry_available":true,"total_skills":2,"returned_skills":0,"trust_filter_applied":false,"max_results":5,"query":"review code"}}`, false),
+			llm.NewAssistantMessage("Done."),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(nil, orchestrator.WorkflowConfig{}, result)
+
+	if len(summary.SkillCatalogReceipts) != 1 {
+		t.Fatalf("SkillCatalogReceipts = %#v, want one receipt", summary.SkillCatalogReceipts)
+	}
+	receipt := summary.SkillCatalogReceipts[0]
+	if receipt.Tool != "skill_catalog" || receipt.Action != "recommend" || !receipt.ReadOnly || !receipt.RegistryAvailable {
+		t.Fatalf("receipt identity = %+v", receipt)
+	}
+	if receipt.TotalSkills != 2 || receipt.ReturnedSkills != 0 || receipt.MaxResults != 5 || receipt.Query != "review code" {
+		t.Fatalf("receipt counts/bounds = %+v", receipt)
+	}
+}
+
 func TestCompletionContractSummaryRecordsProviderCapabilities(t *testing.T) {
 	summary := withProviderCapabilities(completionContractSummary{}, &capabilityCountingProvider{})
 
@@ -413,17 +439,27 @@ func TestRecordOutcomePersistsCompletionObservability(t *testing.T) {
 		success:      true,
 		userInput:    "fix regression and run tests",
 		completion: completionContractSummary{
-			VerificationHint:        true,
-			VerificationObserved:    &observed,
-			VerificationCommand:     "go test ./cmd/elnath -count=1",
-			CompletionWarning:       "final_response_reports_incomplete",
-			ReasoningEffort:         "high",
-			ReasoningEffortMode:     "auto",
-			ReasoningEffortReason:   "work_keyword",
-			ProviderName:            "openai-responses",
-			ProviderEffort:          llm.ReasoningEffortNativeWithUnsupportedRetry,
-			ProviderEffortNote:      "retry_without_reasoning_on_400_or_422_unsupported_effort",
-			LoadedDeferredTools:     []string{"mcp_github_issue"},
+			VerificationHint:      true,
+			VerificationObserved:  &observed,
+			VerificationCommand:   "go test ./cmd/elnath -count=1",
+			CompletionWarning:     "final_response_reports_incomplete",
+			ReasoningEffort:       "high",
+			ReasoningEffortMode:   "auto",
+			ReasoningEffortReason: "work_keyword",
+			ProviderName:          "openai-responses",
+			ProviderEffort:        llm.ReasoningEffortNativeWithUnsupportedRetry,
+			ProviderEffortNote:    "retry_without_reasoning_on_400_or_422_unsupported_effort",
+			LoadedDeferredTools:   []string{"mcp_github_issue"},
+			SkillCatalogReceipts: []completionSkillCatalogReceipt{{
+				Tool:              "skill_catalog",
+				Action:            "recommend",
+				ReadOnly:          true,
+				RegistryAvailable: true,
+				TotalSkills:       2,
+				ReturnedSkills:    1,
+				MaxResults:        5,
+				Query:             "review code",
+			}},
 			CorrectionAttempted:     true,
 			CorrectionAttempts:      1,
 			CorrectionMaxAttempts:   1,
@@ -472,6 +508,16 @@ func TestCompletionGateContextProviderConsumesRuntimeSummary(t *testing.T) {
 		ProviderEffort:        llm.ReasoningEffortNativeWithUnsupportedRetry,
 		ProviderEffortNote:    "retry_without_reasoning_on_400_or_422_unsupported_effort",
 		LoadedDeferredTools:   []string{"mcp_github_issue"},
+		SkillCatalogReceipts: []completionSkillCatalogReceipt{{
+			Tool:              "skill_catalog",
+			Action:            "recommend",
+			ReadOnly:          true,
+			RegistryAvailable: true,
+			TotalSkills:       2,
+			ReturnedSkills:    1,
+			MaxResults:        5,
+			Query:             "review code",
+		}},
 		ConditionalSkillMatches: []completionConditionalSkillMatch{
 			{SkillName: "go-review", Pattern: "internal/**/*.go", Path: "internal/skill/skill.go", Source: "claude-skill", TrustLevel: "local_compatible", External: false},
 		},
@@ -516,6 +562,9 @@ func TestCompletionGateContextProviderConsumesRuntimeSummary(t *testing.T) {
 	}
 	if len(summary.LoadedDeferredTools) != 1 || summary.LoadedDeferredTools[0] != "mcp_github_issue" {
 		t.Fatalf("LoadedDeferredTools = %v", summary.LoadedDeferredTools)
+	}
+	if len(summary.SkillCatalogReceipts) != 1 || summary.SkillCatalogReceipts[0].Action != "recommend" {
+		t.Fatalf("SkillCatalogReceipts = %+v", summary.SkillCatalogReceipts)
 	}
 	if len(summary.ConditionalSkillMatches) != 1 || summary.ConditionalSkillMatches[0].SkillName != "go-review" {
 		t.Fatalf("ConditionalSkillMatches = %+v", summary.ConditionalSkillMatches)
@@ -578,19 +627,29 @@ func TestCompletionGateReceiptSummaryIncludesRuntimeContext(t *testing.T) {
 	}
 	observed := false
 	rt.rememberAgenticCompletionContext(task.ID, completionContractSummary{
-		VerificationHint:        true,
-		VerificationObserved:    &observed,
-		VerificationCommand:     "go test ./cmd/elnath -count=1",
-		CompletionWarning:       "final_response_reports_incomplete",
-		EditIntent:              true,
-		EditObserved:            &observed,
-		ReasoningEffort:         "medium",
-		ReasoningEffortMode:     "manual",
-		ReasoningEffortReason:   "manual",
-		ProviderName:            "openai-responses",
-		ProviderEffort:          llm.ReasoningEffortNativeWithUnsupportedRetry,
-		ProviderEffortNote:      "retry_without_reasoning_on_400_or_422_unsupported_effort",
-		LoadedDeferredTools:     []string{"mcp_github_issue"},
+		VerificationHint:      true,
+		VerificationObserved:  &observed,
+		VerificationCommand:   "go test ./cmd/elnath -count=1",
+		CompletionWarning:     "final_response_reports_incomplete",
+		EditIntent:            true,
+		EditObserved:          &observed,
+		ReasoningEffort:       "medium",
+		ReasoningEffortMode:   "manual",
+		ReasoningEffortReason: "manual",
+		ProviderName:          "openai-responses",
+		ProviderEffort:        llm.ReasoningEffortNativeWithUnsupportedRetry,
+		ProviderEffortNote:    "retry_without_reasoning_on_400_or_422_unsupported_effort",
+		LoadedDeferredTools:   []string{"mcp_github_issue"},
+		SkillCatalogReceipts: []completionSkillCatalogReceipt{{
+			Tool:              "skill_catalog",
+			Action:            "recommend",
+			ReadOnly:          true,
+			RegistryAvailable: true,
+			TotalSkills:       2,
+			ReturnedSkills:    1,
+			MaxResults:        5,
+			Query:             "review code",
+		}},
 		CorrectionAttempted:     true,
 		CorrectionAttempts:      1,
 		CorrectionMaxAttempts:   1,
@@ -658,6 +717,10 @@ func TestCompletionGateReceiptSummaryIncludesRuntimeContext(t *testing.T) {
 	if !ok || len(loaded) != 1 || loaded[0] != "mcp_github_issue" {
 		t.Fatalf("loaded deferred tools missing from gate summary: %v", summary)
 	}
+	catalogReceipts, ok := summary["skill_catalog_receipts"].([]any)
+	if !ok || len(catalogReceipts) != 1 {
+		t.Fatalf("skill catalog receipts missing from gate summary: %v", summary)
+	}
 	if summary["correction_attempted"] != true || summary["correction_attempts"] != float64(1) || summary["correction_max_attempts"] != float64(1) {
 		t.Fatalf("correction attempt missing from gate summary: %v", summary)
 	}
@@ -700,6 +763,9 @@ func assertCompletionOutcome(t *testing.T, rec learning.OutcomeRecord) {
 	}
 	if len(rec.LoadedDeferredTools) != 1 || rec.LoadedDeferredTools[0] != "mcp_github_issue" {
 		t.Fatalf("LoadedDeferredTools = %v", rec.LoadedDeferredTools)
+	}
+	if len(rec.SkillCatalogReceipts) != 1 || rec.SkillCatalogReceipts[0].Action != "recommend" {
+		t.Fatalf("SkillCatalogReceipts = %+v", rec.SkillCatalogReceipts)
 	}
 	if len(rec.ConditionalSkillMatches) != 1 {
 		t.Fatalf("ConditionalSkillMatches = %#v, want one match", rec.ConditionalSkillMatches)

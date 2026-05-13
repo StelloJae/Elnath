@@ -46,6 +46,7 @@ func (rt *executionRuntime) CompletionContext(_ context.Context, _ daemon.Task, 
 		ProviderEffort:          summary.ProviderEffort,
 		ProviderEffortNote:      summary.ProviderEffortNote,
 		LoadedDeferredTools:     append([]string(nil), summary.LoadedDeferredTools...),
+		SkillCatalogReceipts:    completionSkillCatalogReceiptsToAgentic(summary.SkillCatalogReceipts),
 		ConditionalSkillMatches: completionSkillMatchesToAgentic(summary.ConditionalSkillMatches),
 		CorrectionAttempted:     summary.CorrectionAttempted,
 		CorrectionAttempts:      summary.CorrectionAttempts,
@@ -57,6 +58,33 @@ func (rt *executionRuntime) CompletionContext(_ context.Context, _ daemon.Task, 
 		RetryDecision:           summary.RetryDecision,
 		RetryReason:             summary.RetryReason,
 	}, nil
+}
+
+func completionSkillCatalogReceiptsToAgentic(src []completionSkillCatalogReceipt) []agenticcompletion.SkillCatalogReceipt {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]agenticcompletion.SkillCatalogReceipt, 0, len(src))
+	for _, receipt := range src {
+		out = append(out, agenticcompletion.SkillCatalogReceipt{
+			Tool:               receipt.Tool,
+			Action:             receipt.Action,
+			ReadOnly:           receipt.ReadOnly,
+			RegistryAvailable:  receipt.RegistryAvailable,
+			TotalSkills:        receipt.TotalSkills,
+			ReturnedSkills:     receipt.ReturnedSkills,
+			ReturnedMatches:    receipt.ReturnedMatches,
+			TrustFilterApplied: receipt.TrustFilterApplied,
+			AllowTrustLevels:   append([]string(nil), receipt.AllowTrustLevels...),
+			MaxResults:         receipt.MaxResults,
+			Query:              receipt.Query,
+			Skill:              receipt.Skill,
+			PathCount:          receipt.PathCount,
+			CWDSet:             receipt.CWDSet,
+			IncludePrompt:      receipt.IncludePrompt,
+		})
+	}
+	return out
 }
 
 func completionSkillMatchesToAgentic(src []completionConditionalSkillMatch) []agenticcompletion.ConditionalSkillMatch {

@@ -120,6 +120,55 @@ func TestCatalogToolExposesUserInvocableMetadata(t *testing.T) {
 	}
 }
 
+func TestCatalogToolIncludesDiscoveryReceipt(t *testing.T) {
+	reg := NewRegistry()
+	reg.Add(&Skill{Name: "visible", Description: "Review code", Status: "active", Source: "claude-skill"})
+	reg.Add(&Skill{Name: "plugin", Description: "Review code", Status: "active", Source: "codex-plugin-skill"})
+
+	tool := NewCatalogTool(reg)
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"recommend","query":"review code","max_results":1,"allow_trust_levels":["local_compatible"]}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("Execute returned error result: %s", res.Output)
+	}
+
+	var out struct {
+		Action  string `json:"action"`
+		Skills  []any  `json:"skills"`
+		Receipt struct {
+			Tool               string   `json:"tool"`
+			Action             string   `json:"action"`
+			ReadOnly           bool     `json:"read_only"`
+			RegistryAvailable  bool     `json:"registry_available"`
+			TotalSkills        int      `json:"total_skills"`
+			ReturnedSkills     int      `json:"returned_skills"`
+			ReturnedMatches    int      `json:"returned_matches"`
+			TrustFilterApplied bool     `json:"trust_filter_applied"`
+			AllowTrustLevels   []string `json:"allow_trust_levels"`
+			MaxResults         int      `json:"max_results"`
+			Query              string   `json:"query"`
+			IncludePrompt      bool     `json:"include_prompt"`
+		} `json:"receipt"`
+	}
+	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, res.Output)
+	}
+	if out.Receipt.Tool != CatalogToolName || out.Receipt.Action != "recommend" || !out.Receipt.ReadOnly || !out.Receipt.RegistryAvailable {
+		t.Fatalf("receipt identity = %+v", out.Receipt)
+	}
+	if out.Receipt.TotalSkills != 2 || out.Receipt.ReturnedSkills != 1 || out.Receipt.ReturnedMatches != 0 {
+		t.Fatalf("receipt counts = %+v", out.Receipt)
+	}
+	if !out.Receipt.TrustFilterApplied || len(out.Receipt.AllowTrustLevels) != 1 || out.Receipt.AllowTrustLevels[0] != "local_compatible" {
+		t.Fatalf("receipt trust filter = %+v", out.Receipt)
+	}
+	if out.Receipt.MaxResults != 1 || out.Receipt.Query != "review code" || out.Receipt.IncludePrompt {
+		t.Fatalf("receipt request bounds = %+v", out.Receipt)
+	}
+}
+
 func TestCatalogToolMarksPluginCacheSkillsAsExternal(t *testing.T) {
 	reg := NewRegistry()
 	reg.Add(&Skill{

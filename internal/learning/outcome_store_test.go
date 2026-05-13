@@ -176,6 +176,16 @@ func TestOutcomeRecordCompletionObservabilityJSONCompatibility(t *testing.T) {
 	rec.ProviderEffort = "native_with_unsupported_retry"
 	rec.ProviderEffortNote = "retry_without_reasoning_on_400_or_422_unsupported_effort"
 	rec.LoadedDeferredTools = []string{"mcp_github_issue"}
+	rec.SkillCatalogReceipts = []SkillCatalogReceipt{{
+		Tool:              "skill_catalog",
+		Action:            "recommend",
+		ReadOnly:          true,
+		RegistryAvailable: true,
+		TotalSkills:       2,
+		ReturnedSkills:    1,
+		MaxResults:        5,
+		Query:             "review code",
+	}}
 	rec.CorrectionAttempted = true
 	rec.CorrectionAttempts = 1
 	rec.CorrectionMaxAttempts = 1
@@ -202,6 +212,8 @@ func TestOutcomeRecordCompletionObservabilityJSONCompatibility(t *testing.T) {
 		`"provider_effort":"native_with_unsupported_retry"`,
 		`"provider_effort_note":"retry_without_reasoning_on_400_or_422_unsupported_effort"`,
 		`"loaded_deferred_tools":["mcp_github_issue"]`,
+		`"skill_catalog_receipts":[{"tool":"skill_catalog","action":"recommend"`,
+		`"query":"review code"`,
 		`"correction_attempted":true`,
 		`"correction_attempts":1`,
 		`"correction_max_attempts":1`,

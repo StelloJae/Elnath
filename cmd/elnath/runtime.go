@@ -1386,6 +1386,7 @@ func (rt *executionRuntime) recordOutcome(ctx context.Context, in outcomeInput) 
 		ProviderEffort:          in.completion.ProviderEffort,
 		ProviderEffortNote:      in.completion.ProviderEffortNote,
 		LoadedDeferredTools:     append([]string(nil), in.completion.LoadedDeferredTools...),
+		SkillCatalogReceipts:    completionSkillCatalogReceiptsToLearning(in.completion.SkillCatalogReceipts),
 		ConditionalSkillMatches: completionSkillMatchesToLearning(in.completion.ConditionalSkillMatches),
 		CorrectionAttempted:     in.completion.CorrectionAttempted,
 		CorrectionAttempts:      in.completion.CorrectionAttempts,
@@ -1431,6 +1432,33 @@ func completionSkillMatchesToLearning(src []completionConditionalSkillMatch) []l
 			Source:     match.Source,
 			TrustLevel: match.TrustLevel,
 			External:   match.External,
+		})
+	}
+	return out
+}
+
+func completionSkillCatalogReceiptsToLearning(src []completionSkillCatalogReceipt) []learning.SkillCatalogReceipt {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]learning.SkillCatalogReceipt, 0, len(src))
+	for _, receipt := range src {
+		out = append(out, learning.SkillCatalogReceipt{
+			Tool:               receipt.Tool,
+			Action:             receipt.Action,
+			ReadOnly:           receipt.ReadOnly,
+			RegistryAvailable:  receipt.RegistryAvailable,
+			TotalSkills:        receipt.TotalSkills,
+			ReturnedSkills:     receipt.ReturnedSkills,
+			ReturnedMatches:    receipt.ReturnedMatches,
+			TrustFilterApplied: receipt.TrustFilterApplied,
+			AllowTrustLevels:   append([]string(nil), receipt.AllowTrustLevels...),
+			MaxResults:         receipt.MaxResults,
+			Query:              receipt.Query,
+			Skill:              receipt.Skill,
+			PathCount:          receipt.PathCount,
+			CWDSet:             receipt.CWDSet,
+			IncludePrompt:      receipt.IncludePrompt,
 		})
 	}
 	return out
