@@ -12,6 +12,7 @@ import (
 
 	"github.com/stello/elnath/internal/config"
 	"github.com/stello/elnath/internal/learning"
+	basetools "github.com/stello/elnath/internal/tools"
 )
 
 func TestCmdExplainTimeoutsJSON(t *testing.T) {
@@ -195,6 +196,28 @@ func TestExplainControlSurfacesJSON(t *testing.T) {
 	}
 	if len(out.RemainingGaps) == 0 {
 		t.Fatal("remaining_gaps empty, want honest non-complete boundary")
+	}
+	for _, gap := range out.RemainingGaps {
+		if strings.Contains(gap, "surface status is static") {
+			t.Fatalf("remaining gap %q should be replaced after manifest-backed control-surface metadata", gap)
+		}
+	}
+}
+
+func TestControlSurfaceManifestMatchesToolSearchRouting(t *testing.T) {
+	for _, surface := range controlSurfaceManifest() {
+		if len(surface.Tools) == 0 {
+			t.Fatalf("surface %s has no tools", surface.Name)
+		}
+		for _, name := range surface.Tools {
+			routing := basetools.ToolRoutingMetadataForName(name)
+			if routing.Category != surface.Name {
+				t.Fatalf("tool %s routing category = %q, want surface %q", name, routing.Category, surface.Name)
+			}
+			if routing.Surface == "" {
+				t.Fatalf("tool %s routing surface is empty", name)
+			}
+		}
 	}
 }
 

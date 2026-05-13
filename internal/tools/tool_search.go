@@ -129,6 +129,19 @@ type toolSearchCandidate struct {
 	score int
 }
 
+type ToolRoutingMetadata struct {
+	Category string
+	Surface  string
+}
+
+func ToolRoutingMetadataForName(name string) ToolRoutingMetadata {
+	routing := toolSearchRoutingMetadataForName(name)
+	return ToolRoutingMetadata{
+		Category: routing.Category,
+		Surface:  routing.Surface,
+	}
+}
+
 type toolSearchRoutingMetadata struct {
 	Category string
 	Surface  string
