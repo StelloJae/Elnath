@@ -125,10 +125,15 @@ type ControlToolReceipt struct {
 	ExecutionAvailable      bool   `json:"execution_available,omitempty"`
 	ExecutionPolicy         string `json:"execution_policy,omitempty"`
 	TaskID                  int64  `json:"task_id,omitempty"`
+	ProcessID               int64  `json:"process_id,omitempty"`
 	Status                  string `json:"status,omitempty"`
 	PreviousStatus          string `json:"previous_status,omitempty"`
 	Terminal                bool   `json:"terminal,omitempty"`
 	Found                   bool   `json:"found,omitempty"`
+	TimeoutMS               int    `json:"timeout_ms,omitempty"`
+	CWD                     string `json:"cwd,omitempty"`
+	TailBytes               int    `json:"tail_bytes,omitempty"`
+	StopSignal              string `json:"stop_signal,omitempty"`
 	TotalReturned           int    `json:"total_returned,omitempty"`
 	Limit                   int    `json:"limit,omitempty"`
 	Field                   string `json:"field,omitempty"`

@@ -241,6 +241,17 @@ func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testi
 					ExecutionPolicy: "daemon_queue_enqueue",
 					TaskID:          7,
 					Status:          "pending",
+				}, {
+					Tool:            "process_monitor",
+					Action:          "monitor",
+					ReadOnly:        true,
+					ExecutionPolicy: "session_process_observation",
+					ProcessID:       4,
+					Status:          "completed",
+					Terminal:        true,
+					Found:           true,
+					TailBytes:       4000,
+					CWD:             "/tmp/work",
 				}},
 				CorrectionAttempts:    1,
 				CorrectionMaxAttempts: 1,
@@ -310,8 +321,12 @@ func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testi
 		t.Fatalf("tool_search_receipts missing: summary=%v", summary)
 	}
 	controlToolReceipts, ok := summary["control_tool_receipts"].([]any)
-	if !ok || len(controlToolReceipts) != 1 {
+	if !ok || len(controlToolReceipts) != 2 {
 		t.Fatalf("control_tool_receipts missing: summary=%v", summary)
+	}
+	processReceipt, ok := controlToolReceipts[1].(map[string]any)
+	if !ok || processReceipt["tool"] != "process_monitor" || processReceipt["process_id"] != float64(4) || processReceipt["tail_bytes"] != float64(4000) || processReceipt["cwd"] != "/tmp/work" {
+		t.Fatalf("process control receipt missing fields: receipt=%v summary=%v", controlToolReceipts[1], summary)
 	}
 	if summary["correction_attempts"] != float64(1) || summary["correction_max_attempts"] != float64(1) {
 		t.Fatalf("correction budget fields missing: summary=%v", summary)

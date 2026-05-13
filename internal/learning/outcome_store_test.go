@@ -219,6 +219,17 @@ func TestOutcomeRecordCompletionObservabilityJSONCompatibility(t *testing.T) {
 		ExecutionPolicy: "daemon_queue_enqueue",
 		TaskID:          7,
 		Status:          "pending",
+	}, {
+		Tool:            "process_monitor",
+		Action:          "monitor",
+		ReadOnly:        true,
+		ExecutionPolicy: "session_process_observation",
+		ProcessID:       4,
+		Status:          "completed",
+		Terminal:        true,
+		Found:           true,
+		TailBytes:       4000,
+		CWD:             "/tmp/work",
 	}}
 	rec.CorrectionAttempted = true
 	rec.CorrectionAttempts = 1
@@ -250,6 +261,10 @@ func TestOutcomeRecordCompletionObservabilityJSONCompatibility(t *testing.T) {
 		`"command_catalog_receipts":[{"tool":"command_catalog","action":"recommend"`,
 		`"tool_search_receipts":[{"tool":"tool_search","action":"search"`,
 		`"control_tool_receipts":[{"tool":"task_create","action":"create"`,
+		`"tool":"process_monitor","action":"monitor"`,
+		`"process_id":4`,
+		`"tail_bytes":4000`,
+		`"cwd":"/tmp/work"`,
 		`"execution_policy":"metadata_only"`,
 		`"query":"review code"`,
 		`"correction_attempted":true`,

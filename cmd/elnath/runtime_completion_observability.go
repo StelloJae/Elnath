@@ -107,10 +107,15 @@ type completionControlToolReceipt struct {
 	ExecutionAvailable      bool   `json:"execution_available,omitempty"`
 	ExecutionPolicy         string `json:"execution_policy,omitempty"`
 	TaskID                  int64  `json:"task_id,omitempty"`
+	ProcessID               int64  `json:"process_id,omitempty"`
 	Status                  string `json:"status,omitempty"`
 	PreviousStatus          string `json:"previous_status,omitempty"`
 	Terminal                bool   `json:"terminal,omitempty"`
 	Found                   bool   `json:"found,omitempty"`
+	TimeoutMS               int    `json:"timeout_ms,omitempty"`
+	CWD                     string `json:"cwd,omitempty"`
+	TailBytes               int    `json:"tail_bytes,omitempty"`
+	StopSignal              string `json:"stop_signal,omitempty"`
 	TotalReturned           int    `json:"total_returned,omitempty"`
 	Limit                   int    `json:"limit,omitempty"`
 	Field                   string `json:"field,omitempty"`
@@ -346,6 +351,9 @@ var completionControlToolReceiptNames = map[string]struct{}{
 	"worktree_list":   {},
 	"worktree_run":    {},
 	"worktree_prune":  {},
+	"process_start":   {},
+	"process_monitor": {},
+	"process_stop":    {},
 }
 
 func observedControlToolReceipts(messages []llm.Message) []completionControlToolReceipt {
@@ -394,6 +402,8 @@ func controlToolReceiptFromOutput(toolName, output string) (completionControlToo
 	receipt.ExecutionPolicy = strings.TrimSpace(receipt.ExecutionPolicy)
 	receipt.Status = strings.TrimSpace(receipt.Status)
 	receipt.PreviousStatus = strings.TrimSpace(receipt.PreviousStatus)
+	receipt.CWD = strings.TrimSpace(receipt.CWD)
+	receipt.StopSignal = strings.TrimSpace(receipt.StopSignal)
 	receipt.Field = strings.TrimSpace(receipt.Field)
 	receipt.RetrievalStatus = strings.TrimSpace(receipt.RetrievalStatus)
 	receipt.Name = strings.TrimSpace(receipt.Name)

@@ -501,6 +501,44 @@ func TestCompletionContractSummaryRecordsControlToolReceipts(t *testing.T) {
 	}
 }
 
+func TestCompletionContractSummaryRecordsProcessToolReceipts(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("start background process and monitor it"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "process-1", Name: "process_start", Input: json.RawMessage(`{"command":"sleep 1"}`)},
+			}},
+			llm.NewToolResultMessage("process-1", `{"process_id":4,"status":"running","receipt":{"tool":"process_start","action":"start","read_only":false,"persistent":true,"execution_policy":"session_process_start","process_id":4,"status":"running","timeout_ms":600000,"cwd":"/tmp/work"}}`, false),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "process-2", Name: "process_monitor", Input: json.RawMessage(`{"process_id":4}`)},
+			}},
+			llm.NewToolResultMessage("process-2", `{"process_id":4,"status":"completed","receipt":{"tool":"process_monitor","action":"monitor","read_only":true,"persistent":false,"execution_policy":"session_process_observation","process_id":4,"status":"completed","terminal":true,"found":true,"tail_bytes":4000,"cwd":"/tmp/work"}}`, false),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "process-3", Name: "process_stop", Input: json.RawMessage(`{"process_id":4}`)},
+			}},
+			llm.NewToolResultMessage("process-3", `{"process_id":4,"status":"stopped","receipt":{"tool":"process_stop","action":"stop","read_only":false,"persistent":true,"execution_policy":"session_process_stop","process_id":4,"status":"stopped","terminal":true,"found":true,"stop_signal":"SIGTERM","cwd":"/tmp/work"}}`, false),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(nil, orchestrator.WorkflowConfig{}, result)
+
+	if len(summary.ControlToolReceipts) != 3 {
+		t.Fatalf("ControlToolReceipts = %#v, want three process receipts", summary.ControlToolReceipts)
+	}
+	start := summary.ControlToolReceipts[0]
+	if start.Tool != "process_start" || start.Action != "start" || start.ProcessID != 4 || start.TimeoutMS != 600000 || start.CWD != "/tmp/work" {
+		t.Fatalf("start receipt = %+v", start)
+	}
+	monitor := summary.ControlToolReceipts[1]
+	if monitor.Tool != "process_monitor" || monitor.Action != "monitor" || monitor.ProcessID != 4 || !monitor.ReadOnly || monitor.Persistent || !monitor.Terminal || !monitor.Found || monitor.TailBytes != 4000 {
+		t.Fatalf("monitor receipt = %+v", monitor)
+	}
+	stop := summary.ControlToolReceipts[2]
+	if stop.Tool != "process_stop" || stop.Action != "stop" || stop.ProcessID != 4 || stop.StopSignal != "SIGTERM" || !stop.Terminal || !stop.Found {
+		t.Fatalf("stop receipt = %+v", stop)
+	}
+}
+
 func TestCompletionContractSummaryRecordsProviderCapabilities(t *testing.T) {
 	summary := withProviderCapabilities(completionContractSummary{}, &capabilityCountingProvider{})
 
@@ -512,6 +550,50 @@ func TestCompletionContractSummaryRecordsProviderCapabilities(t *testing.T) {
 	}
 	if !strings.Contains(summary.ProviderEffortNote, "retry_without_reasoning") {
 		t.Fatalf("ProviderEffortNote = %q", summary.ProviderEffortNote)
+	}
+}
+
+func TestProcessControlReceiptsConvertToLearningAndAgentic(t *testing.T) {
+	src := []completionControlToolReceipt{{
+		Tool:            "process_start",
+		Action:          "start",
+		Persistent:      true,
+		ExecutionPolicy: "session_process_start",
+		ProcessID:       4,
+		Status:          "running",
+		TimeoutMS:       600000,
+		CWD:             "/tmp/work",
+	}, {
+		Tool:            "process_monitor",
+		Action:          "monitor",
+		ReadOnly:        true,
+		ExecutionPolicy: "session_process_observation",
+		ProcessID:       4,
+		Status:          "completed",
+		Terminal:        true,
+		Found:           true,
+		TailBytes:       4000,
+		CWD:             "/tmp/work",
+	}, {
+		Tool:            "process_stop",
+		Action:          "stop",
+		Persistent:      true,
+		ExecutionPolicy: "session_process_stop",
+		ProcessID:       4,
+		Status:          "stopped",
+		Terminal:        true,
+		Found:           true,
+		StopSignal:      "SIGTERM",
+		CWD:             "/tmp/work",
+	}}
+
+	learningReceipts := completionControlToolReceiptsToLearning(src)
+	if len(learningReceipts) != 3 || learningReceipts[0].ProcessID != 4 || learningReceipts[0].TimeoutMS != 600000 || learningReceipts[1].TailBytes != 4000 || learningReceipts[2].StopSignal != "SIGTERM" {
+		t.Fatalf("learning receipts = %+v", learningReceipts)
+	}
+	agenticReceipts := completionControlToolReceiptsToAgentic(src)
+	if len(agenticReceipts) != 3 || agenticReceipts[0].ProcessID != 4 || agenticReceipts[0].CWD != "/tmp/work" || agenticReceipts[1].TailBytes != 4000 || agenticReceipts[2].StopSignal != "SIGTERM" {
+		t.Fatalf("agentic receipts = %+v", agenticReceipts)
 	}
 }
 
