@@ -139,6 +139,7 @@ type completionControlToolReceipt struct {
 	Action                  string   `json:"action"`
 	ReadOnly                bool     `json:"read_only"`
 	Persistent              bool     `json:"persistent"`
+	RequestID               string   `json:"request_id,omitempty"`
 	SessionID               string   `json:"session_id,omitempty"`
 	QueueBacked             bool     `json:"queue_backed,omitempty"`
 	RegistryBacked          bool     `json:"registry_backed,omitempty"`
@@ -565,6 +566,7 @@ func controlToolReceiptFromOutput(toolName, output string) (completionControlToo
 	receipt.Action = strings.TrimSpace(receipt.Action)
 	receipt.ExecutionPolicy = strings.TrimSpace(receipt.ExecutionPolicy)
 	receipt.FollowupTool = strings.TrimSpace(receipt.FollowupTool)
+	receipt.RequestID = strings.TrimSpace(receipt.RequestID)
 	receipt.Status = strings.TrimSpace(receipt.Status)
 	receipt.PreviousStatus = strings.TrimSpace(receipt.PreviousStatus)
 	receipt.SessionID = strings.TrimSpace(receipt.SessionID)

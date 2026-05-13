@@ -8,21 +8,23 @@ Branch: codex/ask-user-question-session
 Added a narrow answer-to-resume bridge for structured user-input requests.
 
 `ask_user_question` can now provide a `session_id` when session-bound, and
-`user_question_answer` can enqueue a daemon follow-up task against that same
-session. The daemon's existing task runner then resumes the session through the
-normal `TaskPayload.SessionID` path.
+all question requests carry a `request_id`. `user_question_answer` can enqueue a
+daemon follow-up task against that same session and optional request id. The
+daemon's existing task runner then resumes the session through the normal
+`TaskPayload.SessionID` path.
 
 ## Implemented
 
 - Added model-callable `user_question_answer`.
 - Requires `session_id` and `answer`.
-- Accepts optional `question`, `surface`, and `idempotency_key`.
+- Accepts optional `request_id`, `question`, `surface`, and `idempotency_key`.
 - Enqueues a daemon task with a continuation prompt and the exact session id.
 - Emits a queue-backed receipt:
   - `tool=user_question_answer`
   - `action=answer`
   - `execution_policy=daemon_queue_user_answer_resume`
   - `task_id`
+  - `request_id` when supplied
   - `session_id`
   - `followup_tool=task_monitor`
 - Registered the tool in the runtime registry.
@@ -38,6 +40,7 @@ Allowed claims:
   `ask_user_question` flows.
 - The answer bridge creates a pending daemon task scoped to the supplied
   `session_id`.
+- `request_id` can be carried from question request to answer enqueue receipt.
 - The bridge is ToolSearch-discoverable and completion-observable.
 
 Not claimed:
@@ -45,7 +48,7 @@ Not claimed:
 - no blocking wait state
 - no automatic wake after the user answer arrives
 - no validation that the supplied answer corresponds to the most recent pending
-  question
+  question or to a persisted pending-question ledger
 - no UI-level answer collection
 - no full managed pause/resume lifecycle
 - no benchmark behavior change
@@ -59,7 +62,7 @@ go test ./internal/daemon -run 'TestUserQuestionAnswerToolEnqueuesSessionBoundFo
 go test ./cmd/elnath -run 'TestCompletionContractSummaryRecordsUserQuestionAnswerReceipt|TestCompletionContractSummaryRecordsAskUserQuestionReceipt|TestExecutionRuntimeRegistersDeferredControlSurfaceTools|TestExplainControlSurfacesJSON|TestExplainControlSurfacesText' -count=1
 go test ./internal/tools -run 'TestToolSearchReportsRoutingMetadata|TestToolSearchFiltersByCategoryAndSurface' -count=1
 go test ./internal/agent -run 'TestPlanModeAllowsOnlyReadOnlyTools|TestAcceptEditsAutoApprovesWithoutPrompter' -count=1
-go test ./internal/daemon ./cmd/elnath ./internal/tools ./internal/agent ./internal/learning ./internal/agentic/completion -count=1
+go test ./internal/agent ./internal/daemon ./cmd/elnath ./internal/tools ./internal/learning ./internal/agentic/completion -count=1
 go vet ./...
 git diff --check
 go run ./cmd/elnath explain control-surfaces --json

@@ -7,9 +7,10 @@ Branch: codex/ask-user-question-session
 
 Added a narrow session-provenance slice for `ask_user_question`.
 
-When `ask_user_question` runs in a session-bound tool context, its structured
-output and receipt now include `session_id`. Completion observability preserves
-that field into learning and agentic completion receipts.
+When `ask_user_question` runs, its structured output and receipt now include a
+stable `request_id`. When the tool context is session-bound, they also include
+`session_id`. Completion observability preserves both fields into learning and
+agentic completion receipts.
 
 This is a wait/resume foundation only.
 
@@ -19,8 +20,9 @@ Allowed claims:
 
 - `ask_user_question` emits `session_id` when the tool context is session-bound.
 - `ask_user_question` omits `session_id` when no session is bound.
-- Completion control receipts parse and trim `session_id`.
-- Learning and agentic completion receipt conversions preserve `session_id`.
+- `ask_user_question` emits `request_id` for the specific question request.
+- Completion control receipts parse and trim `request_id` and `session_id`.
+- Learning and agentic completion receipt conversions preserve both fields.
 
 Not claimed:
 

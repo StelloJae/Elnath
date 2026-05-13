@@ -109,6 +109,7 @@ type taskToolReceipt struct {
 	QueueBacked     bool       `json:"queue_backed"`
 	ExecutionPolicy string     `json:"execution_policy"`
 	TaskID          int64      `json:"task_id,omitempty"`
+	RequestID       string     `json:"request_id,omitempty"`
 	SessionID       string     `json:"session_id,omitempty"`
 	Status          TaskStatus `json:"status,omitempty"`
 	PreviousStatus  TaskStatus `json:"previous_status,omitempty"`
@@ -196,6 +197,7 @@ func (t *UserQuestionAnswerTool) Description() string {
 func (t *UserQuestionAnswerTool) Schema() json.RawMessage {
 	return tools.Object(map[string]tools.Property{
 		"session_id":      tools.String("Session id from the user-input-required receipt."),
+		"request_id":      tools.String("Optional request id from the ask_user_question receipt."),
 		"answer":          tools.String("User-provided answer to continue the session."),
 		"question":        tools.String("Optional question text being answered, for provenance."),
 		"surface":         tools.String("Optional originating surface label."),
@@ -217,6 +219,7 @@ func (t *UserQuestionAnswerTool) DeferInitialToolSchema() bool { return true }
 
 type userQuestionAnswerToolInput struct {
 	SessionID      string `json:"session_id"`
+	RequestID      string `json:"request_id"`
 	Answer         string `json:"answer"`
 	Question       string `json:"question"`
 	Surface        string `json:"surface"`
@@ -228,6 +231,7 @@ type userQuestionAnswerToolOutput struct {
 	TaskID         int64           `json:"task_id"`
 	Status         string          `json:"status"`
 	Deduplicated   bool            `json:"deduplicated"`
+	RequestID      string          `json:"request_id,omitempty"`
 	SessionID      string          `json:"session_id"`
 	PayloadPreview string          `json:"payload_preview"`
 	AnswerChars    int             `json:"answer_chars"`
@@ -253,12 +257,13 @@ func (t *UserQuestionAnswerTool) Execute(ctx context.Context, params json.RawMes
 		return tools.ErrorResult("user_question_answer: answer is required"), nil
 	}
 	question := strings.TrimSpace(input.Question)
+	requestID := strings.TrimSpace(input.RequestID)
 	surface := strings.TrimSpace(input.Surface)
 	if surface == "" {
 		surface = "user_question_answer"
 	}
 	payload := EncodeTaskPayload(TaskPayload{
-		Prompt:    buildUserQuestionAnswerPrompt(question, answer),
+		Prompt:    buildUserQuestionAnswerPrompt(requestID, question, answer),
 		SessionID: sessionID,
 		Surface:   surface,
 	})
@@ -272,6 +277,7 @@ func (t *UserQuestionAnswerTool) Execute(ctx context.Context, params json.RawMes
 		TaskID:         id,
 		Status:         string(StatusPending),
 		Deduplicated:   deduped,
+		RequestID:      requestID,
 		SessionID:      sessionID,
 		PayloadPreview: truncateTaskToolText(payload, taskToolPreviewMaxRune),
 		AnswerChars:    len([]rune(answer)),
@@ -283,6 +289,7 @@ func (t *UserQuestionAnswerTool) Execute(ctx context.Context, params json.RawMes
 			QueueBacked:     true,
 			ExecutionPolicy: "daemon_queue_user_answer_resume",
 			TaskID:          id,
+			RequestID:       requestID,
 			SessionID:       sessionID,
 			Status:          StatusPending,
 			Deduplicated:    deduped,
@@ -297,9 +304,14 @@ func (t *UserQuestionAnswerTool) Execute(ctx context.Context, params json.RawMes
 	return tools.SuccessResult(string(raw)), nil
 }
 
-func buildUserQuestionAnswerPrompt(question, answer string) string {
+func buildUserQuestionAnswerPrompt(requestID, question, answer string) string {
 	var b strings.Builder
 	b.WriteString("User answered a pending clarification question.\n\n")
+	if strings.TrimSpace(requestID) != "" {
+		b.WriteString("Request ID:\n")
+		b.WriteString(strings.TrimSpace(requestID))
+		b.WriteString("\n\n")
+	}
 	if strings.TrimSpace(question) != "" {
 		b.WriteString("Question:\n")
 		b.WriteString(strings.TrimSpace(question))

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/stello/elnath/internal/tools"
 )
 
@@ -53,6 +54,7 @@ type askUserQuestionToolOutput struct {
 	Options        []string               `json:"options,omitempty"`
 	AllowFreeText  bool                   `json:"allow_free_text"`
 	TimeoutSeconds int                    `json:"timeout_seconds"`
+	RequestID      string                 `json:"request_id"`
 	SessionID      string                 `json:"session_id,omitempty"`
 	Instruction    string                 `json:"instruction"`
 	Receipt        askUserQuestionReceipt `json:"receipt"`
@@ -67,6 +69,7 @@ type askUserQuestionReceipt struct {
 	OptionCount     int    `json:"option_count"`
 	AllowFreeText   bool   `json:"allow_free_text"`
 	TimeoutSeconds  int    `json:"timeout_seconds"`
+	RequestID       string `json:"request_id"`
 	SessionID       string `json:"session_id,omitempty"`
 }
 
@@ -88,6 +91,7 @@ func (t *AskUserQuestionTool) Execute(ctx context.Context, params json.RawMessag
 		Options:        cleanUserQuestionOptions(input.Options),
 		AllowFreeText:  true,
 		TimeoutSeconds: normalizeUserQuestionTimeout(input.TimeoutSeconds),
+		RequestID:      uuid.NewString(),
 		SessionID:      tools.SessionIDFrom(ctx),
 		Instruction:    "Stop and ask the user this question; do not guess an answer or continue with assumptions.",
 	}
@@ -103,6 +107,7 @@ func (t *AskUserQuestionTool) Execute(ctx context.Context, params json.RawMessag
 		OptionCount:     len(output.Options),
 		AllowFreeText:   output.AllowFreeText,
 		TimeoutSeconds:  output.TimeoutSeconds,
+		RequestID:       output.RequestID,
 		SessionID:       output.SessionID,
 	}
 

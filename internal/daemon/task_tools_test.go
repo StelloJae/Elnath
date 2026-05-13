@@ -69,6 +69,7 @@ func TestUserQuestionAnswerToolEnqueuesSessionBoundFollowUp(t *testing.T) {
 
 	result, err := NewUserQuestionAnswerTool(queue).Execute(ctx, json.RawMessage(`{
 		"session_id": "sess-123",
+		"request_id": "req-123",
 		"question": "Which branch?",
 		"answer": "Use main.",
 		"surface": "tool-test",
@@ -85,13 +86,13 @@ func TestUserQuestionAnswerToolEnqueuesSessionBoundFollowUp(t *testing.T) {
 	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
 		t.Fatalf("unmarshal output: %v", err)
 	}
-	if output.Type != "user_input_answer_enqueued" || output.TaskID == 0 || output.Status != string(StatusPending) || output.SessionID != "sess-123" {
+	if output.Type != "user_input_answer_enqueued" || output.TaskID == 0 || output.Status != string(StatusPending) || output.SessionID != "sess-123" || output.RequestID != "req-123" {
 		t.Fatalf("output = %+v, want pending session-bound answer task", output)
 	}
 	if output.AnswerChars != len("Use main.") {
 		t.Fatalf("AnswerChars = %d, want %d", output.AnswerChars, len("Use main."))
 	}
-	if output.Receipt.Tool != UserQuestionAnswerToolName || output.Receipt.Action != "answer" || output.Receipt.ReadOnly || !output.Receipt.Persistent || !output.Receipt.QueueBacked || output.Receipt.TaskID != output.TaskID || output.Receipt.SessionID != "sess-123" || output.Receipt.FollowupTool != TaskMonitorToolName {
+	if output.Receipt.Tool != UserQuestionAnswerToolName || output.Receipt.Action != "answer" || output.Receipt.ReadOnly || !output.Receipt.Persistent || !output.Receipt.QueueBacked || output.Receipt.TaskID != output.TaskID || output.Receipt.RequestID != "req-123" || output.Receipt.SessionID != "sess-123" || output.Receipt.FollowupTool != TaskMonitorToolName {
 		t.Fatalf("receipt = %+v, want user answer queue-backed mutation receipt", output.Receipt)
 	}
 	if output.Receipt.ExecutionPolicy != "daemon_queue_user_answer_resume" || output.Receipt.QuestionChars != len("Which branch?") {
@@ -106,7 +107,7 @@ func TestUserQuestionAnswerToolEnqueuesSessionBoundFollowUp(t *testing.T) {
 	if payload.SessionID != "sess-123" || payload.Surface != "tool-test" {
 		t.Fatalf("payload routing = %+v, want session-bound tool-test follow-up", payload)
 	}
-	if !strings.Contains(payload.Prompt, "Question:\nWhich branch?") || !strings.Contains(payload.Prompt, "Answer:\nUse main.") || !strings.Contains(payload.Prompt, "Continue the existing session") {
+	if !strings.Contains(payload.Prompt, "Request ID:\nreq-123") || !strings.Contains(payload.Prompt, "Question:\nWhich branch?") || !strings.Contains(payload.Prompt, "Answer:\nUse main.") || !strings.Contains(payload.Prompt, "Continue the existing session") {
 		t.Fatalf("payload prompt = %q, want question, answer, and continuation instruction", payload.Prompt)
 	}
 }

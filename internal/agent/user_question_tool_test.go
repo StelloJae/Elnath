@@ -42,6 +42,9 @@ func TestAskUserQuestionToolReturnsStructuredRequest(t *testing.T) {
 	if output.TimeoutSeconds != 120 {
 		t.Fatalf("TimeoutSeconds = %d, want 120", output.TimeoutSeconds)
 	}
+	if output.RequestID == "" {
+		t.Fatal("RequestID is empty, want stable question id")
+	}
 	if !strings.Contains(output.Instruction, "ask the user") {
 		t.Fatalf("Instruction = %q, want user-facing guidance", output.Instruction)
 	}
@@ -50,6 +53,9 @@ func TestAskUserQuestionToolReturnsStructuredRequest(t *testing.T) {
 	}
 	if output.Receipt.QuestionChars != len("Which branch should I use?") || output.Receipt.OptionCount != 2 || output.Receipt.AllowFreeText || output.Receipt.TimeoutSeconds != 120 {
 		t.Fatalf("Receipt bounds = %+v", output.Receipt)
+	}
+	if output.Receipt.RequestID != output.RequestID {
+		t.Fatalf("receipt RequestID = %q, want output RequestID %q", output.Receipt.RequestID, output.RequestID)
 	}
 }
 

@@ -571,7 +571,7 @@ func TestCompletionContractSummaryRecordsAskUserQuestionReceipt(t *testing.T) {
 			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
 				llm.ToolUseBlock{ID: "ask-1", Name: "ask_user_question", Input: json.RawMessage(`{"question":"Which branch?","options":["main","new"],"allow_free_text":false,"timeout_seconds":120}`)},
 			}},
-			llm.NewToolResultMessage("ask-1", `{"type":"user_input_required","question":"Which branch?","options":["main","new"],"allow_free_text":false,"timeout_seconds":120,"session_id":"sess-123","receipt":{"tool":"ask_user_question","action":"request","read_only":true,"execution_policy":"user_input_request","question_chars":13,"option_count":2,"allow_free_text":false,"timeout_seconds":120,"session_id":"sess-123"}}`, false),
+			llm.NewToolResultMessage("ask-1", `{"type":"user_input_required","question":"Which branch?","options":["main","new"],"allow_free_text":false,"timeout_seconds":120,"request_id":"req-123","session_id":"sess-123","receipt":{"tool":"ask_user_question","action":"request","read_only":true,"execution_policy":"user_input_request","question_chars":13,"option_count":2,"allow_free_text":false,"timeout_seconds":120,"request_id":"req-123","session_id":"sess-123"}}`, false),
 		},
 		FinishReason: "stop",
 	}
@@ -584,7 +584,7 @@ func TestCompletionContractSummaryRecordsAskUserQuestionReceipt(t *testing.T) {
 	if receipt.Tool != "ask_user_question" || receipt.Action != "request" || !receipt.ReadOnly || receipt.ExecutionPolicy != "user_input_request" {
 		t.Fatalf("receipt identity = %+v", receipt)
 	}
-	if receipt.QuestionChars != 13 || receipt.OptionCount != 2 || receipt.AllowFreeText || receipt.TimeoutSeconds != 120 || receipt.SessionID != "sess-123" {
+	if receipt.QuestionChars != 13 || receipt.OptionCount != 2 || receipt.AllowFreeText || receipt.TimeoutSeconds != 120 || receipt.RequestID != "req-123" || receipt.SessionID != "sess-123" {
 		t.Fatalf("receipt bounds = %+v", receipt)
 	}
 	if !summary.UserInputRequired {
@@ -599,7 +599,7 @@ func TestCompletionContractSummaryRecordsUserQuestionAnswerReceipt(t *testing.T)
 			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
 				llm.ToolUseBlock{ID: "answer-1", Name: "user_question_answer", Input: json.RawMessage(`{"session_id":"sess-123","answer":"main"}`)},
 			}},
-			llm.NewToolResultMessage("answer-1", `{"type":"user_input_answer_enqueued","task_id":8,"status":"pending","session_id":"sess-123","answer_chars":4,"receipt":{"tool":"user_question_answer","action":"answer","read_only":false,"persistent":true,"queue_backed":true,"execution_policy":"daemon_queue_user_answer_resume","task_id":8,"session_id":"sess-123","status":"pending","followup_tool":"task_monitor","question_chars":13}}`, false),
+			llm.NewToolResultMessage("answer-1", `{"type":"user_input_answer_enqueued","task_id":8,"status":"pending","request_id":"req-123","session_id":"sess-123","answer_chars":4,"receipt":{"tool":"user_question_answer","action":"answer","read_only":false,"persistent":true,"queue_backed":true,"execution_policy":"daemon_queue_user_answer_resume","task_id":8,"request_id":"req-123","session_id":"sess-123","status":"pending","followup_tool":"task_monitor","question_chars":13}}`, false),
 		},
 		FinishReason: "stop",
 	}
@@ -612,7 +612,7 @@ func TestCompletionContractSummaryRecordsUserQuestionAnswerReceipt(t *testing.T)
 	if receipt.Tool != "user_question_answer" || receipt.Action != "answer" || receipt.ReadOnly || !receipt.Persistent || !receipt.QueueBacked || receipt.ExecutionPolicy != "daemon_queue_user_answer_resume" {
 		t.Fatalf("receipt identity = %+v", receipt)
 	}
-	if receipt.TaskID != 8 || receipt.SessionID != "sess-123" || receipt.Status != "pending" || receipt.FollowupTool != "task_monitor" || receipt.QuestionChars != 13 {
+	if receipt.TaskID != 8 || receipt.RequestID != "req-123" || receipt.SessionID != "sess-123" || receipt.Status != "pending" || receipt.FollowupTool != "task_monitor" || receipt.QuestionChars != 13 {
 		t.Fatalf("receipt routing = %+v", receipt)
 	}
 }
@@ -827,6 +827,7 @@ func TestDelegationControlReceiptsConvertToLearningAndAgentic(t *testing.T) {
 		DecisionID:      7,
 		DecisionStatus:  "enqueued",
 		Enqueued:        true,
+		RequestID:       "req-123",
 		SessionID:       "sess-123",
 	}, {
 		Tool:            "agentic_message_send",
@@ -841,11 +842,11 @@ func TestDelegationControlReceiptsConvertToLearningAndAgentic(t *testing.T) {
 	}}
 
 	learningReceipts := completionControlToolReceiptsToLearning(src)
-	if len(learningReceipts) != 2 || learningReceipts[0].ParentTaskID != 3 || learningReceipts[0].ChildTaskID != 9 || learningReceipts[0].QueueTaskID != 44 || learningReceipts[0].FollowupTool != "agentic_delegate_status" || learningReceipts[0].DecisionID != 7 || !learningReceipts[0].Enqueued || learningReceipts[0].SessionID != "sess-123" || learningReceipts[1].HandoffID != 5 || !learningReceipts[1].Delivered {
+	if len(learningReceipts) != 2 || learningReceipts[0].ParentTaskID != 3 || learningReceipts[0].ChildTaskID != 9 || learningReceipts[0].QueueTaskID != 44 || learningReceipts[0].FollowupTool != "agentic_delegate_status" || learningReceipts[0].DecisionID != 7 || !learningReceipts[0].Enqueued || learningReceipts[0].RequestID != "req-123" || learningReceipts[0].SessionID != "sess-123" || learningReceipts[1].HandoffID != 5 || !learningReceipts[1].Delivered {
 		t.Fatalf("learning receipts = %+v", learningReceipts)
 	}
 	agenticReceipts := completionControlToolReceiptsToAgentic(src)
-	if len(agenticReceipts) != 2 || agenticReceipts[0].ParentTaskID != 3 || agenticReceipts[0].ChildTaskID != 9 || agenticReceipts[0].QueueTaskID != 44 || agenticReceipts[0].FollowupTool != "agentic_delegate_status" || agenticReceipts[0].DecisionStatus != "enqueued" || agenticReceipts[0].SessionID != "sess-123" || agenticReceipts[1].FromActorID != 1 || agenticReceipts[1].ToActorID != 2 || !agenticReceipts[1].Delivered {
+	if len(agenticReceipts) != 2 || agenticReceipts[0].ParentTaskID != 3 || agenticReceipts[0].ChildTaskID != 9 || agenticReceipts[0].QueueTaskID != 44 || agenticReceipts[0].FollowupTool != "agentic_delegate_status" || agenticReceipts[0].DecisionStatus != "enqueued" || agenticReceipts[0].RequestID != "req-123" || agenticReceipts[0].SessionID != "sess-123" || agenticReceipts[1].FromActorID != 1 || agenticReceipts[1].ToActorID != 2 || !agenticReceipts[1].Delivered {
 		t.Fatalf("agentic receipts = %+v", agenticReceipts)
 	}
 }
