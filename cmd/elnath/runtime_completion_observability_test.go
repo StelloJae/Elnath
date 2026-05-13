@@ -564,6 +564,31 @@ func TestCompletionContractSummaryRecordsRuntimeCommandReceipt(t *testing.T) {
 	}
 }
 
+func TestCompletionContractSummaryRecordsAskUserQuestionReceipt(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("need clarification"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "ask-1", Name: "ask_user_question", Input: json.RawMessage(`{"question":"Which branch?","options":["main","new"],"allow_free_text":false,"timeout_seconds":120}`)},
+			}},
+			llm.NewToolResultMessage("ask-1", `{"type":"user_input_required","question":"Which branch?","options":["main","new"],"allow_free_text":false,"timeout_seconds":120,"receipt":{"tool":"ask_user_question","action":"request","read_only":true,"execution_policy":"user_input_request","question_chars":13,"option_count":2,"allow_free_text":false,"timeout_seconds":120}}`, false),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(nil, orchestrator.WorkflowConfig{}, result)
+
+	if len(summary.ControlToolReceipts) != 1 {
+		t.Fatalf("ControlToolReceipts = %#v, want one ask_user_question receipt", summary.ControlToolReceipts)
+	}
+	receipt := summary.ControlToolReceipts[0]
+	if receipt.Tool != "ask_user_question" || receipt.Action != "request" || !receipt.ReadOnly || receipt.ExecutionPolicy != "user_input_request" {
+		t.Fatalf("receipt identity = %+v", receipt)
+	}
+	if receipt.QuestionChars != 13 || receipt.OptionCount != 2 || receipt.AllowFreeText || receipt.TimeoutSeconds != 120 {
+		t.Fatalf("receipt bounds = %+v", receipt)
+	}
+}
+
 func TestCompletionContractSummaryRecordsProcessToolReceipts(t *testing.T) {
 	result := &orchestrator.WorkflowResult{
 		Messages: []llm.Message{

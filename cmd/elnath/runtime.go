@@ -1644,6 +1644,10 @@ func completionControlToolReceiptsToLearning(src []completionControlToolReceipt)
 			Command:                 receipt.Command,
 			Args:                    append([]string(nil), receipt.Args...),
 			StateMutation:           receipt.StateMutation,
+			QuestionChars:           receipt.QuestionChars,
+			OptionCount:             receipt.OptionCount,
+			AllowFreeText:           receipt.AllowFreeText,
+			TimeoutSeconds:          receipt.TimeoutSeconds,
 		})
 	}
 	return out

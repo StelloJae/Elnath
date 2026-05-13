@@ -269,6 +269,15 @@ func TestOutcomeRecordCompletionObservabilityJSONCompatibility(t *testing.T) {
 		StderrRawBytes:  4,
 		StderrTruncated: true,
 		CWD:             "/tmp/work",
+	}, {
+		Tool:            "ask_user_question",
+		Action:          "request",
+		ReadOnly:        true,
+		ExecutionPolicy: "user_input_request",
+		QuestionChars:   13,
+		OptionCount:     2,
+		AllowFreeText:   false,
+		TimeoutSeconds:  120,
 	}}
 	rec.CorrectionAttempted = true
 	rec.CorrectionAttempts = 1
@@ -327,6 +336,10 @@ func TestOutcomeRecordCompletionObservabilityJSONCompatibility(t *testing.T) {
 		`"stdout_raw_bytes":5`,
 		`"stderr_truncated":true`,
 		`"cwd":"/tmp/work"`,
+		`"tool":"ask_user_question","action":"request"`,
+		`"question_chars":13`,
+		`"option_count":2`,
+		`"timeout_seconds":120`,
 		`"execution_policy":"metadata_only"`,
 		`"query":"review code"`,
 		`"correction_attempted":true`,

@@ -213,6 +213,10 @@ type ControlToolReceipt struct {
 	Command                 string   `json:"command,omitempty"`
 	Args                    []string `json:"args,omitempty"`
 	StateMutation           bool     `json:"state_mutation,omitempty"`
+	QuestionChars           int      `json:"question_chars,omitempty"`
+	OptionCount             int      `json:"option_count,omitempty"`
+	AllowFreeText           bool     `json:"allow_free_text,omitempty"`
+	TimeoutSeconds          int      `json:"timeout_seconds,omitempty"`
 }
 
 type CompletionContextProvider interface {

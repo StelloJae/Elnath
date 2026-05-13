@@ -48,12 +48,24 @@ type askUserQuestionToolInput struct {
 }
 
 type askUserQuestionToolOutput struct {
-	Type           string   `json:"type"`
-	Question       string   `json:"question"`
-	Options        []string `json:"options,omitempty"`
-	AllowFreeText  bool     `json:"allow_free_text"`
-	TimeoutSeconds int      `json:"timeout_seconds"`
-	Instruction    string   `json:"instruction"`
+	Type           string                 `json:"type"`
+	Question       string                 `json:"question"`
+	Options        []string               `json:"options,omitempty"`
+	AllowFreeText  bool                   `json:"allow_free_text"`
+	TimeoutSeconds int                    `json:"timeout_seconds"`
+	Instruction    string                 `json:"instruction"`
+	Receipt        askUserQuestionReceipt `json:"receipt"`
+}
+
+type askUserQuestionReceipt struct {
+	Tool            string `json:"tool"`
+	Action          string `json:"action"`
+	ReadOnly        bool   `json:"read_only"`
+	ExecutionPolicy string `json:"execution_policy"`
+	QuestionChars   int    `json:"question_chars"`
+	OptionCount     int    `json:"option_count"`
+	AllowFreeText   bool   `json:"allow_free_text"`
+	TimeoutSeconds  int    `json:"timeout_seconds"`
 }
 
 func (t *AskUserQuestionTool) Execute(_ context.Context, params json.RawMessage) (*tools.Result, error) {
@@ -78,6 +90,16 @@ func (t *AskUserQuestionTool) Execute(_ context.Context, params json.RawMessage)
 	}
 	if input.AllowFreeText != nil {
 		output.AllowFreeText = *input.AllowFreeText
+	}
+	output.Receipt = askUserQuestionReceipt{
+		Tool:            AskUserQuestionToolName,
+		Action:          "request",
+		ReadOnly:        true,
+		ExecutionPolicy: "user_input_request",
+		QuestionChars:   len([]rune(question)),
+		OptionCount:     len(output.Options),
+		AllowFreeText:   output.AllowFreeText,
+		TimeoutSeconds:  output.TimeoutSeconds,
 	}
 
 	raw, err := json.Marshal(output)
