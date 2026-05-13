@@ -815,7 +815,7 @@ func TestValidate(t *testing.T) {
 		},
 		{
 			name:    "unsupported self healing completion retry max above current executor limit",
-			mutate:  func(c *Config) { c.SelfHealing.CompletionRetryMax = 2 },
+			mutate:  func(c *Config) { c.SelfHealing.CompletionRetryMax = 3 },
 			wantErr: "self_healing.completion_retry_max",
 		},
 		{

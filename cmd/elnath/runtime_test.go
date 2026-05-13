@@ -3786,7 +3786,7 @@ func TestExecutionRuntimeRunTaskSelfHealingCorrectionRetriesIncompleteFinal(t *t
 		t.Fatalf("NewSession: %v", err)
 	}
 
-	_, summary, err := rt.runTask(context.Background(), sess, nil, "fix the existing handler", orchestrationOutput{})
+	_, summary, err := rt.runTask(context.Background(), sess, nil, "answer the status question", orchestrationOutput{})
 	if err != nil {
 		t.Fatalf("runTask: %v", err)
 	}
@@ -3805,6 +3805,44 @@ func TestExecutionRuntimeRunTaskSelfHealingCorrectionRetriesIncompleteFinal(t *t
 	}
 	if records[0].CorrectionDecision != completionRetryDecisionRetrySmallerScope || records[0].CorrectionReason != "final_response_reports_incomplete" {
 		t.Fatalf("correction outcome reason = decision %q reason %q", records[0].CorrectionDecision, records[0].CorrectionReason)
+	}
+}
+
+func TestExecutionRuntimeRunTaskSelfHealingCorrectionUsesSecondBoundedRetry(t *testing.T) {
+	provider := &sequenceStreamProvider{responses: []string{
+		"I could not finish the patch.",
+		"I still could not finish the patch.",
+		"Done now.",
+	}}
+	rt := newTestExecutionRuntimeWithConfig(t, provider, false, func(cfg *config.Config) {
+		cfg.SelfHealing.Enabled = true
+		cfg.SelfHealing.ObserveOnly = false
+		cfg.SelfHealing.CompletionRetryMax = 2
+	})
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	_, summary, err := rt.runTask(context.Background(), sess, nil, "answer the status question", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask: %v", err)
+	}
+	if summary != "Done now." {
+		t.Fatalf("summary = %q, want second retry result", summary)
+	}
+	if provider.idx != 3 {
+		t.Fatalf("streamed responses = %d, want initial attempt plus two bounded retries", provider.idx)
+	}
+	records, err := rt.outcomeStore.Recent(1)
+	if err != nil {
+		t.Fatalf("Recent outcomes: %v", err)
+	}
+	if len(records) != 1 || !records[0].CorrectionAttempted || records[0].CorrectionAttempts != 2 {
+		t.Fatalf("correction outcome = %+v, want two recorded correction attempts", records)
+	}
+	if records[0].CorrectionMaxAttempts != 2 || records[0].CorrectionStatus != "succeeded" {
+		t.Fatalf("correction budget/status = max %d status %q warning %q retry %q/%q", records[0].CorrectionMaxAttempts, records[0].CorrectionStatus, records[0].CompletionWarning, records[0].RetryDecision, records[0].RetryReason)
 	}
 }
 
@@ -3941,6 +3979,43 @@ func TestCompletionRetryPreservesVerificationRequirement(t *testing.T) {
 	}
 	if gotSummary.CorrectionStatus != "succeeded" {
 		t.Fatalf("CorrectionStatus = %q, want succeeded workflow correction with remaining verification requirement", gotSummary.CorrectionStatus)
+	}
+}
+
+func TestCompletionRetryPreservesPriorAttemptWhenVerificationSkipFollowsCorrection(t *testing.T) {
+	rt := newTestExecutionRuntimeWithConfig(t, &countingProvider{}, false, func(cfg *config.Config) {
+		cfg.SelfHealing.Enabled = true
+		cfg.SelfHealing.ObserveOnly = false
+	})
+	rt.completionRetryMax = 2
+	wf := &captureRetryWorkflow{name: "single"}
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("answer the status question\n\ngo test ./cmd/elnath -count=1"),
+			llm.NewAssistantMessage("I could not finish the answer."),
+		},
+		Summary:      "I could not finish the answer.",
+		FinishReason: "stop",
+		Workflow:     "single",
+	}
+	observed := false
+	summary := completionContractSummary{
+		VerificationHint:     true,
+		VerificationObserved: &observed,
+		CompletionWarning:    "final_response_reports_incomplete",
+		RetryDecision:        completionRetryDecisionRetrySmallerScope,
+		RetryReason:          "final_response_reports_incomplete",
+	}
+
+	_, gotSummary := rt.maybeRunCompletionRetry(context.Background(), wf, orchestrator.WorkflowInput{
+		Provider: rt.provider,
+	}, result, summary)
+
+	if gotSummary.CorrectionStatus != "skipped" || gotSummary.CorrectionFailureFamily != "missing_verification_executor" {
+		t.Fatalf("correction skip = status %q family %q", gotSummary.CorrectionStatus, gotSummary.CorrectionFailureFamily)
+	}
+	if gotSummary.CorrectionAttempts != 1 || gotSummary.CorrectionMaxAttempts != 2 {
+		t.Fatalf("correction attempts = %d max %d, want prior smaller-scope attempt preserved", gotSummary.CorrectionAttempts, gotSummary.CorrectionMaxAttempts)
 	}
 }
 

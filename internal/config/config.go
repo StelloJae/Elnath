@@ -435,8 +435,8 @@ func validate(cfg *Config) error {
 	if cfg.SelfHealing.CompletionRetryMax < 0 {
 		return fmt.Errorf("self_healing.completion_retry_max must be >= 0")
 	}
-	if cfg.SelfHealing.CompletionRetryMax > 1 {
-		return fmt.Errorf("self_healing.completion_retry_max must be <= 1 until multi-pass correction is implemented")
+	if cfg.SelfHealing.CompletionRetryMax > 2 {
+		return fmt.Errorf("self_healing.completion_retry_max must be <= 2")
 	}
 
 	for i, s := range cfg.MCPServers {

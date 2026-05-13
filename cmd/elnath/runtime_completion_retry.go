@@ -11,6 +11,8 @@ import (
 	"github.com/stello/elnath/internal/tools"
 )
 
+const maxCompletionRetryAttempts = 2
+
 func (rt *executionRuntime) maybeRunCompletionRetry(
 	ctx context.Context,
 	wf orchestrator.Workflow,
@@ -24,17 +26,28 @@ func (rt *executionRuntime) maybeRunCompletionRetry(
 	if summary.RetryDecision != "" {
 		summary.CorrectionMaxAttempts = rt.completionRetryMax
 	}
-	switch summary.RetryDecision {
-	case completionRetryDecisionRetrySmallerScope:
-		if wf == nil {
-			return result, completionCorrectionSkippedSummary(summary, "missing_retry_workflow")
+	currentResult := result
+	currentSummary := summary
+	attempts := 0
+	for currentSummary.RetryDecision != "" && attempts < rt.completionRetryMax {
+		attempts++
+		currentSummary.CorrectionMaxAttempts = rt.completionRetryMax
+		switch currentSummary.RetryDecision {
+		case completionRetryDecisionRetrySmallerScope:
+			if wf == nil {
+				return currentResult, completionCorrectionSkippedSummary(currentSummary, "missing_retry_workflow")
+			}
+			currentResult, currentSummary = rt.runSmallerScopeCompletionRetry(ctx, wf, input, currentResult, currentSummary, attempts)
+		case completionRetryDecisionRunVerification:
+			currentResult, currentSummary = rt.runVerificationCompletionRetry(ctx, input, currentResult, currentSummary, attempts)
+		default:
+			return currentResult, currentSummary
 		}
-		return rt.runSmallerScopeCompletionRetry(ctx, wf, input, result, summary)
-	case completionRetryDecisionRunVerification:
-		return rt.runVerificationCompletionRetry(ctx, input, result, summary)
-	default:
-		return result, summary
+		if currentSummary.CorrectionStatus == "failed" || currentSummary.CorrectionStatus == "skipped" {
+			return currentResult, currentSummary
+		}
 	}
+	return currentResult, currentSummary
 }
 
 func (rt *executionRuntime) runSmallerScopeCompletionRetry(
@@ -43,6 +56,7 @@ func (rt *executionRuntime) runSmallerScopeCompletionRetry(
 	input orchestrator.WorkflowInput,
 	result *orchestrator.WorkflowResult,
 	summary completionContractSummary,
+	attempt int,
 ) (*orchestrator.WorkflowResult, completionContractSummary) {
 	retryInput := input
 	retryInput.Messages = result.Messages
@@ -59,17 +73,21 @@ func (rt *executionRuntime) runSmallerScopeCompletionRetry(
 			"reason", summary.RetryReason,
 			"error", err,
 		)
-		return result, completionCorrectionFailedSummary(summary, "workflow_error")
+		return result, completionCorrectionFailedSummary(summary, "workflow_error", attempt)
 	}
 	retrySummary := withProviderCapabilities(summarizeCompletionContract(completionRetryRoutingContext(summary), retryInput.Config, retryResult), rt.provider)
 	retrySummary.CorrectionAttempted = true
-	retrySummary.CorrectionAttempts = 1
+	retrySummary.CorrectionAttempts = attempt
 	retrySummary.CorrectionMaxAttempts = summary.CorrectionMaxAttempts
 	retrySummary.CorrectionDecision = summary.RetryDecision
 	retrySummary.CorrectionReason = summary.RetryReason
 	if retrySummary.CompletionWarning != "" {
-		retrySummary.CorrectionStatus = "failed"
-		retrySummary.CorrectionFailureFamily = "completion_warning_unresolved"
+		if attempt >= summary.CorrectionMaxAttempts {
+			retrySummary.CorrectionStatus = "failed"
+			retrySummary.CorrectionFailureFamily = "completion_warning_unresolved"
+		} else {
+			retrySummary.CorrectionStatus = "retrying"
+		}
 	} else {
 		retrySummary.CorrectionStatus = "succeeded"
 	}
@@ -88,10 +106,10 @@ func completionRetryRoutingContext(summary completionContractSummary) *orchestra
 	return &orchestrator.RoutingContext{VerificationHint: true}
 }
 
-func completionCorrectionFailedSummary(summary completionContractSummary, failureFamily string) completionContractSummary {
+func completionCorrectionFailedSummary(summary completionContractSummary, failureFamily string, attempt int) completionContractSummary {
 	updated := summary
 	updated.CorrectionAttempted = true
-	updated.CorrectionAttempts = 1
+	updated.CorrectionAttempts = attempt
 	updated.CorrectionMaxAttempts = summary.CorrectionMaxAttempts
 	updated.CorrectionDecision = summary.RetryDecision
 	updated.CorrectionReason = summary.RetryReason
@@ -102,8 +120,8 @@ func completionCorrectionFailedSummary(summary completionContractSummary, failur
 
 func completionCorrectionSkippedSummary(summary completionContractSummary, failureFamily string) completionContractSummary {
 	updated := summary
-	updated.CorrectionAttempted = false
-	updated.CorrectionAttempts = 0
+	updated.CorrectionAttempted = summary.CorrectionAttempted
+	updated.CorrectionAttempts = summary.CorrectionAttempts
 	updated.CorrectionMaxAttempts = summary.CorrectionMaxAttempts
 	updated.CorrectionDecision = summary.RetryDecision
 	updated.CorrectionReason = summary.RetryReason
@@ -135,6 +153,7 @@ func (rt *executionRuntime) runVerificationCompletionRetry(
 	input orchestrator.WorkflowInput,
 	result *orchestrator.WorkflowResult,
 	summary completionContractSummary,
+	attempt int,
 ) (*orchestrator.WorkflowResult, completionContractSummary) {
 	command := explicitCompletionVerificationCommand(result.Messages)
 	if command == "" {
@@ -157,7 +176,7 @@ func (rt *executionRuntime) runVerificationCompletionRetry(
 			"reason", summary.RetryReason,
 			"error", err,
 		)
-		return result, completionCorrectionFailedSummary(completionVerificationObservedSummary(summary, command), "verification_executor_error")
+		return result, completionCorrectionFailedSummary(completionVerificationObservedSummary(summary, command), "verification_executor_error", attempt)
 	}
 	if toolResult == nil || toolResult.IsError {
 		rt.app.Logger.Warn("completion verification correction returned error",
@@ -165,12 +184,12 @@ func (rt *executionRuntime) runVerificationCompletionRetry(
 			"reason", summary.RetryReason,
 			"command", command,
 		)
-		return result, completionCorrectionFailedSummary(completionVerificationObservedSummary(summary, command), "verification_command_failed")
+		return result, completionCorrectionFailedSummary(completionVerificationObservedSummary(summary, command), "verification_command_failed", attempt)
 	}
 
 	updated := completionVerificationObservedSummary(summary, command)
 	updated.CorrectionAttempted = true
-	updated.CorrectionAttempts = 1
+	updated.CorrectionAttempts = attempt
 	updated.CorrectionMaxAttempts = summary.CorrectionMaxAttempts
 	updated.CorrectionDecision = summary.RetryDecision
 	updated.CorrectionReason = summary.RetryReason
