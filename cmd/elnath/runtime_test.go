@@ -3844,6 +3844,15 @@ func TestExecutionRuntimeRunTaskSelfHealingCorrectionUsesSecondBoundedRetry(t *t
 	if records[0].CorrectionMaxAttempts != 2 || records[0].CorrectionStatus != "succeeded" {
 		t.Fatalf("correction budget/status = max %d status %q warning %q retry %q/%q", records[0].CorrectionMaxAttempts, records[0].CorrectionStatus, records[0].CompletionWarning, records[0].RetryDecision, records[0].RetryReason)
 	}
+	if len(records[0].CorrectionAttemptDetails) != 2 {
+		t.Fatalf("correction attempt details = %+v, want two entries", records[0].CorrectionAttemptDetails)
+	}
+	if records[0].CorrectionAttemptDetails[0].Attempt != 1 || records[0].CorrectionAttemptDetails[0].Status != "retrying" || records[0].CorrectionAttemptDetails[0].FailureFamily != "" {
+		t.Fatalf("first correction detail = %+v", records[0].CorrectionAttemptDetails[0])
+	}
+	if records[0].CorrectionAttemptDetails[1].Attempt != 2 || records[0].CorrectionAttemptDetails[1].Status != "succeeded" {
+		t.Fatalf("second correction detail = %+v", records[0].CorrectionAttemptDetails[1])
+	}
 }
 
 func TestExecutionRuntimeRunTaskSelfHealingObserveOnlyDoesNotRetryIncompleteFinal(t *testing.T) {
@@ -4016,6 +4025,15 @@ func TestCompletionRetryPreservesPriorAttemptWhenVerificationSkipFollowsCorrecti
 	}
 	if gotSummary.CorrectionAttempts != 1 || gotSummary.CorrectionMaxAttempts != 2 {
 		t.Fatalf("correction attempts = %d max %d, want prior smaller-scope attempt preserved", gotSummary.CorrectionAttempts, gotSummary.CorrectionMaxAttempts)
+	}
+	if len(gotSummary.CorrectionAttemptDetails) != 2 {
+		t.Fatalf("correction attempt details = %+v, want correction plus skipped verification", gotSummary.CorrectionAttemptDetails)
+	}
+	if gotSummary.CorrectionAttemptDetails[0].Attempt != 1 || gotSummary.CorrectionAttemptDetails[0].Status != "succeeded" {
+		t.Fatalf("first correction detail = %+v", gotSummary.CorrectionAttemptDetails[0])
+	}
+	if gotSummary.CorrectionAttemptDetails[1].Attempt != 2 || gotSummary.CorrectionAttemptDetails[1].Status != "skipped" || gotSummary.CorrectionAttemptDetails[1].FailureFamily != "missing_verification_executor" {
+		t.Fatalf("second correction detail = %+v", gotSummary.CorrectionAttemptDetails[1])
 	}
 }
 

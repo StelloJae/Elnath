@@ -35,7 +35,7 @@ func (rt *executionRuntime) maybeRunCompletionRetry(
 		switch currentSummary.RetryDecision {
 		case completionRetryDecisionRetrySmallerScope:
 			if wf == nil {
-				return currentResult, completionCorrectionSkippedSummary(currentSummary, "missing_retry_workflow")
+				return currentResult, completionCorrectionSkippedSummary(currentSummary, "missing_retry_workflow", attempts)
 			}
 			currentResult, currentSummary = rt.runSmallerScopeCompletionRetry(ctx, wf, input, currentResult, currentSummary, attempts)
 		case completionRetryDecisionRunVerification:
@@ -96,6 +96,14 @@ func (rt *executionRuntime) runSmallerScopeCompletionRetry(
 		retrySummary.ReasoningEffortMode = "manual"
 		retrySummary.ReasoningEffortReason = retryEffortReason
 	}
+	retrySummary.CorrectionAttemptDetails = appendCompletionCorrectionAttemptDetail(summary, completionCorrectionAttemptReceipt{
+		Attempt:           attempt,
+		Decision:          summary.RetryDecision,
+		Reason:            summary.RetryReason,
+		Status:            retrySummary.CorrectionStatus,
+		FailureFamily:     retrySummary.CorrectionFailureFamily,
+		CompletionWarning: retrySummary.CompletionWarning,
+	})
 	return retryResult, retrySummary
 }
 
@@ -115,10 +123,17 @@ func completionCorrectionFailedSummary(summary completionContractSummary, failur
 	updated.CorrectionReason = summary.RetryReason
 	updated.CorrectionStatus = "failed"
 	updated.CorrectionFailureFamily = failureFamily
+	updated.CorrectionAttemptDetails = appendCompletionCorrectionAttemptDetail(summary, completionCorrectionAttemptReceipt{
+		Attempt:       attempt,
+		Decision:      summary.RetryDecision,
+		Reason:        summary.RetryReason,
+		Status:        updated.CorrectionStatus,
+		FailureFamily: updated.CorrectionFailureFamily,
+	})
 	return updated
 }
 
-func completionCorrectionSkippedSummary(summary completionContractSummary, failureFamily string) completionContractSummary {
+func completionCorrectionSkippedSummary(summary completionContractSummary, failureFamily string, attempt int) completionContractSummary {
 	updated := summary
 	updated.CorrectionAttempted = summary.CorrectionAttempted
 	updated.CorrectionAttempts = summary.CorrectionAttempts
@@ -127,7 +142,24 @@ func completionCorrectionSkippedSummary(summary completionContractSummary, failu
 	updated.CorrectionReason = summary.RetryReason
 	updated.CorrectionStatus = "skipped"
 	updated.CorrectionFailureFamily = failureFamily
+	updated.CorrectionAttemptDetails = appendCompletionCorrectionAttemptDetail(summary, completionCorrectionAttemptReceipt{
+		Attempt:             attempt,
+		Decision:            summary.RetryDecision,
+		Reason:              summary.RetryReason,
+		Status:              updated.CorrectionStatus,
+		FailureFamily:       updated.CorrectionFailureFamily,
+		VerificationCommand: summary.VerificationCommand,
+	})
 	return updated
+}
+
+func appendCompletionCorrectionAttemptDetail(summary completionContractSummary, detail completionCorrectionAttemptReceipt) []completionCorrectionAttemptReceipt {
+	details := append([]completionCorrectionAttemptReceipt(nil), summary.CorrectionAttemptDetails...)
+	if detail.Attempt <= 0 {
+		return details
+	}
+	details = append(details, detail)
+	return details
 }
 
 func completionRetryEscalatedEffort(provider llm.Provider, summary completionContractSummary) (string, string) {
@@ -157,11 +189,12 @@ func (rt *executionRuntime) runVerificationCompletionRetry(
 ) (*orchestrator.WorkflowResult, completionContractSummary) {
 	command := explicitCompletionVerificationCommand(result.Messages)
 	if command == "" {
-		return result, completionCorrectionSkippedSummary(summary, "missing_explicit_verification_command")
+		return result, completionCorrectionSkippedSummary(summary, "missing_explicit_verification_command", attempt)
 	}
+	summary = completionVerificationObservedSummary(summary, command)
 	exec := completionVerificationExecutor(input)
 	if exec == nil {
-		return result, completionCorrectionSkippedSummary(summary, "missing_verification_executor")
+		return result, completionCorrectionSkippedSummary(summary, "missing_verification_executor", attempt)
 	}
 
 	params, err := json.Marshal(map[string]string{"command": command})
@@ -176,7 +209,7 @@ func (rt *executionRuntime) runVerificationCompletionRetry(
 			"reason", summary.RetryReason,
 			"error", err,
 		)
-		return result, completionCorrectionFailedSummary(completionVerificationObservedSummary(summary, command), "verification_executor_error", attempt)
+		return result, completionCorrectionFailedSummary(summary, "verification_executor_error", attempt)
 	}
 	if toolResult == nil || toolResult.IsError {
 		rt.app.Logger.Warn("completion verification correction returned error",
@@ -184,16 +217,23 @@ func (rt *executionRuntime) runVerificationCompletionRetry(
 			"reason", summary.RetryReason,
 			"command", command,
 		)
-		return result, completionCorrectionFailedSummary(completionVerificationObservedSummary(summary, command), "verification_command_failed", attempt)
+		return result, completionCorrectionFailedSummary(summary, "verification_command_failed", attempt)
 	}
 
-	updated := completionVerificationObservedSummary(summary, command)
+	updated := summary
 	updated.CorrectionAttempted = true
 	updated.CorrectionAttempts = attempt
 	updated.CorrectionMaxAttempts = summary.CorrectionMaxAttempts
 	updated.CorrectionDecision = summary.RetryDecision
 	updated.CorrectionReason = summary.RetryReason
 	updated.CorrectionStatus = "succeeded"
+	updated.CorrectionAttemptDetails = appendCompletionCorrectionAttemptDetail(summary, completionCorrectionAttemptReceipt{
+		Attempt:             attempt,
+		Decision:            summary.RetryDecision,
+		Reason:              summary.RetryReason,
+		Status:              updated.CorrectionStatus,
+		VerificationCommand: command,
+	})
 	updated.RetryDecision = ""
 	updated.RetryReason = ""
 	return result, updated

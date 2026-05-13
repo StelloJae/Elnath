@@ -29,34 +29,45 @@ type Store interface {
 }
 
 type CompletionContext struct {
-	VerificationHint        bool
-	VerificationObserved    *bool
-	VerificationCommand     string
-	CompletionWarning       string
-	EditIntent              bool
-	EditObserved            *bool
-	ReasoningEffort         string
-	ReasoningEffortMode     string
-	ReasoningEffortReason   string
-	ProviderName            string
-	ProviderEffort          string
-	ProviderEffortNote      string
-	LoadedDeferredTools     []string
-	SkillCatalogReceipts    []SkillCatalogReceipt
-	SkillExecutionReceipts  []SkillExecutionReceipt
-	CommandCatalogReceipts  []CommandCatalogReceipt
-	ToolSearchReceipts      []ToolSearchReceipt
-	ControlToolReceipts     []ControlToolReceipt
-	ConditionalSkillMatches []ConditionalSkillMatch
-	CorrectionAttempted     bool
-	CorrectionAttempts      int
-	CorrectionMaxAttempts   int
-	CorrectionDecision      string
-	CorrectionReason        string
-	CorrectionStatus        string
-	CorrectionFailureFamily string
-	RetryDecision           string
-	RetryReason             string
+	VerificationHint         bool
+	VerificationObserved     *bool
+	VerificationCommand      string
+	CompletionWarning        string
+	EditIntent               bool
+	EditObserved             *bool
+	ReasoningEffort          string
+	ReasoningEffortMode      string
+	ReasoningEffortReason    string
+	ProviderName             string
+	ProviderEffort           string
+	ProviderEffortNote       string
+	LoadedDeferredTools      []string
+	SkillCatalogReceipts     []SkillCatalogReceipt
+	SkillExecutionReceipts   []SkillExecutionReceipt
+	CommandCatalogReceipts   []CommandCatalogReceipt
+	ToolSearchReceipts       []ToolSearchReceipt
+	ControlToolReceipts      []ControlToolReceipt
+	ConditionalSkillMatches  []ConditionalSkillMatch
+	CorrectionAttempted      bool
+	CorrectionAttempts       int
+	CorrectionMaxAttempts    int
+	CorrectionDecision       string
+	CorrectionReason         string
+	CorrectionStatus         string
+	CorrectionFailureFamily  string
+	CorrectionAttemptDetails []CorrectionAttemptReceipt
+	RetryDecision            string
+	RetryReason              string
+}
+
+type CorrectionAttemptReceipt struct {
+	Attempt             int    `json:"attempt"`
+	Decision            string `json:"decision,omitempty"`
+	Reason              string `json:"reason,omitempty"`
+	Status              string `json:"status,omitempty"`
+	FailureFamily       string `json:"failure_family,omitempty"`
+	VerificationCommand string `json:"verification_command,omitempty"`
+	CompletionWarning   string `json:"completion_warning,omitempty"`
 }
 
 type ConditionalSkillMatch struct {
@@ -444,6 +455,9 @@ func encodeReceiptSummary(summary map[string]int, completionContext CompletionCo
 	}
 	if completionContext.CorrectionFailureFamily != "" {
 		payload["correction_failure_family"] = completionContext.CorrectionFailureFamily
+	}
+	if len(completionContext.CorrectionAttemptDetails) > 0 {
+		payload["correction_attempt_details"] = completionContext.CorrectionAttemptDetails
 	}
 	if completionContext.RetryDecision != "" {
 		payload["retry_decision"] = completionContext.RetryDecision

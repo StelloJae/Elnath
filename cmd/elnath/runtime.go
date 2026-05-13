@@ -1364,49 +1364,50 @@ func (rt *executionRuntime) recordOutcome(ctx context.Context, in outcomeInput) 
 		return
 	}
 	record := learning.OutcomeRecord{
-		ProjectID:               in.routeCtx.ProjectID,
-		Intent:                  string(in.intent),
-		Workflow:                in.workflow,
-		FinishReason:            in.finishReason,
-		Success:                 in.success,
-		Duration:                in.elapsed.Seconds(),
-		Cost:                    0,
-		Iterations:              in.iterations,
-		InputSnippet:            runeSnippet(in.userInput, 100),
-		EstimatedFiles:          in.routeCtx.EstimatedFiles,
-		ExistingCode:            in.routeCtx.ExistingCode,
-		PreferenceUsed:          in.preferenceUsed,
-		SessionID:               in.sessionID,
-		MaxIterations:           in.maxIterations,
-		InputTokens:             in.inputTokens,
-		OutputTokens:            in.outputTokens,
-		ToolStats:               agentToolStatsToLearning(in.toolStats),
-		VerificationHint:        in.completion.VerificationHint,
-		VerificationObserved:    in.completion.VerificationObserved,
-		VerificationCommand:     in.completion.VerificationCommand,
-		CompletionWarning:       in.completion.CompletionWarning,
-		ReasoningEffort:         in.completion.ReasoningEffort,
-		ReasoningEffortMode:     in.completion.ReasoningEffortMode,
-		ReasoningEffortReason:   in.completion.ReasoningEffortReason,
-		ProviderName:            in.completion.ProviderName,
-		ProviderEffort:          in.completion.ProviderEffort,
-		ProviderEffortNote:      in.completion.ProviderEffortNote,
-		LoadedDeferredTools:     append([]string(nil), in.completion.LoadedDeferredTools...),
-		SkillCatalogReceipts:    completionSkillCatalogReceiptsToLearning(in.completion.SkillCatalogReceipts),
-		SkillExecutionReceipts:  completionSkillExecutionReceiptsToLearning(in.completion.SkillExecutionReceipts),
-		CommandCatalogReceipts:  completionCommandCatalogReceiptsToLearning(in.completion.CommandCatalogReceipts),
-		ToolSearchReceipts:      completionToolSearchReceiptsToLearning(in.completion.ToolSearchReceipts),
-		ControlToolReceipts:     completionControlToolReceiptsToLearning(in.completion.ControlToolReceipts),
-		ConditionalSkillMatches: completionSkillMatchesToLearning(in.completion.ConditionalSkillMatches),
-		CorrectionAttempted:     in.completion.CorrectionAttempted,
-		CorrectionAttempts:      in.completion.CorrectionAttempts,
-		CorrectionMaxAttempts:   in.completion.CorrectionMaxAttempts,
-		CorrectionDecision:      in.completion.CorrectionDecision,
-		CorrectionReason:        in.completion.CorrectionReason,
-		CorrectionStatus:        in.completion.CorrectionStatus,
-		CorrectionFailureFamily: in.completion.CorrectionFailureFamily,
-		RetryDecision:           in.completion.RetryDecision,
-		RetryReason:             in.completion.RetryReason,
+		ProjectID:                in.routeCtx.ProjectID,
+		Intent:                   string(in.intent),
+		Workflow:                 in.workflow,
+		FinishReason:             in.finishReason,
+		Success:                  in.success,
+		Duration:                 in.elapsed.Seconds(),
+		Cost:                     0,
+		Iterations:               in.iterations,
+		InputSnippet:             runeSnippet(in.userInput, 100),
+		EstimatedFiles:           in.routeCtx.EstimatedFiles,
+		ExistingCode:             in.routeCtx.ExistingCode,
+		PreferenceUsed:           in.preferenceUsed,
+		SessionID:                in.sessionID,
+		MaxIterations:            in.maxIterations,
+		InputTokens:              in.inputTokens,
+		OutputTokens:             in.outputTokens,
+		ToolStats:                agentToolStatsToLearning(in.toolStats),
+		VerificationHint:         in.completion.VerificationHint,
+		VerificationObserved:     in.completion.VerificationObserved,
+		VerificationCommand:      in.completion.VerificationCommand,
+		CompletionWarning:        in.completion.CompletionWarning,
+		ReasoningEffort:          in.completion.ReasoningEffort,
+		ReasoningEffortMode:      in.completion.ReasoningEffortMode,
+		ReasoningEffortReason:    in.completion.ReasoningEffortReason,
+		ProviderName:             in.completion.ProviderName,
+		ProviderEffort:           in.completion.ProviderEffort,
+		ProviderEffortNote:       in.completion.ProviderEffortNote,
+		LoadedDeferredTools:      append([]string(nil), in.completion.LoadedDeferredTools...),
+		SkillCatalogReceipts:     completionSkillCatalogReceiptsToLearning(in.completion.SkillCatalogReceipts),
+		SkillExecutionReceipts:   completionSkillExecutionReceiptsToLearning(in.completion.SkillExecutionReceipts),
+		CommandCatalogReceipts:   completionCommandCatalogReceiptsToLearning(in.completion.CommandCatalogReceipts),
+		ToolSearchReceipts:       completionToolSearchReceiptsToLearning(in.completion.ToolSearchReceipts),
+		ControlToolReceipts:      completionControlToolReceiptsToLearning(in.completion.ControlToolReceipts),
+		ConditionalSkillMatches:  completionSkillMatchesToLearning(in.completion.ConditionalSkillMatches),
+		CorrectionAttempted:      in.completion.CorrectionAttempted,
+		CorrectionAttempts:       in.completion.CorrectionAttempts,
+		CorrectionMaxAttempts:    in.completion.CorrectionMaxAttempts,
+		CorrectionDecision:       in.completion.CorrectionDecision,
+		CorrectionReason:         in.completion.CorrectionReason,
+		CorrectionStatus:         in.completion.CorrectionStatus,
+		CorrectionFailureFamily:  in.completion.CorrectionFailureFamily,
+		CorrectionAttemptDetails: completionCorrectionAttemptDetailsToLearning(in.completion.CorrectionAttemptDetails),
+		RetryDecision:            in.completion.RetryDecision,
+		RetryReason:              in.completion.RetryReason,
 	}
 	if appendErr := rt.outcomeStore.Append(record); appendErr != nil {
 		rt.app.Logger.Warn("outcome store: append failed", "error", appendErr)
@@ -1427,6 +1428,25 @@ func (rt *executionRuntime) recordOutcome(ctx context.Context, in outcomeInput) 
 	if saveErr := wiki.SaveWorkflowPreference(rt.wikiStore, in.routeCtx.ProjectID, advPref); saveErr != nil {
 		rt.app.Logger.Warn("routing advisor: wiki save failed", "error", saveErr)
 	}
+}
+
+func completionCorrectionAttemptDetailsToLearning(src []completionCorrectionAttemptReceipt) []learning.CorrectionAttemptReceipt {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]learning.CorrectionAttemptReceipt, 0, len(src))
+	for _, detail := range src {
+		out = append(out, learning.CorrectionAttemptReceipt{
+			Attempt:             detail.Attempt,
+			Decision:            detail.Decision,
+			Reason:              detail.Reason,
+			Status:              detail.Status,
+			FailureFamily:       detail.FailureFamily,
+			VerificationCommand: detail.VerificationCommand,
+			CompletionWarning:   detail.CompletionWarning,
+		})
+	}
+	return out
 }
 
 func completionSkillMatchesToLearning(src []completionConditionalSkillMatch) []learning.ConditionalSkillMatch {
