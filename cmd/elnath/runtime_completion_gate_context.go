@@ -63,6 +63,11 @@ func (rt *executionRuntime) CompletionContext(_ context.Context, _ daemon.Task, 
 		CorrectionAttemptDetails: completionCorrectionAttemptDetailsToAgentic(summary.CorrectionAttemptDetails),
 		RetryDecision:            summary.RetryDecision,
 		RetryReason:              summary.RetryReason,
+		RecoveryScopeLabel:       summary.RecoveryScopeLabel,
+		AllowedRecoveryPaths:     append([]string(nil), summary.AllowedRecoveryPaths...),
+		ForbiddenRecoveryPaths:   append([]string(nil), summary.ForbiddenRecoveryPaths...),
+		MutatedPaths:             append([]string(nil), summary.MutatedPaths...),
+		OutOfScopeChangedFiles:   append([]string(nil), summary.OutOfScopeChangedFiles...),
 	}, nil
 }
 
@@ -80,6 +85,7 @@ func completionCorrectionAttemptDetailsToAgentic(src []completionCorrectionAttem
 			FailureFamily:       detail.FailureFamily,
 			VerificationCommand: detail.VerificationCommand,
 			CompletionWarning:   detail.CompletionWarning,
+			OutOfScopeFiles:     append([]string(nil), detail.OutOfScopeFiles...),
 		})
 	}
 	return out

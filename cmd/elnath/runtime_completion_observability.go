@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"path"
 	"regexp"
 	"sort"
 	"strings"
@@ -41,16 +42,22 @@ type completionContractSummary struct {
 	CorrectionAttemptDetails []completionCorrectionAttemptReceipt
 	RetryDecision            string
 	RetryReason              string
+	RecoveryScopeLabel       string
+	AllowedRecoveryPaths     []string
+	ForbiddenRecoveryPaths   []string
+	MutatedPaths             []string
+	OutOfScopeChangedFiles   []string
 }
 
 type completionCorrectionAttemptReceipt struct {
-	Attempt             int    `json:"attempt"`
-	Decision            string `json:"decision,omitempty"`
-	Reason              string `json:"reason,omitempty"`
-	Status              string `json:"status,omitempty"`
-	FailureFamily       string `json:"failure_family,omitempty"`
-	VerificationCommand string `json:"verification_command,omitempty"`
-	CompletionWarning   string `json:"completion_warning,omitempty"`
+	Attempt             int      `json:"attempt"`
+	Decision            string   `json:"decision,omitempty"`
+	Reason              string   `json:"reason,omitempty"`
+	Status              string   `json:"status,omitempty"`
+	FailureFamily       string   `json:"failure_family,omitempty"`
+	VerificationCommand string   `json:"verification_command,omitempty"`
+	CompletionWarning   string   `json:"completion_warning,omitempty"`
+	OutOfScopeFiles     []string `json:"out_of_scope_files,omitempty"`
 }
 
 type completionConditionalSkillMatch struct {
@@ -218,6 +225,13 @@ func summarizeCompletionContract(routeCtx *orchestrator.RoutingContext, cfg orch
 	summary := completionContractSummary{
 		ReasoningEffort:     strings.TrimSpace(cfg.ReasoningEffort),
 		ReasoningEffortMode: strings.TrimSpace(cfg.ReasoningEffortMode),
+		RecoveryScopeLabel:  strings.TrimSpace(cfg.CorrectionScope.Label),
+		AllowedRecoveryPaths: normalizeCompletionScopePaths(
+			cfg.CorrectionScope.AllowedPaths,
+		),
+		ForbiddenRecoveryPaths: normalizeCompletionScopePaths(
+			cfg.CorrectionScope.ForbiddenPaths,
+		),
 	}
 	if routeCtx != nil {
 		summary.VerificationHint = routeCtx.VerificationHint
@@ -249,6 +263,9 @@ func summarizeCompletionContract(routeCtx *orchestrator.RoutingContext, cfg orch
 	summary.VerificationCommand = verificationCommand
 	editIntent := editIntentDetected(result.Messages)
 	editObserved := mutationObservedInMessages(result.Messages)
+	mutatedPaths := observedMutatingPaths(result.Messages)
+	summary.MutatedPaths = mutatedPaths
+	summary.OutOfScopeChangedFiles = outOfScopeMutatingPaths(mutatedPaths, summary.AllowedRecoveryPaths, summary.ForbiddenRecoveryPaths)
 	summary.EditIntent = editIntent
 	if editIntent || editObserved {
 		summary.EditObserved = &editObserved
@@ -267,6 +284,9 @@ func summarizeCompletionContract(routeCtx *orchestrator.RoutingContext, cfg orch
 	}
 	if summary.CompletionWarning == "" && editIntent && strings.EqualFold(strings.TrimSpace(result.FinishReason), "budget_exceeded") {
 		summary.CompletionWarning = "budget_exceeded_after_edit_intent"
+	}
+	if len(summary.OutOfScopeChangedFiles) > 0 {
+		summary.CompletionWarning = "scope_drift"
 	}
 	summary.RetryDecision, summary.RetryReason = completionRetryPlan(summary)
 	return summary
@@ -669,6 +689,9 @@ func completionRetryPlan(summary completionContractSummary) (string, string) {
 	if summary.UserInputRequired {
 		return "", ""
 	}
+	if summary.CompletionWarning == "scope_drift" {
+		return "", ""
+	}
 	if summary.CompletionWarning == "final_response_reports_incomplete" {
 		return completionRetryDecisionRetrySmallerScope, summary.CompletionWarning
 	}
@@ -798,6 +821,150 @@ func mutationObservedInMessages(messages []llm.Message) bool {
 		}
 	}
 	return false
+}
+
+func observedMutatingPaths(messages []llm.Message) []string {
+	pending := make(map[string][]string)
+	seen := make(map[string]struct{})
+	for _, msg := range messages {
+		for _, block := range msg.Content {
+			switch b := block.(type) {
+			case llm.ToolUseBlock:
+				paths := mutatingToolUsePaths(b)
+				if len(paths) == 0 {
+					continue
+				}
+				if b.ID == "" {
+					addObservedMutatingPaths(seen, paths)
+					continue
+				}
+				pending[b.ID] = paths
+			case llm.ToolResultBlock:
+				paths, ok := pending[b.ToolUseID]
+				if !ok {
+					continue
+				}
+				if !b.IsError && !mutatingToolResultLooksNoop(b.Content) {
+					addObservedMutatingPaths(seen, paths)
+				}
+				delete(pending, b.ToolUseID)
+			}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for p := range seen {
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func addObservedMutatingPaths(seen map[string]struct{}, paths []string) {
+	for _, p := range paths {
+		if normalized := normalizeCompletionScopePath(p); normalized != "" {
+			seen[normalized] = struct{}{}
+		}
+	}
+}
+
+func mutatingToolUsePaths(toolUse llm.ToolUseBlock) []string {
+	switch toolUse.Name {
+	case "write_file", "edit_file":
+		var payload struct {
+			FilePath string `json:"file_path"`
+			Path     string `json:"path"`
+		}
+		if err := json.Unmarshal(toolUse.Input, &payload); err != nil {
+			return nil
+		}
+		if payload.FilePath != "" {
+			return []string{payload.FilePath}
+		}
+		if payload.Path != "" {
+			return []string{payload.Path}
+		}
+	}
+	return nil
+}
+
+func normalizeCompletionScopePaths(paths []string) []string {
+	if len(paths) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(paths))
+	for _, p := range paths {
+		if normalized := normalizeCompletionScopePath(p); normalized != "" {
+			seen[normalized] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for p := range seen {
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func normalizeCompletionScopePath(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return ""
+	}
+	p = strings.ReplaceAll(p, "\\", "/")
+	p = strings.TrimPrefix(p, "./")
+	p = strings.TrimPrefix(p, "/")
+	clean := path.Clean(p)
+	if clean == "." {
+		return ""
+	}
+	return clean
+}
+
+func outOfScopeMutatingPaths(mutated []string, allowed []string, forbidden []string) []string {
+	if len(mutated) == 0 || (len(allowed) == 0 && len(forbidden) == 0) {
+		return nil
+	}
+	var out []string
+	for _, p := range mutated {
+		if completionPathForbidden(p, forbidden) || !completionPathAllowed(p, allowed) {
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	sort.Strings(out)
+	return out
+}
+
+func completionPathAllowed(p string, allowed []string) bool {
+	if len(allowed) == 0 {
+		return true
+	}
+	for _, scope := range allowed {
+		if completionPathMatchesScope(p, scope) {
+			return true
+		}
+	}
+	return false
+}
+
+func completionPathForbidden(p string, forbidden []string) bool {
+	for _, scope := range forbidden {
+		if completionPathMatchesScope(p, scope) {
+			return true
+		}
+	}
+	return false
+}
+
+func completionPathMatchesScope(p string, scope string) bool {
+	p = normalizeCompletionScopePath(p)
+	scope = normalizeCompletionScopePath(scope)
+	if p == "" || scope == "" {
+		return false
+	}
+	return p == scope || strings.HasPrefix(p, scope+"/")
 }
 
 func mutatingToolUseObserved(toolUse llm.ToolUseBlock) bool {

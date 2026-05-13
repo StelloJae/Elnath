@@ -96,6 +96,11 @@ type failingRetryWorkflow struct {
 	err  error
 }
 
+type scopeDriftRetryWorkflow struct {
+	name string
+	path string
+}
+
 type captureLearningWorkflow struct {
 	name        string
 	sawLearning bool
@@ -154,6 +159,24 @@ func (w *failingRetryWorkflow) Run(context.Context, orchestrator.WorkflowInput) 
 		return nil, w.err
 	}
 	return nil, fmt.Errorf("retry workflow failed")
+}
+
+func (w *scopeDriftRetryWorkflow) Name() string { return w.name }
+
+func (w *scopeDriftRetryWorkflow) Run(_ context.Context, input orchestrator.WorkflowInput) (*orchestrator.WorkflowResult, error) {
+	messages := append([]llm.Message{}, input.Messages...)
+	messages = append(messages,
+		llm.Message{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+			llm.ToolUseBlock{ID: "edit-1", Name: "edit_file", Input: json.RawMessage(`{"file_path":"` + w.path + `","old_string":"old","new_string":"new"}`)},
+		}},
+		llm.NewToolResultMessage("edit-1", "ok", false),
+		llm.NewAssistantMessage("Done."),
+	)
+	return &orchestrator.WorkflowResult{
+		Messages: messages,
+		Summary:  "Done.",
+		Workflow: w.name,
+	}, nil
 }
 
 func (w *captureLearningWorkflow) Name() string { return w.name }
@@ -4186,6 +4209,54 @@ func TestCompletionRetryMarksUnresolvedWarningFailed(t *testing.T) {
 	}
 	if gotSummary.CorrectionStatus != "failed" || gotSummary.CorrectionFailureFamily != "completion_warning_unresolved" {
 		t.Fatalf("correction status = %q family %q, want failed completion_warning_unresolved", gotSummary.CorrectionStatus, gotSummary.CorrectionFailureFamily)
+	}
+}
+
+func TestCompletionRetryFailsClosedOnScopeDrift(t *testing.T) {
+	rt := newTestExecutionRuntimeWithConfig(t, &countingProvider{}, false, func(cfg *config.Config) {
+		cfg.SelfHealing.Enabled = true
+		cfg.SelfHealing.ObserveOnly = false
+	})
+	rt.completionRetryMax = 2
+	result := &orchestrator.WorkflowResult{
+		Messages:     []llm.Message{llm.NewAssistantMessage("I could not finish the patch.")},
+		Summary:      "I could not finish the patch.",
+		FinishReason: "stop",
+		Workflow:     "single",
+	}
+	summary := completionContractSummary{
+		CompletionWarning: "final_response_reports_incomplete",
+		RetryDecision:     completionRetryDecisionRetrySmallerScope,
+		RetryReason:       "final_response_reports_incomplete",
+	}
+
+	_, gotSummary := rt.maybeRunCompletionRetry(context.Background(), &scopeDriftRetryWorkflow{
+		name: "single",
+		path: "docs/unrelated.md",
+	}, orchestrator.WorkflowInput{
+		Provider: rt.provider,
+		Config: orchestrator.WorkflowConfig{
+			CorrectionScope: orchestrator.CorrectionScope{
+				Label:        "daemon-only",
+				AllowedPaths: []string{"internal/daemon/"},
+			},
+		},
+	}, result, summary)
+
+	if gotSummary.CompletionWarning != "scope_drift" {
+		t.Fatalf("CompletionWarning = %q, want scope_drift", gotSummary.CompletionWarning)
+	}
+	if gotSummary.CorrectionStatus != "failed" || gotSummary.CorrectionFailureFamily != "scope_drift" {
+		t.Fatalf("correction status = %q family %q, want failed/scope_drift", gotSummary.CorrectionStatus, gotSummary.CorrectionFailureFamily)
+	}
+	if gotSummary.RetryDecision != "" || gotSummary.RetryReason != "" {
+		t.Fatalf("retry = %q/%q, want fail-closed empty retry", gotSummary.RetryDecision, gotSummary.RetryReason)
+	}
+	if len(gotSummary.CorrectionAttemptDetails) != 1 || gotSummary.CorrectionAttemptDetails[0].FailureFamily != "scope_drift" {
+		t.Fatalf("correction attempt details = %+v, want scope_drift detail", gotSummary.CorrectionAttemptDetails)
+	}
+	if got := gotSummary.OutOfScopeChangedFiles; len(got) != 1 || got[0] != "docs/unrelated.md" {
+		t.Fatalf("OutOfScopeChangedFiles = %#v, want docs/unrelated.md", gotSummary.OutOfScopeChangedFiles)
 	}
 }
 

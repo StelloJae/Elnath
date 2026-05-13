@@ -63,16 +63,22 @@ type OutcomeRecord struct {
 	CorrectionAttemptDetails []CorrectionAttemptReceipt `json:"correction_attempt_details,omitempty"`
 	RetryDecision            string                     `json:"retry_decision,omitempty"`
 	RetryReason              string                     `json:"retry_reason,omitempty"`
+	RecoveryScopeLabel       string                     `json:"recovery_scope_label,omitempty"`
+	AllowedRecoveryPaths     []string                   `json:"allowed_recovery_paths,omitempty"`
+	ForbiddenRecoveryPaths   []string                   `json:"forbidden_recovery_paths,omitempty"`
+	MutatedPaths             []string                   `json:"mutated_paths,omitempty"`
+	OutOfScopeChangedFiles   []string                   `json:"out_of_scope_changed_files,omitempty"`
 }
 
 type CorrectionAttemptReceipt struct {
-	Attempt             int    `json:"attempt"`
-	Decision            string `json:"decision,omitempty"`
-	Reason              string `json:"reason,omitempty"`
-	Status              string `json:"status,omitempty"`
-	FailureFamily       string `json:"failure_family,omitempty"`
-	VerificationCommand string `json:"verification_command,omitempty"`
-	CompletionWarning   string `json:"completion_warning,omitempty"`
+	Attempt             int      `json:"attempt"`
+	Decision            string   `json:"decision,omitempty"`
+	Reason              string   `json:"reason,omitempty"`
+	Status              string   `json:"status,omitempty"`
+	FailureFamily       string   `json:"failure_family,omitempty"`
+	VerificationCommand string   `json:"verification_command,omitempty"`
+	CompletionWarning   string   `json:"completion_warning,omitempty"`
+	OutOfScopeFiles     []string `json:"out_of_scope_files,omitempty"`
 }
 
 type ConditionalSkillMatch struct {

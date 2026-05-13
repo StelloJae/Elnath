@@ -82,7 +82,12 @@ func (rt *executionRuntime) runSmallerScopeCompletionRetry(
 	retrySummary.CorrectionDecision = summary.RetryDecision
 	retrySummary.CorrectionReason = summary.RetryReason
 	if retrySummary.CompletionWarning != "" {
-		if attempt >= summary.CorrectionMaxAttempts {
+		if completionWarningFailsClosed(retrySummary.CompletionWarning) {
+			retrySummary.CorrectionStatus = "failed"
+			retrySummary.CorrectionFailureFamily = retrySummary.CompletionWarning
+			retrySummary.RetryDecision = ""
+			retrySummary.RetryReason = ""
+		} else if attempt >= summary.CorrectionMaxAttempts {
 			retrySummary.CorrectionStatus = "failed"
 			retrySummary.CorrectionFailureFamily = "completion_warning_unresolved"
 		} else {
@@ -103,8 +108,13 @@ func (rt *executionRuntime) runSmallerScopeCompletionRetry(
 		Status:            retrySummary.CorrectionStatus,
 		FailureFamily:     retrySummary.CorrectionFailureFamily,
 		CompletionWarning: retrySummary.CompletionWarning,
+		OutOfScopeFiles:   append([]string(nil), retrySummary.OutOfScopeChangedFiles...),
 	})
 	return retryResult, retrySummary
+}
+
+func completionWarningFailsClosed(warning string) bool {
+	return warning == "scope_drift"
 }
 
 func completionRetryRoutingContext(summary completionContractSummary) *orchestrator.RoutingContext {
@@ -252,12 +262,34 @@ func completionRetryPrompt(summary completionContractSummary) string {
 	if reasonGuidance != "" {
 		reasonGuidance = "\nReason-specific guidance:\n" + reasonGuidance
 	}
+	scopeGuidance := completionRetryScopeGuidance(summary)
+	if scopeGuidance != "" {
+		scopeGuidance = "\nScope lock:\n" + scopeGuidance
+	}
 	return fmt.Sprintf(
-		"Run one bounded correction pass for the previous task.\nRetry decision: %s\nRetry reason: %s\nKeep scope smaller than the original attempt. Provide a concrete completed result, or explicitly state what remains incomplete.%s",
+		"Run one bounded correction pass for the previous task.\nRetry decision: %s\nRetry reason: %s\nKeep scope smaller than the original attempt. Provide a concrete completed result, or explicitly state what remains incomplete.%s%s",
 		summary.RetryDecision,
 		summary.RetryReason,
 		reasonGuidance,
+		scopeGuidance,
 	)
+}
+
+func completionRetryScopeGuidance(summary completionContractSummary) string {
+	var parts []string
+	if summary.RecoveryScopeLabel != "" {
+		parts = append(parts, "- Scope label: "+summary.RecoveryScopeLabel)
+	}
+	if len(summary.AllowedRecoveryPaths) > 0 {
+		parts = append(parts, "- Allowed recovery paths: "+strings.Join(summary.AllowedRecoveryPaths, ", "))
+	}
+	if len(summary.ForbiddenRecoveryPaths) > 0 {
+		parts = append(parts, "- Forbidden recovery paths: "+strings.Join(summary.ForbiddenRecoveryPaths, ", "))
+	}
+	if len(summary.AllowedRecoveryPaths) > 0 || len(summary.ForbiddenRecoveryPaths) > 0 {
+		parts = append(parts, "- If the root cause appears outside this scope, stop and report scope_drift instead of editing unrelated files.")
+	}
+	return strings.Join(parts, "\n")
 }
 
 func completionRetryReasonGuidance(summary completionContractSummary) string {

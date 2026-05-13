@@ -59,16 +59,22 @@ type CompletionContext struct {
 	CorrectionAttemptDetails []CorrectionAttemptReceipt
 	RetryDecision            string
 	RetryReason              string
+	RecoveryScopeLabel       string
+	AllowedRecoveryPaths     []string
+	ForbiddenRecoveryPaths   []string
+	MutatedPaths             []string
+	OutOfScopeChangedFiles   []string
 }
 
 type CorrectionAttemptReceipt struct {
-	Attempt             int    `json:"attempt"`
-	Decision            string `json:"decision,omitempty"`
-	Reason              string `json:"reason,omitempty"`
-	Status              string `json:"status,omitempty"`
-	FailureFamily       string `json:"failure_family,omitempty"`
-	VerificationCommand string `json:"verification_command,omitempty"`
-	CompletionWarning   string `json:"completion_warning,omitempty"`
+	Attempt             int      `json:"attempt"`
+	Decision            string   `json:"decision,omitempty"`
+	Reason              string   `json:"reason,omitempty"`
+	Status              string   `json:"status,omitempty"`
+	FailureFamily       string   `json:"failure_family,omitempty"`
+	VerificationCommand string   `json:"verification_command,omitempty"`
+	CompletionWarning   string   `json:"completion_warning,omitempty"`
+	OutOfScopeFiles     []string `json:"out_of_scope_files,omitempty"`
 }
 
 type ConditionalSkillMatch struct {
@@ -482,6 +488,21 @@ func encodeReceiptSummary(summary map[string]int, completionContext CompletionCo
 	}
 	if completionContext.RetryReason != "" {
 		payload["retry_reason"] = completionContext.RetryReason
+	}
+	if completionContext.RecoveryScopeLabel != "" {
+		payload["recovery_scope_label"] = completionContext.RecoveryScopeLabel
+	}
+	if len(completionContext.AllowedRecoveryPaths) > 0 {
+		payload["allowed_recovery_paths"] = completionContext.AllowedRecoveryPaths
+	}
+	if len(completionContext.ForbiddenRecoveryPaths) > 0 {
+		payload["forbidden_recovery_paths"] = completionContext.ForbiddenRecoveryPaths
+	}
+	if len(completionContext.MutatedPaths) > 0 {
+		payload["mutated_paths"] = completionContext.MutatedPaths
+	}
+	if len(completionContext.OutOfScopeChangedFiles) > 0 {
+		payload["out_of_scope_changed_files"] = completionContext.OutOfScopeChangedFiles
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {

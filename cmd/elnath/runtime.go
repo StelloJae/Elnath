@@ -702,6 +702,7 @@ func buildExecutionRuntime(
 		Permission:           perm,
 		ContextWindow:        wrappedCtxWindow,
 		CompressionMaxTokens: compressionBudget,
+		CorrectionScope:      runtimeCorrectionScopeFromEnv(),
 	}
 	learningPath := filepath.Join(cfg.DataDir, "lessons.jsonl")
 	learningStore := learning.NewStore(
@@ -1435,6 +1436,11 @@ func (rt *executionRuntime) recordOutcome(ctx context.Context, in outcomeInput) 
 		CorrectionAttemptDetails: completionCorrectionAttemptDetailsToLearning(in.completion.CorrectionAttemptDetails),
 		RetryDecision:            in.completion.RetryDecision,
 		RetryReason:              in.completion.RetryReason,
+		RecoveryScopeLabel:       in.completion.RecoveryScopeLabel,
+		AllowedRecoveryPaths:     append([]string(nil), in.completion.AllowedRecoveryPaths...),
+		ForbiddenRecoveryPaths:   append([]string(nil), in.completion.ForbiddenRecoveryPaths...),
+		MutatedPaths:             append([]string(nil), in.completion.MutatedPaths...),
+		OutOfScopeChangedFiles:   append([]string(nil), in.completion.OutOfScopeChangedFiles...),
 	}
 	if appendErr := rt.outcomeStore.Append(record); appendErr != nil {
 		rt.app.Logger.Warn("outcome store: append failed", "error", appendErr)
@@ -1471,6 +1477,7 @@ func completionCorrectionAttemptDetailsToLearning(src []completionCorrectionAtte
 			FailureFamily:       detail.FailureFamily,
 			VerificationCommand: detail.VerificationCommand,
 			CompletionWarning:   detail.CompletionWarning,
+			OutOfScopeFiles:     append([]string(nil), detail.OutOfScopeFiles...),
 		})
 	}
 	return out
@@ -2067,6 +2074,30 @@ func benchmarkEnvDir() string {
 
 func taskLanguageFromEnv() string {
 	return os.Getenv("ELNATH_TASK_LANGUAGE")
+}
+
+func runtimeCorrectionScopeFromEnv() orchestrator.CorrectionScope {
+	return orchestrator.CorrectionScope{
+		Label:          strings.TrimSpace(os.Getenv("ELNATH_CORRECTION_SCOPE_LABEL")),
+		AllowedPaths:   splitEnvPathList(os.Getenv("ELNATH_CORRECTION_SCOPE_ALLOWED_PATHS")),
+		ForbiddenPaths: splitEnvPathList(os.Getenv("ELNATH_CORRECTION_SCOPE_FORBIDDEN_PATHS")),
+	}
+}
+
+func splitEnvPathList(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	fields := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == '\n'
+	})
+	out := make([]string, 0, len(fields))
+	for _, field := range fields {
+		if field = strings.TrimSpace(field); field != "" {
+			out = append(out, field)
+		}
+	}
+	return out
 }
 
 func maxIterationsFromEnv() int {

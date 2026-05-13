@@ -234,6 +234,106 @@ func TestCompletionRetryPromptGuidesBudgetAfterEditIntent(t *testing.T) {
 	}
 }
 
+func TestCompletionContractSummaryDetectsScopeDriftForOutOfScopeEdit(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("fix the daemon and stay inside allowed paths"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "edit-1", Name: "edit_file", Input: json.RawMessage(`{"file_path":"docs/unrelated.md","old_string":"old","new_string":"new"}`)},
+			}},
+			llm.NewToolResultMessage("edit-1", "ok", false),
+			llm.NewAssistantMessage("Done."),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(nil, orchestrator.WorkflowConfig{
+		CorrectionScope: orchestrator.CorrectionScope{
+			Label:        "daemon-only",
+			AllowedPaths: []string{"internal/daemon/"},
+		},
+	}, result)
+
+	if summary.CompletionWarning != "scope_drift" {
+		t.Fatalf("CompletionWarning = %q, want scope_drift", summary.CompletionWarning)
+	}
+	if summary.RetryDecision != "" || summary.RetryReason != "" {
+		t.Fatalf("retry plan = %q/%q, want fail-closed with no retry", summary.RetryDecision, summary.RetryReason)
+	}
+	if got, want := summary.MutatedPaths, []string{"docs/unrelated.md"}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("MutatedPaths = %#v, want %#v", got, want)
+	}
+	if got, want := summary.OutOfScopeChangedFiles, []string{"docs/unrelated.md"}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("OutOfScopeChangedFiles = %#v, want %#v", got, want)
+	}
+}
+
+func TestCompletionContractSummaryAllowsInScopeEdit(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("fix the daemon and stay inside allowed paths"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "edit-1", Name: "edit_file", Input: json.RawMessage(`{"file_path":"internal/daemon/runner.go","old_string":"old","new_string":"new"}`)},
+			}},
+			llm.NewToolResultMessage("edit-1", "ok", false),
+			llm.NewAssistantMessage("Done."),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(nil, orchestrator.WorkflowConfig{
+		CorrectionScope: orchestrator.CorrectionScope{
+			Label:        "daemon-only",
+			AllowedPaths: []string{"internal/daemon/"},
+		},
+	}, result)
+
+	if summary.CompletionWarning != "" {
+		t.Fatalf("CompletionWarning = %q, want empty for in-scope edit", summary.CompletionWarning)
+	}
+	if len(summary.OutOfScopeChangedFiles) != 0 {
+		t.Fatalf("OutOfScopeChangedFiles = %#v, want empty", summary.OutOfScopeChangedFiles)
+	}
+}
+
+func TestCompletionRetryPromptIncludesScopeLock(t *testing.T) {
+	prompt := completionRetryPrompt(completionContractSummary{
+		RetryDecision:          completionRetryDecisionRetrySmallerScope,
+		RetryReason:            "verification_command_failed",
+		RecoveryScopeLabel:     "prettier-while-like",
+		AllowedRecoveryPaths:   []string{"src/language-js/comments/attach", "tests/format/js/comments/while-like"},
+		ForbiddenRecoveryPaths: []string{"tests/integration"},
+	})
+
+	for _, want := range []string{
+		"Scope lock:",
+		"Scope label: prettier-while-like",
+		"Allowed recovery paths: src/language-js/comments/attach, tests/format/js/comments/while-like",
+		"Forbidden recovery paths: tests/integration",
+		"report scope_drift instead of editing unrelated files",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
+func TestRuntimeCorrectionScopeFromEnv(t *testing.T) {
+	t.Setenv("ELNATH_CORRECTION_SCOPE_LABEL", "prettier-while-like")
+	t.Setenv("ELNATH_CORRECTION_SCOPE_ALLOWED_PATHS", "src/language-js/comments/attach, tests/format/js/comments/while-like\nscripts")
+	t.Setenv("ELNATH_CORRECTION_SCOPE_FORBIDDEN_PATHS", "tests/integration")
+
+	scope := runtimeCorrectionScopeFromEnv()
+
+	if scope.Label != "prettier-while-like" {
+		t.Fatalf("Label = %q", scope.Label)
+	}
+	if got, want := scope.AllowedPaths, []string{"src/language-js/comments/attach", "tests/format/js/comments/while-like", "scripts"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		t.Fatalf("AllowedPaths = %#v, want %#v", got, want)
+	}
+	if got, want := scope.ForbiddenPaths, []string{"tests/integration"}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("ForbiddenPaths = %#v, want %#v", got, want)
+	}
+}
+
 func TestCompletionContractSummaryDetectsEditToolMutation(t *testing.T) {
 	result := &orchestrator.WorkflowResult{
 		Messages: []llm.Message{
