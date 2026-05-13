@@ -784,7 +784,7 @@ func mutationObservedInMessages(messages []llm.Message) bool {
 				if _, ok := mutatingToolUseIDs[b.ToolUseID]; !ok {
 					continue
 				}
-				if !b.IsError {
+				if !b.IsError && !mutatingToolResultLooksNoop(b.Content) {
 					return true
 				}
 				delete(mutatingToolUseIDs, b.ToolUseID)
@@ -827,6 +827,29 @@ func worktreeRunCommandFromToolInput(input json.RawMessage) string {
 
 func bashCommandLooksMutating(command string) bool {
 	return mutatingBashCommandRE.MatchString(command)
+}
+
+func mutatingToolResultLooksNoop(output string) bool {
+	text := strings.ToLower(strings.TrimSpace(output))
+	if text == "" {
+		return false
+	}
+	for _, marker := range []string{
+		"no changes",
+		"no files changed",
+		"0 files changed",
+		"file unchanged",
+		"content already matches",
+		"already matches",
+		"old_string and new_string are identical",
+		"nothing to commit",
+		"working tree clean",
+	} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func userMessageText(messages []llm.Message) string {
