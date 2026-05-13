@@ -1,0 +1,21 @@
+{
+  "version": "v1",
+  "system": "elnath-current",
+  "baseline": "self",
+  "corpus_path": ".omc/research/post-pr200-v8-go-bug004-self-correction-20260513/one-task-corpus.json",
+  "command_template": "\"$CURRENT_BIN\" {{task_output}} {{task_id}} {{task_track}} {{task_language}} {{task_prompt}} {{task_repo}} {{task_repo_ref}} {{task_repo_class}} {{task_benchmark_family}} {{task_verification_command}}",
+  "output_path": "benchmarks/results/post-pr200-v8-go-bug004-missing-regression-recovery-20260513/current-scorecard.json",
+  "context": "benchmark",
+  "runtime_policy": "post-PR200 one-task V8-GO-BUG-004 current-only smoke after missing-regression recovery prompt patch; sandbox=workspace-write, approvals=bypass; ELNATH_BENCHMARK_KEEP_TMP=1; absolute CURRENT_BIN and ELNATH_BIN; bounded benchmark self-healing retry enabled; no baseline; no full v8 benchmark; no comparison",
+  "repeated_runs": 1,
+  "intervention_notes": true,
+  "required_env": [
+    "CURRENT_BIN"
+  ],
+  "notes": [
+    "Focused acceptance evidence for the missing focused-regression recovery prompt patch.",
+    "Task: V8-GO-BUG-004 only.",
+    "No baseline, no full v8 benchmark, no Codex CLI comparison, no Claude Code comparison.",
+    "Do not claim v8 benchmark success from this one-task smoke."
+  ]
+}

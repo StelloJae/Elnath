@@ -248,11 +248,33 @@ func completionVerificationObservedSummary(summary completionContractSummary, co
 }
 
 func completionRetryPrompt(summary completionContractSummary) string {
+	reasonGuidance := completionRetryReasonGuidance(summary)
+	if reasonGuidance != "" {
+		reasonGuidance = "\nReason-specific guidance:\n" + reasonGuidance
+	}
 	return fmt.Sprintf(
-		"Run one bounded correction pass for the previous task.\nRetry decision: %s\nRetry reason: %s\nKeep scope smaller than the original attempt. Provide a concrete completed result, or explicitly state what remains incomplete.",
+		"Run one bounded correction pass for the previous task.\nRetry decision: %s\nRetry reason: %s\nKeep scope smaller than the original attempt. Provide a concrete completed result, or explicitly state what remains incomplete.%s",
 		summary.RetryDecision,
 		summary.RetryReason,
+		reasonGuidance,
 	)
+}
+
+func completionRetryReasonGuidance(summary completionContractSummary) string {
+	switch summary.RetryReason {
+	case "edit_intent_without_mutation":
+		return "- Previous attempt intended to edit but left no accepted mutation.\n- Do not spend the whole retry re-reading broad context.\n- Make the smallest concrete file edit that satisfies the task before the final answer.\n- If editing is impossible, state the exact blocker instead of claiming completion."
+	case "budget_exceeded_after_edit_intent":
+		return "- Previous attempt reached budget after edit intent.\n- Resume from the already identified seam; do not restart broad investigation.\n- Complete the smallest concrete patch and run the configured verification before claiming completion."
+	case "verification_command_failed":
+		return "- Previous verification failed.\n- Inspect the failure, patch only the smallest root cause, and rerun the same verification command."
+	case "unsupported_verification_success_claim":
+		return "- Previous answer claimed verification without an observed command.\n- Run an explicit verification command, or remove the success claim and report the blocker."
+	case "final_response_reports_incomplete":
+		return "- Previous final answer self-reported incomplete work.\n- Finish only the smallest missing slice, then verify or state the exact remaining blocker."
+	default:
+		return ""
+	}
 }
 
 func completionVerificationExecutor(input orchestrator.WorkflowInput) tools.Executor {

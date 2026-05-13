@@ -1,0 +1,21 @@
+{
+  "version": "v1",
+  "system": "elnath-current",
+  "baseline": "self",
+  "corpus_path": ".omc/research/post-pr197-expanded-10task-current-smoke-20260513/selected-corpus.json",
+  "command_template": "\"$CURRENT_BIN\" {{task_output}} {{task_id}} {{task_track}} {{task_language}} {{task_prompt}} {{task_repo}} {{task_repo_ref}} {{task_repo_class}} {{task_benchmark_family}} {{task_verification_command}}",
+  "output_path": "benchmarks/results/post-pr200-expanded-10task-after-mix-budget-20260513/current-scorecard.json",
+  "context": "benchmark",
+  "runtime_policy": "post-PR200 expanded 10-task current-only smoke after V8-GO-BUG-004 self-correction repair and V8-MIX-BF-001 bounded recovery budget patch; sandbox=workspace-write, approvals=bypass; ELNATH_BENCHMARK_KEEP_TMP=1; absolute CURRENT_BIN and ELNATH_BIN; bounded benchmark self-healing retry enabled; no baseline; no full v8 benchmark; no comparison",
+  "repeated_runs": 1,
+  "intervention_notes": true,
+  "required_env": [
+    "CURRENT_BIN"
+  ],
+  "notes": [
+    "Expanded selected current-only rerun after V8-MIX-BF-001 focused recovery budget pass.",
+    "Tasks: V8-GO-BF-004, V8-MIX-BF-001, V8-JS-BUG-001, V8-PY-BUG-001, V8-GO-BUG-003, V8-GO-BUG-004, V8-TS-BUG-003, V8-TS-BUG-004, V8-PY-BUG-002, V8-PY-BF-001.",
+    "No baseline, no full v8 benchmark, no Codex CLI comparison, no Claude Code comparison.",
+    "Do not claim v8 benchmark success from this selected smoke."
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "version": "v1",
+  "tasks": [
+    {
+      "id": "V8-MIX-BF-001",
+      "title": "Preserve deterministic YAML transformer behavior",
+      "track": "brownfield_feature",
+      "language": "go",
+      "repo_class": "mixed_config_tooling",
+      "benchmark_family": "v8_public_first_freeze",
+      "prompt": "Add or fix a deterministic transformer or configuration behavior with fixture coverage while avoiding broad output churn.",
+      "repo": "https://github.com/kubernetes-sigs/kustomize",
+      "source_url": "https://github.com/kubernetes-sigs/kustomize",
+      "repo_ref": "313aacedd3adcb6564fd362bcef52f5aa3abef85",
+      "verification_command": "cd kyaml && go test ./...",
+      "acceptance_criteria": [
+        "the transformer or configuration behavior is covered by a fixture test",
+        "the verification command is module-scoped",
+        "unrelated YAML output remains unchanged"
+      ]
+    }
+  ]
+}
