@@ -39,6 +39,9 @@ func TestActorMessageSendToolRecordsMailboxAndHandoff(t *testing.T) {
 	if !strings.Contains(out.Boundary, "mailbox record") {
 		t.Fatalf("boundary = %q, want mailbox boundary", out.Boundary)
 	}
+	if out.Receipt.Tool != ActorMessageSendToolName || out.Receipt.Action != "send" || out.Receipt.TaskID != task.ID || out.Receipt.FromActorID != planner.ID || out.Receipt.ToActorID != executor.ID || out.Receipt.HandoffID != out.HandoffID || out.Receipt.ExecutionPolicy != "agentic_actor_message_send" || !out.Receipt.Delivered {
+		t.Fatalf("receipt = %+v, want actor message send receipt", out.Receipt)
+	}
 
 	updatedPlanner, err := store.GetAgentActor(ctx, planner.ID)
 	if err != nil {
@@ -96,6 +99,9 @@ func TestActorMessageListToolListsInboxAndOutbox(t *testing.T) {
 	}
 	if out.ActorID != executor.ID || out.Box != "inbox" || out.Total != 1 || out.Messages[0].Text != "List this message." {
 		t.Fatalf("output = %+v, want one inbox message", out)
+	}
+	if out.Receipt.Tool != ActorMessageListToolName || out.Receipt.Action != "list" || !out.Receipt.ReadOnly || out.Receipt.Persistent || out.Receipt.TaskID != task.ID || out.Receipt.ActorID != executor.ID || out.Receipt.Box != "inbox" || out.Receipt.Total != 1 || out.Receipt.ExecutionPolicy != "agentic_actor_message_observation" {
+		t.Fatalf("receipt = %+v, want actor message list receipt", out.Receipt)
 	}
 }
 

@@ -87,16 +87,17 @@ type delegateEnqueueToolInput struct {
 }
 
 type delegateEnqueueToolOutput struct {
-	ParentTaskID         int64  `json:"parent_task_id"`
-	ChildTaskID          int64  `json:"child_task_id"`
-	QueueTaskID          int64  `json:"queue_task_id"`
-	Enqueued             bool   `json:"enqueued"`
-	Deduplicated         bool   `json:"deduplicated"`
-	DecisionID           int64  `json:"decision_id,omitempty"`
-	DecisionStatus       string `json:"decision_status,omitempty"`
-	RequestedEnforcement string `json:"requested_enforcement,omitempty"`
-	RequestedCompletion  string `json:"requested_completion_gate,omitempty"`
-	Boundary             string `json:"boundary"`
+	ParentTaskID         int64              `json:"parent_task_id"`
+	ChildTaskID          int64              `json:"child_task_id"`
+	QueueTaskID          int64              `json:"queue_task_id"`
+	Enqueued             bool               `json:"enqueued"`
+	Deduplicated         bool               `json:"deduplicated"`
+	DecisionID           int64              `json:"decision_id,omitempty"`
+	DecisionStatus       string             `json:"decision_status,omitempty"`
+	RequestedEnforcement string             `json:"requested_enforcement,omitempty"`
+	RequestedCompletion  string             `json:"requested_completion_gate,omitempty"`
+	Boundary             string             `json:"boundary"`
+	Receipt              agenticToolReceipt `json:"receipt"`
 }
 
 func (t *DelegateEnqueueTool) Execute(ctx context.Context, params json.RawMessage) (*basetools.Result, error) {
@@ -159,6 +160,20 @@ func (t *DelegateEnqueueTool) Execute(ctx context.Context, params json.RawMessag
 	}
 	output.DecisionID = result.DecisionID
 	output.DecisionStatus = result.DecisionStatus
+	output.Receipt = agenticToolReceipt{
+		Tool:            DelegateEnqueueToolName,
+		Action:          "enqueue",
+		ReadOnly:        false,
+		Persistent:      true,
+		ExecutionPolicy: "agentic_delegation_enqueue",
+		ParentTaskID:    parentID,
+		ChildTaskID:     child.ID,
+		QueueTaskID:     result.QueueTaskID,
+		DecisionID:      result.DecisionID,
+		DecisionStatus:  result.DecisionStatus,
+		Enqueued:        result.QueueTaskID != 0,
+		Deduplicated:    result.Existed,
+	}
 	raw, err := json.Marshal(output)
 	if err != nil {
 		return basetools.ErrorResult(fmt.Sprintf("agentic_delegate_enqueue: marshal output: %v", err)), nil

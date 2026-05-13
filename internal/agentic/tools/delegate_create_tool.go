@@ -68,12 +68,13 @@ type delegateCreateToolInput struct {
 }
 
 type delegateCreateToolOutput struct {
-	ParentTaskID int64  `json:"parent_task_id,omitempty"`
-	ChildTaskID  int64  `json:"child_task_id"`
-	Status       string `json:"status"`
-	EdgeType     string `json:"edge_type,omitempty"`
-	Enqueued     bool   `json:"enqueued"`
-	Boundary     string `json:"boundary"`
+	ParentTaskID int64              `json:"parent_task_id,omitempty"`
+	ChildTaskID  int64              `json:"child_task_id"`
+	Status       string             `json:"status"`
+	EdgeType     string             `json:"edge_type,omitempty"`
+	Enqueued     bool               `json:"enqueued"`
+	Boundary     string             `json:"boundary"`
+	Receipt      agenticToolReceipt `json:"receipt"`
 }
 
 func (t *DelegateCreateTool) Execute(ctx context.Context, params json.RawMessage) (*basetools.Result, error) {
@@ -157,6 +158,18 @@ func (t *DelegateCreateTool) Execute(ctx context.Context, params json.RawMessage
 		EdgeType:     edgeType,
 		Enqueued:     false,
 		Boundary:     "delegation intent recorded; child task is proposed and not enqueued",
+		Receipt: agenticToolReceipt{
+			Tool:            DelegateCreateToolName,
+			Action:          "create",
+			ReadOnly:        false,
+			Persistent:      true,
+			ExecutionPolicy: "agentic_delegation_intent",
+			ParentTaskID:    input.ParentTaskID,
+			ChildTaskID:     created.ID,
+			Status:          created.Status,
+			EdgeType:        edgeType,
+			Enqueued:        false,
+		},
 	}
 	raw, err := json.Marshal(output)
 	if err != nil {

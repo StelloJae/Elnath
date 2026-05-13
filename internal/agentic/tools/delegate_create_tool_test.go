@@ -37,6 +37,9 @@ func TestDelegateCreateToolCreatesProposedChildWithoutEnqueue(t *testing.T) {
 	if out.EdgeType != delegateEdgeType || !strings.Contains(out.Boundary, "not enqueued") {
 		t.Fatalf("output boundary = %+v, want non-execution edge boundary", out)
 	}
+	if out.Receipt.Tool != DelegateCreateToolName || out.Receipt.Action != "create" || out.Receipt.ParentTaskID != parent.ID || out.Receipt.ChildTaskID != out.ChildTaskID || out.Receipt.ExecutionPolicy != "agentic_delegation_intent" || out.Receipt.Enqueued {
+		t.Fatalf("receipt = %+v, want delegation intent receipt", out.Receipt)
+	}
 
 	child, err := store.GetAgenticTask(ctx, out.ChildTaskID)
 	if err != nil {
