@@ -54,6 +54,9 @@ func TestScheduleCreateListDeleteTools(t *testing.T) {
 	if !createOutput.Receipt.Persistent || createOutput.Receipt.EffectiveWhen != "after_daemon_restart" || createOutput.Receipt.TaskCountAfter != 1 {
 		t.Fatalf("create receipt state = %+v", createOutput.Receipt)
 	}
+	if createOutput.Receipt.FollowupTool != ScheduleListToolName {
+		t.Fatalf("create receipt followup = %q, want schedule_list", createOutput.Receipt.FollowupTool)
+	}
 	if createRuntime.Runtime.HotReloadSupported || createRuntime.Runtime.EffectiveWhen != "after_daemon_restart" {
 		t.Fatalf("create runtime = %+v, want restart-bound schedule semantics", createRuntime.Runtime)
 	}
@@ -133,6 +136,9 @@ func TestScheduleCreateListDeleteTools(t *testing.T) {
 	}
 	if !deleteOutput.Receipt.Persistent || deleteOutput.Receipt.TaskCountAfter != 0 || deleteOutput.Receipt.EffectiveWhen != "after_daemon_restart" {
 		t.Fatalf("delete receipt state = %+v", deleteOutput.Receipt)
+	}
+	if deleteOutput.Receipt.FollowupTool != ScheduleListToolName {
+		t.Fatalf("delete receipt followup = %q, want schedule_list", deleteOutput.Receipt.FollowupTool)
 	}
 	if deleteRuntime.Runtime.HotReloadSupported || deleteRuntime.Runtime.EffectiveWhen != "after_daemon_restart" {
 		t.Fatalf("delete runtime = %+v, want restart-bound schedule semantics", deleteRuntime.Runtime)

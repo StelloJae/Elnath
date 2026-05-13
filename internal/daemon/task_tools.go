@@ -165,6 +165,7 @@ func (t *TaskCreateTool) Execute(ctx context.Context, params json.RawMessage) (*
 			TaskID:          id,
 			Status:          StatusPending,
 			Deduplicated:    deduped,
+			FollowupTool:    TaskMonitorToolName,
 		},
 	}
 	raw, err := json.Marshal(output)

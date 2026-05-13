@@ -515,7 +515,7 @@ func TestCompletionContractSummaryRecordsControlToolReceipts(t *testing.T) {
 			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
 				llm.ToolUseBlock{ID: "task-1", Name: "task_create", Input: json.RawMessage(`{"prompt":"do work"}`)},
 			}},
-			llm.NewToolResultMessage("task-1", `{"task_id":7,"status":"pending","receipt":{"tool":"task_create","action":"create","read_only":false,"persistent":true,"queue_backed":true,"execution_policy":"daemon_queue_enqueue","task_id":7,"status":"pending"}}`, false),
+			llm.NewToolResultMessage("task-1", `{"task_id":7,"status":"pending","receipt":{"tool":"task_create","action":"create","read_only":false,"persistent":true,"queue_backed":true,"execution_policy":"daemon_queue_enqueue","task_id":7,"status":"pending","followup_tool":"task_monitor"}}`, false),
 			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
 				llm.ToolUseBlock{ID: "worktree-1", Name: "worktree_run", Input: json.RawMessage(`{"name":"feature/run","command":"go test ./..."}`)},
 			}},
@@ -530,7 +530,7 @@ func TestCompletionContractSummaryRecordsControlToolReceipts(t *testing.T) {
 		t.Fatalf("ControlToolReceipts = %#v, want two receipts", summary.ControlToolReceipts)
 	}
 	taskReceipt := summary.ControlToolReceipts[0]
-	if taskReceipt.Tool != "task_create" || taskReceipt.Action != "create" || taskReceipt.ReadOnly || !taskReceipt.Persistent || !taskReceipt.QueueBacked || taskReceipt.TaskID != 7 || taskReceipt.Status != "pending" {
+	if taskReceipt.Tool != "task_create" || taskReceipt.Action != "create" || taskReceipt.ReadOnly || !taskReceipt.Persistent || !taskReceipt.QueueBacked || taskReceipt.TaskID != 7 || taskReceipt.Status != "pending" || taskReceipt.FollowupTool != "task_monitor" {
 		t.Fatalf("task receipt = %+v", taskReceipt)
 	}
 	worktreeReceipt := summary.ControlToolReceipts[1]
@@ -714,6 +714,7 @@ func TestDelegationControlReceiptsConvertToLearningAndAgentic(t *testing.T) {
 		ParentTaskID:    3,
 		ChildTaskID:     9,
 		QueueTaskID:     44,
+		FollowupTool:    "agentic_delegate_status",
 		DecisionID:      7,
 		DecisionStatus:  "enqueued",
 		Enqueued:        true,
@@ -730,11 +731,11 @@ func TestDelegationControlReceiptsConvertToLearningAndAgentic(t *testing.T) {
 	}}
 
 	learningReceipts := completionControlToolReceiptsToLearning(src)
-	if len(learningReceipts) != 2 || learningReceipts[0].ParentTaskID != 3 || learningReceipts[0].ChildTaskID != 9 || learningReceipts[0].QueueTaskID != 44 || learningReceipts[0].DecisionID != 7 || !learningReceipts[0].Enqueued || learningReceipts[1].HandoffID != 5 || !learningReceipts[1].Delivered {
+	if len(learningReceipts) != 2 || learningReceipts[0].ParentTaskID != 3 || learningReceipts[0].ChildTaskID != 9 || learningReceipts[0].QueueTaskID != 44 || learningReceipts[0].FollowupTool != "agentic_delegate_status" || learningReceipts[0].DecisionID != 7 || !learningReceipts[0].Enqueued || learningReceipts[1].HandoffID != 5 || !learningReceipts[1].Delivered {
 		t.Fatalf("learning receipts = %+v", learningReceipts)
 	}
 	agenticReceipts := completionControlToolReceiptsToAgentic(src)
-	if len(agenticReceipts) != 2 || agenticReceipts[0].ParentTaskID != 3 || agenticReceipts[0].ChildTaskID != 9 || agenticReceipts[0].QueueTaskID != 44 || agenticReceipts[0].DecisionStatus != "enqueued" || agenticReceipts[1].FromActorID != 1 || agenticReceipts[1].ToActorID != 2 || !agenticReceipts[1].Delivered {
+	if len(agenticReceipts) != 2 || agenticReceipts[0].ParentTaskID != 3 || agenticReceipts[0].ChildTaskID != 9 || agenticReceipts[0].QueueTaskID != 44 || agenticReceipts[0].FollowupTool != "agentic_delegate_status" || agenticReceipts[0].DecisionStatus != "enqueued" || agenticReceipts[1].FromActorID != 1 || agenticReceipts[1].ToActorID != 2 || !agenticReceipts[1].Delivered {
 		t.Fatalf("agentic receipts = %+v", agenticReceipts)
 	}
 }
