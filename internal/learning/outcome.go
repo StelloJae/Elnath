@@ -37,6 +37,7 @@ type OutcomeRecord struct {
 	// policy is introduced.
 	VerificationHint        bool                    `json:"verification_hint,omitempty"`
 	VerificationObserved    *bool                   `json:"verification_observed,omitempty"`
+	VerificationCommand     string                  `json:"verification_command,omitempty"`
 	CompletionWarning       string                  `json:"completion_warning,omitempty"`
 	ReasoningEffort         string                  `json:"reasoning_effort,omitempty"`
 	ReasoningEffortMode     string                  `json:"reasoning_effort_mode,omitempty"`
@@ -48,6 +49,7 @@ type OutcomeRecord struct {
 	ConditionalSkillMatches []ConditionalSkillMatch `json:"conditional_skill_matches,omitempty"`
 	CorrectionAttempted     bool                    `json:"correction_attempted,omitempty"`
 	CorrectionAttempts      int                     `json:"correction_attempts,omitempty"`
+	CorrectionMaxAttempts   int                     `json:"correction_max_attempts,omitempty"`
 	CorrectionDecision      string                  `json:"correction_decision,omitempty"`
 	CorrectionReason        string                  `json:"correction_reason,omitempty"`
 	CorrectionStatus        string                  `json:"correction_status,omitempty"`

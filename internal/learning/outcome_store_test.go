@@ -167,6 +167,7 @@ func TestOutcomeRecordCompletionObservabilityJSONCompatibility(t *testing.T) {
 	observed := false
 	rec.VerificationHint = true
 	rec.VerificationObserved = &observed
+	rec.VerificationCommand = "go test ./cmd/elnath -count=1"
 	rec.CompletionWarning = "final_response_reports_incomplete"
 	rec.ReasoningEffort = "high"
 	rec.ReasoningEffortMode = "auto"
@@ -177,6 +178,7 @@ func TestOutcomeRecordCompletionObservabilityJSONCompatibility(t *testing.T) {
 	rec.LoadedDeferredTools = []string{"mcp_github_issue"}
 	rec.CorrectionAttempted = true
 	rec.CorrectionAttempts = 1
+	rec.CorrectionMaxAttempts = 1
 	rec.CorrectionDecision = "retry_smaller_scope"
 	rec.CorrectionReason = "final_response_reports_incomplete"
 	rec.CorrectionStatus = "failed"
@@ -191,6 +193,7 @@ func TestOutcomeRecordCompletionObservabilityJSONCompatibility(t *testing.T) {
 	for _, want := range []string{
 		`"verification_hint":true`,
 		`"verification_observed":false`,
+		`"verification_command":"go test ./cmd/elnath -count=1"`,
 		`"completion_warning":"final_response_reports_incomplete"`,
 		`"reasoning_effort":"high"`,
 		`"reasoning_effort_mode":"auto"`,
@@ -201,6 +204,7 @@ func TestOutcomeRecordCompletionObservabilityJSONCompatibility(t *testing.T) {
 		`"loaded_deferred_tools":["mcp_github_issue"]`,
 		`"correction_attempted":true`,
 		`"correction_attempts":1`,
+		`"correction_max_attempts":1`,
 		`"correction_decision":"retry_smaller_scope"`,
 		`"correction_reason":"final_response_reports_incomplete"`,
 		`"correction_status":"failed"`,

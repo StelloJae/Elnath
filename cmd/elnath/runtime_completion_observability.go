@@ -27,6 +27,7 @@ type completionContractSummary struct {
 	ConditionalSkillMatches []completionConditionalSkillMatch
 	CorrectionAttempted     bool
 	CorrectionAttempts      int
+	CorrectionMaxAttempts   int
 	CorrectionDecision      string
 	CorrectionReason        string
 	CorrectionStatus        string

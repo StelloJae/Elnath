@@ -77,6 +77,8 @@ type runtimeMockTool struct {
 type recordingRuntimeTool struct {
 	name    string
 	output  string
+	isError bool
+	execErr error
 	calls   int
 	command string
 }
@@ -393,6 +395,12 @@ func (t *recordingRuntimeTool) Execute(_ context.Context, params json.RawMessage
 		return tools.ErrorResult(err.Error()), nil
 	}
 	t.command = payload.Command
+	if t.execErr != nil {
+		return nil, t.execErr
+	}
+	if t.isError {
+		return tools.ErrorResult(t.output), nil
+	}
 	return tools.SuccessResult(t.output), nil
 }
 
@@ -3972,6 +3980,42 @@ func TestCompletionRetryRecordsFailedCorrectionAttempt(t *testing.T) {
 	}
 }
 
+func TestCompletionRetryRecordsMissingRetryWorkflow(t *testing.T) {
+	rt := newTestExecutionRuntimeWithConfig(t, &countingProvider{}, false, func(cfg *config.Config) {
+		cfg.SelfHealing.Enabled = true
+		cfg.SelfHealing.ObserveOnly = false
+	})
+	rt.completionRetryMax = 1
+	result := &orchestrator.WorkflowResult{
+		Messages:     []llm.Message{llm.NewAssistantMessage("I could not finish the patch.")},
+		Summary:      "I could not finish the patch.",
+		FinishReason: "stop",
+		Workflow:     "single",
+	}
+	summary := completionContractSummary{
+		CompletionWarning: "final_response_reports_incomplete",
+		RetryDecision:     completionRetryDecisionRetrySmallerScope,
+		RetryReason:       "final_response_reports_incomplete",
+	}
+
+	gotResult, gotSummary := rt.maybeRunCompletionRetry(context.Background(), nil, orchestrator.WorkflowInput{
+		Provider: rt.provider,
+	}, result, summary)
+
+	if gotResult != result {
+		t.Fatal("missing retry workflow should preserve original result")
+	}
+	if gotSummary.CorrectionAttempted || gotSummary.CorrectionAttempts != 0 || gotSummary.CorrectionMaxAttempts != 1 {
+		t.Fatalf("correction budget = attempted %v attempts %d max %d", gotSummary.CorrectionAttempted, gotSummary.CorrectionAttempts, gotSummary.CorrectionMaxAttempts)
+	}
+	if gotSummary.CorrectionStatus != "skipped" || gotSummary.CorrectionFailureFamily != "missing_retry_workflow" {
+		t.Fatalf("missing workflow skip = status %q family %q", gotSummary.CorrectionStatus, gotSummary.CorrectionFailureFamily)
+	}
+	if gotSummary.CorrectionDecision != completionRetryDecisionRetrySmallerScope || gotSummary.CorrectionReason != "final_response_reports_incomplete" {
+		t.Fatalf("correction decision = %q/%q", gotSummary.CorrectionDecision, gotSummary.CorrectionReason)
+	}
+}
+
 func TestCompletionRetryMarksUnresolvedWarningFailed(t *testing.T) {
 	rt := newTestExecutionRuntimeWithConfig(t, &countingProvider{}, false, func(cfg *config.Config) {
 		cfg.SelfHealing.Enabled = true
@@ -4049,6 +4093,98 @@ func TestCompletionRetryRunsExplicitVerificationCommand(t *testing.T) {
 	}
 	if !gotSummary.CorrectionAttempted || gotSummary.CorrectionAttempts != 1 || gotSummary.CorrectionDecision != completionRetryDecisionRunVerification {
 		t.Fatalf("correction summary = %+v", gotSummary)
+	}
+	if gotSummary.CorrectionMaxAttempts != 1 {
+		t.Fatalf("CorrectionMaxAttempts = %d, want 1", gotSummary.CorrectionMaxAttempts)
+	}
+}
+
+func TestCompletionRetryRecordsFailedVerificationCommand(t *testing.T) {
+	rt := newTestExecutionRuntimeWithConfig(t, &countingProvider{}, false, func(cfg *config.Config) {
+		cfg.SelfHealing.Enabled = true
+		cfg.SelfHealing.ObserveOnly = false
+	})
+	rt.completionRetryMax = 1
+	reg := tools.NewRegistry()
+	bash := &recordingRuntimeTool{name: "bash", output: "FAIL", isError: true}
+	reg.Register(bash)
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("fix the existing handler\n\ngo test ./cmd/elnath -count=1"),
+			llm.NewAssistantMessage("Done."),
+		},
+		Summary:      "Done.",
+		FinishReason: "stop",
+		Workflow:     "single",
+	}
+	observed := false
+	summary := completionContractSummary{
+		VerificationHint:     true,
+		VerificationObserved: &observed,
+		RetryDecision:        completionRetryDecisionRunVerification,
+		RetryReason:          "verification_hint_not_observed",
+	}
+
+	gotResult, gotSummary := rt.maybeRunCompletionRetry(context.Background(), &stubWorkflow{name: "single"}, orchestrator.WorkflowInput{
+		Session:  &agent.Session{ID: "verify-session"},
+		Tools:    reg,
+		Provider: rt.provider,
+	}, result, summary)
+
+	if gotResult != result {
+		t.Fatal("failed verification retry should preserve original workflow result")
+	}
+	if bash.calls != 1 || bash.command != "go test ./cmd/elnath -count=1" {
+		t.Fatalf("bash calls = %d command = %q, want explicit verification command", bash.calls, bash.command)
+	}
+	if gotSummary.VerificationObserved == nil || !*gotSummary.VerificationObserved || gotSummary.VerificationCommand != "go test ./cmd/elnath -count=1" {
+		t.Fatalf("failed verification receipt = observed %v command %q, want observed failed command", gotSummary.VerificationObserved, gotSummary.VerificationCommand)
+	}
+	if !gotSummary.CorrectionAttempted || gotSummary.CorrectionStatus != "failed" || gotSummary.CorrectionFailureFamily != "verification_command_failed" {
+		t.Fatalf("correction failure summary = %+v", gotSummary)
+	}
+}
+
+func TestCompletionRetryRecordsVerificationExecutorErrorCommand(t *testing.T) {
+	rt := newTestExecutionRuntimeWithConfig(t, &countingProvider{}, false, func(cfg *config.Config) {
+		cfg.SelfHealing.Enabled = true
+		cfg.SelfHealing.ObserveOnly = false
+	})
+	rt.completionRetryMax = 1
+	reg := tools.NewRegistry()
+	bash := &recordingRuntimeTool{name: "bash", execErr: fmt.Errorf("executor unavailable")}
+	reg.Register(bash)
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("fix the existing handler\n\ngo test ./cmd/elnath -count=1"),
+			llm.NewAssistantMessage("Done."),
+		},
+		Summary:      "Done.",
+		FinishReason: "stop",
+		Workflow:     "single",
+	}
+	observed := false
+	summary := completionContractSummary{
+		VerificationHint:     true,
+		VerificationObserved: &observed,
+		RetryDecision:        completionRetryDecisionRunVerification,
+		RetryReason:          "verification_hint_not_observed",
+	}
+
+	_, gotSummary := rt.maybeRunCompletionRetry(context.Background(), &stubWorkflow{name: "single"}, orchestrator.WorkflowInput{
+		Session:  &agent.Session{ID: "verify-session"},
+		Tools:    reg,
+		Provider: rt.provider,
+	}, result, summary)
+
+	if bash.calls != 1 || bash.command != "go test ./cmd/elnath -count=1" {
+		t.Fatalf("bash calls = %d command = %q, want explicit verification command", bash.calls, bash.command)
+	}
+	if gotSummary.VerificationObserved == nil || !*gotSummary.VerificationObserved || gotSummary.VerificationCommand != "go test ./cmd/elnath -count=1" {
+		t.Fatalf("executor-error receipt = observed %v command %q, want attempted command", gotSummary.VerificationObserved, gotSummary.VerificationCommand)
+	}
+	if gotSummary.CorrectionStatus != "failed" || gotSummary.CorrectionFailureFamily != "verification_executor_error" {
+		t.Fatalf("executor-error correction summary = %+v", gotSummary)
 	}
 }
 
