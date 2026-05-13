@@ -155,6 +155,12 @@ func TestToolGateway_AgenticDelegateListIsReadOnly(t *testing.T) {
 	}
 }
 
+func TestToolGateway_AgenticDelegateStatusIsReadOnly(t *testing.T) {
+	if !isReadOnlyTool(DelegateStatusToolName) {
+		t.Fatal("agentic_delegate_status should be classified as read-only")
+	}
+}
+
 func TestToolGateway_AgenticMessageListIsReadOnly(t *testing.T) {
 	if !isReadOnlyTool(ActorMessageListToolName) {
 		t.Fatal("agentic_message_list should be classified as read-only")
