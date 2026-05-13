@@ -1388,6 +1388,7 @@ func (rt *executionRuntime) recordOutcome(ctx context.Context, in outcomeInput) 
 		LoadedDeferredTools:     append([]string(nil), in.completion.LoadedDeferredTools...),
 		SkillCatalogReceipts:    completionSkillCatalogReceiptsToLearning(in.completion.SkillCatalogReceipts),
 		CommandCatalogReceipts:  completionCommandCatalogReceiptsToLearning(in.completion.CommandCatalogReceipts),
+		ToolSearchReceipts:      completionToolSearchReceiptsToLearning(in.completion.ToolSearchReceipts),
 		ConditionalSkillMatches: completionSkillMatchesToLearning(in.completion.ConditionalSkillMatches),
 		CorrectionAttempted:     in.completion.CorrectionAttempted,
 		CorrectionAttempts:      in.completion.CorrectionAttempts,
@@ -1484,6 +1485,30 @@ func completionCommandCatalogReceiptsToLearning(src []completionCommandCatalogRe
 			MaxResults:         receipt.MaxResults,
 			Query:              receipt.Query,
 			Command:            receipt.Command,
+		})
+	}
+	return out
+}
+
+func completionToolSearchReceiptsToLearning(src []completionToolSearchReceipt) []learning.ToolSearchReceipt {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]learning.ToolSearchReceipt, 0, len(src))
+	for _, receipt := range src {
+		out = append(out, learning.ToolSearchReceipt{
+			Tool:               receipt.Tool,
+			Action:             receipt.Action,
+			ReadOnly:           receipt.ReadOnly,
+			RegistryAvailable:  receipt.RegistryAvailable,
+			ExecutionAvailable: receipt.ExecutionAvailable,
+			ExecutionPolicy:    receipt.ExecutionPolicy,
+			TotalTools:         receipt.TotalTools,
+			ReturnedMatches:    receipt.ReturnedMatches,
+			DeferredMatches:    receipt.DeferredMatches,
+			MaxResults:         receipt.MaxResults,
+			AllowNamesCount:    receipt.AllowNamesCount,
+			Query:              receipt.Query,
 		})
 	}
 	return out

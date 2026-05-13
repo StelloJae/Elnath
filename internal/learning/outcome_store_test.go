@@ -198,6 +198,19 @@ func TestOutcomeRecordCompletionObservabilityJSONCompatibility(t *testing.T) {
 		MaxResults:         2,
 		Query:              "commands",
 	}}
+	rec.ToolSearchReceipts = []ToolSearchReceipt{{
+		Tool:               "tool_search",
+		Action:             "search",
+		ReadOnly:           true,
+		RegistryAvailable:  true,
+		ExecutionAvailable: false,
+		ExecutionPolicy:    "metadata_only",
+		TotalTools:         12,
+		ReturnedMatches:    1,
+		DeferredMatches:    1,
+		MaxResults:         3,
+		Query:              "task",
+	}}
 	rec.CorrectionAttempted = true
 	rec.CorrectionAttempts = 1
 	rec.CorrectionMaxAttempts = 1
@@ -226,6 +239,7 @@ func TestOutcomeRecordCompletionObservabilityJSONCompatibility(t *testing.T) {
 		`"loaded_deferred_tools":["mcp_github_issue"]`,
 		`"skill_catalog_receipts":[{"tool":"skill_catalog","action":"recommend"`,
 		`"command_catalog_receipts":[{"tool":"command_catalog","action":"recommend"`,
+		`"tool_search_receipts":[{"tool":"tool_search","action":"search"`,
 		`"execution_policy":"metadata_only"`,
 		`"query":"review code"`,
 		`"correction_attempted":true`,

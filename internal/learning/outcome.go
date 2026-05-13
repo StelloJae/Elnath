@@ -48,6 +48,7 @@ type OutcomeRecord struct {
 	LoadedDeferredTools     []string                `json:"loaded_deferred_tools,omitempty"`
 	SkillCatalogReceipts    []SkillCatalogReceipt   `json:"skill_catalog_receipts,omitempty"`
 	CommandCatalogReceipts  []CommandCatalogReceipt `json:"command_catalog_receipts,omitempty"`
+	ToolSearchReceipts      []ToolSearchReceipt     `json:"tool_search_receipts,omitempty"`
 	ConditionalSkillMatches []ConditionalSkillMatch `json:"conditional_skill_matches,omitempty"`
 	CorrectionAttempted     bool                    `json:"correction_attempted,omitempty"`
 	CorrectionAttempts      int                     `json:"correction_attempts,omitempty"`
@@ -100,6 +101,21 @@ type CommandCatalogReceipt struct {
 	MaxResults         int    `json:"max_results,omitempty"`
 	Query              string `json:"query,omitempty"`
 	Command            string `json:"command,omitempty"`
+}
+
+type ToolSearchReceipt struct {
+	Tool               string `json:"tool"`
+	Action             string `json:"action"`
+	ReadOnly           bool   `json:"read_only"`
+	RegistryAvailable  bool   `json:"registry_available"`
+	ExecutionAvailable bool   `json:"execution_available"`
+	ExecutionPolicy    string `json:"execution_policy"`
+	TotalTools         int    `json:"total_tools"`
+	ReturnedMatches    int    `json:"returned_matches"`
+	DeferredMatches    int    `json:"deferred_matches"`
+	MaxResults         int    `json:"max_results"`
+	AllowNamesCount    int    `json:"allow_names_count"`
+	Query              string `json:"query"`
 }
 
 // IsSuccessful returns true for workflow outcomes that count as completion in

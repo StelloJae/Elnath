@@ -84,6 +84,7 @@ type toolSearchOutput struct {
 	Query      string            `json:"query"`
 	TotalTools int               `json:"total_tools"`
 	Matches    []toolSearchMatch `json:"matches"`
+	Receipt    toolSearchReceipt `json:"receipt"`
 }
 
 type toolSearchMatch struct {
@@ -95,6 +96,21 @@ type toolSearchMatch struct {
 	ConcurrencySafe       bool   `json:"concurrency_safe"`
 	Reversible            bool   `json:"reversible"`
 	CancelSiblingsOnError bool   `json:"cancel_siblings_on_error"`
+}
+
+type toolSearchReceipt struct {
+	Tool               string `json:"tool"`
+	Action             string `json:"action"`
+	ReadOnly           bool   `json:"read_only"`
+	RegistryAvailable  bool   `json:"registry_available"`
+	ExecutionAvailable bool   `json:"execution_available"`
+	ExecutionPolicy    string `json:"execution_policy"`
+	TotalTools         int    `json:"total_tools"`
+	ReturnedMatches    int    `json:"returned_matches"`
+	DeferredMatches    int    `json:"deferred_matches"`
+	MaxResults         int    `json:"max_results"`
+	AllowNamesCount    int    `json:"allow_names_count"`
+	Query              string `json:"query"`
 }
 
 type toolSearchCandidate struct {
@@ -125,12 +141,57 @@ func (t *ToolSearchTool) Execute(_ context.Context, params json.RawMessage) (*Re
 		Query:      query,
 		TotalTools: len(tools),
 		Matches:    matches,
+		Receipt:    t.receipt(query, maxResults, input.AllowNames, len(tools), matches),
 	}
 	raw, err := json.Marshal(out)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("tool_search: marshal output: %v", err)), nil
 	}
 	return SuccessResult(string(raw)), nil
+}
+
+func (t *ToolSearchTool) receipt(query string, maxResults int, allowNames []string, totalTools int, matches []toolSearchMatch) toolSearchReceipt {
+	return toolSearchReceipt{
+		Tool:               ToolSearchName,
+		Action:             toolSearchAction(query),
+		ReadOnly:           true,
+		RegistryAvailable:  t != nil && t.registry != nil,
+		ExecutionAvailable: false,
+		ExecutionPolicy:    "metadata_only",
+		TotalTools:         totalTools,
+		ReturnedMatches:    len(matches),
+		DeferredMatches:    countDeferredToolSearchMatches(matches),
+		MaxResults:         maxResults,
+		AllowNamesCount:    countNonEmptyToolSearchNames(allowNames),
+		Query:              strings.TrimSpace(query),
+	}
+}
+
+func toolSearchAction(query string) string {
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(query)), "select:") {
+		return "select"
+	}
+	return "search"
+}
+
+func countDeferredToolSearchMatches(matches []toolSearchMatch) int {
+	count := 0
+	for _, match := range matches {
+		if match.Deferred {
+			count++
+		}
+	}
+	return count
+}
+
+func countNonEmptyToolSearchNames(names []string) int {
+	count := 0
+	for _, name := range names {
+		if strings.TrimSpace(name) != "" {
+			count++
+		}
+	}
+	return count
 }
 
 func (t *ToolSearchTool) searchableTools() []Tool {
