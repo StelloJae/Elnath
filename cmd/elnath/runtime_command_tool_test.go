@@ -50,6 +50,20 @@ func TestExecutionRuntimeRegistersAskUserQuestionTool(t *testing.T) {
 	}
 }
 
+func TestExecutionRuntimeRegistersProcessTools(t *testing.T) {
+	rt := newTestExecutionRuntime(t, &countingProvider{})
+
+	for _, name := range []string{tools.ProcessStartToolName, tools.ProcessMonitorToolName, tools.ProcessStopToolName} {
+		tool, ok := rt.reg.Get(name)
+		if !ok {
+			t.Fatalf("%s tool missing", name)
+		}
+		if deferred, ok := tool.(interface{ DeferInitialToolSchema() bool }); !ok || !deferred.DeferInitialToolSchema() {
+			t.Fatalf("%s should be deferred from initial schema", name)
+		}
+	}
+}
+
 func TestCommandCatalogToolListsCommandsAsJSON(t *testing.T) {
 	tool := newCommandCatalogTool()
 

@@ -460,6 +460,11 @@ func buildExecutionRuntime(
 		}
 		return rt.provider
 	}))
+	processManager := tools.NewProcessManager(guard)
+	app.RegisterCloser("process manager", processManagerCloser{manager: processManager})
+	reg.Register(tools.NewProcessStartTool(processManager))
+	reg.Register(tools.NewProcessMonitorTool(processManager))
+	reg.Register(tools.NewProcessStopTool(processManager))
 	planModeController := agent.NewPlanModeController(perm)
 	reg.Register(agent.NewEnterPlanModeTool(planModeController))
 	reg.Register(agent.NewExitPlanModeTool(planModeController))
@@ -1531,10 +1536,15 @@ func completionControlToolReceiptsToLearning(src []completionControlToolReceipt)
 			ExecutionAvailable:      receipt.ExecutionAvailable,
 			ExecutionPolicy:         receipt.ExecutionPolicy,
 			TaskID:                  receipt.TaskID,
+			ProcessID:               receipt.ProcessID,
 			Status:                  receipt.Status,
 			PreviousStatus:          receipt.PreviousStatus,
 			Terminal:                receipt.Terminal,
 			Found:                   receipt.Found,
+			TimeoutMS:               receipt.TimeoutMS,
+			CWD:                     receipt.CWD,
+			TailBytes:               receipt.TailBytes,
+			StopSignal:              receipt.StopSignal,
 			TotalReturned:           receipt.TotalReturned,
 			Limit:                   receipt.Limit,
 			Field:                   receipt.Field,

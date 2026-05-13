@@ -637,6 +637,17 @@ func (c bashRunnerCloser) Close() error {
 	return c.runner.Close(context.Background())
 }
 
+type processManagerCloser struct {
+	manager *tools.ProcessManager
+}
+
+func (c processManagerCloser) Close() error {
+	if c.manager == nil {
+		return nil
+	}
+	return c.manager.Close(context.Background())
+}
+
 func buildToolRegistry(guard *tools.PathGuard, provider llm.Provider, runner tools.BashRunner) *tools.Registry {
 	return buildToolRegistryWithSecondaryCaller(guard, runner, llm.NewSecondaryModelCaller(provider))
 }
