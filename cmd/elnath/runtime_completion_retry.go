@@ -151,7 +151,7 @@ func (rt *executionRuntime) runVerificationCompletionRetry(
 			"reason", summary.RetryReason,
 			"error", err,
 		)
-		return result, completionCorrectionFailedSummary(summary, "verification_executor_error")
+		return result, completionCorrectionFailedSummary(completionVerificationObservedSummary(summary, command), "verification_executor_error")
 	}
 	if toolResult == nil || toolResult.IsError {
 		rt.app.Logger.Warn("completion verification correction returned error",
@@ -159,13 +159,10 @@ func (rt *executionRuntime) runVerificationCompletionRetry(
 			"reason", summary.RetryReason,
 			"command", command,
 		)
-		return result, completionCorrectionFailedSummary(summary, "verification_command_failed")
+		return result, completionCorrectionFailedSummary(completionVerificationObservedSummary(summary, command), "verification_command_failed")
 	}
 
-	observed := true
-	updated := summary
-	updated.VerificationObserved = &observed
-	updated.VerificationCommand = command
+	updated := completionVerificationObservedSummary(summary, command)
 	updated.CorrectionAttempted = true
 	updated.CorrectionAttempts = 1
 	updated.CorrectionDecision = summary.RetryDecision
@@ -174,6 +171,14 @@ func (rt *executionRuntime) runVerificationCompletionRetry(
 	updated.RetryDecision = ""
 	updated.RetryReason = ""
 	return result, updated
+}
+
+func completionVerificationObservedSummary(summary completionContractSummary, command string) completionContractSummary {
+	observed := true
+	updated := summary
+	updated.VerificationObserved = &observed
+	updated.VerificationCommand = command
+	return updated
 }
 
 func completionRetryPrompt(summary completionContractSummary) string {
