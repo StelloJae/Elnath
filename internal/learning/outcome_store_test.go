@@ -272,6 +272,14 @@ func TestOutcomeRecordCompletionObservabilityJSONCompatibility(t *testing.T) {
 	rec.CorrectionReason = "final_response_reports_incomplete"
 	rec.CorrectionStatus = "failed"
 	rec.CorrectionFailureFamily = "workflow_error"
+	rec.CorrectionAttemptDetails = []CorrectionAttemptReceipt{{
+		Attempt:           1,
+		Decision:          "retry_smaller_scope",
+		Reason:            "final_response_reports_incomplete",
+		Status:            "failed",
+		FailureFamily:     "workflow_error",
+		CompletionWarning: "final_response_reports_incomplete",
+	}}
 	rec.RetryDecision = "retry_smaller_scope"
 	rec.RetryReason = "final_response_reports_incomplete"
 
@@ -318,6 +326,8 @@ func TestOutcomeRecordCompletionObservabilityJSONCompatibility(t *testing.T) {
 		`"correction_reason":"final_response_reports_incomplete"`,
 		`"correction_status":"failed"`,
 		`"correction_failure_family":"workflow_error"`,
+		`"correction_attempt_details":[{"attempt":1,"decision":"retry_smaller_scope"`,
+		`"completion_warning":"final_response_reports_incomplete"`,
 		`"retry_decision":"retry_smaller_scope"`,
 		`"retry_reason":"final_response_reports_incomplete"`,
 	} {

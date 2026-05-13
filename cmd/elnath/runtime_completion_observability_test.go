@@ -580,6 +580,32 @@ func TestCompletionContractSummaryRecordsProcessToolReceipts(t *testing.T) {
 	}
 }
 
+func TestCompletionContractSummaryRecordsSleepToolReceipt(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("wait briefly before checking again"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "sleep-1", Name: "sleep", Input: json.RawMessage(`{"duration_ms":1000}`)},
+			}},
+			llm.NewToolResultMessage("sleep-1", `{"requested_ms":1000,"slept_ms":1000,"receipt":{"tool":"sleep","action":"wait","read_only":true,"persistent":false,"execution_available":true,"execution_policy":"timer_wait","status":"completed","timeout_ms":1000}}`, false),
+			llm.NewAssistantMessage("Done."),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(nil, orchestrator.WorkflowConfig{}, result)
+
+	if len(summary.ControlToolReceipts) != 1 {
+		t.Fatalf("ControlToolReceipts = %#v, want one sleep receipt", summary.ControlToolReceipts)
+	}
+	receipt := summary.ControlToolReceipts[0]
+	if receipt.Tool != "sleep" || receipt.Action != "wait" || !receipt.ReadOnly || receipt.Persistent || !receipt.ExecutionAvailable {
+		t.Fatalf("sleep receipt = %+v", receipt)
+	}
+	if receipt.ExecutionPolicy != "timer_wait" || receipt.Status != "completed" || receipt.TimeoutMS != 1000 {
+		t.Fatalf("sleep receipt execution = %+v", receipt)
+	}
+}
+
 func TestCompletionContractSummaryRecordsDelegationToolReceipts(t *testing.T) {
 	result := &orchestrator.WorkflowResult{
 		Messages: []llm.Message{
@@ -808,8 +834,16 @@ func TestRecordOutcomePersistsCompletionObservability(t *testing.T) {
 			CorrectionReason:        "final_response_reports_incomplete",
 			CorrectionStatus:        "failed",
 			CorrectionFailureFamily: "workflow_error",
-			RetryDecision:           completionRetryDecisionRetrySmallerScope,
-			RetryReason:             "final_response_reports_incomplete",
+			CorrectionAttemptDetails: []completionCorrectionAttemptReceipt{{
+				Attempt:           1,
+				Decision:          completionRetryDecisionRetrySmallerScope,
+				Reason:            "final_response_reports_incomplete",
+				Status:            "failed",
+				FailureFamily:     "workflow_error",
+				CompletionWarning: "final_response_reports_incomplete",
+			}},
+			RetryDecision: completionRetryDecisionRetrySmallerScope,
+			RetryReason:   "final_response_reports_incomplete",
 			ConditionalSkillMatches: []completionConditionalSkillMatch{
 				{SkillName: "go-review", Pattern: "internal/**/*.go", Path: "internal/skill/skill.go", Source: "claude-skill", TrustLevel: "local_compatible", External: false},
 			},
@@ -923,8 +957,16 @@ func TestCompletionGateContextProviderConsumesRuntimeSummary(t *testing.T) {
 		CorrectionReason:        "final_response_reports_incomplete",
 		CorrectionStatus:        "failed",
 		CorrectionFailureFamily: "workflow_error",
-		RetryDecision:           completionRetryDecisionRetrySmallerScope,
-		RetryReason:             "final_response_reports_incomplete",
+		CorrectionAttemptDetails: []completionCorrectionAttemptReceipt{{
+			Attempt:           1,
+			Decision:          completionRetryDecisionRetrySmallerScope,
+			Reason:            "final_response_reports_incomplete",
+			Status:            "failed",
+			FailureFamily:     "workflow_error",
+			CompletionWarning: "final_response_reports_incomplete",
+		}},
+		RetryDecision: completionRetryDecisionRetrySmallerScope,
+		RetryReason:   "final_response_reports_incomplete",
 	})
 
 	summary, err := rt.CompletionContext(ctx, daemon.Task{ID: 7}, 42)
@@ -984,6 +1026,9 @@ func TestCompletionGateContextProviderConsumesRuntimeSummary(t *testing.T) {
 	}
 	if summary.CorrectionStatus != "failed" || summary.CorrectionFailureFamily != "workflow_error" {
 		t.Fatalf("correction failure context = status %q family %q", summary.CorrectionStatus, summary.CorrectionFailureFamily)
+	}
+	if len(summary.CorrectionAttemptDetails) != 1 || summary.CorrectionAttemptDetails[0].FailureFamily != "workflow_error" {
+		t.Fatalf("correction attempt details = %+v", summary.CorrectionAttemptDetails)
 	}
 	if summary.RetryDecision != completionRetryDecisionRetrySmallerScope || summary.RetryReason != "final_response_reports_incomplete" {
 		t.Fatalf("retry plan = %q/%q", summary.RetryDecision, summary.RetryReason)
@@ -1118,8 +1163,16 @@ func TestCompletionGateReceiptSummaryIncludesRuntimeContext(t *testing.T) {
 		CorrectionReason:        "final_response_reports_incomplete",
 		CorrectionStatus:        "failed",
 		CorrectionFailureFamily: "workflow_error",
-		RetryDecision:           completionRetryDecisionRetrySmallerScope,
-		RetryReason:             "final_response_reports_incomplete",
+		CorrectionAttemptDetails: []completionCorrectionAttemptReceipt{{
+			Attempt:           1,
+			Decision:          completionRetryDecisionRetrySmallerScope,
+			Reason:            "final_response_reports_incomplete",
+			Status:            "failed",
+			FailureFamily:     "workflow_error",
+			CompletionWarning: "final_response_reports_incomplete",
+		}},
+		RetryDecision: completionRetryDecisionRetrySmallerScope,
+		RetryReason:   "final_response_reports_incomplete",
 	})
 
 	gate := agenticcompletion.NewGate(rt.agenticStore, agenticcompletion.ModeVerification,
@@ -1211,6 +1264,14 @@ func TestCompletionGateReceiptSummaryIncludesRuntimeContext(t *testing.T) {
 	if summary["correction_status"] != "failed" || summary["correction_failure_family"] != "workflow_error" {
 		t.Fatalf("correction failure missing from gate summary: %v", summary)
 	}
+	attemptDetails, ok := summary["correction_attempt_details"].([]any)
+	if !ok || len(attemptDetails) != 1 {
+		t.Fatalf("correction attempt details missing from gate summary: %v", summary)
+	}
+	attemptDetail, ok := attemptDetails[0].(map[string]any)
+	if !ok || attemptDetail["attempt"] != float64(1) || attemptDetail["failure_family"] != "workflow_error" {
+		t.Fatalf("correction attempt detail missing fields: detail=%v summary=%v", attemptDetails[0], summary)
+	}
 	if summary["retry_decision"] != completionRetryDecisionRetrySmallerScope || summary["retry_reason"] != "final_response_reports_incomplete" {
 		t.Fatalf("retry context missing from gate summary: %v", summary)
 	}
@@ -1274,6 +1335,9 @@ func assertCompletionOutcome(t *testing.T, rec learning.OutcomeRecord) {
 	}
 	if rec.CorrectionStatus != "failed" || rec.CorrectionFailureFamily != "workflow_error" {
 		t.Fatalf("correction failure = status %q family %q", rec.CorrectionStatus, rec.CorrectionFailureFamily)
+	}
+	if len(rec.CorrectionAttemptDetails) != 1 || rec.CorrectionAttemptDetails[0].FailureFamily != "workflow_error" {
+		t.Fatalf("correction attempt details = %+v", rec.CorrectionAttemptDetails)
 	}
 	if rec.RetryDecision != completionRetryDecisionRetrySmallerScope || rec.RetryReason != "final_response_reports_incomplete" {
 		t.Fatalf("retry = decision %q reason %q", rec.RetryDecision, rec.RetryReason)

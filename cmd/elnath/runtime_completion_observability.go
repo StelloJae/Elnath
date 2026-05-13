@@ -11,34 +11,45 @@ import (
 )
 
 type completionContractSummary struct {
-	VerificationHint        bool
-	VerificationObserved    *bool
-	VerificationCommand     string
-	CompletionWarning       string
-	EditIntent              bool
-	EditObserved            *bool
-	ReasoningEffort         string
-	ReasoningEffortMode     string
-	ReasoningEffortReason   string
-	ProviderName            string
-	ProviderEffort          string
-	ProviderEffortNote      string
-	LoadedDeferredTools     []string
-	ConditionalSkillMatches []completionConditionalSkillMatch
-	SkillCatalogReceipts    []completionSkillCatalogReceipt
-	SkillExecutionReceipts  []completionSkillExecutionReceipt
-	CommandCatalogReceipts  []completionCommandCatalogReceipt
-	ToolSearchReceipts      []completionToolSearchReceipt
-	ControlToolReceipts     []completionControlToolReceipt
-	CorrectionAttempted     bool
-	CorrectionAttempts      int
-	CorrectionMaxAttempts   int
-	CorrectionDecision      string
-	CorrectionReason        string
-	CorrectionStatus        string
-	CorrectionFailureFamily string
-	RetryDecision           string
-	RetryReason             string
+	VerificationHint         bool
+	VerificationObserved     *bool
+	VerificationCommand      string
+	CompletionWarning        string
+	EditIntent               bool
+	EditObserved             *bool
+	ReasoningEffort          string
+	ReasoningEffortMode      string
+	ReasoningEffortReason    string
+	ProviderName             string
+	ProviderEffort           string
+	ProviderEffortNote       string
+	LoadedDeferredTools      []string
+	ConditionalSkillMatches  []completionConditionalSkillMatch
+	SkillCatalogReceipts     []completionSkillCatalogReceipt
+	SkillExecutionReceipts   []completionSkillExecutionReceipt
+	CommandCatalogReceipts   []completionCommandCatalogReceipt
+	ToolSearchReceipts       []completionToolSearchReceipt
+	ControlToolReceipts      []completionControlToolReceipt
+	CorrectionAttempted      bool
+	CorrectionAttempts       int
+	CorrectionMaxAttempts    int
+	CorrectionDecision       string
+	CorrectionReason         string
+	CorrectionStatus         string
+	CorrectionFailureFamily  string
+	CorrectionAttemptDetails []completionCorrectionAttemptReceipt
+	RetryDecision            string
+	RetryReason              string
+}
+
+type completionCorrectionAttemptReceipt struct {
+	Attempt             int    `json:"attempt"`
+	Decision            string `json:"decision,omitempty"`
+	Reason              string `json:"reason,omitempty"`
+	Status              string `json:"status,omitempty"`
+	FailureFamily       string `json:"failure_family,omitempty"`
+	VerificationCommand string `json:"verification_command,omitempty"`
+	CompletionWarning   string `json:"completion_warning,omitempty"`
 }
 
 type completionConditionalSkillMatch struct {
@@ -473,6 +484,7 @@ var completionControlToolReceiptNames = map[string]struct{}{
 	"process_start":            {},
 	"process_monitor":          {},
 	"process_stop":             {},
+	"sleep":                    {},
 	"agentic_delegate_create":  {},
 	"agentic_delegate_list":    {},
 	"agentic_delegate_status":  {},

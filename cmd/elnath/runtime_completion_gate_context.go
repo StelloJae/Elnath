@@ -33,35 +33,55 @@ func (rt *executionRuntime) CompletionContext(_ context.Context, _ daemon.Task, 
 		return agenticcompletion.CompletionContext{}, nil
 	}
 	return agenticcompletion.CompletionContext{
-		VerificationHint:        summary.VerificationHint,
-		VerificationObserved:    summary.VerificationObserved,
-		VerificationCommand:     summary.VerificationCommand,
-		CompletionWarning:       summary.CompletionWarning,
-		EditIntent:              summary.EditIntent,
-		EditObserved:            summary.EditObserved,
-		ReasoningEffort:         summary.ReasoningEffort,
-		ReasoningEffortMode:     summary.ReasoningEffortMode,
-		ReasoningEffortReason:   summary.ReasoningEffortReason,
-		ProviderName:            summary.ProviderName,
-		ProviderEffort:          summary.ProviderEffort,
-		ProviderEffortNote:      summary.ProviderEffortNote,
-		LoadedDeferredTools:     append([]string(nil), summary.LoadedDeferredTools...),
-		SkillCatalogReceipts:    completionSkillCatalogReceiptsToAgentic(summary.SkillCatalogReceipts),
-		SkillExecutionReceipts:  completionSkillExecutionReceiptsToAgentic(summary.SkillExecutionReceipts),
-		CommandCatalogReceipts:  completionCommandCatalogReceiptsToAgentic(summary.CommandCatalogReceipts),
-		ToolSearchReceipts:      completionToolSearchReceiptsToAgentic(summary.ToolSearchReceipts),
-		ControlToolReceipts:     completionControlToolReceiptsToAgentic(summary.ControlToolReceipts),
-		ConditionalSkillMatches: completionSkillMatchesToAgentic(summary.ConditionalSkillMatches),
-		CorrectionAttempted:     summary.CorrectionAttempted,
-		CorrectionAttempts:      summary.CorrectionAttempts,
-		CorrectionMaxAttempts:   summary.CorrectionMaxAttempts,
-		CorrectionDecision:      summary.CorrectionDecision,
-		CorrectionReason:        summary.CorrectionReason,
-		CorrectionStatus:        summary.CorrectionStatus,
-		CorrectionFailureFamily: summary.CorrectionFailureFamily,
-		RetryDecision:           summary.RetryDecision,
-		RetryReason:             summary.RetryReason,
+		VerificationHint:         summary.VerificationHint,
+		VerificationObserved:     summary.VerificationObserved,
+		VerificationCommand:      summary.VerificationCommand,
+		CompletionWarning:        summary.CompletionWarning,
+		EditIntent:               summary.EditIntent,
+		EditObserved:             summary.EditObserved,
+		ReasoningEffort:          summary.ReasoningEffort,
+		ReasoningEffortMode:      summary.ReasoningEffortMode,
+		ReasoningEffortReason:    summary.ReasoningEffortReason,
+		ProviderName:             summary.ProviderName,
+		ProviderEffort:           summary.ProviderEffort,
+		ProviderEffortNote:       summary.ProviderEffortNote,
+		LoadedDeferredTools:      append([]string(nil), summary.LoadedDeferredTools...),
+		SkillCatalogReceipts:     completionSkillCatalogReceiptsToAgentic(summary.SkillCatalogReceipts),
+		SkillExecutionReceipts:   completionSkillExecutionReceiptsToAgentic(summary.SkillExecutionReceipts),
+		CommandCatalogReceipts:   completionCommandCatalogReceiptsToAgentic(summary.CommandCatalogReceipts),
+		ToolSearchReceipts:       completionToolSearchReceiptsToAgentic(summary.ToolSearchReceipts),
+		ControlToolReceipts:      completionControlToolReceiptsToAgentic(summary.ControlToolReceipts),
+		ConditionalSkillMatches:  completionSkillMatchesToAgentic(summary.ConditionalSkillMatches),
+		CorrectionAttempted:      summary.CorrectionAttempted,
+		CorrectionAttempts:       summary.CorrectionAttempts,
+		CorrectionMaxAttempts:    summary.CorrectionMaxAttempts,
+		CorrectionDecision:       summary.CorrectionDecision,
+		CorrectionReason:         summary.CorrectionReason,
+		CorrectionStatus:         summary.CorrectionStatus,
+		CorrectionFailureFamily:  summary.CorrectionFailureFamily,
+		CorrectionAttemptDetails: completionCorrectionAttemptDetailsToAgentic(summary.CorrectionAttemptDetails),
+		RetryDecision:            summary.RetryDecision,
+		RetryReason:              summary.RetryReason,
 	}, nil
+}
+
+func completionCorrectionAttemptDetailsToAgentic(src []completionCorrectionAttemptReceipt) []agenticcompletion.CorrectionAttemptReceipt {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]agenticcompletion.CorrectionAttemptReceipt, 0, len(src))
+	for _, detail := range src {
+		out = append(out, agenticcompletion.CorrectionAttemptReceipt{
+			Attempt:             detail.Attempt,
+			Decision:            detail.Decision,
+			Reason:              detail.Reason,
+			Status:              detail.Status,
+			FailureFamily:       detail.FailureFamily,
+			VerificationCommand: detail.VerificationCommand,
+			CompletionWarning:   detail.CompletionWarning,
+		})
+	}
+	return out
 }
 
 func completionSkillCatalogReceiptsToAgentic(src []completionSkillCatalogReceipt) []agenticcompletion.SkillCatalogReceipt {

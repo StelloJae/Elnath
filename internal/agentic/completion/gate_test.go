@@ -289,8 +289,16 @@ func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testi
 				}},
 				CorrectionAttempts:    1,
 				CorrectionMaxAttempts: 1,
-				RetryDecision:         "retry_smaller_scope",
-				RetryReason:           "final_response_reports_incomplete",
+				CorrectionAttemptDetails: []CorrectionAttemptReceipt{{
+					Attempt:           1,
+					Decision:          "retry_smaller_scope",
+					Reason:            "final_response_reports_incomplete",
+					Status:            "failed",
+					FailureFamily:     "workflow_error",
+					CompletionWarning: "final_response_reports_incomplete",
+				}},
+				RetryDecision: "retry_smaller_scope",
+				RetryReason:   "final_response_reports_incomplete",
 			}, nil
 		},
 	)))
@@ -376,6 +384,14 @@ func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testi
 	}
 	if summary["correction_attempts"] != float64(1) || summary["correction_max_attempts"] != float64(1) {
 		t.Fatalf("correction budget fields missing: summary=%v", summary)
+	}
+	attemptDetails, ok := summary["correction_attempt_details"].([]any)
+	if !ok || len(attemptDetails) != 1 {
+		t.Fatalf("correction attempt details missing: summary=%v", summary)
+	}
+	attemptDetail, ok := attemptDetails[0].(map[string]any)
+	if !ok || attemptDetail["attempt"] != float64(1) || attemptDetail["failure_family"] != "workflow_error" {
+		t.Fatalf("correction attempt detail missing fields: detail=%v summary=%v", attemptDetails[0], summary)
 	}
 }
 
