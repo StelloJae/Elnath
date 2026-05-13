@@ -257,6 +257,9 @@ func completionControlToolReceiptsToAgentic(src []completionControlToolReceipt) 
 			HandoffID:               receipt.HandoffID,
 			Box:                     receipt.Box,
 			Delivered:               receipt.Delivered,
+			Command:                 receipt.Command,
+			Args:                    append([]string(nil), receipt.Args...),
+			StateMutation:           receipt.StateMutation,
 		})
 	}
 	return out

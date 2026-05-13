@@ -109,7 +109,7 @@ func (t *commandCatalogTool) Execute(_ context.Context, params json.RawMessage) 
 		}
 		commands := runtimeCommandCatalogWithSkills(t.skillReg, input.IncludeHidden)
 		receipt := commandCatalogReceipt("show", input.IncludeHidden, commands, 1, 0, "", entry.Name)
-		receipt.FollowupTool = commandCatalogFollowupTool(entry.ModelCallable)
+		receipt.FollowupTool = commandCatalogEntryFollowupTool(entry)
 		return marshalCommandCatalogToolOutput(map[string]any{
 			"action":  "show",
 			"command": entry,
@@ -121,7 +121,7 @@ func (t *commandCatalogTool) Execute(_ context.Context, params json.RawMessage) 
 		commands := runtimeCommandCatalogWithSkills(t.skillReg, input.IncludeHidden)
 		recommendations := recommendedCommandCatalogEntriesFromCatalog(commands, query, maxResults)
 		receipt := commandCatalogReceipt("recommend", input.IncludeHidden, commands, len(recommendations), maxResults, query, "")
-		receipt.FollowupTool = commandCatalogFollowupTool(commandCatalogRecommendationsHaveModelCallable(recommendations))
+		receipt.FollowupTool = commandCatalogRecommendationsFollowupTool(recommendations)
 		return marshalCommandCatalogToolOutput(map[string]any{
 			"action":   "recommend",
 			"query":    query,
@@ -152,20 +152,36 @@ func commandCatalogReceipt(action string, includeHidden bool, commands []command
 	}
 }
 
-func commandCatalogFollowupTool(modelCallable bool) string {
-	if modelCallable {
-		return "skill"
+func commandCatalogEntryFollowupTool(entry commandCatalogEntry) string {
+	if !entry.ModelCallable {
+		return ""
 	}
-	return ""
+	switch entry.Surface {
+	case "skill_slash":
+		return "skill"
+	case "runtime_slash":
+		return runtimeCommandToolName
+	default:
+		return ""
+	}
 }
 
-func commandCatalogRecommendationsHaveModelCallable(recommendations []commandCatalogRecommendation) bool {
+func commandCatalogRecommendationsFollowupTool(recommendations []commandCatalogRecommendation) string {
+	var followup string
 	for _, rec := range recommendations {
-		if rec.ModelCallable {
-			return true
+		next := commandCatalogEntryFollowupTool(rec.commandCatalogEntry)
+		if next == "" {
+			continue
+		}
+		if followup == "" {
+			followup = next
+			continue
+		}
+		if followup != next {
+			return ""
 		}
 	}
-	return false
+	return followup
 }
 
 func countCommandCatalogExecutable(commands []commandCatalogEntry) int {

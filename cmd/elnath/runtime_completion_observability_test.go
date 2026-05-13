@@ -539,6 +539,31 @@ func TestCompletionContractSummaryRecordsControlToolReceipts(t *testing.T) {
 	}
 }
 
+func TestCompletionContractSummaryRecordsRuntimeCommandReceipt(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("show runtime status"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "runtime-command-1", Name: "runtime_command", Input: json.RawMessage(`{"command":"/status","args":["--json"]}`)},
+			}},
+			llm.NewToolResultMessage("runtime-command-1", `{"command":"/status","args":["--json"],"output":"{}","receipt":{"tool":"runtime_command","action":"execute","read_only":true,"execution_available":true,"execution_policy":"local_runtime_control_readonly","command":"/status","args":["--json"],"state_mutation":false}}`, false),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(nil, orchestrator.WorkflowConfig{}, result)
+
+	if len(summary.ControlToolReceipts) != 1 {
+		t.Fatalf("ControlToolReceipts = %#v, want one runtime command receipt", summary.ControlToolReceipts)
+	}
+	receipt := summary.ControlToolReceipts[0]
+	if receipt.Tool != "runtime_command" || receipt.Action != "execute" || !receipt.ReadOnly || !receipt.ExecutionAvailable || receipt.ExecutionPolicy != "local_runtime_control_readonly" {
+		t.Fatalf("receipt identity = %+v", receipt)
+	}
+	if receipt.Command != "/status" || len(receipt.Args) != 1 || receipt.Args[0] != "--json" || receipt.StateMutation {
+		t.Fatalf("receipt command bounds = %+v", receipt)
+	}
+}
+
 func TestCompletionContractSummaryRecordsProcessToolReceipts(t *testing.T) {
 	result := &orchestrator.WorkflowResult{
 		Messages: []llm.Message{
