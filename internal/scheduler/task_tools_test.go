@@ -45,6 +45,15 @@ func TestScheduleCreateListDeleteTools(t *testing.T) {
 	if createOutput.Path != path || createOutput.Task.Name != "morning-check" || createOutput.Task.Type != "research" || !createOutput.Task.RunOnStart {
 		t.Fatalf("create output = %+v, want created research task", createOutput)
 	}
+	if createOutput.Receipt.Tool != ScheduleCreateToolName || createOutput.Receipt.Action != "create" {
+		t.Fatalf("create receipt identity = %+v", createOutput.Receipt)
+	}
+	if createOutput.Receipt.ReadOnly || createOutput.Receipt.ExecutionAvailable || createOutput.Receipt.ExecutionPolicy != "static_config_only" {
+		t.Fatalf("create receipt boundary = %+v", createOutput.Receipt)
+	}
+	if !createOutput.Receipt.Persistent || createOutput.Receipt.EffectiveWhen != "after_daemon_restart" || createOutput.Receipt.TaskCountAfter != 1 {
+		t.Fatalf("create receipt state = %+v", createOutput.Receipt)
+	}
 	if createRuntime.Runtime.HotReloadSupported || createRuntime.Runtime.EffectiveWhen != "after_daemon_restart" {
 		t.Fatalf("create runtime = %+v, want restart-bound schedule semantics", createRuntime.Runtime)
 	}
@@ -80,6 +89,15 @@ func TestScheduleCreateListDeleteTools(t *testing.T) {
 	if listOutput.Total != 1 || listOutput.Tasks[0].Name != "morning-check" || !listOutput.Tasks[0].Enabled {
 		t.Fatalf("list output = %+v, want one enabled task", listOutput)
 	}
+	if listOutput.Receipt.Tool != ScheduleListToolName || listOutput.Receipt.Action != "list" {
+		t.Fatalf("list receipt identity = %+v", listOutput.Receipt)
+	}
+	if !listOutput.Receipt.ReadOnly || listOutput.Receipt.ExecutionAvailable || listOutput.Receipt.ExecutionPolicy != "static_config_only" {
+		t.Fatalf("list receipt boundary = %+v", listOutput.Receipt)
+	}
+	if listOutput.Receipt.TaskCountAfter != 1 || listOutput.Receipt.EffectiveWhen != "after_daemon_restart" {
+		t.Fatalf("list receipt state = %+v", listOutput.Receipt)
+	}
 	if listRuntime.Runtime.HotReloadSupported || listRuntime.Runtime.EffectiveWhen != "after_daemon_restart" {
 		t.Fatalf("list runtime = %+v, want restart-bound schedule semantics", listRuntime.Runtime)
 	}
@@ -106,6 +124,15 @@ func TestScheduleCreateListDeleteTools(t *testing.T) {
 	}
 	if !deleteOutput.Deleted || deleteOutput.Name != "morning-check" {
 		t.Fatalf("delete output = %+v, want deleted task", deleteOutput)
+	}
+	if deleteOutput.Receipt.Tool != ScheduleDeleteToolName || deleteOutput.Receipt.Action != "delete" {
+		t.Fatalf("delete receipt identity = %+v", deleteOutput.Receipt)
+	}
+	if deleteOutput.Receipt.ReadOnly || deleteOutput.Receipt.ExecutionAvailable || deleteOutput.Receipt.ExecutionPolicy != "static_config_only" {
+		t.Fatalf("delete receipt boundary = %+v", deleteOutput.Receipt)
+	}
+	if !deleteOutput.Receipt.Persistent || deleteOutput.Receipt.TaskCountAfter != 0 || deleteOutput.Receipt.EffectiveWhen != "after_daemon_restart" {
+		t.Fatalf("delete receipt state = %+v", deleteOutput.Receipt)
 	}
 	if deleteRuntime.Runtime.HotReloadSupported || deleteRuntime.Runtime.EffectiveWhen != "after_daemon_restart" {
 		t.Fatalf("delete runtime = %+v, want restart-bound schedule semantics", deleteRuntime.Runtime)

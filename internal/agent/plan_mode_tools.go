@@ -84,10 +84,23 @@ func (t *EnterPlanModeTool) Scope(json.RawMessage) tools.ToolScope { return tool
 func (t *EnterPlanModeTool) ShouldCancelSiblingsOnError() bool { return false }
 
 type planModeToolOutput struct {
-	Message      string `json:"message"`
-	PreviousMode string `json:"previous_mode"`
-	CurrentMode  string `json:"current_mode"`
-	Restored     bool   `json:"restored,omitempty"`
+	Message      string              `json:"message"`
+	PreviousMode string              `json:"previous_mode"`
+	CurrentMode  string              `json:"current_mode"`
+	Restored     bool                `json:"restored,omitempty"`
+	Receipt      planModeToolReceipt `json:"receipt"`
+}
+
+type planModeToolReceipt struct {
+	Tool                    string `json:"tool"`
+	Action                  string `json:"action"`
+	PreviousMode            string `json:"previous_mode"`
+	CurrentMode             string `json:"current_mode"`
+	Restored                bool   `json:"restored"`
+	ReadOnlyAfterTransition bool   `json:"read_only_after_transition"`
+	Persistent              bool   `json:"persistent"`
+	ExecutionAvailable      bool   `json:"execution_available"`
+	ExecutionPolicy         string `json:"execution_policy"`
 }
 
 func (t *EnterPlanModeTool) Execute(_ context.Context, _ json.RawMessage) (*tools.Result, error) {
@@ -99,6 +112,7 @@ func (t *EnterPlanModeTool) Execute(_ context.Context, _ json.RawMessage) (*tool
 		Message:      "Entered plan mode. Continue with read-only exploration, then present or record a concrete implementation plan before editing.",
 		PreviousMode: previous.String(),
 		CurrentMode:  current.String(),
+		Receipt:      planModeReceipt(EnterPlanModeToolName, "enter", previous.String(), current.String(), false),
 	})
 }
 
@@ -142,7 +156,22 @@ func (t *ExitPlanModeTool) Execute(_ context.Context, _ json.RawMessage) (*tools
 		PreviousMode: previous.String(),
 		CurrentMode:  current.String(),
 		Restored:     restored,
+		Receipt:      planModeReceipt(ExitPlanModeToolName, "exit", previous.String(), current.String(), restored),
 	})
+}
+
+func planModeReceipt(toolName, action, previousMode, currentMode string, restored bool) planModeToolReceipt {
+	return planModeToolReceipt{
+		Tool:                    toolName,
+		Action:                  action,
+		PreviousMode:            previousMode,
+		CurrentMode:             currentMode,
+		Restored:                restored,
+		ReadOnlyAfterTransition: currentMode == ModePlan.String(),
+		Persistent:              false,
+		ExecutionAvailable:      false,
+		ExecutionPolicy:         "permission_mode_transition",
+	}
 }
 
 func planModeResult(output planModeToolOutput) (*tools.Result, error) {

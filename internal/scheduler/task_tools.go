@@ -128,6 +128,21 @@ type scheduleRuntimeSemantics struct {
 	EffectiveWhen      string `json:"effective_when"`
 }
 
+type scheduleToolReceipt struct {
+	Tool               string `json:"tool"`
+	Action             string `json:"action"`
+	ReadOnly           bool   `json:"read_only"`
+	Persistent         bool   `json:"persistent"`
+	ExecutionAvailable bool   `json:"execution_available"`
+	ExecutionPolicy    string `json:"execution_policy"`
+	ConfigPath         string `json:"config_path"`
+	HotReloadSupported bool   `json:"hot_reload_supported"`
+	EffectiveWhen      string `json:"effective_when"`
+	TaskCountBefore    int    `json:"task_count_before"`
+	TaskCountAfter     int    `json:"task_count_after"`
+	TaskName           string `json:"task_name,omitempty"`
+}
+
 var staticScheduleRuntime = scheduleRuntimeSemantics{
 	HotReloadSupported: false,
 	EffectiveWhen:      "after_daemon_restart",
@@ -137,6 +152,7 @@ type scheduleCreateToolOutput struct {
 	Path    string                   `json:"path"`
 	Task    scheduleToolItem         `json:"task"`
 	Runtime scheduleRuntimeSemantics `json:"runtime"`
+	Receipt scheduleToolReceipt      `json:"receipt"`
 }
 
 func (t *ScheduleCreateTool) Execute(_ context.Context, params json.RawMessage) (*tools.Result, error) {
@@ -160,12 +176,18 @@ func (t *ScheduleCreateTool) Execute(_ context.Context, params json.RawMessage) 
 			return tools.ErrorResult(fmt.Sprintf("schedule_create: task %q already exists", task.Name)), nil
 		}
 	}
+	beforeCount := len(cfg.ScheduledTasks)
 	cfg.ScheduledTasks = append(cfg.ScheduledTasks, raw)
 	if err := t.store.write(cfg); err != nil {
 		return tools.ErrorResult(fmt.Sprintf("schedule_create: write config: %v", err)), nil
 	}
 
-	output := scheduleCreateToolOutput{Path: t.store.path, Task: task, Runtime: staticScheduleRuntime}
+	output := scheduleCreateToolOutput{
+		Path:    t.store.path,
+		Task:    task,
+		Runtime: staticScheduleRuntime,
+		Receipt: scheduleReceipt(ScheduleCreateToolName, "create", false, true, t.store.path, beforeCount, len(cfg.ScheduledTasks), task.Name),
+	}
 	rawOutput, err := json.Marshal(output)
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("schedule_create: marshal output: %v", err)), nil
@@ -206,6 +228,7 @@ type scheduleListToolOutput struct {
 	Total   int                      `json:"total"`
 	Tasks   []scheduleToolItem       `json:"tasks"`
 	Runtime scheduleRuntimeSemantics `json:"runtime"`
+	Receipt scheduleToolReceipt      `json:"receipt"`
 }
 
 func (t *ScheduleListTool) Execute(_ context.Context, _ json.RawMessage) (*tools.Result, error) {
@@ -217,7 +240,13 @@ func (t *ScheduleListTool) Execute(_ context.Context, _ json.RawMessage) (*tools
 	for _, raw := range cfg.ScheduledTasks {
 		items = append(items, scheduleToolItemFromRaw(raw))
 	}
-	output := scheduleListToolOutput{Path: t.store.path, Total: len(items), Tasks: items, Runtime: staticScheduleRuntime}
+	output := scheduleListToolOutput{
+		Path:    t.store.path,
+		Total:   len(items),
+		Tasks:   items,
+		Runtime: staticScheduleRuntime,
+		Receipt: scheduleReceipt(ScheduleListToolName, "list", true, false, t.store.path, len(items), len(items), ""),
+	}
 	rawOutput, err := json.Marshal(output)
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("schedule_list: marshal output: %v", err)), nil
@@ -266,6 +295,7 @@ type scheduleDeleteToolOutput struct {
 	Name    string                   `json:"name"`
 	Deleted bool                     `json:"deleted"`
 	Runtime scheduleRuntimeSemantics `json:"runtime"`
+	Receipt scheduleToolReceipt      `json:"receipt"`
 }
 
 func (t *ScheduleDeleteTool) Execute(_ context.Context, params json.RawMessage) (*tools.Result, error) {
@@ -284,6 +314,7 @@ func (t *ScheduleDeleteTool) Execute(_ context.Context, params json.RawMessage) 
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("schedule_delete: read config: %v", err)), nil
 	}
+	beforeCount := len(cfg.ScheduledTasks)
 	next := cfg.ScheduledTasks[:0]
 	deleted := false
 	for _, task := range cfg.ScheduledTasks {
@@ -301,12 +332,35 @@ func (t *ScheduleDeleteTool) Execute(_ context.Context, params json.RawMessage) 
 		return tools.ErrorResult(fmt.Sprintf("schedule_delete: write config: %v", err)), nil
 	}
 
-	output := scheduleDeleteToolOutput{Path: t.store.path, Name: name, Deleted: true, Runtime: staticScheduleRuntime}
+	output := scheduleDeleteToolOutput{
+		Path:    t.store.path,
+		Name:    name,
+		Deleted: true,
+		Runtime: staticScheduleRuntime,
+		Receipt: scheduleReceipt(ScheduleDeleteToolName, "delete", false, true, t.store.path, beforeCount, len(cfg.ScheduledTasks), name),
+	}
 	rawOutput, err := json.Marshal(output)
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("schedule_delete: marshal output: %v", err)), nil
 	}
 	return tools.SuccessResult(string(rawOutput)), nil
+}
+
+func scheduleReceipt(toolName, action string, readOnly, persistent bool, configPath string, before, after int, taskName string) scheduleToolReceipt {
+	return scheduleToolReceipt{
+		Tool:               toolName,
+		Action:             action,
+		ReadOnly:           readOnly,
+		Persistent:         persistent,
+		ExecutionAvailable: false,
+		ExecutionPolicy:    "static_config_only",
+		ConfigPath:         configPath,
+		HotReloadSupported: staticScheduleRuntime.HotReloadSupported,
+		EffectiveWhen:      staticScheduleRuntime.EffectiveWhen,
+		TaskCountBefore:    before,
+		TaskCountAfter:     after,
+		TaskName:           strings.TrimSpace(taskName),
+	}
 }
 
 func normalizeScheduleCreateInput(input scheduleCreateToolInput) (scheduleToolItem, rawTask, error) {
