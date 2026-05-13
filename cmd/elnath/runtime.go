@@ -1588,6 +1588,7 @@ func completionControlToolReceiptsToLearning(src []completionControlToolReceipt)
 			Action:                  receipt.Action,
 			ReadOnly:                receipt.ReadOnly,
 			Persistent:              receipt.Persistent,
+			SessionID:               receipt.SessionID,
 			QueueBacked:             receipt.QueueBacked,
 			RegistryBacked:          receipt.RegistryBacked,
 			ExecutionAvailable:      receipt.ExecutionAvailable,

@@ -161,6 +161,7 @@ type ControlToolReceipt struct {
 	Action                  string   `json:"action"`
 	ReadOnly                bool     `json:"read_only"`
 	Persistent              bool     `json:"persistent"`
+	SessionID               string   `json:"session_id,omitempty"`
 	QueueBacked             bool     `json:"queue_backed,omitempty"`
 	RegistryBacked          bool     `json:"registry_backed,omitempty"`
 	ExecutionAvailable      bool     `json:"execution_available,omitempty"`

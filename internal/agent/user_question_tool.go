@@ -53,6 +53,7 @@ type askUserQuestionToolOutput struct {
 	Options        []string               `json:"options,omitempty"`
 	AllowFreeText  bool                   `json:"allow_free_text"`
 	TimeoutSeconds int                    `json:"timeout_seconds"`
+	SessionID      string                 `json:"session_id,omitempty"`
 	Instruction    string                 `json:"instruction"`
 	Receipt        askUserQuestionReceipt `json:"receipt"`
 }
@@ -66,9 +67,10 @@ type askUserQuestionReceipt struct {
 	OptionCount     int    `json:"option_count"`
 	AllowFreeText   bool   `json:"allow_free_text"`
 	TimeoutSeconds  int    `json:"timeout_seconds"`
+	SessionID       string `json:"session_id,omitempty"`
 }
 
-func (t *AskUserQuestionTool) Execute(_ context.Context, params json.RawMessage) (*tools.Result, error) {
+func (t *AskUserQuestionTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
 	var input askUserQuestionToolInput
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &input); err != nil {
@@ -86,6 +88,7 @@ func (t *AskUserQuestionTool) Execute(_ context.Context, params json.RawMessage)
 		Options:        cleanUserQuestionOptions(input.Options),
 		AllowFreeText:  true,
 		TimeoutSeconds: normalizeUserQuestionTimeout(input.TimeoutSeconds),
+		SessionID:      tools.SessionIDFrom(ctx),
 		Instruction:    "Stop and ask the user this question; do not guess an answer or continue with assumptions.",
 	}
 	if input.AllowFreeText != nil {
@@ -100,6 +103,7 @@ func (t *AskUserQuestionTool) Execute(_ context.Context, params json.RawMessage)
 		OptionCount:     len(output.Options),
 		AllowFreeText:   output.AllowFreeText,
 		TimeoutSeconds:  output.TimeoutSeconds,
+		SessionID:       output.SessionID,
 	}
 
 	raw, err := json.Marshal(output)

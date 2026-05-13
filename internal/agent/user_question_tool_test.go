@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/stello/elnath/internal/tools"
 )
 
 func TestAskUserQuestionToolReturnsStructuredRequest(t *testing.T) {
@@ -71,6 +73,51 @@ func TestAskUserQuestionToolDefaultsToFreeText(t *testing.T) {
 	}
 	if output.TimeoutSeconds != 0 {
 		t.Fatalf("TimeoutSeconds = %d, want 0 for non-blocking default", output.TimeoutSeconds)
+	}
+}
+
+func TestAskUserQuestionToolIncludesSessionIDWhenBound(t *testing.T) {
+	ctx := tools.WithSessionID(context.Background(), "sess-123")
+	result, err := NewAskUserQuestionTool().Execute(ctx, json.RawMessage(`{
+		"question":"What should I do next?"
+	}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute returned error result: %s", result.Output)
+	}
+
+	var output askUserQuestionToolOutput
+	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if output.SessionID != "sess-123" || output.Receipt.SessionID != "sess-123" {
+		t.Fatalf("session ids = output:%q receipt:%q, want sess-123", output.SessionID, output.Receipt.SessionID)
+	}
+}
+
+func TestAskUserQuestionToolOmitsSessionIDWhenUnbound(t *testing.T) {
+	result, err := NewAskUserQuestionTool().Execute(context.Background(), json.RawMessage(`{
+		"question":"What should I do next?"
+	}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute returned error result: %s", result.Output)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(result.Output), &raw); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if _, ok := raw["session_id"]; ok {
+		t.Fatalf("session_id present in unbound output: %s", result.Output)
+	}
+	receipt, _ := raw["receipt"].(map[string]any)
+	if _, ok := receipt["session_id"]; ok {
+		t.Fatalf("receipt session_id present in unbound output: %s", result.Output)
 	}
 }
 
