@@ -45,6 +45,7 @@ type CompletionContext struct {
 	SkillCatalogReceipts    []SkillCatalogReceipt
 	CommandCatalogReceipts  []CommandCatalogReceipt
 	ToolSearchReceipts      []ToolSearchReceipt
+	ControlToolReceipts     []ControlToolReceipt
 	ConditionalSkillMatches []ConditionalSkillMatch
 	CorrectionAttempted     bool
 	CorrectionAttempts      int
@@ -112,6 +113,42 @@ type ToolSearchReceipt struct {
 	MaxResults         int    `json:"max_results"`
 	AllowNamesCount    int    `json:"allow_names_count"`
 	Query              string `json:"query"`
+}
+
+type ControlToolReceipt struct {
+	Tool                    string `json:"tool"`
+	Action                  string `json:"action"`
+	ReadOnly                bool   `json:"read_only"`
+	Persistent              bool   `json:"persistent"`
+	QueueBacked             bool   `json:"queue_backed,omitempty"`
+	RegistryBacked          bool   `json:"registry_backed,omitempty"`
+	ExecutionAvailable      bool   `json:"execution_available,omitempty"`
+	ExecutionPolicy         string `json:"execution_policy,omitempty"`
+	TaskID                  int64  `json:"task_id,omitempty"`
+	Status                  string `json:"status,omitempty"`
+	PreviousStatus          string `json:"previous_status,omitempty"`
+	Terminal                bool   `json:"terminal,omitempty"`
+	Found                   bool   `json:"found,omitempty"`
+	TotalReturned           int    `json:"total_returned,omitempty"`
+	Limit                   int    `json:"limit,omitempty"`
+	Field                   string `json:"field,omitempty"`
+	RetrievalStatus         string `json:"retrieval_status,omitempty"`
+	Name                    string `json:"name,omitempty"`
+	Path                    string `json:"path,omitempty"`
+	Branch                  string `json:"branch,omitempty"`
+	RegistryPath            string `json:"registry_path,omitempty"`
+	Runner                  string `json:"runner,omitempty"`
+	IsError                 bool   `json:"is_error,omitempty"`
+	Removed                 bool   `json:"removed,omitempty"`
+	DryRun                  bool   `json:"dry_run,omitempty"`
+	Total                   int    `json:"total,omitempty"`
+	TaskName                string `json:"task_name,omitempty"`
+	TaskCountBefore         int    `json:"task_count_before,omitempty"`
+	TaskCountAfter          int    `json:"task_count_after,omitempty"`
+	PreviousMode            string `json:"previous_mode,omitempty"`
+	CurrentMode             string `json:"current_mode,omitempty"`
+	Restored                bool   `json:"restored,omitempty"`
+	ReadOnlyAfterTransition bool   `json:"read_only_after_transition,omitempty"`
 }
 
 type CompletionContextProvider interface {
@@ -331,6 +368,9 @@ func encodeReceiptSummary(summary map[string]int, completionContext CompletionCo
 	}
 	if len(completionContext.ToolSearchReceipts) > 0 {
 		payload["tool_search_receipts"] = completionContext.ToolSearchReceipts
+	}
+	if len(completionContext.ControlToolReceipts) > 0 {
+		payload["control_tool_receipts"] = completionContext.ControlToolReceipts
 	}
 	if len(completionContext.ConditionalSkillMatches) > 0 {
 		payload["conditional_skill_matches"] = completionContext.ConditionalSkillMatches

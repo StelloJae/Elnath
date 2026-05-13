@@ -470,6 +470,37 @@ func TestCompletionContractSummaryRecordsToolSearchReceipt(t *testing.T) {
 	}
 }
 
+func TestCompletionContractSummaryRecordsControlToolReceipts(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("enqueue task and run in worktree"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "task-1", Name: "task_create", Input: json.RawMessage(`{"prompt":"do work"}`)},
+			}},
+			llm.NewToolResultMessage("task-1", `{"task_id":7,"status":"pending","receipt":{"tool":"task_create","action":"create","read_only":false,"persistent":true,"queue_backed":true,"execution_policy":"daemon_queue_enqueue","task_id":7,"status":"pending"}}`, false),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "worktree-1", Name: "worktree_run", Input: json.RawMessage(`{"name":"feature/run","command":"go test ./..."}`)},
+			}},
+			llm.NewToolResultMessage("worktree-1", `{"name":"feature/run","runner":"direct","is_error":false,"receipt":{"tool":"worktree_run","action":"run","read_only":false,"persistent":true,"registry_backed":true,"execution_available":true,"execution_policy":"managed_worktree_command","name":"feature/run","branch":"elnath-worktree-feature+run","runner":"direct"}}`, false),
+			llm.NewAssistantMessage("Done."),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(nil, orchestrator.WorkflowConfig{}, result)
+
+	if len(summary.ControlToolReceipts) != 2 {
+		t.Fatalf("ControlToolReceipts = %#v, want two receipts", summary.ControlToolReceipts)
+	}
+	taskReceipt := summary.ControlToolReceipts[0]
+	if taskReceipt.Tool != "task_create" || taskReceipt.Action != "create" || taskReceipt.ReadOnly || !taskReceipt.Persistent || !taskReceipt.QueueBacked || taskReceipt.TaskID != 7 || taskReceipt.Status != "pending" {
+		t.Fatalf("task receipt = %+v", taskReceipt)
+	}
+	worktreeReceipt := summary.ControlToolReceipts[1]
+	if worktreeReceipt.Tool != "worktree_run" || worktreeReceipt.Action != "run" || worktreeReceipt.ReadOnly || !worktreeReceipt.Persistent || !worktreeReceipt.RegistryBacked || !worktreeReceipt.ExecutionAvailable || worktreeReceipt.Runner != "direct" {
+		t.Fatalf("worktree receipt = %+v", worktreeReceipt)
+	}
+}
+
 func TestCompletionContractSummaryRecordsProviderCapabilities(t *testing.T) {
 	summary := withProviderCapabilities(completionContractSummary{}, &capabilityCountingProvider{})
 
@@ -542,6 +573,15 @@ func TestRecordOutcomePersistsCompletionObservability(t *testing.T) {
 				DeferredMatches:    1,
 				MaxResults:         3,
 				Query:              "task",
+			}},
+			ControlToolReceipts: []completionControlToolReceipt{{
+				Tool:            "task_create",
+				Action:          "create",
+				Persistent:      true,
+				QueueBacked:     true,
+				ExecutionPolicy: "daemon_queue_enqueue",
+				TaskID:          7,
+				Status:          "pending",
 			}},
 			CorrectionAttempted:     true,
 			CorrectionAttempts:      1,
@@ -626,6 +666,15 @@ func TestCompletionGateContextProviderConsumesRuntimeSummary(t *testing.T) {
 			MaxResults:         3,
 			Query:              "task",
 		}},
+		ControlToolReceipts: []completionControlToolReceipt{{
+			Tool:            "worktree_run",
+			Action:          "run",
+			Persistent:      true,
+			RegistryBacked:  true,
+			ExecutionPolicy: "managed_worktree_command",
+			Name:            "feature/run",
+			Runner:          "direct",
+		}},
 		ConditionalSkillMatches: []completionConditionalSkillMatch{
 			{SkillName: "go-review", Pattern: "internal/**/*.go", Path: "internal/skill/skill.go", Source: "claude-skill", TrustLevel: "local_compatible", External: false},
 		},
@@ -679,6 +728,9 @@ func TestCompletionGateContextProviderConsumesRuntimeSummary(t *testing.T) {
 	}
 	if len(summary.ToolSearchReceipts) != 1 || summary.ToolSearchReceipts[0].ExecutionPolicy != "metadata_only" {
 		t.Fatalf("ToolSearchReceipts = %+v", summary.ToolSearchReceipts)
+	}
+	if len(summary.ControlToolReceipts) != 1 || summary.ControlToolReceipts[0].Tool != "worktree_run" {
+		t.Fatalf("ControlToolReceipts = %+v", summary.ControlToolReceipts)
 	}
 	if len(summary.ConditionalSkillMatches) != 1 || summary.ConditionalSkillMatches[0].SkillName != "go-review" {
 		t.Fatalf("ConditionalSkillMatches = %+v", summary.ConditionalSkillMatches)
@@ -789,6 +841,15 @@ func TestCompletionGateReceiptSummaryIncludesRuntimeContext(t *testing.T) {
 			MaxResults:         3,
 			Query:              "task",
 		}},
+		ControlToolReceipts: []completionControlToolReceipt{{
+			Tool:            "task_stop",
+			Action:          "stop",
+			Persistent:      true,
+			QueueBacked:     true,
+			ExecutionPolicy: "daemon_queue_mutation",
+			TaskID:          7,
+			Status:          "failed",
+		}},
 		CorrectionAttempted:     true,
 		CorrectionAttempts:      1,
 		CorrectionMaxAttempts:   1,
@@ -868,6 +929,10 @@ func TestCompletionGateReceiptSummaryIncludesRuntimeContext(t *testing.T) {
 	if !ok || len(toolSearchReceipts) != 1 {
 		t.Fatalf("tool search receipts missing from gate summary: %v", summary)
 	}
+	controlToolReceipts, ok := summary["control_tool_receipts"].([]any)
+	if !ok || len(controlToolReceipts) != 1 {
+		t.Fatalf("control tool receipts missing from gate summary: %v", summary)
+	}
 	if summary["correction_attempted"] != true || summary["correction_attempts"] != float64(1) || summary["correction_max_attempts"] != float64(1) {
 		t.Fatalf("correction attempt missing from gate summary: %v", summary)
 	}
@@ -919,6 +984,9 @@ func assertCompletionOutcome(t *testing.T, rec learning.OutcomeRecord) {
 	}
 	if len(rec.ToolSearchReceipts) != 1 || rec.ToolSearchReceipts[0].ExecutionPolicy != "metadata_only" {
 		t.Fatalf("ToolSearchReceipts = %+v", rec.ToolSearchReceipts)
+	}
+	if len(rec.ControlToolReceipts) != 1 || rec.ControlToolReceipts[0].Tool != "task_create" {
+		t.Fatalf("ControlToolReceipts = %+v", rec.ControlToolReceipts)
 	}
 	if len(rec.ConditionalSkillMatches) != 1 {
 		t.Fatalf("ConditionalSkillMatches = %#v, want one match", rec.ConditionalSkillMatches)

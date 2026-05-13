@@ -49,6 +49,7 @@ type OutcomeRecord struct {
 	SkillCatalogReceipts    []SkillCatalogReceipt   `json:"skill_catalog_receipts,omitempty"`
 	CommandCatalogReceipts  []CommandCatalogReceipt `json:"command_catalog_receipts,omitempty"`
 	ToolSearchReceipts      []ToolSearchReceipt     `json:"tool_search_receipts,omitempty"`
+	ControlToolReceipts     []ControlToolReceipt    `json:"control_tool_receipts,omitempty"`
 	ConditionalSkillMatches []ConditionalSkillMatch `json:"conditional_skill_matches,omitempty"`
 	CorrectionAttempted     bool                    `json:"correction_attempted,omitempty"`
 	CorrectionAttempts      int                     `json:"correction_attempts,omitempty"`
@@ -116,6 +117,42 @@ type ToolSearchReceipt struct {
 	MaxResults         int    `json:"max_results"`
 	AllowNamesCount    int    `json:"allow_names_count"`
 	Query              string `json:"query"`
+}
+
+type ControlToolReceipt struct {
+	Tool                    string `json:"tool"`
+	Action                  string `json:"action"`
+	ReadOnly                bool   `json:"read_only"`
+	Persistent              bool   `json:"persistent"`
+	QueueBacked             bool   `json:"queue_backed,omitempty"`
+	RegistryBacked          bool   `json:"registry_backed,omitempty"`
+	ExecutionAvailable      bool   `json:"execution_available,omitempty"`
+	ExecutionPolicy         string `json:"execution_policy,omitempty"`
+	TaskID                  int64  `json:"task_id,omitempty"`
+	Status                  string `json:"status,omitempty"`
+	PreviousStatus          string `json:"previous_status,omitempty"`
+	Terminal                bool   `json:"terminal,omitempty"`
+	Found                   bool   `json:"found,omitempty"`
+	TotalReturned           int    `json:"total_returned,omitempty"`
+	Limit                   int    `json:"limit,omitempty"`
+	Field                   string `json:"field,omitempty"`
+	RetrievalStatus         string `json:"retrieval_status,omitempty"`
+	Name                    string `json:"name,omitempty"`
+	Path                    string `json:"path,omitempty"`
+	Branch                  string `json:"branch,omitempty"`
+	RegistryPath            string `json:"registry_path,omitempty"`
+	Runner                  string `json:"runner,omitempty"`
+	IsError                 bool   `json:"is_error,omitempty"`
+	Removed                 bool   `json:"removed,omitempty"`
+	DryRun                  bool   `json:"dry_run,omitempty"`
+	Total                   int    `json:"total,omitempty"`
+	TaskName                string `json:"task_name,omitempty"`
+	TaskCountBefore         int    `json:"task_count_before,omitempty"`
+	TaskCountAfter          int    `json:"task_count_after,omitempty"`
+	PreviousMode            string `json:"previous_mode,omitempty"`
+	CurrentMode             string `json:"current_mode,omitempty"`
+	Restored                bool   `json:"restored,omitempty"`
+	ReadOnlyAfterTransition bool   `json:"read_only_after_transition,omitempty"`
 }
 
 // IsSuccessful returns true for workflow outcomes that count as completion in
