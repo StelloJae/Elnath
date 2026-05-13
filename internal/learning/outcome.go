@@ -137,6 +137,7 @@ type CommandCatalogReceipt struct {
 	MaxResults            int    `json:"max_results,omitempty"`
 	Query                 string `json:"query,omitempty"`
 	Command               string `json:"command,omitempty"`
+	FollowupTool          string `json:"followup_tool,omitempty"`
 }
 
 type ToolSearchReceipt struct {

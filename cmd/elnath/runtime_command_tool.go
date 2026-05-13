@@ -78,6 +78,7 @@ type commandCatalogToolReceipt struct {
 	MaxResults            int    `json:"max_results,omitempty"`
 	Query                 string `json:"query,omitempty"`
 	Command               string `json:"command,omitempty"`
+	FollowupTool          string `json:"followup_tool,omitempty"`
 }
 
 func (t *commandCatalogTool) Execute(_ context.Context, params json.RawMessage) (*tools.Result, error) {
@@ -107,21 +108,25 @@ func (t *commandCatalogTool) Execute(_ context.Context, params json.RawMessage) 
 			return tools.ErrorResult(fmt.Sprintf("command_catalog: command %q not found", name)), nil
 		}
 		commands := runtimeCommandCatalogWithSkills(t.skillReg, input.IncludeHidden)
+		receipt := commandCatalogReceipt("show", input.IncludeHidden, commands, 1, 0, "", entry.Name)
+		receipt.FollowupTool = commandCatalogFollowupTool(entry.ModelCallable)
 		return marshalCommandCatalogToolOutput(map[string]any{
 			"action":  "show",
 			"command": entry,
-			"receipt": commandCatalogReceipt("show", input.IncludeHidden, commands, 1, 0, "", entry.Name),
+			"receipt": receipt,
 		})
 	case "recommend":
 		query := strings.TrimSpace(input.Query)
 		maxResults := normalizeCommandCatalogMax(input.MaxResults)
 		commands := runtimeCommandCatalogWithSkills(t.skillReg, input.IncludeHidden)
 		recommendations := recommendedCommandCatalogEntriesFromCatalog(commands, query, maxResults)
+		receipt := commandCatalogReceipt("recommend", input.IncludeHidden, commands, len(recommendations), maxResults, query, "")
+		receipt.FollowupTool = commandCatalogFollowupTool(commandCatalogRecommendationsHaveModelCallable(recommendations))
 		return marshalCommandCatalogToolOutput(map[string]any{
 			"action":   "recommend",
 			"query":    query,
 			"commands": recommendations,
-			"receipt":  commandCatalogReceipt("recommend", input.IncludeHidden, commands, len(recommendations), maxResults, query, ""),
+			"receipt":  receipt,
 		})
 	default:
 		return tools.ErrorResult(fmt.Sprintf("command_catalog: unsupported action %q; supported actions are list, show, and recommend", input.Action)), nil
@@ -145,6 +150,22 @@ func commandCatalogReceipt(action string, includeHidden bool, commands []command
 		Query:                 strings.TrimSpace(query),
 		Command:               strings.TrimSpace(command),
 	}
+}
+
+func commandCatalogFollowupTool(modelCallable bool) string {
+	if modelCallable {
+		return "skill"
+	}
+	return ""
+}
+
+func commandCatalogRecommendationsHaveModelCallable(recommendations []commandCatalogRecommendation) bool {
+	for _, rec := range recommendations {
+		if rec.ModelCallable {
+			return true
+		}
+	}
+	return false
 }
 
 func countCommandCatalogExecutable(commands []commandCatalogEntry) int {

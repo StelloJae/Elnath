@@ -1545,6 +1545,7 @@ func completionCommandCatalogReceiptsToLearning(src []completionCommandCatalogRe
 			MaxResults:            receipt.MaxResults,
 			Query:                 receipt.Query,
 			Command:               receipt.Command,
+			FollowupTool:          receipt.FollowupTool,
 		})
 	}
 	return out
