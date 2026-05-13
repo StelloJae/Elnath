@@ -757,8 +757,10 @@ v8_mix_bf001_kustomize_guidance() {
 
 V8-MIX-BF-001 kustomize deterministic transformer guidance:
 - Start in `api/internal/accumulator/namereferencetransformer.go`.
+- Use `api/internal/accumulator/namereferencetransformer_test.go` for focused regression coverage.
 - The high-signal behavior is deterministic name-reference transformer application order. Preserve resource order from `m.Resources()` instead of iterating over a map.
 - Add focused regression coverage in the existing kyaml/name-reference test area before final verification; do not finish with a production-only diff.
+- Do not finish with only `go.work.sum` as non-production evidence.
 - Do not leave `go.work.sum` churn as the only non-production evidence. If tooling mutates `go.work.sum`, keep the behavioral test diff too or revert incidental checksum churn when it is not required.
 - Retained failure evidence showed `cd kyaml && go test ./...` passing but the final response self-reported incomplete regression evidence. Do not report incomplete work after verification; finish only after the focused regression exists and the exact command passes.
 - Run `cd kyaml && go test ./...` before the final answer.
@@ -1645,6 +1647,12 @@ recover_passed_task_specific_failure() {
       "The verification command '${VERIFY_CMD}' passed, but the benchmark guard rejected the patch: ${reason}" \
       "Keep the passing 'lib/get-release-to-add.js' channel comparison diff intact. Repair 'test/get-release-to-add.test.js' by adding one complete standalone regression test block for a maintenance branch such as '2.x' receiving a version whose tag stores the higher default channel as 'channels: [false]'. Do not remove or detach the existing 'test(\"Return versions merged between release branches\", (t) => {' block." \
       "After editing the test, run 'node --check test/get-release-to-add.test.js' first. Only then run '${VERIFY_CMD}'. Finish only if the syntax check and full verification both pass and both 'lib/get-release-to-add.js' and 'test/get-release-to-add.test.js' remain changed."
+  elif is_v8_mix_bf001_kustomize_task; then
+    printf -v TASK_SPECIFIC_PROMPT '%s\n\n%s\n\n%s\n\n%s' \
+      "Task ID: ${TASK_ID}" \
+      "The verification command '${VERIFY_CMD}' passed, but the benchmark guard rejected the patch: ${reason}" \
+      "Keep the passing 'api/internal/accumulator/namereferencetransformer.go' production diff intact. Do not rerun broad baseline checks or re-read unrelated packages before editing the missing regression." \
+      "Immediately edit 'api/internal/accumulator/namereferencetransformer_test.go' and add a focused deterministic name-reference regression that proves transformer application/RefBy order follows 'm.Resources()' order for multiple referencing resources. Do not finish with only 'go.work.sum' as non-production evidence. Then run '${VERIFY_CMD}' and finish only if both 'api/internal/accumulator/namereferencetransformer.go' and 'api/internal/accumulator/namereferencetransformer_test.go' remain changed."
   else
     printf -v TASK_SPECIFIC_PROMPT '%s\n\n%s\n\n%s' \
       "$BENCHMARK_PROMPT" \
