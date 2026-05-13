@@ -540,8 +540,13 @@ func (t *ProcessMonitorTool) Execute(ctx context.Context, params json.RawMessage
 			ProcessID:       input.ProcessID,
 			Status:          snap.Status,
 			Terminal:        snap.Terminal,
+			ExitCode:        snap.ExitCode,
 			Found:           true,
 			TailBytes:       limit,
+			StdoutRawBytes:  snap.StdoutRawBytes,
+			StderrRawBytes:  snap.StderrRawBytes,
+			StdoutTruncated: snap.StdoutTruncated,
+			StderrTruncated: snap.StderrTruncated,
 			CWD:             snap.CWD,
 		},
 	}
@@ -696,9 +701,14 @@ type processReceipt struct {
 	ProcessID       int64  `json:"process_id,omitempty"`
 	Status          string `json:"status,omitempty"`
 	Terminal        bool   `json:"terminal,omitempty"`
+	ExitCode        *int   `json:"exit_code,omitempty"`
 	TimeoutMS       int    `json:"timeout_ms,omitempty"`
 	CWD             string `json:"cwd,omitempty"`
 	TailBytes       int    `json:"tail_bytes,omitempty"`
+	StdoutRawBytes  int64  `json:"stdout_raw_bytes,omitempty"`
+	StderrRawBytes  int64  `json:"stderr_raw_bytes,omitempty"`
+	StdoutTruncated bool   `json:"stdout_truncated,omitempty"`
+	StderrTruncated bool   `json:"stderr_truncated,omitempty"`
 	StopSignal      string `json:"stop_signal,omitempty"`
 	Found           bool   `json:"found,omitempty"`
 }

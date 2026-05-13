@@ -46,8 +46,13 @@ type processMonitorTestOutput struct {
 		ProcessID       int64  `json:"process_id"`
 		Status          string `json:"status"`
 		Terminal        bool   `json:"terminal"`
+		ExitCode        *int   `json:"exit_code"`
 		Found           bool   `json:"found"`
 		TailBytes       int    `json:"tail_bytes"`
+		StdoutRawBytes  int64  `json:"stdout_raw_bytes"`
+		StderrRawBytes  int64  `json:"stderr_raw_bytes"`
+		StdoutTruncated bool   `json:"stdout_truncated"`
+		StderrTruncated bool   `json:"stderr_truncated"`
 	} `json:"receipt"`
 }
 
@@ -162,6 +167,9 @@ func TestProcessToolsStartMonitorTerminalReceipt(t *testing.T) {
 	}
 	if !mon.Receipt.ReadOnly || mon.Receipt.Persistent || !mon.Receipt.Found || !mon.Receipt.Terminal {
 		t.Fatalf("monitor receipt flags = %+v", mon.Receipt)
+	}
+	if mon.Receipt.ExitCode == nil || *mon.Receipt.ExitCode != 0 || mon.Receipt.StdoutRawBytes == 0 || mon.Receipt.StderrRawBytes == 0 {
+		t.Fatalf("monitor receipt completion/output metadata = %+v", mon.Receipt)
 	}
 }
 

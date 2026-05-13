@@ -138,10 +138,15 @@ type completionControlToolReceipt struct {
 	Status                  string `json:"status,omitempty"`
 	PreviousStatus          string `json:"previous_status,omitempty"`
 	Terminal                bool   `json:"terminal,omitempty"`
+	ExitCode                *int   `json:"exit_code,omitempty"`
 	Found                   bool   `json:"found,omitempty"`
 	TimeoutMS               int    `json:"timeout_ms,omitempty"`
 	CWD                     string `json:"cwd,omitempty"`
 	TailBytes               int    `json:"tail_bytes,omitempty"`
+	StdoutRawBytes          int64  `json:"stdout_raw_bytes,omitempty"`
+	StderrRawBytes          int64  `json:"stderr_raw_bytes,omitempty"`
+	StdoutTruncated         bool   `json:"stdout_truncated,omitempty"`
+	StderrTruncated         bool   `json:"stderr_truncated,omitempty"`
 	StopSignal              string `json:"stop_signal,omitempty"`
 	EdgeType                string `json:"edge_type,omitempty"`
 	Enqueued                bool   `json:"enqueued,omitempty"`
