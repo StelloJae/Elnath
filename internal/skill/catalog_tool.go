@@ -81,6 +81,24 @@ type catalogSkillEntry struct {
 	Prompt        string   `json:"prompt,omitempty"`
 }
 
+type catalogToolReceipt struct {
+	Tool               string   `json:"tool"`
+	Action             string   `json:"action"`
+	ReadOnly           bool     `json:"read_only"`
+	RegistryAvailable  bool     `json:"registry_available"`
+	TotalSkills        int      `json:"total_skills"`
+	ReturnedSkills     int      `json:"returned_skills,omitempty"`
+	ReturnedMatches    int      `json:"returned_matches,omitempty"`
+	TrustFilterApplied bool     `json:"trust_filter_applied"`
+	AllowTrustLevels   []string `json:"allow_trust_levels,omitempty"`
+	MaxResults         int      `json:"max_results,omitempty"`
+	Query              string   `json:"query,omitempty"`
+	Skill              string   `json:"skill,omitempty"`
+	PathCount          int      `json:"path_count,omitempty"`
+	CWDSet             bool     `json:"cwd_set,omitempty"`
+	IncludePrompt      bool     `json:"include_prompt,omitempty"`
+}
+
 func (t *CatalogTool) Execute(_ context.Context, params json.RawMessage) (*tools.Result, error) {
 	var input catalogToolInput
 	if len(params) > 0 {
@@ -96,10 +114,11 @@ func (t *CatalogTool) Execute(_ context.Context, params json.RawMessage) (*tools
 	action := strings.ToLower(strings.TrimSpace(input.Action))
 	switch action {
 	case "", "list":
-		return marshalSkillCatalogOutput(map[string]any{
+		skills := t.skillEntries(false, filter)
+		return marshalSkillCatalogOutput(t.withReceipt(input, "list", map[string]any{
 			"action": "list",
-			"skills": t.skillEntries(false, filter),
-		})
+			"skills": skills,
+		}, len(skills), 0, filter))
 	case "show":
 		name := strings.TrimSpace(strings.TrimPrefix(input.Skill, "/"))
 		if name == "" {
@@ -112,25 +131,66 @@ func (t *CatalogTool) Execute(_ context.Context, params json.RawMessage) (*tools
 		if !filter.allowsSkill(sk) {
 			return tools.ErrorResult(fmt.Sprintf("skill %q filtered by allow_trust_levels", name)), nil
 		}
-		return marshalSkillCatalogOutput(map[string]any{
+		return marshalSkillCatalogOutput(t.withReceipt(input, "show", map[string]any{
 			"action": "show",
 			"skill":  skillCatalogEntry(sk, input.IncludePrompt),
-		})
+		}, 1, 0, filter))
 	case "recommend":
 		query := strings.TrimSpace(input.Query)
-		return marshalSkillCatalogOutput(map[string]any{
+		maxResults := normalizeSkillCatalogMax(input.MaxResults)
+		skills := t.recommendedSkillEntries(query, maxResults, filter)
+		return marshalSkillCatalogOutput(t.withReceipt(input, "recommend", map[string]any{
 			"action": "recommend",
 			"query":  query,
-			"skills": t.recommendedSkillEntries(query, normalizeSkillCatalogMax(input.MaxResults), filter),
-		})
+			"skills": skills,
+		}, len(skills), 0, filter))
 	case "match_paths":
-		return marshalSkillCatalogOutput(map[string]any{
+		matches := filter.filterMatches(t.registry.ConditionalMatchesForPaths(input.Paths, input.CWD))
+		return marshalSkillCatalogOutput(t.withReceipt(input, "match_paths", map[string]any{
 			"action":  "match_paths",
-			"matches": filter.filterMatches(t.registry.ConditionalMatchesForPaths(input.Paths, input.CWD)),
-		})
+			"matches": matches,
+		}, 0, len(matches), filter))
 	default:
 		return tools.ErrorResult(fmt.Sprintf("skill_catalog: unsupported action %q; supported actions are list, show, recommend, and match_paths", input.Action)), nil
 	}
+}
+
+func (t *CatalogTool) withReceipt(input catalogToolInput, action string, output map[string]any, returnedSkills, returnedMatches int, filter skillTrustFilter) map[string]any {
+	output["receipt"] = t.receipt(input, action, returnedSkills, returnedMatches, filter)
+	return output
+}
+
+func (t *CatalogTool) receipt(input catalogToolInput, action string, returnedSkills, returnedMatches int, filter skillTrustFilter) catalogToolReceipt {
+	receipt := catalogToolReceipt{
+		Tool:               CatalogToolName,
+		Action:             action,
+		ReadOnly:           true,
+		RegistryAvailable:  t != nil && t.registry != nil,
+		TotalSkills:        t.totalSkills(),
+		ReturnedSkills:     returnedSkills,
+		ReturnedMatches:    returnedMatches,
+		TrustFilterApplied: filter.active,
+		AllowTrustLevels:   filter.allowedLevels(),
+	}
+	switch action {
+	case "show":
+		receipt.Skill = strings.TrimSpace(strings.TrimPrefix(input.Skill, "/"))
+		receipt.IncludePrompt = input.IncludePrompt
+	case "recommend":
+		receipt.Query = strings.TrimSpace(input.Query)
+		receipt.MaxResults = normalizeSkillCatalogMax(input.MaxResults)
+	case "match_paths":
+		receipt.PathCount = len(input.Paths)
+		receipt.CWDSet = strings.TrimSpace(input.CWD) != ""
+	}
+	return receipt
+}
+
+func (t *CatalogTool) totalSkills() int {
+	if t == nil || t.registry == nil {
+		return 0
+	}
+	return len(t.registry.List())
 }
 
 func (t *CatalogTool) skillEntries(includePrompt bool, filter skillTrustFilter) []catalogSkillEntry {

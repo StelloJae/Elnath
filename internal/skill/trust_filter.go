@@ -2,6 +2,7 @@ package skill
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -56,4 +57,16 @@ func (f skillTrustFilter) filterMatches(matches []ConditionalSkillMatch) []Condi
 		}
 	}
 	return out
+}
+
+func (f skillTrustFilter) allowedLevels() []string {
+	if !f.active || len(f.allow) == 0 {
+		return nil
+	}
+	levels := make([]string, 0, len(f.allow))
+	for level := range f.allow {
+		levels = append(levels, level)
+	}
+	sort.Strings(levels)
+	return levels
 }
