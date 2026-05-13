@@ -366,6 +366,49 @@ func TestCommandCatalogToolShowsRuntimeControlArgumentHints(t *testing.T) {
 	}
 }
 
+func TestCommandCatalogToolExposesExecutionPolicyMetadata(t *testing.T) {
+	reg := skill.NewRegistry()
+	reg.Add(&skill.Skill{
+		Name:        "review-pr",
+		Description: "Review pull requests",
+		Trigger:     "/review-pr <pr_number>",
+		Source:      "claude-command-skill",
+		Prompt:      "Review the PR.",
+	})
+	tool := newCommandCatalogTool(reg)
+
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"list","include_hidden":true}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("Execute returned error result: %s", res.Output)
+	}
+
+	var out struct {
+		Commands []commandCatalogEntry `json:"commands"`
+	}
+	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, res.Output)
+	}
+	seen := map[string]commandCatalogEntry{}
+	for _, entry := range out.Commands {
+		seen[entry.Name] = entry
+	}
+	if got := seen["run"]; got.Surface != "cli" || got.ExecutionPolicy != "cli_dispatch" || got.ModelCallable {
+		t.Fatalf("run command metadata = %+v, want cli non-model execution policy", got)
+	}
+	if got := seen["/provider"]; got.Surface != "runtime_slash" || got.ExecutionPolicy != "local_runtime_control" || got.ModelCallable {
+		t.Fatalf("/provider metadata = %+v, want runtime slash non-model execution policy", got)
+	}
+	if got := seen["/review-pr"]; got.Surface != "skill_slash" || got.ExecutionPolicy != "skill_prompt_invocation" || !got.ModelCallable || got.Source != "claude-command-skill" {
+		t.Fatalf("/review-pr metadata = %+v, want model-callable skill invocation policy", got)
+	}
+	if got := seen["netproxy"]; got.Surface != "internal" || got.ExecutionPolicy != "internal_exec" || got.ModelCallable {
+		t.Fatalf("hidden internal command metadata = %+v, want internal non-model execution policy", got)
+	}
+}
+
 func TestCommandCatalogToolRecommendsCommandsByQuery(t *testing.T) {
 	tool := newCommandCatalogTool()
 
