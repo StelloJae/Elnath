@@ -46,6 +46,7 @@ type OutcomeRecord struct {
 	ProviderEffort          string                  `json:"provider_effort,omitempty"`
 	ProviderEffortNote      string                  `json:"provider_effort_note,omitempty"`
 	LoadedDeferredTools     []string                `json:"loaded_deferred_tools,omitempty"`
+	SkillCatalogReceipts    []SkillCatalogReceipt   `json:"skill_catalog_receipts,omitempty"`
 	ConditionalSkillMatches []ConditionalSkillMatch `json:"conditional_skill_matches,omitempty"`
 	CorrectionAttempted     bool                    `json:"correction_attempted,omitempty"`
 	CorrectionAttempts      int                     `json:"correction_attempts,omitempty"`
@@ -65,6 +66,24 @@ type ConditionalSkillMatch struct {
 	Source     string `json:"source,omitempty"`
 	TrustLevel string `json:"trust_level,omitempty"`
 	External   bool   `json:"external"`
+}
+
+type SkillCatalogReceipt struct {
+	Tool               string   `json:"tool"`
+	Action             string   `json:"action"`
+	ReadOnly           bool     `json:"read_only"`
+	RegistryAvailable  bool     `json:"registry_available"`
+	TotalSkills        int      `json:"total_skills"`
+	ReturnedSkills     int      `json:"returned_skills,omitempty"`
+	ReturnedMatches    int      `json:"returned_matches,omitempty"`
+	TrustFilterApplied bool     `json:"trust_filter_applied"`
+	AllowTrustLevels   []string `json:"allow_trust_levels,omitempty"`
+	MaxResults         int      `json:"max_results,omitempty"`
+	Query              string   `json:"query,omitempty"`
+	Skill              string   `json:"skill,omitempty"`
+	PathCount          int      `json:"path_count,omitempty"`
+	CWDSet             bool     `json:"cwd_set,omitempty"`
+	IncludePrompt      bool     `json:"include_prompt,omitempty"`
 }
 
 // IsSuccessful returns true for workflow outcomes that count as completion in

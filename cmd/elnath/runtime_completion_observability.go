@@ -25,6 +25,7 @@ type completionContractSummary struct {
 	ProviderEffortNote      string
 	LoadedDeferredTools     []string
 	ConditionalSkillMatches []completionConditionalSkillMatch
+	SkillCatalogReceipts    []completionSkillCatalogReceipt
 	CorrectionAttempted     bool
 	CorrectionAttempts      int
 	CorrectionMaxAttempts   int
@@ -43,6 +44,24 @@ type completionConditionalSkillMatch struct {
 	Source     string `json:"source,omitempty"`
 	TrustLevel string `json:"trust_level,omitempty"`
 	External   bool   `json:"external"`
+}
+
+type completionSkillCatalogReceipt struct {
+	Tool               string   `json:"tool"`
+	Action             string   `json:"action"`
+	ReadOnly           bool     `json:"read_only"`
+	RegistryAvailable  bool     `json:"registry_available"`
+	TotalSkills        int      `json:"total_skills"`
+	ReturnedSkills     int      `json:"returned_skills,omitempty"`
+	ReturnedMatches    int      `json:"returned_matches,omitempty"`
+	TrustFilterApplied bool     `json:"trust_filter_applied"`
+	AllowTrustLevels   []string `json:"allow_trust_levels,omitempty"`
+	MaxResults         int      `json:"max_results,omitempty"`
+	Query              string   `json:"query,omitempty"`
+	Skill              string   `json:"skill,omitempty"`
+	PathCount          int      `json:"path_count,omitempty"`
+	CWDSet             bool     `json:"cwd_set,omitempty"`
+	IncludePrompt      bool     `json:"include_prompt,omitempty"`
 }
 
 const (
@@ -74,6 +93,7 @@ func summarizeCompletionContract(routeCtx *orchestrator.RoutingContext, cfg orch
 	summary.ReasoningEffortReason = strings.TrimSpace(result.ReasoningEffortReason)
 	summary.LoadedDeferredTools = append([]string(nil), result.LoadedDeferredTools...)
 	summary.ConditionalSkillMatches = observedConditionalSkillMatches(result.Messages)
+	summary.SkillCatalogReceipts = observedSkillCatalogReceipts(result.Messages)
 
 	verificationCommand, verificationFailed := observedVerificationCommandStatus(result.Messages)
 	observed := verificationCommand != ""
@@ -101,6 +121,50 @@ func summarizeCompletionContract(routeCtx *orchestrator.RoutingContext, cfg orch
 	}
 	summary.RetryDecision, summary.RetryReason = completionRetryPlan(summary)
 	return summary
+}
+
+func observedSkillCatalogReceipts(messages []llm.Message) []completionSkillCatalogReceipt {
+	toolNamesByID := make(map[string]string)
+	var receipts []completionSkillCatalogReceipt
+	for _, msg := range messages {
+		for _, block := range msg.Content {
+			switch b := block.(type) {
+			case llm.ToolUseBlock:
+				if b.ID != "" {
+					toolNamesByID[b.ID] = b.Name
+				}
+			case llm.ToolResultBlock:
+				if b.IsError || toolNamesByID[b.ToolUseID] != "skill_catalog" {
+					continue
+				}
+				receipt, ok := skillCatalogReceiptFromOutput(b.Content)
+				if ok {
+					receipts = append(receipts, receipt)
+				}
+			}
+		}
+	}
+	if len(receipts) == 0 {
+		return nil
+	}
+	return receipts
+}
+
+func skillCatalogReceiptFromOutput(output string) (completionSkillCatalogReceipt, bool) {
+	var parsed struct {
+		Receipt completionSkillCatalogReceipt `json:"receipt"`
+	}
+	if err := json.Unmarshal([]byte(output), &parsed); err != nil {
+		return completionSkillCatalogReceipt{}, false
+	}
+	parsed.Receipt.Tool = strings.TrimSpace(parsed.Receipt.Tool)
+	parsed.Receipt.Action = strings.TrimSpace(parsed.Receipt.Action)
+	parsed.Receipt.Query = strings.TrimSpace(parsed.Receipt.Query)
+	parsed.Receipt.Skill = strings.TrimSpace(parsed.Receipt.Skill)
+	if parsed.Receipt.Tool != "skill_catalog" || parsed.Receipt.Action == "" {
+		return completionSkillCatalogReceipt{}, false
+	}
+	return parsed.Receipt, true
 }
 
 func observedConditionalSkillMatches(messages []llm.Message) []completionConditionalSkillMatch {

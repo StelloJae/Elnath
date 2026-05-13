@@ -42,6 +42,7 @@ type CompletionContext struct {
 	ProviderEffort          string
 	ProviderEffortNote      string
 	LoadedDeferredTools     []string
+	SkillCatalogReceipts    []SkillCatalogReceipt
 	ConditionalSkillMatches []ConditionalSkillMatch
 	CorrectionAttempted     bool
 	CorrectionAttempts      int
@@ -61,6 +62,24 @@ type ConditionalSkillMatch struct {
 	Source     string `json:"source,omitempty"`
 	TrustLevel string `json:"trust_level,omitempty"`
 	External   bool   `json:"external"`
+}
+
+type SkillCatalogReceipt struct {
+	Tool               string   `json:"tool"`
+	Action             string   `json:"action"`
+	ReadOnly           bool     `json:"read_only"`
+	RegistryAvailable  bool     `json:"registry_available"`
+	TotalSkills        int      `json:"total_skills"`
+	ReturnedSkills     int      `json:"returned_skills,omitempty"`
+	ReturnedMatches    int      `json:"returned_matches,omitempty"`
+	TrustFilterApplied bool     `json:"trust_filter_applied"`
+	AllowTrustLevels   []string `json:"allow_trust_levels,omitempty"`
+	MaxResults         int      `json:"max_results,omitempty"`
+	Query              string   `json:"query,omitempty"`
+	Skill              string   `json:"skill,omitempty"`
+	PathCount          int      `json:"path_count,omitempty"`
+	CWDSet             bool     `json:"cwd_set,omitempty"`
+	IncludePrompt      bool     `json:"include_prompt,omitempty"`
 }
 
 type CompletionContextProvider interface {
@@ -271,6 +290,9 @@ func encodeReceiptSummary(summary map[string]int, completionContext CompletionCo
 	}
 	if len(completionContext.LoadedDeferredTools) > 0 {
 		payload["loaded_deferred_tools"] = completionContext.LoadedDeferredTools
+	}
+	if len(completionContext.SkillCatalogReceipts) > 0 {
+		payload["skill_catalog_receipts"] = completionContext.SkillCatalogReceipts
 	}
 	if len(completionContext.ConditionalSkillMatches) > 0 {
 		payload["conditional_skill_matches"] = completionContext.ConditionalSkillMatches
