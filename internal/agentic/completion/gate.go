@@ -45,6 +45,7 @@ type CompletionContext struct {
 	ConditionalSkillMatches []ConditionalSkillMatch
 	CorrectionAttempted     bool
 	CorrectionAttempts      int
+	CorrectionMaxAttempts   int
 	CorrectionDecision      string
 	CorrectionReason        string
 	CorrectionStatus        string
@@ -279,6 +280,9 @@ func encodeReceiptSummary(summary map[string]int, completionContext CompletionCo
 	}
 	if completionContext.CorrectionAttempts > 0 {
 		payload["correction_attempts"] = completionContext.CorrectionAttempts
+	}
+	if completionContext.CorrectionMaxAttempts > 0 {
+		payload["correction_max_attempts"] = completionContext.CorrectionMaxAttempts
 	}
 	if completionContext.CorrectionDecision != "" {
 		payload["correction_decision"] = completionContext.CorrectionDecision

@@ -198,6 +198,8 @@ func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testi
 				ConditionalSkillMatches: []ConditionalSkillMatch{
 					{SkillName: "go-review", Pattern: "internal/**/*.go", Path: "internal/skill/skill.go", Source: "claude-skill", TrustLevel: "local_compatible", External: false},
 				},
+				CorrectionAttempts:    1,
+				CorrectionMaxAttempts: 1,
 				RetryDecision: "retry_smaller_scope",
 				RetryReason:   "final_response_reports_incomplete",
 			}, nil
@@ -250,6 +252,9 @@ func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testi
 	}
 	if summary["retry_decision"] != "retry_smaller_scope" || summary["retry_reason"] != "final_response_reports_incomplete" {
 		t.Fatalf("retry fields missing: summary=%v", summary)
+	}
+	if summary["correction_attempts"] != float64(1) || summary["correction_max_attempts"] != float64(1) {
+		t.Fatalf("correction budget fields missing: summary=%v", summary)
 	}
 }
 

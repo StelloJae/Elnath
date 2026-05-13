@@ -21,6 +21,9 @@ func (rt *executionRuntime) maybeRunCompletionRetry(
 	if rt == nil || rt.completionRetryMax <= 0 || result == nil {
 		return result, summary
 	}
+	if summary.RetryDecision != "" {
+		summary.CorrectionMaxAttempts = rt.completionRetryMax
+	}
 	switch summary.RetryDecision {
 	case completionRetryDecisionRetrySmallerScope:
 		if wf == nil {
@@ -61,6 +64,7 @@ func (rt *executionRuntime) runSmallerScopeCompletionRetry(
 	retrySummary := withProviderCapabilities(summarizeCompletionContract(completionRetryRoutingContext(summary), retryInput.Config, retryResult), rt.provider)
 	retrySummary.CorrectionAttempted = true
 	retrySummary.CorrectionAttempts = 1
+	retrySummary.CorrectionMaxAttempts = summary.CorrectionMaxAttempts
 	retrySummary.CorrectionDecision = summary.RetryDecision
 	retrySummary.CorrectionReason = summary.RetryReason
 	if retrySummary.CompletionWarning != "" {
@@ -88,6 +92,7 @@ func completionCorrectionFailedSummary(summary completionContractSummary, failur
 	updated := summary
 	updated.CorrectionAttempted = true
 	updated.CorrectionAttempts = 1
+	updated.CorrectionMaxAttempts = summary.CorrectionMaxAttempts
 	updated.CorrectionDecision = summary.RetryDecision
 	updated.CorrectionReason = summary.RetryReason
 	updated.CorrectionStatus = "failed"
@@ -99,6 +104,7 @@ func completionCorrectionSkippedSummary(summary completionContractSummary, failu
 	updated := summary
 	updated.CorrectionAttempted = false
 	updated.CorrectionAttempts = 0
+	updated.CorrectionMaxAttempts = summary.CorrectionMaxAttempts
 	updated.CorrectionDecision = summary.RetryDecision
 	updated.CorrectionReason = summary.RetryReason
 	updated.CorrectionStatus = "skipped"
@@ -165,6 +171,7 @@ func (rt *executionRuntime) runVerificationCompletionRetry(
 	updated := completionVerificationObservedSummary(summary, command)
 	updated.CorrectionAttempted = true
 	updated.CorrectionAttempts = 1
+	updated.CorrectionMaxAttempts = summary.CorrectionMaxAttempts
 	updated.CorrectionDecision = summary.RetryDecision
 	updated.CorrectionReason = summary.RetryReason
 	updated.CorrectionStatus = "succeeded"

@@ -425,6 +425,7 @@ func TestRecordOutcomePersistsCompletionObservability(t *testing.T) {
 			LoadedDeferredTools:     []string{"mcp_github_issue"},
 			CorrectionAttempted:     true,
 			CorrectionAttempts:      1,
+			CorrectionMaxAttempts:   1,
 			CorrectionDecision:      completionRetryDecisionRetrySmallerScope,
 			CorrectionReason:        "final_response_reports_incomplete",
 			CorrectionStatus:        "failed",
@@ -475,6 +476,7 @@ func TestCompletionGateContextProviderConsumesRuntimeSummary(t *testing.T) {
 		},
 		CorrectionAttempted:     true,
 		CorrectionAttempts:      1,
+		CorrectionMaxAttempts:   1,
 		CorrectionDecision:      completionRetryDecisionRetrySmallerScope,
 		CorrectionReason:        "final_response_reports_incomplete",
 		CorrectionStatus:        "failed",
@@ -520,8 +522,8 @@ func TestCompletionGateContextProviderConsumesRuntimeSummary(t *testing.T) {
 	if summary.ConditionalSkillMatches[0].Source != "claude-skill" || summary.ConditionalSkillMatches[0].TrustLevel != "local_compatible" || summary.ConditionalSkillMatches[0].External {
 		t.Fatalf("ConditionalSkillMatches[0] trust metadata = %+v", summary.ConditionalSkillMatches[0])
 	}
-	if !summary.CorrectionAttempted || summary.CorrectionAttempts != 1 || summary.CorrectionDecision != completionRetryDecisionRetrySmallerScope || summary.CorrectionReason != "final_response_reports_incomplete" {
-		t.Fatalf("correction context = attempted %v attempts %d decision %q reason %q", summary.CorrectionAttempted, summary.CorrectionAttempts, summary.CorrectionDecision, summary.CorrectionReason)
+	if !summary.CorrectionAttempted || summary.CorrectionAttempts != 1 || summary.CorrectionMaxAttempts != 1 || summary.CorrectionDecision != completionRetryDecisionRetrySmallerScope || summary.CorrectionReason != "final_response_reports_incomplete" {
+		t.Fatalf("correction context = attempted %v attempts %d max %d decision %q reason %q", summary.CorrectionAttempted, summary.CorrectionAttempts, summary.CorrectionMaxAttempts, summary.CorrectionDecision, summary.CorrectionReason)
 	}
 	if summary.CorrectionStatus != "failed" || summary.CorrectionFailureFamily != "workflow_error" {
 		t.Fatalf("correction failure context = status %q family %q", summary.CorrectionStatus, summary.CorrectionFailureFamily)
@@ -590,6 +592,7 @@ func TestCompletionGateReceiptSummaryIncludesRuntimeContext(t *testing.T) {
 		LoadedDeferredTools:     []string{"mcp_github_issue"},
 		CorrectionAttempted:     true,
 		CorrectionAttempts:      1,
+		CorrectionMaxAttempts:   1,
 		CorrectionDecision:      completionRetryDecisionRetrySmallerScope,
 		CorrectionReason:        "final_response_reports_incomplete",
 		CorrectionStatus:        "failed",
@@ -654,7 +657,7 @@ func TestCompletionGateReceiptSummaryIncludesRuntimeContext(t *testing.T) {
 	if !ok || len(loaded) != 1 || loaded[0] != "mcp_github_issue" {
 		t.Fatalf("loaded deferred tools missing from gate summary: %v", summary)
 	}
-	if summary["correction_attempted"] != true || summary["correction_attempts"] != float64(1) {
+	if summary["correction_attempted"] != true || summary["correction_attempts"] != float64(1) || summary["correction_max_attempts"] != float64(1) {
 		t.Fatalf("correction attempt missing from gate summary: %v", summary)
 	}
 	if summary["correction_decision"] != completionRetryDecisionRetrySmallerScope || summary["correction_reason"] != "final_response_reports_incomplete" {
@@ -703,8 +706,8 @@ func assertCompletionOutcome(t *testing.T, rec learning.OutcomeRecord) {
 	if rec.ConditionalSkillMatches[0].Source != "claude-skill" || rec.ConditionalSkillMatches[0].TrustLevel != "local_compatible" || rec.ConditionalSkillMatches[0].External {
 		t.Fatalf("ConditionalSkillMatches[0] trust metadata = %+v", rec.ConditionalSkillMatches[0])
 	}
-	if !rec.CorrectionAttempted || rec.CorrectionAttempts != 1 || rec.CorrectionDecision != completionRetryDecisionRetrySmallerScope || rec.CorrectionReason != "final_response_reports_incomplete" {
-		t.Fatalf("correction = attempted %v attempts %d decision %q reason %q", rec.CorrectionAttempted, rec.CorrectionAttempts, rec.CorrectionDecision, rec.CorrectionReason)
+	if !rec.CorrectionAttempted || rec.CorrectionAttempts != 1 || rec.CorrectionMaxAttempts != 1 || rec.CorrectionDecision != completionRetryDecisionRetrySmallerScope || rec.CorrectionReason != "final_response_reports_incomplete" {
+		t.Fatalf("correction = attempted %v attempts %d max %d decision %q reason %q", rec.CorrectionAttempted, rec.CorrectionAttempts, rec.CorrectionMaxAttempts, rec.CorrectionDecision, rec.CorrectionReason)
 	}
 	if rec.CorrectionStatus != "failed" || rec.CorrectionFailureFamily != "workflow_error" {
 		t.Fatalf("correction failure = status %q family %q", rec.CorrectionStatus, rec.CorrectionFailureFamily)

@@ -4058,6 +4058,9 @@ func TestCompletionRetryRunsExplicitVerificationCommand(t *testing.T) {
 	if !gotSummary.CorrectionAttempted || gotSummary.CorrectionAttempts != 1 || gotSummary.CorrectionDecision != completionRetryDecisionRunVerification {
 		t.Fatalf("correction summary = %+v", gotSummary)
 	}
+	if gotSummary.CorrectionMaxAttempts != 1 {
+		t.Fatalf("CorrectionMaxAttempts = %d, want 1", gotSummary.CorrectionMaxAttempts)
+	}
 }
 
 func TestCompletionRetryRecordsFailedVerificationCommand(t *testing.T) {

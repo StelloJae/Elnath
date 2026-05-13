@@ -48,6 +48,7 @@ type OutcomeRecord struct {
 	ConditionalSkillMatches []ConditionalSkillMatch `json:"conditional_skill_matches,omitempty"`
 	CorrectionAttempted     bool                    `json:"correction_attempted,omitempty"`
 	CorrectionAttempts      int                     `json:"correction_attempts,omitempty"`
+	CorrectionMaxAttempts   int                     `json:"correction_max_attempts,omitempty"`
 	CorrectionDecision      string                  `json:"correction_decision,omitempty"`
 	CorrectionReason        string                  `json:"correction_reason,omitempty"`
 	CorrectionStatus        string                  `json:"correction_status,omitempty"`

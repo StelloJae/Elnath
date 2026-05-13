@@ -1388,6 +1388,7 @@ func (rt *executionRuntime) recordOutcome(ctx context.Context, in outcomeInput) 
 		ConditionalSkillMatches: completionSkillMatchesToLearning(in.completion.ConditionalSkillMatches),
 		CorrectionAttempted:     in.completion.CorrectionAttempted,
 		CorrectionAttempts:      in.completion.CorrectionAttempts,
+		CorrectionMaxAttempts:   in.completion.CorrectionMaxAttempts,
 		CorrectionDecision:      in.completion.CorrectionDecision,
 		CorrectionReason:        in.completion.CorrectionReason,
 		CorrectionStatus:        in.completion.CorrectionStatus,
