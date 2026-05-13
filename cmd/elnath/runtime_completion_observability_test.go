@@ -412,6 +412,44 @@ func TestCompletionContractSummaryRecordsSkillCatalogReceipt(t *testing.T) {
 	}
 }
 
+func TestCompletionContractSummaryRecordsSkillExecutionReceipt(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("run the review skill"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "skill-run-1", Name: "skill", Input: json.RawMessage(`{"skill":"review-pr"}`)},
+			}},
+			llm.NewToolResultMessage("skill-run-1", `{"skill":"review-pr","status":"completed","source":"codex-plugin-skill","trust_level":"plugin_cache","external":true,"output":"done","receipt":{"skill":"review-pr","provider":"openai-responses","model":"gpt-5.5","reasoning_effort":"high","reasoning_effort_mode":"manual","permission_mode":"bypass","max_iterations":8,"required_tools":["read_file"],"available_tools":["read_file","grep"],"tool_filter_applied":true,"base_dir":"/tmp/skills/review-pr","source":"codex-plugin-skill","trust_level":"plugin_cache","external":true,"user_invocable":true}}`, false),
+			llm.NewAssistantMessage("Done."),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(nil, orchestrator.WorkflowConfig{}, result)
+
+	if len(summary.SkillExecutionReceipts) != 1 {
+		t.Fatalf("SkillExecutionReceipts = %#v, want one receipt", summary.SkillExecutionReceipts)
+	}
+	receipt := summary.SkillExecutionReceipts[0]
+	if receipt.Tool != "skill" || receipt.Action != "execute" || receipt.Skill != "review-pr" || receipt.Status != "completed" {
+		t.Fatalf("receipt identity = %+v", receipt)
+	}
+	if receipt.Provider != "openai-responses" || receipt.Model != "gpt-5.5" || receipt.ReasoningEffort != "high" || receipt.ReasoningEffortMode != "manual" {
+		t.Fatalf("receipt model context = %+v", receipt)
+	}
+	if receipt.PermissionMode != "bypass" || receipt.MaxIterations != 8 || !receipt.ToolFilterApplied {
+		t.Fatalf("receipt execution bounds = %+v", receipt)
+	}
+	if len(receipt.RequiredTools) != 1 || receipt.RequiredTools[0] != "read_file" {
+		t.Fatalf("required tools = %+v", receipt.RequiredTools)
+	}
+	if len(receipt.AvailableTools) != 2 || receipt.AvailableTools[0] != "read_file" || receipt.AvailableTools[1] != "grep" {
+		t.Fatalf("available tools = %+v", receipt.AvailableTools)
+	}
+	if receipt.BaseDir != "/tmp/skills/review-pr" || receipt.Source != "codex-plugin-skill" || receipt.TrustLevel != "plugin_cache" || !receipt.External || !receipt.UserInvocable {
+		t.Fatalf("receipt trust/source metadata = %+v", receipt)
+	}
+}
+
 func TestCompletionContractSummaryRecordsCommandCatalogReceipt(t *testing.T) {
 	result := &orchestrator.WorkflowResult{
 		Messages: []llm.Message{
@@ -703,6 +741,26 @@ func TestRecordOutcomePersistsCompletionObservability(t *testing.T) {
 				MaxResults:        5,
 				Query:             "review code",
 			}},
+			SkillExecutionReceipts: []completionSkillExecutionReceipt{{
+				Tool:                "skill",
+				Action:              "execute",
+				Skill:               "review-pr",
+				Status:              "completed",
+				Provider:            "openai-responses",
+				Model:               "gpt-5.5",
+				ReasoningEffort:     "high",
+				ReasoningEffortMode: "manual",
+				PermissionMode:      "bypass",
+				MaxIterations:       8,
+				RequiredTools:       []string{"read_file"},
+				AvailableTools:      []string{"read_file", "grep"},
+				ToolFilterApplied:   true,
+				BaseDir:             "/tmp/skills/review-pr",
+				Source:              "codex-plugin-skill",
+				TrustLevel:          "plugin_cache",
+				External:            true,
+				UserInvocable:       true,
+			}},
 			CommandCatalogReceipts: []completionCommandCatalogReceipt{{
 				Tool:               "command_catalog",
 				Action:             "recommend",
@@ -795,6 +853,26 @@ func TestCompletionGateContextProviderConsumesRuntimeSummary(t *testing.T) {
 			MaxResults:        5,
 			Query:             "review code",
 		}},
+		SkillExecutionReceipts: []completionSkillExecutionReceipt{{
+			Tool:                "skill",
+			Action:              "execute",
+			Skill:               "review-pr",
+			Status:              "completed",
+			Provider:            "openai-responses",
+			Model:               "gpt-5.5",
+			ReasoningEffort:     "high",
+			ReasoningEffortMode: "manual",
+			PermissionMode:      "bypass",
+			MaxIterations:       8,
+			RequiredTools:       []string{"read_file"},
+			AvailableTools:      []string{"read_file", "grep"},
+			ToolFilterApplied:   true,
+			BaseDir:             "/tmp/skills/review-pr",
+			Source:              "codex-plugin-skill",
+			TrustLevel:          "plugin_cache",
+			External:            true,
+			UserInvocable:       true,
+		}},
 		CommandCatalogReceipts: []completionCommandCatalogReceipt{{
 			Tool:               "command_catalog",
 			Action:             "recommend",
@@ -876,6 +954,9 @@ func TestCompletionGateContextProviderConsumesRuntimeSummary(t *testing.T) {
 	}
 	if len(summary.SkillCatalogReceipts) != 1 || summary.SkillCatalogReceipts[0].Action != "recommend" {
 		t.Fatalf("SkillCatalogReceipts = %+v", summary.SkillCatalogReceipts)
+	}
+	if len(summary.SkillExecutionReceipts) != 1 || summary.SkillExecutionReceipts[0].Skill != "review-pr" || summary.SkillExecutionReceipts[0].Model != "gpt-5.5" {
+		t.Fatalf("SkillExecutionReceipts = %+v", summary.SkillExecutionReceipts)
 	}
 	if len(summary.CommandCatalogReceipts) != 1 || summary.CommandCatalogReceipts[0].ExecutionPolicy != "metadata_only" {
 		t.Fatalf("CommandCatalogReceipts = %+v", summary.CommandCatalogReceipts)
@@ -969,6 +1050,26 @@ func TestCompletionGateReceiptSummaryIncludesRuntimeContext(t *testing.T) {
 			ReturnedSkills:    1,
 			MaxResults:        5,
 			Query:             "review code",
+		}},
+		SkillExecutionReceipts: []completionSkillExecutionReceipt{{
+			Tool:                "skill",
+			Action:              "execute",
+			Skill:               "review-pr",
+			Status:              "completed",
+			Provider:            "openai-responses",
+			Model:               "gpt-5.5",
+			ReasoningEffort:     "high",
+			ReasoningEffortMode: "manual",
+			PermissionMode:      "bypass",
+			MaxIterations:       8,
+			RequiredTools:       []string{"read_file"},
+			AvailableTools:      []string{"read_file", "grep"},
+			ToolFilterApplied:   true,
+			BaseDir:             "/tmp/skills/review-pr",
+			Source:              "codex-plugin-skill",
+			TrustLevel:          "plugin_cache",
+			External:            true,
+			UserInvocable:       true,
 		}},
 		CommandCatalogReceipts: []completionCommandCatalogReceipt{{
 			Tool:               "command_catalog",
@@ -1075,6 +1176,14 @@ func TestCompletionGateReceiptSummaryIncludesRuntimeContext(t *testing.T) {
 	if !ok || len(catalogReceipts) != 1 {
 		t.Fatalf("skill catalog receipts missing from gate summary: %v", summary)
 	}
+	skillExecutionReceipts, ok := summary["skill_execution_receipts"].([]any)
+	if !ok || len(skillExecutionReceipts) != 1 {
+		t.Fatalf("skill execution receipts missing from gate summary: %v", summary)
+	}
+	skillExecutionReceipt, ok := skillExecutionReceipts[0].(map[string]any)
+	if !ok || skillExecutionReceipt["skill"] != "review-pr" || skillExecutionReceipt["model"] != "gpt-5.5" || skillExecutionReceipt["tool_filter_applied"] != true {
+		t.Fatalf("skill execution receipt missing fields: receipt=%v summary=%v", skillExecutionReceipts[0], summary)
+	}
 	commandCatalogReceipts, ok := summary["command_catalog_receipts"].([]any)
 	if !ok || len(commandCatalogReceipts) != 1 {
 		t.Fatalf("command catalog receipts missing from gate summary: %v", summary)
@@ -1132,6 +1241,9 @@ func assertCompletionOutcome(t *testing.T, rec learning.OutcomeRecord) {
 	}
 	if len(rec.SkillCatalogReceipts) != 1 || rec.SkillCatalogReceipts[0].Action != "recommend" {
 		t.Fatalf("SkillCatalogReceipts = %+v", rec.SkillCatalogReceipts)
+	}
+	if len(rec.SkillExecutionReceipts) != 1 || rec.SkillExecutionReceipts[0].Skill != "review-pr" || rec.SkillExecutionReceipts[0].Model != "gpt-5.5" || !rec.SkillExecutionReceipts[0].ToolFilterApplied {
+		t.Fatalf("SkillExecutionReceipts = %+v", rec.SkillExecutionReceipts)
 	}
 	if len(rec.CommandCatalogReceipts) != 1 || rec.CommandCatalogReceipts[0].ExecutionPolicy != "metadata_only" {
 		t.Fatalf("CommandCatalogReceipts = %+v", rec.CommandCatalogReceipts)

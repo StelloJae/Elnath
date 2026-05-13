@@ -47,6 +47,7 @@ type OutcomeRecord struct {
 	ProviderEffortNote      string                  `json:"provider_effort_note,omitempty"`
 	LoadedDeferredTools     []string                `json:"loaded_deferred_tools,omitempty"`
 	SkillCatalogReceipts    []SkillCatalogReceipt   `json:"skill_catalog_receipts,omitempty"`
+	SkillExecutionReceipts  []SkillExecutionReceipt `json:"skill_execution_receipts,omitempty"`
 	CommandCatalogReceipts  []CommandCatalogReceipt `json:"command_catalog_receipts,omitempty"`
 	ToolSearchReceipts      []ToolSearchReceipt     `json:"tool_search_receipts,omitempty"`
 	ControlToolReceipts     []ControlToolReceipt    `json:"control_tool_receipts,omitempty"`
@@ -87,6 +88,27 @@ type SkillCatalogReceipt struct {
 	PathCount          int      `json:"path_count,omitempty"`
 	CWDSet             bool     `json:"cwd_set,omitempty"`
 	IncludePrompt      bool     `json:"include_prompt,omitempty"`
+}
+
+type SkillExecutionReceipt struct {
+	Tool                string   `json:"tool"`
+	Action              string   `json:"action"`
+	Skill               string   `json:"skill"`
+	Status              string   `json:"status,omitempty"`
+	Provider            string   `json:"provider,omitempty"`
+	Model               string   `json:"model,omitempty"`
+	ReasoningEffort     string   `json:"reasoning_effort,omitempty"`
+	ReasoningEffortMode string   `json:"reasoning_effort_mode,omitempty"`
+	PermissionMode      string   `json:"permission_mode,omitempty"`
+	MaxIterations       int      `json:"max_iterations,omitempty"`
+	RequiredTools       []string `json:"required_tools,omitempty"`
+	AvailableTools      []string `json:"available_tools,omitempty"`
+	ToolFilterApplied   bool     `json:"tool_filter_applied"`
+	BaseDir             string   `json:"base_dir,omitempty"`
+	Source              string   `json:"source,omitempty"`
+	TrustLevel          string   `json:"trust_level,omitempty"`
+	External            bool     `json:"external"`
+	UserInvocable       bool     `json:"user_invocable"`
 }
 
 type CommandCatalogReceipt struct {

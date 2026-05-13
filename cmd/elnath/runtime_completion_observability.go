@@ -26,6 +26,7 @@ type completionContractSummary struct {
 	LoadedDeferredTools     []string
 	ConditionalSkillMatches []completionConditionalSkillMatch
 	SkillCatalogReceipts    []completionSkillCatalogReceipt
+	SkillExecutionReceipts  []completionSkillExecutionReceipt
 	CommandCatalogReceipts  []completionCommandCatalogReceipt
 	ToolSearchReceipts      []completionToolSearchReceipt
 	ControlToolReceipts     []completionControlToolReceipt
@@ -65,6 +66,27 @@ type completionSkillCatalogReceipt struct {
 	PathCount          int      `json:"path_count,omitempty"`
 	CWDSet             bool     `json:"cwd_set,omitempty"`
 	IncludePrompt      bool     `json:"include_prompt,omitempty"`
+}
+
+type completionSkillExecutionReceipt struct {
+	Tool                string   `json:"tool"`
+	Action              string   `json:"action"`
+	Skill               string   `json:"skill"`
+	Status              string   `json:"status,omitempty"`
+	Provider            string   `json:"provider,omitempty"`
+	Model               string   `json:"model,omitempty"`
+	ReasoningEffort     string   `json:"reasoning_effort,omitempty"`
+	ReasoningEffortMode string   `json:"reasoning_effort_mode,omitempty"`
+	PermissionMode      string   `json:"permission_mode,omitempty"`
+	MaxIterations       int      `json:"max_iterations,omitempty"`
+	RequiredTools       []string `json:"required_tools,omitempty"`
+	AvailableTools      []string `json:"available_tools,omitempty"`
+	ToolFilterApplied   bool     `json:"tool_filter_applied"`
+	BaseDir             string   `json:"base_dir,omitempty"`
+	Source              string   `json:"source,omitempty"`
+	TrustLevel          string   `json:"trust_level,omitempty"`
+	External            bool     `json:"external"`
+	UserInvocable       bool     `json:"user_invocable"`
 }
 
 type completionCommandCatalogReceipt struct {
@@ -182,6 +204,7 @@ func summarizeCompletionContract(routeCtx *orchestrator.RoutingContext, cfg orch
 	summary.LoadedDeferredTools = append([]string(nil), result.LoadedDeferredTools...)
 	summary.ConditionalSkillMatches = observedConditionalSkillMatches(result.Messages)
 	summary.SkillCatalogReceipts = observedSkillCatalogReceipts(result.Messages)
+	summary.SkillExecutionReceipts = observedSkillExecutionReceipts(result.Messages)
 	summary.CommandCatalogReceipts = observedCommandCatalogReceipts(result.Messages)
 	summary.ToolSearchReceipts = observedToolSearchReceipts(result.Messages)
 	summary.ControlToolReceipts = observedControlToolReceipts(result.Messages)
@@ -256,6 +279,83 @@ func skillCatalogReceiptFromOutput(output string) (completionSkillCatalogReceipt
 		return completionSkillCatalogReceipt{}, false
 	}
 	return parsed.Receipt, true
+}
+
+func observedSkillExecutionReceipts(messages []llm.Message) []completionSkillExecutionReceipt {
+	toolNamesByID := make(map[string]string)
+	var receipts []completionSkillExecutionReceipt
+	for _, msg := range messages {
+		for _, block := range msg.Content {
+			switch b := block.(type) {
+			case llm.ToolUseBlock:
+				if b.ID != "" {
+					toolNamesByID[b.ID] = b.Name
+				}
+			case llm.ToolResultBlock:
+				if b.IsError || toolNamesByID[b.ToolUseID] != "skill" {
+					continue
+				}
+				receipt, ok := skillExecutionReceiptFromOutput(b.Content)
+				if ok {
+					receipts = append(receipts, receipt)
+				}
+			}
+		}
+	}
+	if len(receipts) == 0 {
+		return nil
+	}
+	return receipts
+}
+
+func skillExecutionReceiptFromOutput(output string) (completionSkillExecutionReceipt, bool) {
+	var parsed struct {
+		Skill      string                          `json:"skill"`
+		Status     string                          `json:"status"`
+		Source     string                          `json:"source"`
+		TrustLevel string                          `json:"trust_level"`
+		External   bool                            `json:"external"`
+		Receipt    completionSkillExecutionReceipt `json:"receipt"`
+	}
+	if err := json.Unmarshal([]byte(output), &parsed); err != nil {
+		return completionSkillExecutionReceipt{}, false
+	}
+	receipt := parsed.Receipt
+	receipt.Tool = strings.TrimSpace(receipt.Tool)
+	receipt.Action = strings.TrimSpace(receipt.Action)
+	receipt.Skill = strings.TrimSpace(receipt.Skill)
+	receipt.Status = strings.TrimSpace(receipt.Status)
+	receipt.Provider = strings.TrimSpace(receipt.Provider)
+	receipt.Model = strings.TrimSpace(receipt.Model)
+	receipt.ReasoningEffort = strings.TrimSpace(receipt.ReasoningEffort)
+	receipt.ReasoningEffortMode = strings.TrimSpace(receipt.ReasoningEffortMode)
+	receipt.PermissionMode = strings.TrimSpace(receipt.PermissionMode)
+	receipt.BaseDir = strings.TrimSpace(receipt.BaseDir)
+	receipt.Source = strings.TrimSpace(receipt.Source)
+	receipt.TrustLevel = strings.TrimSpace(receipt.TrustLevel)
+	if receipt.Tool == "" {
+		receipt.Tool = "skill"
+	}
+	if receipt.Action == "" {
+		receipt.Action = "execute"
+	}
+	if receipt.Skill == "" {
+		receipt.Skill = strings.TrimSpace(parsed.Skill)
+	}
+	if receipt.Status == "" {
+		receipt.Status = strings.TrimSpace(parsed.Status)
+	}
+	if receipt.Source == "" {
+		receipt.Source = strings.TrimSpace(parsed.Source)
+	}
+	if receipt.TrustLevel == "" {
+		receipt.TrustLevel = strings.TrimSpace(parsed.TrustLevel)
+	}
+	receipt.External = receipt.External || parsed.External
+	if receipt.Tool != "skill" || receipt.Action != "execute" || receipt.Skill == "" {
+		return completionSkillExecutionReceipt{}, false
+	}
+	return receipt, true
 }
 
 func observedToolSearchReceipts(messages []llm.Message) []completionToolSearchReceipt {
