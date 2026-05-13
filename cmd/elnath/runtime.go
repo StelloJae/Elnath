@@ -648,8 +648,8 @@ func buildExecutionRuntime(
 		if completionRetryMax < 0 {
 			completionRetryMax = 0
 		}
-		if completionRetryMax > 1 {
-			completionRetryMax = 1
+		if completionRetryMax > maxCompletionRetryAttempts {
+			completionRetryMax = maxCompletionRetryAttempts
 		}
 	}
 	hooks.Add(secret.NewSecretScanHook(secret.NewDetector(), auditTrail))
