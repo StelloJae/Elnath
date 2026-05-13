@@ -208,6 +208,31 @@ func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testi
 					MaxResults:        5,
 					Query:             "review code",
 				}},
+				CommandCatalogReceipts: []CommandCatalogReceipt{{
+					Tool:               "command_catalog",
+					Action:             "recommend",
+					ReadOnly:           true,
+					RegistryAvailable:  true,
+					ExecutionAvailable: false,
+					ExecutionPolicy:    "metadata_only",
+					TotalCommands:      12,
+					ReturnedCommands:   1,
+					MaxResults:         2,
+					Query:              "commands",
+				}},
+				ToolSearchReceipts: []ToolSearchReceipt{{
+					Tool:               "tool_search",
+					Action:             "search",
+					ReadOnly:           true,
+					RegistryAvailable:  true,
+					ExecutionAvailable: false,
+					ExecutionPolicy:    "metadata_only",
+					TotalTools:         12,
+					ReturnedMatches:    1,
+					DeferredMatches:    1,
+					MaxResults:         3,
+					Query:              "task",
+				}},
 				CorrectionAttempts:    1,
 				CorrectionMaxAttempts: 1,
 				RetryDecision:         "retry_smaller_scope",
@@ -266,6 +291,14 @@ func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testi
 	receipts, ok := summary["skill_catalog_receipts"].([]any)
 	if !ok || len(receipts) != 1 {
 		t.Fatalf("skill_catalog_receipts missing: summary=%v", summary)
+	}
+	commandReceipts, ok := summary["command_catalog_receipts"].([]any)
+	if !ok || len(commandReceipts) != 1 {
+		t.Fatalf("command_catalog_receipts missing: summary=%v", summary)
+	}
+	toolSearchReceipts, ok := summary["tool_search_receipts"].([]any)
+	if !ok || len(toolSearchReceipts) != 1 {
+		t.Fatalf("tool_search_receipts missing: summary=%v", summary)
 	}
 	if summary["correction_attempts"] != float64(1) || summary["correction_max_attempts"] != float64(1) {
 		t.Fatalf("correction budget fields missing: summary=%v", summary)

@@ -63,6 +63,21 @@ type commandCatalogRecommendation struct {
 	MatchedFields []string `json:"matched_fields,omitempty"`
 }
 
+type commandCatalogToolReceipt struct {
+	Tool               string `json:"tool"`
+	Action             string `json:"action"`
+	ReadOnly           bool   `json:"read_only"`
+	RegistryAvailable  bool   `json:"registry_available"`
+	ExecutionAvailable bool   `json:"execution_available"`
+	ExecutionPolicy    string `json:"execution_policy"`
+	TotalCommands      int    `json:"total_commands"`
+	ReturnedCommands   int    `json:"returned_commands"`
+	IncludeHidden      bool   `json:"include_hidden"`
+	MaxResults         int    `json:"max_results,omitempty"`
+	Query              string `json:"query,omitempty"`
+	Command            string `json:"command,omitempty"`
+}
+
 func (t *commandCatalogTool) Execute(_ context.Context, params json.RawMessage) (*tools.Result, error) {
 	var input commandCatalogToolInput
 	if len(params) > 0 {
@@ -74,9 +89,11 @@ func (t *commandCatalogTool) Execute(_ context.Context, params json.RawMessage) 
 	action := strings.ToLower(strings.TrimSpace(input.Action))
 	switch action {
 	case "", "list":
+		commands := runtimeCommandCatalogWithSkills(t.skillReg, input.IncludeHidden)
 		return marshalCommandCatalogToolOutput(map[string]any{
 			"action":   "list",
-			"commands": runtimeCommandCatalogWithSkills(t.skillReg, input.IncludeHidden),
+			"commands": commands,
+			"receipt":  commandCatalogReceipt("list", input.IncludeHidden, len(commands), len(commands), 0, "", ""),
 		})
 	case "show":
 		name := strings.TrimSpace(input.Command)
@@ -87,19 +104,42 @@ func (t *commandCatalogTool) Execute(_ context.Context, params json.RawMessage) 
 		if !ok {
 			return tools.ErrorResult(fmt.Sprintf("command_catalog: command %q not found", name)), nil
 		}
+		totalCommands := len(runtimeCommandCatalogWithSkills(t.skillReg, input.IncludeHidden))
 		return marshalCommandCatalogToolOutput(map[string]any{
 			"action":  "show",
 			"command": entry,
+			"receipt": commandCatalogReceipt("show", input.IncludeHidden, totalCommands, 1, 0, "", entry.Name),
 		})
 	case "recommend":
 		query := strings.TrimSpace(input.Query)
+		maxResults := normalizeCommandCatalogMax(input.MaxResults)
+		commands := runtimeCommandCatalogWithSkills(t.skillReg, input.IncludeHidden)
+		recommendations := recommendedCommandCatalogEntriesFromCatalog(commands, query, maxResults)
 		return marshalCommandCatalogToolOutput(map[string]any{
 			"action":   "recommend",
 			"query":    query,
-			"commands": recommendedCommandCatalogEntries(query, input.IncludeHidden, normalizeCommandCatalogMax(input.MaxResults), t.skillReg),
+			"commands": recommendations,
+			"receipt":  commandCatalogReceipt("recommend", input.IncludeHidden, len(commands), len(recommendations), maxResults, query, ""),
 		})
 	default:
 		return tools.ErrorResult(fmt.Sprintf("command_catalog: unsupported action %q; supported actions are list, show, and recommend", input.Action)), nil
+	}
+}
+
+func commandCatalogReceipt(action string, includeHidden bool, totalCommands, returnedCommands, maxResults int, query, command string) commandCatalogToolReceipt {
+	return commandCatalogToolReceipt{
+		Tool:               commandCatalogToolName,
+		Action:             action,
+		ReadOnly:           true,
+		RegistryAvailable:  true,
+		ExecutionAvailable: false,
+		ExecutionPolicy:    "metadata_only",
+		TotalCommands:      totalCommands,
+		ReturnedCommands:   returnedCommands,
+		IncludeHidden:      includeHidden,
+		MaxResults:         maxResults,
+		Query:              strings.TrimSpace(query),
+		Command:            strings.TrimSpace(command),
 	}
 }
 
@@ -127,6 +167,10 @@ func recommendedCommandCatalogEntries(query string, includeHidden bool, maxResul
 		reg = skillReg[0]
 	}
 	commands := runtimeCommandCatalogWithSkills(reg, includeHidden)
+	return recommendedCommandCatalogEntriesFromCatalog(commands, query, maxResults)
+}
+
+func recommendedCommandCatalogEntriesFromCatalog(commands []commandCatalogEntry, query string, maxResults int) []commandCatalogRecommendation {
 	terms := commandCatalogQueryTerms(query)
 	if len(terms) == 0 {
 		if len(commands) > maxResults {

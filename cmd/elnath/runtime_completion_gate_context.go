@@ -47,6 +47,8 @@ func (rt *executionRuntime) CompletionContext(_ context.Context, _ daemon.Task, 
 		ProviderEffortNote:      summary.ProviderEffortNote,
 		LoadedDeferredTools:     append([]string(nil), summary.LoadedDeferredTools...),
 		SkillCatalogReceipts:    completionSkillCatalogReceiptsToAgentic(summary.SkillCatalogReceipts),
+		CommandCatalogReceipts:  completionCommandCatalogReceiptsToAgentic(summary.CommandCatalogReceipts),
+		ToolSearchReceipts:      completionToolSearchReceiptsToAgentic(summary.ToolSearchReceipts),
 		ConditionalSkillMatches: completionSkillMatchesToAgentic(summary.ConditionalSkillMatches),
 		CorrectionAttempted:     summary.CorrectionAttempted,
 		CorrectionAttempts:      summary.CorrectionAttempts,
@@ -82,6 +84,54 @@ func completionSkillCatalogReceiptsToAgentic(src []completionSkillCatalogReceipt
 			PathCount:          receipt.PathCount,
 			CWDSet:             receipt.CWDSet,
 			IncludePrompt:      receipt.IncludePrompt,
+		})
+	}
+	return out
+}
+
+func completionCommandCatalogReceiptsToAgentic(src []completionCommandCatalogReceipt) []agenticcompletion.CommandCatalogReceipt {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]agenticcompletion.CommandCatalogReceipt, 0, len(src))
+	for _, receipt := range src {
+		out = append(out, agenticcompletion.CommandCatalogReceipt{
+			Tool:               receipt.Tool,
+			Action:             receipt.Action,
+			ReadOnly:           receipt.ReadOnly,
+			RegistryAvailable:  receipt.RegistryAvailable,
+			ExecutionAvailable: receipt.ExecutionAvailable,
+			ExecutionPolicy:    receipt.ExecutionPolicy,
+			TotalCommands:      receipt.TotalCommands,
+			ReturnedCommands:   receipt.ReturnedCommands,
+			IncludeHidden:      receipt.IncludeHidden,
+			MaxResults:         receipt.MaxResults,
+			Query:              receipt.Query,
+			Command:            receipt.Command,
+		})
+	}
+	return out
+}
+
+func completionToolSearchReceiptsToAgentic(src []completionToolSearchReceipt) []agenticcompletion.ToolSearchReceipt {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]agenticcompletion.ToolSearchReceipt, 0, len(src))
+	for _, receipt := range src {
+		out = append(out, agenticcompletion.ToolSearchReceipt{
+			Tool:               receipt.Tool,
+			Action:             receipt.Action,
+			ReadOnly:           receipt.ReadOnly,
+			RegistryAvailable:  receipt.RegistryAvailable,
+			ExecutionAvailable: receipt.ExecutionAvailable,
+			ExecutionPolicy:    receipt.ExecutionPolicy,
+			TotalTools:         receipt.TotalTools,
+			ReturnedMatches:    receipt.ReturnedMatches,
+			DeferredMatches:    receipt.DeferredMatches,
+			MaxResults:         receipt.MaxResults,
+			AllowNamesCount:    receipt.AllowNamesCount,
+			Query:              receipt.Query,
 		})
 	}
 	return out

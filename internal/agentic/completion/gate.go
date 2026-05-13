@@ -43,6 +43,8 @@ type CompletionContext struct {
 	ProviderEffortNote      string
 	LoadedDeferredTools     []string
 	SkillCatalogReceipts    []SkillCatalogReceipt
+	CommandCatalogReceipts  []CommandCatalogReceipt
+	ToolSearchReceipts      []ToolSearchReceipt
 	ConditionalSkillMatches []ConditionalSkillMatch
 	CorrectionAttempted     bool
 	CorrectionAttempts      int
@@ -80,6 +82,36 @@ type SkillCatalogReceipt struct {
 	PathCount          int      `json:"path_count,omitempty"`
 	CWDSet             bool     `json:"cwd_set,omitempty"`
 	IncludePrompt      bool     `json:"include_prompt,omitempty"`
+}
+
+type CommandCatalogReceipt struct {
+	Tool               string `json:"tool"`
+	Action             string `json:"action"`
+	ReadOnly           bool   `json:"read_only"`
+	RegistryAvailable  bool   `json:"registry_available"`
+	ExecutionAvailable bool   `json:"execution_available"`
+	ExecutionPolicy    string `json:"execution_policy"`
+	TotalCommands      int    `json:"total_commands"`
+	ReturnedCommands   int    `json:"returned_commands"`
+	IncludeHidden      bool   `json:"include_hidden"`
+	MaxResults         int    `json:"max_results,omitempty"`
+	Query              string `json:"query,omitempty"`
+	Command            string `json:"command,omitempty"`
+}
+
+type ToolSearchReceipt struct {
+	Tool               string `json:"tool"`
+	Action             string `json:"action"`
+	ReadOnly           bool   `json:"read_only"`
+	RegistryAvailable  bool   `json:"registry_available"`
+	ExecutionAvailable bool   `json:"execution_available"`
+	ExecutionPolicy    string `json:"execution_policy"`
+	TotalTools         int    `json:"total_tools"`
+	ReturnedMatches    int    `json:"returned_matches"`
+	DeferredMatches    int    `json:"deferred_matches"`
+	MaxResults         int    `json:"max_results"`
+	AllowNamesCount    int    `json:"allow_names_count"`
+	Query              string `json:"query"`
 }
 
 type CompletionContextProvider interface {
@@ -293,6 +325,12 @@ func encodeReceiptSummary(summary map[string]int, completionContext CompletionCo
 	}
 	if len(completionContext.SkillCatalogReceipts) > 0 {
 		payload["skill_catalog_receipts"] = completionContext.SkillCatalogReceipts
+	}
+	if len(completionContext.CommandCatalogReceipts) > 0 {
+		payload["command_catalog_receipts"] = completionContext.CommandCatalogReceipts
+	}
+	if len(completionContext.ToolSearchReceipts) > 0 {
+		payload["tool_search_receipts"] = completionContext.ToolSearchReceipts
 	}
 	if len(completionContext.ConditionalSkillMatches) > 0 {
 		payload["conditional_skill_matches"] = completionContext.ConditionalSkillMatches

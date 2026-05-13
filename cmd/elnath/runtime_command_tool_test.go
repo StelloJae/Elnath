@@ -85,6 +85,56 @@ func TestCommandCatalogToolListsCommandsAsJSON(t *testing.T) {
 	}
 }
 
+func TestCommandCatalogToolIncludesDiscoveryReceipt(t *testing.T) {
+	tool := newCommandCatalogTool()
+
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"recommend","query":"reasoning effort","max_results":2}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("Execute returned error result: %s", res.Output)
+	}
+
+	var out struct {
+		Action   string `json:"action"`
+		Query    string `json:"query"`
+		Commands []struct {
+			Name string `json:"name"`
+		} `json:"commands"`
+		Receipt struct {
+			Tool               string `json:"tool"`
+			Action             string `json:"action"`
+			ReadOnly           bool   `json:"read_only"`
+			RegistryAvailable  bool   `json:"registry_available"`
+			ExecutionAvailable bool   `json:"execution_available"`
+			ExecutionPolicy    string `json:"execution_policy"`
+			TotalCommands      int    `json:"total_commands"`
+			ReturnedCommands   int    `json:"returned_commands"`
+			MaxResults         int    `json:"max_results"`
+			Query              string `json:"query"`
+		} `json:"receipt"`
+	}
+	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, res.Output)
+	}
+	if out.Receipt.Tool != "command_catalog" || out.Receipt.Action != "recommend" {
+		t.Fatalf("receipt identity = %+v", out.Receipt)
+	}
+	if !out.Receipt.ReadOnly || !out.Receipt.RegistryAvailable {
+		t.Fatalf("receipt read-only/registry = %+v", out.Receipt)
+	}
+	if out.Receipt.ExecutionAvailable || out.Receipt.ExecutionPolicy != "metadata_only" {
+		t.Fatalf("receipt execution boundary = %+v", out.Receipt)
+	}
+	if out.Receipt.TotalCommands == 0 || out.Receipt.ReturnedCommands != len(out.Commands) {
+		t.Fatalf("receipt counts = %+v commands=%d", out.Receipt, len(out.Commands))
+	}
+	if out.Receipt.MaxResults != 2 || out.Receipt.Query != "reasoning effort" {
+		t.Fatalf("receipt request bounds = %+v", out.Receipt)
+	}
+}
+
 func TestCommandCatalogToolListsSkillBackedSlashCommands(t *testing.T) {
 	reg := skill.NewRegistry()
 	reg.Add(&skill.Skill{

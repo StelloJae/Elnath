@@ -21,6 +21,20 @@ type testToolSearchOutput struct {
 		Reversible            bool   `json:"reversible"`
 		CancelSiblingsOnError bool   `json:"cancel_siblings_on_error"`
 	} `json:"matches"`
+	Receipt struct {
+		Tool               string `json:"tool"`
+		Action             string `json:"action"`
+		ReadOnly           bool   `json:"read_only"`
+		RegistryAvailable  bool   `json:"registry_available"`
+		ExecutionAvailable bool   `json:"execution_available"`
+		ExecutionPolicy    string `json:"execution_policy"`
+		TotalTools         int    `json:"total_tools"`
+		ReturnedMatches    int    `json:"returned_matches"`
+		DeferredMatches    int    `json:"deferred_matches"`
+		MaxResults         int    `json:"max_results"`
+		AllowNamesCount    int    `json:"allow_names_count"`
+		Query              string `json:"query"`
+	} `json:"receipt"`
 }
 
 type toolSearchMetadataTool struct {
@@ -225,6 +239,36 @@ func TestToolSearchAllowNamesRestrictsCandidates(t *testing.T) {
 	}
 	if len(out.Matches) != 1 || out.Matches[0].Name != "web_fetch" {
 		t.Fatalf("matches = %+v, want only web_fetch", out.Matches)
+	}
+}
+
+func TestToolSearchIncludesDiscoveryReceipt(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(&mockTool{name: "grep", result: SuccessResult("")})
+	reg.Register(&toolSearchMetadataTool{
+		name:        "task_create",
+		description: "Create daemon task",
+		deferSchema: true,
+	})
+	search := NewToolSearchTool(reg)
+	reg.Register(search)
+
+	out := executeToolSearch(t, search, `{"query":"task","allow_names":["task_create","grep"],"max_results":3}`)
+
+	if out.Receipt.Tool != ToolSearchName || out.Receipt.Action != "search" {
+		t.Fatalf("receipt identity = %+v", out.Receipt)
+	}
+	if !out.Receipt.ReadOnly || !out.Receipt.RegistryAvailable {
+		t.Fatalf("receipt read-only/registry = %+v", out.Receipt)
+	}
+	if out.Receipt.ExecutionAvailable || out.Receipt.ExecutionPolicy != "metadata_only" {
+		t.Fatalf("receipt execution boundary = %+v", out.Receipt)
+	}
+	if out.Receipt.TotalTools != 2 || out.Receipt.ReturnedMatches != len(out.Matches) || out.Receipt.DeferredMatches != 1 {
+		t.Fatalf("receipt counts = %+v matches=%d", out.Receipt, len(out.Matches))
+	}
+	if out.Receipt.MaxResults != 3 || out.Receipt.AllowNamesCount != 2 || out.Receipt.Query != "task" {
+		t.Fatalf("receipt request bounds = %+v", out.Receipt)
 	}
 }
 
