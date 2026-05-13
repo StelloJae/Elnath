@@ -229,16 +229,18 @@ func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testi
 					UserInvocable:       true,
 				}},
 				CommandCatalogReceipts: []CommandCatalogReceipt{{
-					Tool:               "command_catalog",
-					Action:             "recommend",
-					ReadOnly:           true,
-					RegistryAvailable:  true,
-					ExecutionAvailable: false,
-					ExecutionPolicy:    "metadata_only",
-					TotalCommands:      12,
-					ReturnedCommands:   1,
-					MaxResults:         2,
-					Query:              "commands",
+					Tool:                  "command_catalog",
+					Action:                "recommend",
+					ReadOnly:              true,
+					RegistryAvailable:     true,
+					ExecutionAvailable:    false,
+					ExecutionPolicy:       "metadata_only",
+					TotalCommands:         12,
+					ReturnedCommands:      1,
+					ExecutableCommands:    11,
+					ModelCallableCommands: 1,
+					MaxResults:            2,
+					Query:                 "commands",
 				}},
 				ToolSearchReceipts: []ToolSearchReceipt{{
 					Tool:               "tool_search",
@@ -365,6 +367,10 @@ func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testi
 	commandReceipts, ok := summary["command_catalog_receipts"].([]any)
 	if !ok || len(commandReceipts) != 1 {
 		t.Fatalf("command_catalog_receipts missing: summary=%v", summary)
+	}
+	commandReceipt, ok := commandReceipts[0].(map[string]any)
+	if !ok || commandReceipt["executable_commands"] != float64(11) || commandReceipt["model_callable_commands"] != float64(1) {
+		t.Fatalf("command_catalog_receipt execution counts missing: receipt=%v summary=%v", commandReceipts[0], summary)
 	}
 	toolSearchReceipts, ok := summary["tool_search_receipts"].([]any)
 	if !ok || len(toolSearchReceipts) != 1 {
