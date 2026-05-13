@@ -17,6 +17,9 @@ type testToolSearchOutput struct {
 		SchemaPreview         string `json:"schema_preview"`
 		Deferred              bool   `json:"deferred"`
 		DeferReason           string `json:"defer_reason,omitempty"`
+		ExecutionAvailable    bool   `json:"execution_available"`
+		ExecutionPolicy       string `json:"execution_policy"`
+		ModelCallable         bool   `json:"model_callable"`
 		ConcurrencySafe       bool   `json:"concurrency_safe"`
 		Reversible            bool   `json:"reversible"`
 		CancelSiblingsOnError bool   `json:"cancel_siblings_on_error"`
@@ -172,6 +175,9 @@ func TestToolSearchReportsStableMetadata(t *testing.T) {
 	}
 	if match.DeferReason != "mcp_prefix" {
 		t.Fatalf("DeferReason = %q, want mcp_prefix", match.DeferReason)
+	}
+	if !match.ExecutionAvailable || match.ExecutionPolicy != "model_tool_call" || !match.ModelCallable {
+		t.Fatalf("execution metadata = %+v, want available model_tool_call callable", match)
 	}
 	if !match.ConcurrencySafe || !match.Reversible || !match.CancelSiblingsOnError {
 		t.Fatalf("metadata = %+v, want safe/reversible/cancel true", match)

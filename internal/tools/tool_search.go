@@ -93,6 +93,9 @@ type toolSearchMatch struct {
 	SchemaPreview         string `json:"schema_preview"`
 	Deferred              bool   `json:"deferred"`
 	DeferReason           string `json:"defer_reason,omitempty"`
+	ExecutionAvailable    bool   `json:"execution_available"`
+	ExecutionPolicy       string `json:"execution_policy"`
+	ModelCallable         bool   `json:"model_callable"`
 	ConcurrencySafe       bool   `json:"concurrency_safe"`
 	Reversible            bool   `json:"reversible"`
 	CancelSiblingsOnError bool   `json:"cancel_siblings_on_error"`
@@ -330,6 +333,9 @@ func buildToolSearchMatch(tool Tool) toolSearchMatch {
 		SchemaPreview:         compactSchemaPreview(tool.Schema()),
 		Deferred:              deferReason != "",
 		DeferReason:           deferReason,
+		ExecutionAvailable:    true,
+		ExecutionPolicy:       "model_tool_call",
+		ModelCallable:         true,
 		ConcurrencySafe:       tool.IsConcurrencySafe(nil),
 		Reversible:            tool.Reversible(),
 		CancelSiblingsOnError: tool.ShouldCancelSiblingsOnError(),
