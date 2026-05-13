@@ -93,12 +93,14 @@ type daemonTimeoutPolicyView struct {
 }
 
 type selfHealingTimeoutPolicyView struct {
-	Enabled                                    bool `json:"enabled"`
-	ObserveOnly                                bool `json:"observe_only"`
-	TimeoutSeconds                             int  `json:"timeout_seconds"`
-	CompletionRetryMax                         int  `json:"completion_retry_max"`
-	VerificationRetryRequiresStandaloneCommand bool `json:"verification_retry_requires_standalone_command"`
-	VerificationRetryInfersCommandFromProse    bool `json:"verification_retry_infers_command_from_prose"`
+	Enabled                                    bool     `json:"enabled"`
+	ObserveOnly                                bool     `json:"observe_only"`
+	TimeoutSeconds                             int      `json:"timeout_seconds"`
+	CompletionRetryMax                         int      `json:"completion_retry_max"`
+	CompletionRetrySupportedMax                int      `json:"completion_retry_supported_max"`
+	CompletionRetryDecisions                   []string `json:"completion_retry_decisions"`
+	VerificationRetryRequiresStandaloneCommand bool     `json:"verification_retry_requires_standalone_command"`
+	VerificationRetryInfersCommandFromProse    bool     `json:"verification_retry_infers_command_from_prose"`
 }
 
 type telegramTimeoutPolicyView struct {
@@ -136,11 +138,13 @@ func explainTimeouts(cfg *config.Config, args []string) error {
 		view.Daemon.MaxRecoveries,
 		view.Daemon.WorkspaceRetention,
 	)
-	fmt.Fprintf(os.Stdout, "  Self-healing: enabled=%t observe_only=%t timeout=%ds completion_retry_max=%d verification_retry=standalone_command_only\n",
+	fmt.Fprintf(os.Stdout, "  Self-healing: enabled=%t observe_only=%t timeout=%ds completion_retry_max=%d supported_max=%d decisions=%s verification_retry=standalone_command_only\n",
 		view.SelfHealing.Enabled,
 		view.SelfHealing.ObserveOnly,
 		view.SelfHealing.TimeoutSeconds,
 		view.SelfHealing.CompletionRetryMax,
+		view.SelfHealing.CompletionRetrySupportedMax,
+		strings.Join(view.SelfHealing.CompletionRetryDecisions, ","),
 	)
 	fmt.Fprintf(os.Stdout, "  Telegram: poll_timeout=%ds\n", view.Telegram.PollTimeoutSeconds)
 	return nil
@@ -168,10 +172,15 @@ func timeoutPolicyViewForConfig(cfg *config.Config) timeoutPolicyView {
 			WorkspaceRetention:       workspaceRetention,
 		},
 		SelfHealing: selfHealingTimeoutPolicyView{
-			Enabled:            cfg.SelfHealing.Enabled,
-			ObserveOnly:        cfg.SelfHealing.ObserveOnly,
-			TimeoutSeconds:     cfg.SelfHealing.TimeoutSeconds,
-			CompletionRetryMax: cfg.SelfHealing.CompletionRetryMax,
+			Enabled:                     cfg.SelfHealing.Enabled,
+			ObserveOnly:                 cfg.SelfHealing.ObserveOnly,
+			TimeoutSeconds:              cfg.SelfHealing.TimeoutSeconds,
+			CompletionRetryMax:          cfg.SelfHealing.CompletionRetryMax,
+			CompletionRetrySupportedMax: maxCompletionRetryAttempts,
+			CompletionRetryDecisions: []string{
+				completionRetryDecisionRetrySmallerScope,
+				completionRetryDecisionRunVerification,
+			},
 			VerificationRetryRequiresStandaloneCommand: true,
 			VerificationRetryInfersCommandFromProse:    false,
 		},
