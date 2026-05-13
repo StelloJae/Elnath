@@ -91,12 +91,34 @@ type taskCreateToolInput struct {
 }
 
 type taskCreateToolOutput struct {
-	TaskID         int64  `json:"task_id"`
-	Status         string `json:"status"`
-	Deduplicated   bool   `json:"deduplicated"`
-	SessionID      string `json:"session_id,omitempty"`
-	IdempotencyKey string `json:"idempotency_key,omitempty"`
-	PayloadPreview string `json:"payload_preview"`
+	TaskID         int64           `json:"task_id"`
+	Status         string          `json:"status"`
+	Deduplicated   bool            `json:"deduplicated"`
+	SessionID      string          `json:"session_id,omitempty"`
+	IdempotencyKey string          `json:"idempotency_key,omitempty"`
+	PayloadPreview string          `json:"payload_preview"`
+	Receipt        taskToolReceipt `json:"receipt"`
+}
+
+type taskToolReceipt struct {
+	Tool            string     `json:"tool"`
+	Action          string     `json:"action"`
+	ReadOnly        bool       `json:"read_only"`
+	Persistent      bool       `json:"persistent"`
+	QueueBacked     bool       `json:"queue_backed"`
+	ExecutionPolicy string     `json:"execution_policy"`
+	TaskID          int64      `json:"task_id,omitempty"`
+	Status          TaskStatus `json:"status,omitempty"`
+	PreviousStatus  TaskStatus `json:"previous_status,omitempty"`
+	Terminal        bool       `json:"terminal,omitempty"`
+	Deduplicated    bool       `json:"deduplicated,omitempty"`
+	Found           bool       `json:"found,omitempty"`
+	TotalReturned   int        `json:"total_returned,omitempty"`
+	Limit           int        `json:"limit,omitempty"`
+	StatusFilter    TaskStatus `json:"status_filter,omitempty"`
+	Field           string     `json:"field,omitempty"`
+	RetrievalStatus string     `json:"retrieval_status,omitempty"`
+	FollowupTool    string     `json:"followup_tool,omitempty"`
 }
 
 func (t *TaskCreateTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
@@ -133,6 +155,17 @@ func (t *TaskCreateTool) Execute(ctx context.Context, params json.RawMessage) (*
 		SessionID:      strings.TrimSpace(input.SessionID),
 		IdempotencyKey: strings.TrimSpace(input.IdempotencyKey),
 		PayloadPreview: truncateTaskToolText(payload, taskToolPreviewMaxRune),
+		Receipt: taskToolReceipt{
+			Tool:            TaskCreateToolName,
+			Action:          "create",
+			ReadOnly:        false,
+			Persistent:      true,
+			QueueBacked:     true,
+			ExecutionPolicy: "daemon_queue_enqueue",
+			TaskID:          id,
+			Status:          StatusPending,
+			Deduplicated:    deduped,
+		},
 	}
 	raw, err := json.Marshal(output)
 	if err != nil {
@@ -179,10 +212,11 @@ type taskListToolInput struct {
 }
 
 type taskListToolOutput struct {
-	TotalReturned int            `json:"total_returned"`
-	Limit         int            `json:"limit"`
-	Status        string         `json:"status,omitempty"`
-	Tasks         []taskToolItem `json:"tasks"`
+	TotalReturned int             `json:"total_returned"`
+	Limit         int             `json:"limit"`
+	Status        string          `json:"status,omitempty"`
+	Tasks         []taskToolItem  `json:"tasks"`
+	Receipt       taskToolReceipt `json:"receipt"`
 }
 
 type taskToolItem struct {
@@ -245,6 +279,17 @@ func (t *TaskListTool) Execute(ctx context.Context, params json.RawMessage) (*to
 		Limit:         limit,
 		Status:        string(status),
 		Tasks:         items,
+		Receipt: taskToolReceipt{
+			Tool:            TaskListToolName,
+			Action:          "list",
+			ReadOnly:        true,
+			Persistent:      false,
+			QueueBacked:     true,
+			ExecutionPolicy: "daemon_queue_observation",
+			TotalReturned:   len(items),
+			Limit:           limit,
+			StatusFilter:    status,
+		},
 	}
 	raw, err := json.Marshal(output)
 	if err != nil {
@@ -296,8 +341,9 @@ type taskGetToolInput struct {
 }
 
 type taskGetToolOutput struct {
-	Found bool            `json:"found"`
-	Task  *taskToolDetail `json:"task"`
+	Found   bool            `json:"found"`
+	Task    *taskToolDetail `json:"task"`
+	Receipt taskToolReceipt `json:"receipt"`
 }
 
 type taskToolDetail struct {
@@ -323,7 +369,18 @@ func (t *TaskGetTool) Execute(ctx context.Context, params json.RawMessage) (*too
 	task, err := t.queue.Get(ctx, input.ID)
 	if err != nil {
 		if errors.Is(err, core.ErrNotFound) {
-			raw, marshalErr := json.Marshal(taskGetToolOutput{})
+			raw, marshalErr := json.Marshal(taskGetToolOutput{
+				Receipt: taskToolReceipt{
+					Tool:            TaskGetToolName,
+					Action:          "get",
+					ReadOnly:        true,
+					Persistent:      false,
+					QueueBacked:     true,
+					ExecutionPolicy: "daemon_queue_observation",
+					TaskID:          input.ID,
+					Found:           false,
+				},
+			})
 			if marshalErr != nil {
 				return tools.ErrorResult(fmt.Sprintf("task_get: marshal output: %v", marshalErr)), nil
 			}
@@ -338,6 +395,18 @@ func (t *TaskGetTool) Execute(ctx context.Context, params json.RawMessage) (*too
 			taskToolItem: item,
 			Payload:      task.Payload,
 			Result:       task.Result,
+		},
+		Receipt: taskToolReceipt{
+			Tool:            TaskGetToolName,
+			Action:          "get",
+			ReadOnly:        true,
+			Persistent:      false,
+			QueueBacked:     true,
+			ExecutionPolicy: "daemon_queue_observation",
+			TaskID:          task.ID,
+			Status:          task.Status,
+			Terminal:        isTerminalTaskStatus(task.Status),
+			Found:           true,
 		},
 	}
 	raw, err := json.Marshal(output)
@@ -403,14 +472,15 @@ type taskStopToolInput struct {
 }
 
 type taskStopToolOutput struct {
-	TaskID         int64      `json:"task_id"`
-	Stopped        bool       `json:"stopped"`
-	Accepted       bool       `json:"accepted"`
-	Terminal       bool       `json:"terminal"`
-	PreviousStatus TaskStatus `json:"previous_status"`
-	Status         TaskStatus `json:"status"`
-	Reason         string     `json:"reason"`
-	FollowupTool   string     `json:"followup_tool,omitempty"`
+	TaskID         int64           `json:"task_id"`
+	Stopped        bool            `json:"stopped"`
+	Accepted       bool            `json:"accepted"`
+	Terminal       bool            `json:"terminal"`
+	PreviousStatus TaskStatus      `json:"previous_status"`
+	Status         TaskStatus      `json:"status"`
+	Reason         string          `json:"reason"`
+	FollowupTool   string          `json:"followup_tool,omitempty"`
+	Receipt        taskToolReceipt `json:"receipt"`
 }
 
 func (t *TaskStopTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
@@ -466,6 +536,19 @@ func (t *TaskStopTool) Execute(ctx context.Context, params json.RawMessage) (*to
 	default:
 		return tools.ErrorResult(fmt.Sprintf("task_stop: task %d is %s; only pending or running tasks can be stopped", input.ID, task.Status)), nil
 	}
+	output.Receipt = taskToolReceipt{
+		Tool:            TaskStopToolName,
+		Action:          "stop",
+		ReadOnly:        false,
+		Persistent:      true,
+		QueueBacked:     true,
+		ExecutionPolicy: "daemon_queue_mutation",
+		TaskID:          input.ID,
+		Status:          output.Status,
+		PreviousStatus:  output.PreviousStatus,
+		Terminal:        output.Terminal,
+		FollowupTool:    output.FollowupTool,
+	}
 	raw, err := json.Marshal(output)
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("task_stop: marshal output: %v", err)), nil
@@ -518,15 +601,16 @@ type taskOutputToolInput struct {
 }
 
 type taskOutputToolOutput struct {
-	TaskID          int64      `json:"task_id"`
-	Status          TaskStatus `json:"status"`
-	RetrievalStatus string     `json:"retrieval_status"`
-	Terminal        bool       `json:"terminal"`
-	Field           string     `json:"field"`
-	MaxChars        int        `json:"max_chars"`
-	TotalChars      int        `json:"total_chars"`
-	Truncated       bool       `json:"truncated"`
-	Content         string     `json:"content"`
+	TaskID          int64           `json:"task_id"`
+	Status          TaskStatus      `json:"status"`
+	RetrievalStatus string          `json:"retrieval_status"`
+	Terminal        bool            `json:"terminal"`
+	Field           string          `json:"field"`
+	MaxChars        int             `json:"max_chars"`
+	TotalChars      int             `json:"total_chars"`
+	Truncated       bool            `json:"truncated"`
+	Content         string          `json:"content"`
+	Receipt         taskToolReceipt `json:"receipt"`
 }
 
 func (t *TaskOutputTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
@@ -575,6 +659,19 @@ func (t *TaskOutputTool) Execute(ctx context.Context, params json.RawMessage) (*
 		TotalChars:      total,
 		Truncated:       truncated,
 		Content:         tail,
+		Receipt: taskToolReceipt{
+			Tool:            TaskOutputToolName,
+			Action:          "output",
+			ReadOnly:        true,
+			Persistent:      false,
+			QueueBacked:     true,
+			ExecutionPolicy: "daemon_queue_observation",
+			TaskID:          task.ID,
+			Status:          task.Status,
+			Terminal:        terminal,
+			Field:           field,
+			RetrievalStatus: retrievalStatus,
+		},
 	}
 	raw, err := json.Marshal(output)
 	if err != nil {
@@ -677,6 +774,7 @@ type taskMonitorToolOutput struct {
 	TimeoutClass       string                 `json:"timeout_class,omitempty"`
 	IdleTimeoutCount   int                    `json:"idle_timeout_count,omitempty"`
 	ActiveTimeoutCount int                    `json:"active_timeout_count,omitempty"`
+	Receipt            taskToolReceipt        `json:"receipt"`
 }
 
 type taskMonitorObservation struct {
@@ -766,6 +864,18 @@ func (t *TaskMonitorTool) Execute(ctx context.Context, params json.RawMessage) (
 		TimeoutClass:       string(task.TimeoutClass),
 		IdleTimeoutCount:   task.IdleTimeoutCount,
 		ActiveTimeoutCount: task.ActiveTimeoutCount,
+		Receipt: taskToolReceipt{
+			Tool:            TaskMonitorToolName,
+			Action:          "monitor",
+			ReadOnly:        true,
+			Persistent:      false,
+			QueueBacked:     true,
+			ExecutionPolicy: "daemon_queue_observation",
+			TaskID:          task.ID,
+			Status:          task.Status,
+			Terminal:        terminal,
+			RetrievalStatus: retrievalStatus,
+		},
 	}
 	raw, err := json.Marshal(output)
 	if err != nil {
@@ -871,11 +981,12 @@ type taskUpdateToolInput struct {
 }
 
 type taskUpdateToolOutput struct {
-	TaskID   int64      `json:"task_id"`
-	Status   TaskStatus `json:"status"`
-	Progress string     `json:"progress,omitempty"`
-	Summary  string     `json:"summary,omitempty"`
-	Updated  bool       `json:"updated"`
+	TaskID   int64           `json:"task_id"`
+	Status   TaskStatus      `json:"status"`
+	Progress string          `json:"progress,omitempty"`
+	Summary  string          `json:"summary,omitempty"`
+	Updated  bool            `json:"updated"`
+	Receipt  taskToolReceipt `json:"receipt"`
 }
 
 func (t *TaskUpdateTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
@@ -901,6 +1012,17 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, params json.RawMessage) (*
 		Progress: task.Progress,
 		Summary:  task.Summary,
 		Updated:  true,
+		Receipt: taskToolReceipt{
+			Tool:            TaskUpdateToolName,
+			Action:          "update",
+			ReadOnly:        false,
+			Persistent:      true,
+			QueueBacked:     true,
+			ExecutionPolicy: "daemon_queue_mutation",
+			TaskID:          task.ID,
+			Status:          task.Status,
+			Terminal:        isTerminalTaskStatus(task.Status),
+		},
 	}
 	raw, err := json.Marshal(output)
 	if err != nil {

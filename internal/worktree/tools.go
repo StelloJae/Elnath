@@ -85,15 +85,38 @@ type EnterInput struct {
 }
 
 type EnterOutput struct {
-	Name           string `json:"name"`
-	Slug           string `json:"slug"`
-	Path           string `json:"path"`
-	Branch         string `json:"branch"`
-	OriginalBranch string `json:"original_branch,omitempty"`
-	OriginalHead   string `json:"original_head"`
-	Existing       bool   `json:"existing"`
-	RegistryPath   string `json:"registry_path"`
-	EnteredSession bool   `json:"entered_session"`
+	Name           string      `json:"name"`
+	Slug           string      `json:"slug"`
+	Path           string      `json:"path"`
+	Branch         string      `json:"branch"`
+	OriginalBranch string      `json:"original_branch,omitempty"`
+	OriginalHead   string      `json:"original_head"`
+	Existing       bool        `json:"existing"`
+	RegistryPath   string      `json:"registry_path"`
+	EnteredSession bool        `json:"entered_session"`
+	Receipt        ToolReceipt `json:"receipt"`
+}
+
+type ToolReceipt struct {
+	Tool               string `json:"tool"`
+	Action             string `json:"action"`
+	ReadOnly           bool   `json:"read_only"`
+	Persistent         bool   `json:"persistent"`
+	RegistryBacked     bool   `json:"registry_backed"`
+	ExecutionAvailable bool   `json:"execution_available"`
+	ExecutionPolicy    string `json:"execution_policy"`
+	Name               string `json:"name,omitempty"`
+	Path               string `json:"path,omitempty"`
+	Branch             string `json:"branch,omitempty"`
+	RegistryPath       string `json:"registry_path,omitempty"`
+	Existing           bool   `json:"existing,omitempty"`
+	Removed            bool   `json:"removed,omitempty"`
+	DryRun             bool   `json:"dry_run,omitempty"`
+	Total              int    `json:"total,omitempty"`
+	StaleCount         int    `json:"stale_count,omitempty"`
+	RemovedCount       int    `json:"removed_count,omitempty"`
+	Runner             string `json:"runner,omitempty"`
+	IsError            bool   `json:"is_error,omitempty"`
 }
 
 func (t *EnterTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
@@ -160,14 +183,15 @@ type ExitInput struct {
 }
 
 type ExitOutput struct {
-	Name         string `json:"name"`
-	Path         string `json:"path"`
-	Branch       string `json:"branch"`
-	Action       string `json:"action"`
-	Removed      bool   `json:"removed"`
-	DirtyFiles   int    `json:"dirty_files"`
-	AheadCommits int    `json:"ahead_commits"`
-	RegistryPath string `json:"registry_path"`
+	Name         string      `json:"name"`
+	Path         string      `json:"path"`
+	Branch       string      `json:"branch"`
+	Action       string      `json:"action"`
+	Removed      bool        `json:"removed"`
+	DirtyFiles   int         `json:"dirty_files"`
+	AheadCommits int         `json:"ahead_commits"`
+	RegistryPath string      `json:"registry_path"`
+	Receipt      ToolReceipt `json:"receipt"`
 }
 
 type ListTool struct {
@@ -202,6 +226,7 @@ type ListOutput struct {
 	RegistryPath string       `json:"registry_path"`
 	Total        int          `json:"total"`
 	Worktrees    []ListRecord `json:"worktrees"`
+	Receipt      ToolReceipt  `json:"receipt"`
 }
 
 type ListRecord struct {
@@ -246,10 +271,15 @@ func (m *Manager) List(ctx context.Context) (ListOutput, error) {
 	for _, record := range registry.Worktrees {
 		worktrees = append(worktrees, m.listRecordStatus(ctx, repoRoot, record))
 	}
+	registryPath := filepath.Join(repoRoot, ".elnath", "worktrees", "registry.json")
 	return ListOutput{
-		RegistryPath: filepath.Join(repoRoot, ".elnath", "worktrees", "registry.json"),
+		RegistryPath: registryPath,
 		Total:        len(worktrees),
 		Worktrees:    worktrees,
+		Receipt: worktreeToolReceipt(ListToolName, "list", true, false, false, "managed_worktree_registry_observation", worktreeReceiptInput{
+			RegistryPath: registryPath,
+			Total:        len(worktrees),
+		}),
 	}, nil
 }
 
@@ -337,13 +367,14 @@ type RunInput struct {
 }
 
 type RunOutput struct {
-	Name          string `json:"name"`
-	Path          string `json:"path"`
-	Branch        string `json:"branch"`
-	Runner        string `json:"runner"`
-	WorkingDir    string `json:"working_dir"`
-	IsError       bool   `json:"is_error"`
-	CommandOutput string `json:"command_output"`
+	Name          string      `json:"name"`
+	Path          string      `json:"path"`
+	Branch        string      `json:"branch"`
+	Runner        string      `json:"runner"`
+	WorkingDir    string      `json:"working_dir"`
+	IsError       bool        `json:"is_error"`
+	CommandOutput string      `json:"command_output"`
+	Receipt       ToolReceipt `json:"receipt"`
 }
 
 func (t *RunTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
@@ -421,6 +452,13 @@ func (m *Manager) Run(ctx context.Context, input RunInput, runner tools.BashRunn
 		WorkingDir:    workingDir,
 		IsError:       result.IsError,
 		CommandOutput: result.Output,
+		Receipt: worktreeToolReceipt(RunToolName, "run", false, true, true, "managed_worktree_command", worktreeReceiptInput{
+			Name:    record.Name,
+			Path:    record.Path,
+			Branch:  record.Branch,
+			Runner:  runner.Name(),
+			IsError: result.IsError,
+		}),
 	}, nil
 }
 
@@ -468,6 +506,7 @@ type PruneOutput struct {
 	RemovedCount int           `json:"removed_count"`
 	KeptCount    int           `json:"kept_count"`
 	Entries      []PruneRecord `json:"entries"`
+	Receipt      ToolReceipt   `json:"receipt"`
 }
 
 type PruneRecord struct {
@@ -546,6 +585,13 @@ func (m *Manager) Prune(ctx context.Context, input PruneInput) (PruneOutput, err
 			return PruneOutput{}, err
 		}
 	}
+	output.Receipt = worktreeToolReceipt(PruneToolName, "prune", dryRun, !dryRun, false, "managed_worktree_registry_prune", worktreeReceiptInput{
+		RegistryPath: output.RegistryPath,
+		DryRun:       output.DryRun,
+		Total:        output.Total,
+		StaleCount:   output.StaleCount,
+		RemovedCount: output.RemovedCount,
+	})
 	return output, nil
 }
 
@@ -609,6 +655,13 @@ func (m *Manager) Enter(ctx context.Context, rawName string) (EnterOutput, error
 			Existing:       true,
 			RegistryPath:   registryPath,
 			EnteredSession: false,
+			Receipt: worktreeToolReceipt(EnterToolName, "enter", false, true, false, "managed_worktree_registry_mutation", worktreeReceiptInput{
+				Name:         record.Name,
+				Path:         record.Path,
+				Branch:       record.Branch,
+				RegistryPath: registryPath,
+				Existing:     true,
+			}),
 		}, nil
 	}
 
@@ -648,6 +701,13 @@ func (m *Manager) Enter(ctx context.Context, rawName string) (EnterOutput, error
 		Existing:       false,
 		RegistryPath:   registryPath,
 		EnteredSession: false,
+		Receipt: worktreeToolReceipt(EnterToolName, "enter", false, true, false, "managed_worktree_registry_mutation", worktreeReceiptInput{
+			Name:         record.Name,
+			Path:         record.Path,
+			Branch:       record.Branch,
+			RegistryPath: registryPath,
+			Existing:     false,
+		}),
 	}, nil
 }
 
@@ -692,6 +752,13 @@ func (m *Manager) Exit(ctx context.Context, input ExitInput) (ExitOutput, error)
 		AheadCommits: ahead,
 		RegistryPath: filepath.Join(repoRoot, ".elnath", "worktrees", "registry.json"),
 	}
+	output.Receipt = worktreeToolReceipt(ExitToolName, "exit", false, true, false, "managed_worktree_registry_mutation", worktreeReceiptInput{
+		Name:         output.Name,
+		Path:         output.Path,
+		Branch:       output.Branch,
+		RegistryPath: output.RegistryPath,
+		Removed:      output.Removed,
+	})
 	if action == "keep" {
 		return output, nil
 	}
@@ -714,6 +781,7 @@ func (m *Manager) Exit(ctx context.Context, input ExitInput) (ExitOutput, error)
 		return ExitOutput{}, err
 	}
 	output.Removed = true
+	output.Receipt.Removed = true
 	return output, nil
 }
 
@@ -869,6 +937,45 @@ func staleRegistryReason(repoRoot string, path string) (string, bool) {
 		return err.Error(), false
 	}
 	return "", false
+}
+
+type worktreeReceiptInput struct {
+	Name         string
+	Path         string
+	Branch       string
+	RegistryPath string
+	Existing     bool
+	Removed      bool
+	DryRun       bool
+	Total        int
+	StaleCount   int
+	RemovedCount int
+	Runner       string
+	IsError      bool
+}
+
+func worktreeToolReceipt(tool, action string, readOnly, persistent, executionAvailable bool, policy string, input worktreeReceiptInput) ToolReceipt {
+	return ToolReceipt{
+		Tool:               tool,
+		Action:             action,
+		ReadOnly:           readOnly,
+		Persistent:         persistent,
+		RegistryBacked:     true,
+		ExecutionAvailable: executionAvailable,
+		ExecutionPolicy:    policy,
+		Name:               input.Name,
+		Path:               input.Path,
+		Branch:             input.Branch,
+		RegistryPath:       input.RegistryPath,
+		Existing:           input.Existing,
+		Removed:            input.Removed,
+		DryRun:             input.DryRun,
+		Total:              input.Total,
+		StaleCount:         input.StaleCount,
+		RemovedCount:       input.RemovedCount,
+		Runner:             input.Runner,
+		IsError:            input.IsError,
+	}
 }
 
 func (r registryFile) findByNameOrPath(name string, path string) (Record, bool) {

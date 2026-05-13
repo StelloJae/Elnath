@@ -33,6 +33,9 @@ func TestEnterWorktreeCreatesRegistryAndReusesExisting(t *testing.T) {
 	if output.Existing {
 		t.Fatalf("first enter Existing = true, want false")
 	}
+	if output.Receipt.Tool != EnterToolName || output.Receipt.Action != "enter" || output.Receipt.ReadOnly || !output.Receipt.Persistent || !output.Receipt.RegistryBacked || output.Receipt.Name != output.Name || output.Receipt.Branch != output.Branch {
+		t.Fatalf("receipt = %+v, want enter_worktree registry mutation receipt", output.Receipt)
+	}
 	repoRoot := gitOutput(t, repo, "rev-parse", "--show-toplevel")
 	if !strings.HasPrefix(output.Path, filepath.Join(repoRoot, ".elnath", "worktrees")+string(os.PathSeparator)) {
 		t.Fatalf("worktree path = %q, want under .elnath/worktrees", output.Path)
@@ -117,6 +120,9 @@ func TestExitWorktreeRequiresCleanOrDiscard(t *testing.T) {
 	if !exitOutput.Removed || exitOutput.DirtyFiles != 1 {
 		t.Fatalf("exit output = %+v, want forced removal with dirty count", exitOutput)
 	}
+	if exitOutput.Receipt.Tool != ExitToolName || exitOutput.Receipt.Action != "exit" || exitOutput.Receipt.ReadOnly || !exitOutput.Receipt.Persistent || !exitOutput.Receipt.RegistryBacked || !exitOutput.Receipt.Removed {
+		t.Fatalf("receipt = %+v, want exit_worktree registry mutation receipt", exitOutput.Receipt)
+	}
 	if _, err := os.Stat(enterOutput.Path); !os.IsNotExist(err) {
 		t.Fatalf("worktree path still exists or stat failed unexpectedly: %v", err)
 	}
@@ -149,6 +155,9 @@ func TestWorktreeListToolShowsRegisteredWorktrees(t *testing.T) {
 	}
 	if output.Total != 1 || len(output.Worktrees) != 1 {
 		t.Fatalf("list output = %+v, want one registered worktree", output)
+	}
+	if output.Receipt.Tool != ListToolName || output.Receipt.Action != "list" || !output.Receipt.ReadOnly || output.Receipt.Persistent || !output.Receipt.RegistryBacked || output.Receipt.Total != 1 {
+		t.Fatalf("receipt = %+v, want worktree_list read-only receipt", output.Receipt)
 	}
 	if got := output.Worktrees[0]; got.Name != "feature/list" || got.Slug != "feature+list" || got.Path == "" || got.Branch == "" {
 		t.Fatalf("listed worktree = %+v, want registry record details", got)
@@ -255,6 +264,9 @@ func TestWorktreePruneToolDefaultsToDryRun(t *testing.T) {
 	if !output.DryRun || output.StaleCount != 1 || output.RemovedCount != 0 || output.KeptCount != 1 {
 		t.Fatalf("dry-run output = %+v, want one stale entry kept", output)
 	}
+	if output.Receipt.Tool != PruneToolName || output.Receipt.Action != "prune" || !output.Receipt.ReadOnly || output.Receipt.Persistent || !output.Receipt.RegistryBacked || !output.Receipt.DryRun {
+		t.Fatalf("receipt = %+v, want dry-run prune read-only receipt", output.Receipt)
+	}
 	registry, err := manager.readRegistry(context.Background())
 	if err != nil {
 		t.Fatalf("readRegistry: %v", err)
@@ -335,6 +347,9 @@ func TestWorktreeRunToolExecutesInsideManagedWorktree(t *testing.T) {
 	}
 	if output.Name != "feature/run" || output.Path == "" || output.Runner != "direct" || output.IsError {
 		t.Fatalf("run output = %+v, want successful direct run in managed worktree", output)
+	}
+	if output.Receipt.Tool != RunToolName || output.Receipt.Action != "run" || output.Receipt.ReadOnly || !output.Receipt.Persistent || !output.Receipt.ExecutionAvailable || output.Receipt.Runner != "direct" || output.Receipt.IsError {
+		t.Fatalf("receipt = %+v, want worktree_run command receipt", output.Receipt)
 	}
 	if _, err := os.Stat(filepath.Join(output.Path, "run.txt")); err != nil {
 		t.Fatalf("run.txt not written inside worktree: %v", err)
