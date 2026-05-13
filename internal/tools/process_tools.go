@@ -450,6 +450,7 @@ func (t *ProcessStartTool) Execute(ctx context.Context, params json.RawMessage) 
 			Terminal:        snap.Terminal,
 			TimeoutMS:       int(proc.timeout / time.Millisecond),
 			CWD:             snap.CWD,
+			FollowupTool:    processFollowupTool(ProcessStartToolName, true, snap.Terminal),
 		},
 	}
 	raw, err := json.Marshal(out)
@@ -548,6 +549,7 @@ func (t *ProcessMonitorTool) Execute(ctx context.Context, params json.RawMessage
 			StdoutTruncated: snap.StdoutTruncated,
 			StderrTruncated: snap.StderrTruncated,
 			CWD:             snap.CWD,
+			FollowupTool:    processFollowupTool(ProcessMonitorToolName, true, snap.Terminal),
 		},
 	}
 	raw, err := json.Marshal(out)
@@ -664,6 +666,7 @@ func (t *ProcessStopTool) Execute(ctx context.Context, params json.RawMessage) (
 			Found:           true,
 			StopSignal:      stopSignal,
 			CWD:             snap.CWD,
+			FollowupTool:    processFollowupTool(ProcessStopToolName, true, snap.Terminal),
 		},
 	}
 	raw, err := json.Marshal(out)
@@ -711,6 +714,23 @@ type processReceipt struct {
 	StderrTruncated bool   `json:"stderr_truncated,omitempty"`
 	StopSignal      string `json:"stop_signal,omitempty"`
 	Found           bool   `json:"found,omitempty"`
+	FollowupTool    string `json:"followup_tool,omitempty"`
+}
+
+func processFollowupTool(tool string, found bool, terminal bool) string {
+	switch tool {
+	case ProcessStartToolName:
+		return ProcessMonitorToolName
+	case ProcessMonitorToolName:
+		if found && !terminal {
+			return ProcessMonitorToolName
+		}
+	case ProcessStopToolName:
+		if found {
+			return ProcessMonitorToolName
+		}
+	}
+	return ""
 }
 
 func normalizeProcessTimeout(ms int) time.Duration {
