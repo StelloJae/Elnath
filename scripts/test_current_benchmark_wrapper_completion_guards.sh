@@ -230,6 +230,19 @@ GO
     echo "Modified files: logger.go, logger_test.go"
     echo "Verification: go test ./... passed."
     ;;
+  v8_mix_bf001_no_fixture_test)
+    mkdir -p api/internal/accumulator
+    cat > api/internal/accumulator/namereferencetransformer.go <<'GO'
+package accumulator
+
+func TransformNameReferencesInStableResourceOrder() {}
+GO
+    cat > go.work.sum <<'SUMEOF'
+example.com/checksum v1.0.0 h1:abc
+SUMEOF
+    echo "Modified files: api/internal/accumulator/namereferencetransformer.go, go.work.sum"
+    echo "Verification: go test ./... passed."
+    ;;
   go_bug002_unbounded_wait_test)
     cat > viper.go <<'GO'
 package benchmark
@@ -449,6 +462,17 @@ assert data["verification_passed"] is True, data
 assert data["failure_family"] == "incomplete_patch", data
 assert "logger_test.go" in data["changed_files"], data
 assert "logger output buffer" in data["notes"], data
+'
+
+run_wrapper_case v8_mix_bf001_no_fixture_test "$TMP_DIR/v8-mix-bf001-no-fixture-test.json" "$SOURCE_REPO" "V8-MIX-BF-001"
+assert_json_case "$TMP_DIR/v8-mix-bf001-no-fixture-test.json" '
+assert data["success"] is False, data
+assert data["verification_passed"] is True, data
+assert data["failure_family"] == "incomplete_patch", data
+assert "api/internal/accumulator/namereferencetransformer.go" in data["changed_files"], data
+assert "go.work.sum" in data["changed_files"], data
+assert "V8-MIX-BF-001" in data["notes"], data
+assert "test/fixture" in data["notes"], data
 '
 
 run_wrapper_case go_bug002_unbounded_wait_test "$TMP_DIR/go-bug002-unbounded-wait-test.json" "$SOURCE_REPO" "GO-BUG-002"
