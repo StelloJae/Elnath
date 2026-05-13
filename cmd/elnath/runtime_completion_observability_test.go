@@ -587,6 +587,9 @@ func TestCompletionContractSummaryRecordsAskUserQuestionReceipt(t *testing.T) {
 	if receipt.QuestionChars != 13 || receipt.OptionCount != 2 || receipt.AllowFreeText || receipt.TimeoutSeconds != 120 {
 		t.Fatalf("receipt bounds = %+v", receipt)
 	}
+	if !summary.UserInputRequired {
+		t.Fatal("UserInputRequired = false, want true")
+	}
 }
 
 func TestCompletionContractSummaryRecordsProcessToolReceipts(t *testing.T) {
