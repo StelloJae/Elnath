@@ -63,6 +63,8 @@ func (t *ToolSearchTool) Schema() json.RawMessage {
 		"query":       String(`Search query. Use "select:<tool_name>[,<tool_name>...]" for exact selection.`),
 		"max_results": Int("Maximum number of matches to return. Defaults to 5 and caps at 20."),
 		"allow_names": Array("Optional exact tool-name allowlist that restricts the searchable candidate set.", "string"),
+		"category":    String("Optional routing category filter, such as task, schedule, skill, command, worktree, process, file, or mcp."),
+		"surface":     String("Optional routing surface filter, such as daemon, scheduler, skill, runtime, worktree, process, builtin, or mcp."),
 	}, []string{"query"})
 }
 
@@ -78,6 +80,8 @@ type toolSearchInput struct {
 	Query      string   `json:"query"`
 	MaxResults int      `json:"max_results"`
 	AllowNames []string `json:"allow_names"`
+	Category   string   `json:"category"`
+	Surface    string   `json:"surface"`
 }
 
 type toolSearchOutput struct {
@@ -90,6 +94,8 @@ type toolSearchOutput struct {
 type toolSearchMatch struct {
 	Name                  string `json:"name"`
 	Description           string `json:"description"`
+	Category              string `json:"category"`
+	Surface               string `json:"surface"`
 	SchemaPreview         string `json:"schema_preview"`
 	Deferred              bool   `json:"deferred"`
 	DeferReason           string `json:"defer_reason,omitempty"`
@@ -113,12 +119,19 @@ type toolSearchReceipt struct {
 	DeferredMatches    int    `json:"deferred_matches"`
 	MaxResults         int    `json:"max_results"`
 	AllowNamesCount    int    `json:"allow_names_count"`
+	Category           string `json:"category,omitempty"`
+	Surface            string `json:"surface,omitempty"`
 	Query              string `json:"query"`
 }
 
 type toolSearchCandidate struct {
 	tool  Tool
 	score int
+}
+
+type toolSearchRoutingMetadata struct {
+	Category string
+	Surface  string
 }
 
 func (t *ToolSearchTool) Execute(_ context.Context, params json.RawMessage) (*Result, error) {
@@ -131,6 +144,7 @@ func (t *ToolSearchTool) Execute(_ context.Context, params json.RawMessage) (*Re
 
 	maxResults := normalizeToolSearchMax(input.MaxResults)
 	tools := filterToolSearchAllowNames(t.searchableTools(), input.AllowNames)
+	tools = filterToolSearchRouting(tools, input.Category, input.Surface)
 	query := strings.TrimSpace(input.Query)
 
 	var matches []toolSearchMatch
@@ -144,7 +158,7 @@ func (t *ToolSearchTool) Execute(_ context.Context, params json.RawMessage) (*Re
 		Query:      query,
 		TotalTools: len(tools),
 		Matches:    matches,
-		Receipt:    t.receipt(query, maxResults, input.AllowNames, len(tools), matches),
+		Receipt:    t.receipt(query, maxResults, input.AllowNames, input.Category, input.Surface, len(tools), matches),
 	}
 	raw, err := json.Marshal(out)
 	if err != nil {
@@ -153,7 +167,7 @@ func (t *ToolSearchTool) Execute(_ context.Context, params json.RawMessage) (*Re
 	return SuccessResult(string(raw)), nil
 }
 
-func (t *ToolSearchTool) receipt(query string, maxResults int, allowNames []string, totalTools int, matches []toolSearchMatch) toolSearchReceipt {
+func (t *ToolSearchTool) receipt(query string, maxResults int, allowNames []string, category string, surface string, totalTools int, matches []toolSearchMatch) toolSearchReceipt {
 	return toolSearchReceipt{
 		Tool:               ToolSearchName,
 		Action:             toolSearchAction(query),
@@ -166,6 +180,8 @@ func (t *ToolSearchTool) receipt(query string, maxResults int, allowNames []stri
 		DeferredMatches:    countDeferredToolSearchMatches(matches),
 		MaxResults:         maxResults,
 		AllowNamesCount:    countNonEmptyToolSearchNames(allowNames),
+		Category:           normalizeToolSearchFilter(category),
+		Surface:            normalizeToolSearchFilter(surface),
 		Query:              strings.TrimSpace(query),
 	}
 }
@@ -327,9 +343,12 @@ func scoreToolSearchCandidate(tool Tool, required, optional []string) int {
 
 func buildToolSearchMatch(tool Tool) toolSearchMatch {
 	deferReason := ToolSchemaDeferReason(tool)
+	routing := toolSearchRoutingMetadataForName(tool.Name())
 	return toolSearchMatch{
 		Name:                  tool.Name(),
 		Description:           tool.Description(),
+		Category:              routing.Category,
+		Surface:               routing.Surface,
 		SchemaPreview:         compactSchemaPreview(tool.Schema()),
 		Deferred:              deferReason != "",
 		DeferReason:           deferReason,
@@ -339,6 +358,55 @@ func buildToolSearchMatch(tool Tool) toolSearchMatch {
 		ConcurrencySafe:       tool.IsConcurrencySafe(nil),
 		Reversible:            tool.Reversible(),
 		CancelSiblingsOnError: tool.ShouldCancelSiblingsOnError(),
+	}
+}
+
+func toolSearchRoutingMetadataForName(name string) toolSearchRoutingMetadata {
+	name = strings.ToLower(strings.TrimSpace(name))
+	switch {
+	case name == "":
+		return toolSearchRoutingMetadata{Category: "other", Surface: "registry"}
+	case strings.HasPrefix(name, "mcp_"):
+		return toolSearchRoutingMetadata{Category: "mcp", Surface: "mcp"}
+	case strings.HasPrefix(name, "task_"):
+		return toolSearchRoutingMetadata{Category: "task", Surface: "daemon"}
+	case strings.HasPrefix(name, "schedule_"):
+		return toolSearchRoutingMetadata{Category: "schedule", Surface: "scheduler"}
+	case name == "enter_worktree" || name == "exit_worktree" || strings.HasPrefix(name, "worktree_"):
+		return toolSearchRoutingMetadata{Category: "worktree", Surface: "worktree"}
+	case strings.HasPrefix(name, "process_"):
+		return toolSearchRoutingMetadata{Category: "process", Surface: "process"}
+	case strings.HasPrefix(name, "agentic_"):
+		return toolSearchRoutingMetadata{Category: "agentic", Surface: "agentic"}
+	}
+
+	switch name {
+	case "read_file", "write_file", "edit_file", "glob", "grep":
+		return toolSearchRoutingMetadata{Category: "file", Surface: "builtin"}
+	case "bash":
+		return toolSearchRoutingMetadata{Category: "shell", Surface: "builtin"}
+	case "git":
+		return toolSearchRoutingMetadata{Category: "version_control", Surface: "builtin"}
+	case "web_fetch", "web_search":
+		return toolSearchRoutingMetadata{Category: "web", Surface: "builtin"}
+	case "code_symbols":
+		return toolSearchRoutingMetadata{Category: "code_intelligence", Surface: "builtin"}
+	case "todo_write":
+		return toolSearchRoutingMetadata{Category: "plan", Surface: "builtin"}
+	case "sleep":
+		return toolSearchRoutingMetadata{Category: "timer", Surface: "builtin"}
+	case "tool_search":
+		return toolSearchRoutingMetadata{Category: "discovery", Surface: "builtin"}
+	case "skill", "skill_catalog", "create_skill":
+		return toolSearchRoutingMetadata{Category: "skill", Surface: "skill"}
+	case "command_catalog", "runtime_command":
+		return toolSearchRoutingMetadata{Category: "command", Surface: "runtime"}
+	case "enter_plan_mode", "exit_plan_mode":
+		return toolSearchRoutingMetadata{Category: "plan", Surface: "runtime"}
+	case "ask_user_question":
+		return toolSearchRoutingMetadata{Category: "user_input", Surface: "runtime"}
+	default:
+		return toolSearchRoutingMetadata{Category: "other", Surface: "registry"}
 	}
 }
 
@@ -366,6 +434,33 @@ func filterToolSearchAllowNames(tools []Tool, allowNames []string) []Tool {
 		}
 	}
 	return out
+}
+
+func filterToolSearchRouting(tools []Tool, category string, surface string) []Tool {
+	category = normalizeToolSearchFilter(category)
+	surface = normalizeToolSearchFilter(surface)
+	if category == "" && surface == "" {
+		return tools
+	}
+	out := make([]Tool, 0, len(tools))
+	for _, tool := range tools {
+		if tool == nil {
+			continue
+		}
+		routing := toolSearchRoutingMetadataForName(tool.Name())
+		if category != "" && routing.Category != category {
+			continue
+		}
+		if surface != "" && routing.Surface != surface {
+			continue
+		}
+		out = append(out, tool)
+	}
+	return out
+}
+
+func normalizeToolSearchFilter(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
 }
 
 func compactSchemaPreview(raw json.RawMessage) string {
