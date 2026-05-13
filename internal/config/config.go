@@ -329,6 +329,22 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("ELNATH_REASONING_EFFORT"); v != "" {
 		cfg.Reasoning.Effort = v
 	}
+	if v, ok := os.LookupEnv("ELNATH_SELF_HEALING_ENABLED"); ok {
+		cfg.SelfHealing.Enabled = parseEnvBool(v)
+	}
+	if v, ok := os.LookupEnv("ELNATH_SELF_HEALING_OBSERVE_ONLY"); ok {
+		cfg.SelfHealing.ObserveOnly = parseEnvBool(v)
+	}
+	if v := os.Getenv("ELNATH_SELF_HEALING_TIMEOUT_SECONDS"); v != "" {
+		if timeout, err := strconv.Atoi(v); err == nil {
+			cfg.SelfHealing.TimeoutSeconds = timeout
+		}
+	}
+	if v := os.Getenv("ELNATH_SELF_HEALING_COMPLETION_RETRY_MAX"); v != "" {
+		if maxRetries, err := strconv.Atoi(v); err == nil {
+			cfg.SelfHealing.CompletionRetryMax = maxRetries
+		}
+	}
 	if v := os.Getenv("ELNATH_OLLAMA_BASE_URL"); v != "" {
 		cfg.Ollama.BaseURL = v
 	}

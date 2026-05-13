@@ -582,6 +582,44 @@ func TestApplyEnvOverrides(t *testing.T) {
 			want:   "low",
 		},
 		{
+			name:   "ELNATH_SELF_HEALING_ENABLED",
+			envKey: "ELNATH_SELF_HEALING_ENABLED",
+			envVal: "false",
+			check: func(c *Config) string {
+				if c.SelfHealing.Enabled {
+					return "true"
+				}
+				return "false"
+			},
+			want: "false",
+		},
+		{
+			name:   "ELNATH_SELF_HEALING_OBSERVE_ONLY",
+			envKey: "ELNATH_SELF_HEALING_OBSERVE_ONLY",
+			envVal: "false",
+			check: func(c *Config) string {
+				if c.SelfHealing.ObserveOnly {
+					return "true"
+				}
+				return "false"
+			},
+			want: "false",
+		},
+		{
+			name:   "ELNATH_SELF_HEALING_TIMEOUT_SECONDS",
+			envKey: "ELNATH_SELF_HEALING_TIMEOUT_SECONDS",
+			envVal: "21",
+			check:  func(c *Config) string { return strconv.Itoa(c.SelfHealing.TimeoutSeconds) },
+			want:   "21",
+		},
+		{
+			name:   "ELNATH_SELF_HEALING_COMPLETION_RETRY_MAX",
+			envKey: "ELNATH_SELF_HEALING_COMPLETION_RETRY_MAX",
+			envVal: "2",
+			check:  func(c *Config) string { return strconv.Itoa(c.SelfHealing.CompletionRetryMax) },
+			want:   "2",
+		},
+		{
 			name:   "ELNATH_OLLAMA_BASE_URL",
 			envKey: "ELNATH_OLLAMA_BASE_URL",
 			envVal: "http://localhost:11434",

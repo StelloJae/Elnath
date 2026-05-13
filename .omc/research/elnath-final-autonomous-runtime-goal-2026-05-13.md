@@ -1,21 +1,33 @@
 # Elnath final autonomous runtime goal
 
 Date: 2026-05-13
-Branch: `main`
-HEAD: `8d61c831fd1e28b200011a38a80dbff500129d46`
+Branch: `codex/v8-self-correction-regression-recovery`
+Base HEAD: `6f1b4ab87f79bd1c55a78d8d9240669f5e3cd620`
 Status: active operating contract
 
 Latest continuation update:
 
-- working branch: `codex/budget-edit-intent-completion-warning`
-- base HEAD after PR #198: `3aca1cdc7a9ad4144dcd8d5a43794940a4ff2c4f`
+- working branch: `codex/v8-self-correction-regression-recovery`
+- base HEAD after PR #200: `6f1b4ab87f79bd1c55a78d8d9240669f5e3cd620`
+- local milestone commit: `602b3c2618a99cb9e24d50c85a38c6970fde78af`
 - PR #196 shipped patch-quality evidence fields
 - PR #197 shipped a fail-closed `V8-MIX-BF-001` patch-quality guard
 - PR #198 shipped narrower `V8-MIX-BF-001` recovery guidance
-- post-PR198 expanded smoke was intentionally aborted after repeated
-  `V8-MIX-BF-001` `incomplete_patch`
-- current implementation lane: runtime completion guard for
-  `budget_exceeded` after edit intent
+- PR #199 shipped a runtime completion warning for `budget_exceeded` after
+  edit intent
+- PR #200 shipped a narrower `V8-MIX-BF-001` recovery insertion guard
+- post-PR200 4-task control smoke passed `4/4`
+- post-PR200 expanded 10-task current-only smoke after mixed recovery budget
+  completed `10/10`
+- current implementation lane: no-change/timeout self-correction repair after
+  `V8-GO-BUG-004` exited with edit intent but no diff
+- latest focused result: `V8-GO-BUG-004` one-task current-only PASS after
+  special missing-regression recovery path
+- latest focused result: `V8-MIX-BF-001` one-task current-only PASS after
+  bounded recovery budget policy
+- latest selected result: 10-task current-only smoke PASS with
+  `10/10 success+verified`, `verification_unavailable=0`, and
+  `patch_quality=strong` for all tasks
 
 ## Core clarification
 
@@ -70,6 +82,15 @@ Latest benchmark-readiness evidence:
 
 - `V8-JS-BUG-001` retained retry: PASS
 - 4-task current-only control smoke: `4/4 success+verified`
+- post-PR200 expanded 10-task smoke after mixed recovery budget:
+  `10/10 success+verified`
+- post-PR200 `V8-GO-BUG-004` focused rerun: PASS after no-diff and
+  missing-regression recovery repairs
+- post-PR200 `V8-MIX-BF-001` focused rerun: PASS after bounded recovery budget
+  policy
+- post-PR200 expanded selected rerun:
+  `.omc/research/post-pr200-expanded-10task-after-mix-budget-2026-05-13.md`
+- selected smoke result: PASS, 10/10, all patch_quality `strong`
 - `verification_unavailable=0`
 - no baseline run
 - no full v8 run
@@ -77,13 +98,21 @@ Latest benchmark-readiness evidence:
 
 Important caveat:
 
-- 4-task smoke exposed patch-quality weakness:
+- earlier 4-task smoke exposed patch-quality weakness:
   - `V8-MIX-BF-001` passed with only `go.work.sum` changed
   - `V8-PY-BUG-001` passed with production-only diff despite regression-test
     acceptance criteria
+- PR #196 and PR #197 made those weak patches visible/fail-closed where
+  appropriate
+- post-PR200 expanded smoke exposed two runtime/control-loop weaknesses:
+  - `V8-GO-BUG-004` reached edit intent, hit timeout/recovery, and exited
+    with an empty diff
+  - `V8-MIX-BF-001` produced a valid production diff but hit budget before
+    adding required focused regression coverage
 
-This means Elnath can produce executable/verified patches, but benchmark score
-alone is not enough. Patch-quality evidence must be tracked.
+This means Elnath can produce executable/verified patches across multiple
+languages, but benchmark score alone is not enough. Patch-quality and no-diff
+completion evidence must remain first-class gates.
 
 ## Product completion target
 
@@ -169,12 +198,15 @@ Goal:
 
 Status:
 
-- started after PR #197 and PR #198
-- intentionally aborted after repeated `V8-MIX-BF-001` finding
-- latest blocker is not setup or verification availability
-- latest blocker is runtime self-correction/completion-contract weakness:
-  the agent can state a missing test edit intent, spend budget, and exit
-  without the promised concrete diff
+- completed after post-PR200 self-correction and mixed recovery budget lane
+- latest selected result: `10/10 success+verified`
+- `verification_unavailable=0`
+- setup contract remained healthy
+- focused follow-up for that miss passed after bounded recovery budget policy
+- selected-smoke confirmation passed after the V8-MIX-BF-001 focused repair
+- current blocker is no longer selected-smoke readiness
+- next blocker is making the local milestone reviewable before full v8
+  current-only planning
 
 Exit criteria:
 
@@ -200,6 +232,71 @@ Exit criteria:
 - focused runtime completion tests pass
 - `.omc/research` artifact records the post-PR198 root cause and fix
 - larger benchmark lanes stay paused until this runtime fix is reviewed
+
+Status:
+
+- shipped through PR #199
+
+### Stage 3b: no-change/timeout self-correction guard
+
+Goal:
+
+- detect edit-intent plus no diff after timeout or budget pressure as a stronger
+  retry/repair condition
+- keep retry bounded and receipt-backed
+- avoid silent self-healing promises
+
+Status:
+
+- focused repair implemented after post-PR200 expanded smoke
+- primary evidence: `V8-GO-BUG-004` `no_change_planning_failure`
+- result artifact:
+  `.omc/research/post-pr200-expanded-10task-current-smoke-2026-05-13.md`
+- focused closure artifact:
+  `.omc/research/post-pr200-v8-go-bug004-special-regression-recovery-2026-05-13.md`
+- focused result: `V8-GO-BUG-004` one-task current-only PASS, changed
+  `backend_inotify.go` and `backend_inotify_test.go`, patch quality `strong`
+
+Exit criteria:
+
+- focused runtime/self-correction tests pass
+- no-diff completion produces an explicit repair signal or narrower retry path
+- one-task `V8-GO-BUG-004` current-only retained retry is run and documented
+
+### Stage 3c: mixed-task recovery budget guard
+
+Goal:
+
+- prevent mixed brownfield tasks from exhausting the generic recovery budget
+  after identifying the correct missing regression seam
+- keep the higher budget task-specific and bounded
+- preserve patch-quality fail-closed behavior
+
+Status:
+
+- focused wrapper policy patch implemented
+- primary evidence: post-PR200 expanded selected smoke had one remaining miss,
+  `V8-MIX-BF-001` `incomplete_patch`
+- root cause: generic `ELNATH_MAX_ITERATIONS=20` was too low for this mixed
+  task after production diff plus targeted regression insertion
+- focused closure artifact:
+  `.omc/research/post-pr200-v8-mix-bf001-recovery-budget-2026-05-13.md`
+- focused result: `V8-MIX-BF-001` one-task current-only PASS, changed
+  `api/internal/accumulator/namereferencetransformer.go`,
+  `api/internal/accumulator/namereferencetransformer_test.go`, and
+  `go.work.sum`, patch quality `strong`
+
+Exit criteria:
+
+- wrapper syntax and guidance tests pass
+- one-task `V8-MIX-BF-001` current-only retry passes
+- same 10-task selected current-only smoke is rerun and documented
+
+Status:
+
+- exit criteria met
+- selected rerun artifact:
+  `.omc/research/post-pr200-expanded-10task-after-mix-budget-2026-05-13.md`
 
 ### Stage 4: full v8 current-only run
 
@@ -290,18 +387,17 @@ Do not stop for:
 
 ## Immediate next action
 
-Do not run larger smoke first.
+Do not run baseline or comparison.
 
-First implement or document a patch-quality evidence gate, because the latest
-4-task smoke proved that `success+verified` can still hide weak patch quality.
+Make the local milestone reviewable before full v8:
 
-Recommended first slice:
+Recommended next slice:
 
-1. inspect existing eval `RunResult` / scorecard summary code
-2. add a narrow patch-quality classifier if local structure supports it
-3. add focused tests
-4. write closure artifact
-5. then run larger selected current-only smoke with patch-quality columns
+1. keep no baseline and no comparison
+2. run final local verification for changed runtime/wrapper/doc artifacts
+3. amend or create one coherent milestone commit
+4. open one PR for the milestone, not multiple tiny PRs
+5. after merge, plan full v8 current-only run
 
 ## Completion definition
 

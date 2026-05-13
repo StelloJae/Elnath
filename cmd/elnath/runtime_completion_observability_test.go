@@ -198,6 +198,42 @@ func TestCompletionContractSummaryDetectsEditIntentWithoutMutation(t *testing.T)
 	}
 }
 
+func TestCompletionRetryPromptGuidesNoDiffCorrection(t *testing.T) {
+	prompt := completionRetryPrompt(completionContractSummary{
+		RetryDecision: completionRetryDecisionRetrySmallerScope,
+		RetryReason:   "edit_intent_without_mutation",
+	})
+
+	for _, want := range []string{
+		"Retry reason: edit_intent_without_mutation",
+		"left no accepted mutation",
+		"Make the smallest concrete file edit",
+		"instead of claiming completion",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
+func TestCompletionRetryPromptGuidesBudgetAfterEditIntent(t *testing.T) {
+	prompt := completionRetryPrompt(completionContractSummary{
+		RetryDecision: completionRetryDecisionRetrySmallerScope,
+		RetryReason:   "budget_exceeded_after_edit_intent",
+	})
+
+	for _, want := range []string{
+		"Retry reason: budget_exceeded_after_edit_intent",
+		"reached budget after edit intent",
+		"do not restart broad investigation",
+		"run the configured verification",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
 func TestCompletionContractSummaryDetectsEditToolMutation(t *testing.T) {
 	result := &orchestrator.WorkflowResult{
 		Messages: []llm.Message{

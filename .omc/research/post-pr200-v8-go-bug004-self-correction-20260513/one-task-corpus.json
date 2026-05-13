@@ -1,0 +1,23 @@
+{
+  "version": "v1",
+  "tasks": [
+    {
+      "id": "V8-GO-BUG-004",
+      "title": "Stabilize watcher rename/remove sequencing",
+      "track": "bugfix",
+      "language": "go",
+      "repo_class": "cli_dev_tool",
+      "benchmark_family": "v8_public_first_freeze",
+      "prompt": "Fix a watcher edge case around rename or remove sequencing and verify it with deterministic regression coverage.",
+      "repo": "https://github.com/fsnotify/fsnotify",
+      "source_url": "https://github.com/fsnotify/fsnotify",
+      "repo_ref": "58d0c04e1e157f143fd65e6a3e3e927ba7df81c7",
+      "verification_command": "go test ./...",
+      "acceptance_criteria": [
+        "the event sequence regression is captured by tests",
+        "the fix avoids broad timing assumptions",
+        "normal watcher behavior remains intact"
+      ]
+    }
+  ]
+}

@@ -471,6 +471,17 @@ Recovery completion checklist:
 EOF
 }
 
+missing_regression_recovery_discipline() {
+  cat <<'EOF'
+
+Missing-regression recovery discipline:
+- If verification already passes but benchmark task-specific evidence is missing, do not rework the passing production diff first.
+- Edit the required focused test or fixture file before more broad implementation reading.
+- Keep the smallest passing production diff intact unless the missing regression proves it is semantically wrong.
+- A production-only diff remains incomplete when the task acceptance criteria require deterministic regression coverage.
+EOF
+}
+
 no_change_recovery_discipline() {
   cat <<'EOF'
 
@@ -483,7 +494,7 @@ EOF
 }
 
 task_recovery_timeout() {
-  if is_ts_bf001_vitest_task || is_ts_bf002_nestjs_task || is_v8_py_th001_pytest_task || is_v8_go_bug004_fsnotify_task || is_v8_go_bug003_cobra_task || is_v8_go_bf004_gorm_context_task || is_v8_mix_bug001_actions_toolkit_task || is_v8_add_js001_yargs_task || is_v8_def_ts003_msw_task || is_v8_py_bug001_requests_task || is_v8_alt_mix001_semantic_release_task || is_v8_py_bf001_flask_context_task; then
+  if is_ts_bf001_vitest_task || is_ts_bf002_nestjs_task || is_v8_py_th001_pytest_task || is_v8_go_bug004_fsnotify_task || is_v8_go_bug003_cobra_task || is_v8_go_bf004_gorm_context_task || is_v8_mix_bug001_actions_toolkit_task || is_v8_mix_bf001_kustomize_task || is_v8_add_js001_yargs_task || is_v8_def_ts003_msw_task || is_v8_py_bug001_requests_task || is_v8_alt_mix001_semantic_release_task || is_v8_py_bf001_flask_context_task; then
     printf '%s\n' "$ELNATH_TIMEOUT"
     return 0
   fi
@@ -493,6 +504,10 @@ task_recovery_timeout() {
 task_max_iterations() {
   if is_v8_go_bug004_fsnotify_task; then
     printf '%s\n' 28
+    return 0
+  fi
+  if is_v8_mix_bf001_kustomize_task; then
+    printf '%s\n' 30
     return 0
   fi
   if is_ts_bf002_nestjs_task; then
@@ -777,10 +792,12 @@ V8-GO-BUG-004 fsnotify inotify guidance:
 - Start in `backend_inotify.go`, especially `handleEvent`, `IN_MOVE_SELF`, `IN_DELETE_SELF`, and watch descriptor bookkeeping.
 - Use `backend_inotify_test.go` for focused Linux regression coverage when adding a new test; do not create a broad timing-heavy test harness.
 - The expected patch is small and should preserve normal watcher behavior while fixing rename/remove event sequencing. Do not finish with findings only.
+- A production-only diff in `backend_inotify.go` is incomplete even if `go test ./...` passes; add focused regression coverage in `backend_inotify_test.go`.
 - Do not run `go test ./...` before a diff exists. First leave a working-tree diff in `backend_inotify.go`, then add or update the focused regression in `backend_inotify_test.go`, then verify.
 - In `handleEvent`, prefer direct watch bookkeeping for self-move/self-delete events once the kernel has already reported the watch target moved or deleted; avoid treating the self event as a user `Remove()` call that can race with inotify's implicit watch invalidation.
 - If touching `IN_MOVE_SELF`, keep the emitted `Rename` event for user-added non-recursive watches and keep recursive child behavior intact.
 - Add focused coverage in `backend_inotify_test.go` proving the self move/remove sequence does not emit an unexpected backend error and leaves watch bookkeeping consistent.
+- In missing-regression recovery, keep the existing `backend_inotify.go` diff intact and patch `backend_inotify_test.go` first; do not spend the recovery turn re-reading broad production context.
 - If no-change recovery starts, stop re-reading after `handleEvent`, `w.remove`, and the existing inotify delete/rename tests are identified; patch `backend_inotify.go` and `backend_inotify_test.go` before any more exploration.
 - If you are about to say "Applying the targeted code change" or "I will apply the patch", apply the patch in that turn before any final answer.
 - Run `go test ./...` before the final answer.
@@ -1655,6 +1672,12 @@ recover_passed_task_specific_failure() {
       "The verification command '${VERIFY_CMD}' passed, but the benchmark guard rejected the patch: ${reason}" \
       "Keep the passing 'api/internal/accumulator/namereferencetransformer.go' production diff intact. Do not rerun broad baseline checks or re-read unrelated packages before editing the missing regression." \
       "Immediately edit 'api/internal/accumulator/namereferencetransformer_test.go' and add a focused deterministic name-reference regression that proves transformer application/RefBy order follows 'm.Resources()' order for multiple referencing resources. Use a real existing insertion anchor such as \`func TestNameReferenceUnhappyRun(t *testing.T) {\`, or append to the end if the anchor is missing. After editing, run \`git diff --name-only -- api/internal/accumulator/namereferencetransformer_test.go\`; if it prints nothing, the edit was a no-op and you must edit the test file before running broad verification. Do not finish with only 'go.work.sum' as non-production evidence. Then run '${VERIFY_CMD}' and finish only if both 'api/internal/accumulator/namereferencetransformer.go' and 'api/internal/accumulator/namereferencetransformer_test.go' remain changed."
+  elif is_v8_go_bug004_fsnotify_task; then
+    printf -v TASK_SPECIFIC_PROMPT '%s\n\n%s\n\n%s\n\n%s' \
+      "Task ID: ${TASK_ID}" \
+      "The verification command '${VERIFY_CMD}' passed, but the benchmark guard rejected the patch: ${reason}" \
+      "Keep the passing 'backend_inotify.go' production diff intact. Do not rerun broad baseline checks or re-read unrelated packages before editing the missing regression." \
+      "Immediately edit 'backend_inotify_test.go' and add a focused deterministic regression for the inotify self move/remove sequence. The regression must prove the sequence does not emit an unexpected backend error and leaves watch bookkeeping consistent. Use existing backend_inotify_test.go helper style; avoid broad timing-heavy harnesses. After editing, run \`git diff --name-only -- backend_inotify_test.go\`; if it prints nothing, the edit was a no-op and you must edit the test file before running broad verification. Then run '${VERIFY_CMD}' and finish only if both 'backend_inotify.go' and 'backend_inotify_test.go' remain changed."
   else
     printf -v TASK_SPECIFIC_PROMPT '%s\n\n%s\n\n%s' \
       "$BENCHMARK_PROMPT" \
@@ -1662,6 +1685,7 @@ recover_passed_task_specific_failure() {
       "Keep the passing production patch intact, add or repair the missing focused regression evidence now, run '${VERIFY_CMD}', and only claim completion if the task-specific evidence is present."
     TASK_SPECIFIC_PROMPT+="$(typescript_recovery_checklist)"
     TASK_SPECIFIC_PROMPT+="$(recovery_completion_checklist)"
+    TASK_SPECIFIC_PROMPT+="$(missing_regression_recovery_discipline)"
     TASK_SPECIFIC_PROMPT+="$(ts_bf001_recovery_guidance)"
     TASK_SPECIFIC_PROMPT+="$(ts_bf002_no_change_recovery_guidance)"
     TASK_SPECIFIC_PROMPT+="$(ts_bf002_recovery_guidance)"
@@ -2186,6 +2210,8 @@ run_elnath() {
     export ELNATH_DATA_DIR="$BENCHMARK_DATA_DIR"
     export ELNATH_WIKI_DIR="$BENCHMARK_WIKI_DIR"
     export ELNATH_BENCHMARK_ENV_DIR="$BENCHMARK_ENV_DIR"
+    export ELNATH_SELF_HEALING_OBSERVE_ONLY="${ELNATH_BENCHMARK_SELF_HEALING_OBSERVE_ONLY:-false}"
+    export ELNATH_SELF_HEALING_COMPLETION_RETRY_MAX="${ELNATH_BENCHMARK_SELF_HEALING_COMPLETION_RETRY_MAX:-1}"
     export HOME="$BENCHMARK_HOME_DIR"
     local -a args=("$ELNATH_BIN" "run" "--non-interactive")
     python3 - <<'PY' "$timeout_override" "$log_path" "$prompt" "${args[@]}"
