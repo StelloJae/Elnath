@@ -331,7 +331,7 @@ func TestLoadConfigIgnoresDisabledTasksBeforeValidation(t *testing.T) {
 
 func TestSchedulerRunOnStartEnqueuesImmediately(t *testing.T) {
 	enq := &mockEnq{}
-	s := New([]ScheduledTask{{Name: "task1", Prompt: "hello", Interval: 10 * time.Millisecond, RunOnStart: true}}, enq, discardLogger())
+	s := New([]ScheduledTask{{Name: "task1", Prompt: "hello", Interval: time.Hour, RunOnStart: true}}, enq, discardLogger())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -356,7 +356,7 @@ func TestSchedulerBridge_RecordsSignalWithoutChangingQueueBehavior(t *testing.T)
 	enq := &mockEnq{}
 	bridge := &mockSchedulerSignalBridge{}
 	s := New(
-		[]ScheduledTask{{Name: "task1", Prompt: "hello", Interval: 10 * time.Millisecond, RunOnStart: true}},
+		[]ScheduledTask{{Name: "task1", Prompt: "hello", Interval: time.Hour, RunOnStart: true}},
 		enq,
 		discardLogger(),
 		WithSignalBridge(bridge),
