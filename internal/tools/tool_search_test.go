@@ -14,6 +14,8 @@ type testToolSearchOutput struct {
 	Matches    []struct {
 		Name                  string `json:"name"`
 		Description           string `json:"description"`
+		Category              string `json:"category"`
+		Surface               string `json:"surface"`
 		SchemaPreview         string `json:"schema_preview"`
 		Deferred              bool   `json:"deferred"`
 		DeferReason           string `json:"defer_reason,omitempty"`
@@ -36,6 +38,8 @@ type testToolSearchOutput struct {
 		DeferredMatches    int    `json:"deferred_matches"`
 		MaxResults         int    `json:"max_results"`
 		AllowNamesCount    int    `json:"allow_names_count"`
+		Category           string `json:"category,omitempty"`
+		Surface            string `json:"surface,omitempty"`
 		Query              string `json:"query"`
 	} `json:"receipt"`
 }
@@ -181,6 +185,75 @@ func TestToolSearchReportsStableMetadata(t *testing.T) {
 	}
 	if !match.ConcurrencySafe || !match.Reversible || !match.CancelSiblingsOnError {
 		t.Fatalf("metadata = %+v, want safe/reversible/cancel true", match)
+	}
+	if match.Category != "mcp" || match.Surface != "mcp" {
+		t.Fatalf("routing metadata = category:%q surface:%q, want mcp/mcp", match.Category, match.Surface)
+	}
+}
+
+func TestToolSearchReportsRoutingMetadata(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(&toolSearchMetadataTool{name: "task_create", description: "Create daemon task"})
+	reg.Register(&toolSearchMetadataTool{name: "schedule_list", description: "List scheduled tasks"})
+	reg.Register(&toolSearchMetadataTool{name: "enter_worktree", description: "Create managed worktree"})
+	reg.Register(&toolSearchMetadataTool{name: "skill", description: "Invoke a skill"})
+	reg.Register(&toolSearchMetadataTool{name: "command_catalog", description: "Inspect commands"})
+	reg.Register(&toolSearchMetadataTool{name: "process_monitor", description: "Monitor long running command"})
+	search := NewToolSearchTool(reg)
+	reg.Register(search)
+
+	out := executeToolSearch(t, search, `{"query":"","max_results":10}`)
+
+	got := map[string]struct {
+		category string
+		surface  string
+	}{}
+	for _, match := range out.Matches {
+		got[match.Name] = struct {
+			category string
+			surface  string
+		}{category: match.Category, surface: match.Surface}
+	}
+	want := map[string]struct {
+		category string
+		surface  string
+	}{
+		"task_create":     {category: "task", surface: "daemon"},
+		"schedule_list":   {category: "schedule", surface: "scheduler"},
+		"enter_worktree":  {category: "worktree", surface: "worktree"},
+		"skill":           {category: "skill", surface: "skill"},
+		"command_catalog": {category: "command", surface: "runtime"},
+		"process_monitor": {category: "process", surface: "process"},
+	}
+	for name, wantMeta := range want {
+		gotMeta, ok := got[name]
+		if !ok {
+			t.Fatalf("missing match %s in %+v", name, got)
+		}
+		if gotMeta != wantMeta {
+			t.Fatalf("%s routing metadata = %+v, want %+v", name, gotMeta, wantMeta)
+		}
+	}
+}
+
+func TestToolSearchFiltersByCategoryAndSurface(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(&toolSearchMetadataTool{name: "task_create", description: "Create daemon task"})
+	reg.Register(&toolSearchMetadataTool{name: "schedule_list", description: "List scheduled tasks"})
+	reg.Register(&toolSearchMetadataTool{name: "process_monitor", description: "Monitor long running command"})
+	search := NewToolSearchTool(reg)
+	reg.Register(search)
+
+	out := executeToolSearch(t, search, `{"query":"","category":"task","surface":"daemon","max_results":10}`)
+
+	if out.TotalTools != 1 {
+		t.Fatalf("TotalTools = %d, want filtered candidate count 1", out.TotalTools)
+	}
+	if len(out.Matches) != 1 || out.Matches[0].Name != "task_create" {
+		t.Fatalf("matches = %+v, want only task_create", out.Matches)
+	}
+	if out.Receipt.Category != "task" || out.Receipt.Surface != "daemon" {
+		t.Fatalf("receipt routing filters = category:%q surface:%q, want task/daemon", out.Receipt.Category, out.Receipt.Surface)
 	}
 }
 
