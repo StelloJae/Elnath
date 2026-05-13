@@ -655,6 +655,9 @@ func withProviderCapabilities(summary completionContractSummary, provider llm.Pr
 }
 
 func completionRetryPlan(summary completionContractSummary) (string, string) {
+	if summary.UserInputRequired {
+		return "", ""
+	}
 	if summary.CompletionWarning == "final_response_reports_incomplete" {
 		return completionRetryDecisionRetrySmallerScope, summary.CompletionWarning
 	}

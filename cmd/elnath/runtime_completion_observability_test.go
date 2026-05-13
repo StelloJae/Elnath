@@ -592,6 +592,35 @@ func TestCompletionContractSummaryRecordsAskUserQuestionReceipt(t *testing.T) {
 	}
 }
 
+func TestCompletionContractSummaryDoesNotRetryWhenUserInputRequired(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("Need a branch decision before editing."),
+			{
+				Role: llm.RoleAssistant,
+				Content: []llm.ContentBlock{
+					llm.ToolUseBlock{ID: "ask-1", Name: "ask_user_question", Input: json.RawMessage(`{"question":"Which branch?","options":["main","new"],"allow_free_text":false,"timeout_seconds":120}`)},
+				},
+			},
+			llm.NewToolResultMessage("ask-1", `{"type":"user_input_required","question":"Which branch?","options":["main","new"],"allow_free_text":false,"timeout_seconds":120,"receipt":{"tool":"ask_user_question","action":"request","read_only":true,"execution_policy":"user_input_request","question_chars":13,"option_count":2,"allow_free_text":false,"timeout_seconds":120}}`, false),
+			llm.NewAssistantMessage("I still need your answer before I can finish."),
+		},
+		FinishReason: "stop",
+	}
+
+	summary := summarizeCompletionContract(nil, orchestrator.WorkflowConfig{}, result)
+
+	if !summary.UserInputRequired {
+		t.Fatal("UserInputRequired = false, want true")
+	}
+	if summary.CompletionWarning != "final_response_reports_incomplete" {
+		t.Fatalf("CompletionWarning = %q, want final_response_reports_incomplete", summary.CompletionWarning)
+	}
+	if summary.RetryDecision != "" || summary.RetryReason != "" {
+		t.Fatalf("retry plan = %q/%q, want empty while user input is required", summary.RetryDecision, summary.RetryReason)
+	}
+}
+
 func TestCompletionContractSummaryRecordsProcessToolReceipts(t *testing.T) {
 	result := &orchestrator.WorkflowResult{
 		Messages: []llm.Message{
