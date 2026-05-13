@@ -55,6 +55,8 @@ func cmdExplain(_ context.Context, args []string) error {
 		return explainHistory(outcomeStore, n)
 	case "timeouts":
 		return explainTimeouts(cfg, args[1:])
+	case "control-surfaces":
+		return explainControlSurfaces(args[1:])
 	default:
 		return fmt.Errorf("explain: unknown subcommand %q (try: elnath explain help)", args[0])
 	}
@@ -67,9 +69,130 @@ Subcommands:
   last              Show the most recent routing decision
   history [n]       Show recent n routing decisions (default 10)
   timeouts [--json] Show configured timeout and retry policy
+  control-surfaces [--json]
+                    Show implemented model-callable control surfaces
   help              Show this help
 `)
 	return nil
+}
+
+type controlSurfacePolicyView struct {
+	Surfaces      []controlSurfacePolicyEntry `json:"surfaces"`
+	RemainingGaps []string                    `json:"remaining_gaps"`
+}
+
+type controlSurfacePolicyEntry struct {
+	Name                   string   `json:"name"`
+	Status                 string   `json:"status"`
+	Tools                  []string `json:"tools"`
+	ToolSearchDiscoverable bool     `json:"tool_search_discoverable"`
+	ReceiptBacked          bool     `json:"receipt_backed"`
+	Notes                  string   `json:"notes,omitempty"`
+}
+
+func explainControlSurfaces(args []string) error {
+	jsonOut := false
+	for _, arg := range args {
+		switch arg {
+		case "--json":
+			jsonOut = true
+		case "help", "-h", "--help":
+			return printExplainUsage()
+		default:
+			return fmt.Errorf("explain: control-surfaces: unknown flag %q", arg)
+		}
+	}
+
+	view := controlSurfacePolicyViewForRuntime()
+	if jsonOut {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(view)
+	}
+
+	fmt.Fprintln(os.Stdout, "Control surfaces:")
+	for _, surface := range view.Surfaces {
+		fmt.Fprintf(os.Stdout, "  - %s: %s tools=%s tool_search=%t receipts=%t\n",
+			surface.Name,
+			surface.Status,
+			strings.Join(surface.Tools, ","),
+			surface.ToolSearchDiscoverable,
+			surface.ReceiptBacked,
+		)
+	}
+	fmt.Fprintln(os.Stdout, "Remaining gaps:")
+	for _, gap := range view.RemainingGaps {
+		fmt.Fprintf(os.Stdout, "  - %s\n", gap)
+	}
+	return nil
+}
+
+func controlSurfacePolicyViewForRuntime() controlSurfacePolicyView {
+	return controlSurfacePolicyView{
+		Surfaces: []controlSurfacePolicyEntry{
+			{
+				Name:                   "task",
+				Status:                 "implemented",
+				Tools:                  []string{"task_create", "task_list", "task_get", "task_stop", "task_output", "task_monitor", "task_update"},
+				ToolSearchDiscoverable: true,
+				ReceiptBacked:          true,
+				Notes:                  "daemon queue task lifecycle",
+			},
+			{
+				Name:                   "schedule",
+				Status:                 "implemented",
+				Tools:                  []string{"schedule_create", "schedule_list", "schedule_delete"},
+				ToolSearchDiscoverable: true,
+				ReceiptBacked:          true,
+				Notes:                  "static scheduled daemon tasks",
+			},
+			{
+				Name:                   "plan",
+				Status:                 "implemented",
+				Tools:                  []string{"enter_plan_mode", "exit_plan_mode"},
+				ToolSearchDiscoverable: true,
+				ReceiptBacked:          true,
+				Notes:                  "session permission-mode transition",
+			},
+			{
+				Name:                   "worktree",
+				Status:                 "implemented",
+				Tools:                  []string{"enter_worktree", "worktree_list", "worktree_run", "worktree_prune", "exit_worktree"},
+				ToolSearchDiscoverable: true,
+				ReceiptBacked:          true,
+				Notes:                  "managed git worktree lifecycle and bounded run",
+			},
+			{
+				Name:                   "process",
+				Status:                 "implemented",
+				Tools:                  []string{"process_start", "process_monitor", "process_stop"},
+				ToolSearchDiscoverable: true,
+				ReceiptBacked:          true,
+				Notes:                  "session-scoped long-running command observation",
+			},
+			{
+				Name:                   "skill",
+				Status:                 "implemented",
+				Tools:                  []string{"skill_catalog", "skill", "create_skill"},
+				ToolSearchDiscoverable: true,
+				ReceiptBacked:          true,
+				Notes:                  "SKILL.md-compatible discovery and execution",
+			},
+			{
+				Name:                   "command",
+				Status:                 "implemented",
+				Tools:                  []string{"command_catalog", "runtime_command"},
+				ToolSearchDiscoverable: true,
+				ReceiptBacked:          true,
+				Notes:                  "read-only command catalog and safe runtime slash execution",
+			},
+		},
+		RemainingGaps: []string{
+			"wait/resume continuation after ask_user_question is still missing",
+			"bounded self-correction is intentionally closed-enum and not broad silent self-healing",
+			"surface status is static; future manifest-backed metadata can replace this view",
+		},
+	}
 }
 
 type timeoutPolicyView struct {
