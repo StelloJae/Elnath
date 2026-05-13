@@ -46,6 +46,9 @@ func TestTaskCreateToolEnqueuesPendingTask(t *testing.T) {
 	if output.Receipt.Tool != TaskCreateToolName || output.Receipt.Action != "create" || output.Receipt.ReadOnly || !output.Receipt.Persistent || !output.Receipt.QueueBacked || output.Receipt.TaskID != output.TaskID || output.Receipt.FollowupTool != TaskMonitorToolName {
 		t.Fatalf("receipt = %+v, want task_create queue-backed mutation receipt", output.Receipt)
 	}
+	if output.Receipt.SessionID != "sess-123" {
+		t.Fatalf("receipt SessionID = %q, want sess-123", output.Receipt.SessionID)
+	}
 
 	task, err := queue.Get(ctx, output.TaskID)
 	if err != nil {
@@ -57,6 +60,75 @@ func TestTaskCreateToolEnqueuesPendingTask(t *testing.T) {
 	}
 	if payload.AgenticEnforcement != "observe" || payload.AgenticCompletionGate != "verification" {
 		t.Fatalf("payload gates = (%q,%q), want observe/verification", payload.AgenticEnforcement, payload.AgenticCompletionGate)
+	}
+}
+
+func TestUserQuestionAnswerToolEnqueuesSessionBoundFollowUp(t *testing.T) {
+	ctx := context.Background()
+	queue := newTaskToolTestQueue(t)
+
+	result, err := NewUserQuestionAnswerTool(queue).Execute(ctx, json.RawMessage(`{
+		"session_id": "sess-123",
+		"request_id": "req-123",
+		"question": "Which branch?",
+		"answer": "Use main.",
+		"surface": "tool-test",
+		"idempotency_key": "answer-1"
+	}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute returned error result: %s", result.Output)
+	}
+
+	var output userQuestionAnswerToolOutput
+	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if output.Type != "user_input_answer_enqueued" || output.TaskID == 0 || output.Status != string(StatusPending) || output.SessionID != "sess-123" || output.RequestID != "req-123" {
+		t.Fatalf("output = %+v, want pending session-bound answer task", output)
+	}
+	if output.AnswerChars != len("Use main.") {
+		t.Fatalf("AnswerChars = %d, want %d", output.AnswerChars, len("Use main."))
+	}
+	if output.Receipt.Tool != UserQuestionAnswerToolName || output.Receipt.Action != "answer" || output.Receipt.ReadOnly || !output.Receipt.Persistent || !output.Receipt.QueueBacked || output.Receipt.TaskID != output.TaskID || output.Receipt.RequestID != "req-123" || output.Receipt.SessionID != "sess-123" || output.Receipt.FollowupTool != TaskMonitorToolName {
+		t.Fatalf("receipt = %+v, want user answer queue-backed mutation receipt", output.Receipt)
+	}
+	if output.Receipt.ExecutionPolicy != "daemon_queue_user_answer_resume" || output.Receipt.QuestionChars != len("Which branch?") {
+		t.Fatalf("receipt policy/bounds = %+v", output.Receipt)
+	}
+
+	task, err := queue.Get(ctx, output.TaskID)
+	if err != nil {
+		t.Fatalf("Get created task: %v", err)
+	}
+	payload := ParseTaskPayload(task.Payload)
+	if payload.SessionID != "sess-123" || payload.Surface != "tool-test" {
+		t.Fatalf("payload routing = %+v, want session-bound tool-test follow-up", payload)
+	}
+	if !strings.Contains(payload.Prompt, "Request ID:\nreq-123") || !strings.Contains(payload.Prompt, "Question:\nWhich branch?") || !strings.Contains(payload.Prompt, "Answer:\nUse main.") || !strings.Contains(payload.Prompt, "Continue the existing session") {
+		t.Fatalf("payload prompt = %q, want question, answer, and continuation instruction", payload.Prompt)
+	}
+}
+
+func TestUserQuestionAnswerToolRejectsMissingRequiredFields(t *testing.T) {
+	tool := NewUserQuestionAnswerTool(newTaskToolTestQueue(t))
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"answer":"main"}`))
+	if err != nil {
+		t.Fatalf("missing session Execute error = %v", err)
+	}
+	if !result.IsError || !strings.Contains(result.Output, "session_id is required") {
+		t.Fatalf("missing session result = %+v, want session_id error", result)
+	}
+
+	result, err = tool.Execute(context.Background(), json.RawMessage(`{"session_id":"sess-123","answer":" "}`))
+	if err != nil {
+		t.Fatalf("missing answer Execute error = %v", err)
+	}
+	if !result.IsError || !strings.Contains(result.Output, "answer is required") {
+		t.Fatalf("missing answer result = %+v, want answer error", result)
 	}
 }
 
@@ -1067,6 +1139,23 @@ func TestTaskToolsMetadata(t *testing.T) {
 	}
 	if createTool.ShouldCancelSiblingsOnError() {
 		t.Fatal("task_create should not cancel siblings")
+	}
+
+	answerTool := NewUserQuestionAnswerTool(nil)
+	if answerTool.IsConcurrencySafe(nil) {
+		t.Fatal("user_question_answer should not be concurrency-safe")
+	}
+	if answerTool.Reversible() {
+		t.Fatal("user_question_answer should not be reversible")
+	}
+	if got := answerTool.Scope(nil); !got.Persistent || got.Network || len(got.ReadPaths) != 0 || len(got.WritePaths) != 0 {
+		t.Fatalf("user_question_answer Scope() = %+v, want persistent-only scope", got)
+	}
+	if answerTool.ShouldCancelSiblingsOnError() {
+		t.Fatal("user_question_answer should not cancel siblings")
+	}
+	if !tools.ShouldDeferToolSchema(answerTool) {
+		t.Fatal("user_question_answer should defer initial schema")
 	}
 
 	stopTool := NewTaskStopTool(nil)

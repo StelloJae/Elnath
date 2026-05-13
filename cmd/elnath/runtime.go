@@ -474,6 +474,7 @@ func buildExecutionRuntime(
 		return nil, fmt.Errorf("open task queue tools: %w", err)
 	}
 	reg.Register(daemon.NewTaskCreateTool(taskQueue))
+	reg.Register(daemon.NewUserQuestionAnswerTool(taskQueue))
 	reg.Register(daemon.NewTaskListTool(taskQueue))
 	reg.Register(daemon.NewTaskGetTool(taskQueue))
 	taskStopTool := daemon.NewTaskStopTool(taskQueue)
@@ -1588,6 +1589,8 @@ func completionControlToolReceiptsToLearning(src []completionControlToolReceipt)
 			Action:                  receipt.Action,
 			ReadOnly:                receipt.ReadOnly,
 			Persistent:              receipt.Persistent,
+			RequestID:               receipt.RequestID,
+			SessionID:               receipt.SessionID,
 			QueueBacked:             receipt.QueueBacked,
 			RegistryBacked:          receipt.RegistryBacked,
 			ExecutionAvailable:      receipt.ExecutionAvailable,

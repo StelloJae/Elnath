@@ -14,6 +14,7 @@ import (
 
 const (
 	TaskCreateToolName            = "task_create"
+	UserQuestionAnswerToolName    = "user_question_answer"
 	TaskListToolName              = "task_list"
 	TaskGetToolName               = "task_get"
 	TaskStopToolName              = "task_stop"
@@ -108,6 +109,8 @@ type taskToolReceipt struct {
 	QueueBacked     bool       `json:"queue_backed"`
 	ExecutionPolicy string     `json:"execution_policy"`
 	TaskID          int64      `json:"task_id,omitempty"`
+	RequestID       string     `json:"request_id,omitempty"`
+	SessionID       string     `json:"session_id,omitempty"`
 	Status          TaskStatus `json:"status,omitempty"`
 	PreviousStatus  TaskStatus `json:"previous_status,omitempty"`
 	Terminal        bool       `json:"terminal,omitempty"`
@@ -119,6 +122,7 @@ type taskToolReceipt struct {
 	Field           string     `json:"field,omitempty"`
 	RetrievalStatus string     `json:"retrieval_status,omitempty"`
 	FollowupTool    string     `json:"followup_tool,omitempty"`
+	QuestionChars   int        `json:"question_chars,omitempty"`
 }
 
 func (t *TaskCreateTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
@@ -163,6 +167,7 @@ func (t *TaskCreateTool) Execute(ctx context.Context, params json.RawMessage) (*
 			QueueBacked:     true,
 			ExecutionPolicy: "daemon_queue_enqueue",
 			TaskID:          id,
+			SessionID:       strings.TrimSpace(input.SessionID),
 			Status:          StatusPending,
 			Deduplicated:    deduped,
 			FollowupTool:    TaskMonitorToolName,
@@ -173,6 +178,149 @@ func (t *TaskCreateTool) Execute(ctx context.Context, params json.RawMessage) (*
 		return tools.ErrorResult(fmt.Sprintf("task_create: marshal output: %v", err)), nil
 	}
 	return tools.SuccessResult(string(raw)), nil
+}
+
+type UserQuestionAnswerTool struct {
+	queue *Queue
+}
+
+func NewUserQuestionAnswerTool(queue *Queue) *UserQuestionAnswerTool {
+	return &UserQuestionAnswerTool{queue: queue}
+}
+
+func (t *UserQuestionAnswerTool) Name() string { return UserQuestionAnswerToolName }
+
+func (t *UserQuestionAnswerTool) Description() string {
+	return "Enqueue a session-bound follow-up from a user answer to a pending clarification question"
+}
+
+func (t *UserQuestionAnswerTool) Schema() json.RawMessage {
+	return tools.Object(map[string]tools.Property{
+		"session_id":      tools.String("Session id from the user-input-required receipt."),
+		"request_id":      tools.String("Optional request id from the ask_user_question receipt."),
+		"answer":          tools.String("User-provided answer to continue the session."),
+		"question":        tools.String("Optional question text being answered, for provenance."),
+		"surface":         tools.String("Optional originating surface label."),
+		"idempotency_key": tools.String("Optional key used to deduplicate active answer-resume tasks."),
+	}, []string{"session_id", "answer"})
+}
+
+func (t *UserQuestionAnswerTool) IsConcurrencySafe(json.RawMessage) bool { return false }
+
+func (t *UserQuestionAnswerTool) Reversible() bool { return false }
+
+func (t *UserQuestionAnswerTool) Scope(json.RawMessage) tools.ToolScope {
+	return tools.ToolScope{Persistent: true}
+}
+
+func (t *UserQuestionAnswerTool) ShouldCancelSiblingsOnError() bool { return false }
+
+func (t *UserQuestionAnswerTool) DeferInitialToolSchema() bool { return true }
+
+type userQuestionAnswerToolInput struct {
+	SessionID      string `json:"session_id"`
+	RequestID      string `json:"request_id"`
+	Answer         string `json:"answer"`
+	Question       string `json:"question"`
+	Surface        string `json:"surface"`
+	IdempotencyKey string `json:"idempotency_key"`
+}
+
+type userQuestionAnswerToolOutput struct {
+	Type           string          `json:"type"`
+	TaskID         int64           `json:"task_id"`
+	Status         string          `json:"status"`
+	Deduplicated   bool            `json:"deduplicated"`
+	RequestID      string          `json:"request_id,omitempty"`
+	SessionID      string          `json:"session_id"`
+	PayloadPreview string          `json:"payload_preview"`
+	AnswerChars    int             `json:"answer_chars"`
+	Receipt        taskToolReceipt `json:"receipt"`
+}
+
+func (t *UserQuestionAnswerTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
+	if t == nil || t.queue == nil {
+		return tools.ErrorResult("user_question_answer: queue unavailable"), nil
+	}
+	var input userQuestionAnswerToolInput
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &input); err != nil {
+			return tools.ErrorResult(fmt.Sprintf("invalid params: %v", err)), nil
+		}
+	}
+	sessionID := strings.TrimSpace(input.SessionID)
+	if sessionID == "" {
+		return tools.ErrorResult("user_question_answer: session_id is required"), nil
+	}
+	answer := strings.TrimSpace(input.Answer)
+	if answer == "" {
+		return tools.ErrorResult("user_question_answer: answer is required"), nil
+	}
+	question := strings.TrimSpace(input.Question)
+	requestID := strings.TrimSpace(input.RequestID)
+	surface := strings.TrimSpace(input.Surface)
+	if surface == "" {
+		surface = "user_question_answer"
+	}
+	payload := EncodeTaskPayload(TaskPayload{
+		Prompt:    buildUserQuestionAnswerPrompt(requestID, question, answer),
+		SessionID: sessionID,
+		Surface:   surface,
+	})
+	id, deduped, err := t.queue.Enqueue(ctx, payload, input.IdempotencyKey)
+	if err != nil {
+		return tools.ErrorResult(fmt.Sprintf("user_question_answer: %v", err)), nil
+	}
+
+	output := userQuestionAnswerToolOutput{
+		Type:           "user_input_answer_enqueued",
+		TaskID:         id,
+		Status:         string(StatusPending),
+		Deduplicated:   deduped,
+		RequestID:      requestID,
+		SessionID:      sessionID,
+		PayloadPreview: truncateTaskToolText(payload, taskToolPreviewMaxRune),
+		AnswerChars:    len([]rune(answer)),
+		Receipt: taskToolReceipt{
+			Tool:            UserQuestionAnswerToolName,
+			Action:          "answer",
+			ReadOnly:        false,
+			Persistent:      true,
+			QueueBacked:     true,
+			ExecutionPolicy: "daemon_queue_user_answer_resume",
+			TaskID:          id,
+			RequestID:       requestID,
+			SessionID:       sessionID,
+			Status:          StatusPending,
+			Deduplicated:    deduped,
+			FollowupTool:    TaskMonitorToolName,
+			QuestionChars:   len([]rune(question)),
+		},
+	}
+	raw, err := json.Marshal(output)
+	if err != nil {
+		return tools.ErrorResult(fmt.Sprintf("user_question_answer: marshal output: %v", err)), nil
+	}
+	return tools.SuccessResult(string(raw)), nil
+}
+
+func buildUserQuestionAnswerPrompt(requestID, question, answer string) string {
+	var b strings.Builder
+	b.WriteString("User answered a pending clarification question.\n\n")
+	if strings.TrimSpace(requestID) != "" {
+		b.WriteString("Request ID:\n")
+		b.WriteString(strings.TrimSpace(requestID))
+		b.WriteString("\n\n")
+	}
+	if strings.TrimSpace(question) != "" {
+		b.WriteString("Question:\n")
+		b.WriteString(strings.TrimSpace(question))
+		b.WriteString("\n\n")
+	}
+	b.WriteString("Answer:\n")
+	b.WriteString(strings.TrimSpace(answer))
+	b.WriteString("\n\nContinue the existing session using this answer. Do not ask the same question again unless it remains ambiguous.")
+	return b.String()
 }
 
 type TaskListTool struct {

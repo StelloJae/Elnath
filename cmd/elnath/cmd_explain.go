@@ -139,6 +139,14 @@ func controlSurfacePolicyViewForRuntime() controlSurfacePolicyView {
 				Notes:                  "daemon queue task lifecycle",
 			},
 			{
+				Name:                   "user_input",
+				Status:                 "partial",
+				Tools:                  []string{"ask_user_question", "user_question_answer"},
+				ToolSearchDiscoverable: true,
+				ReceiptBacked:          true,
+				Notes:                  "structured question receipts and session-bound answer enqueue",
+			},
+			{
 				Name:                   "schedule",
 				Status:                 "implemented",
 				Tools:                  []string{"schedule_create", "schedule_list", "schedule_delete"},
@@ -188,7 +196,7 @@ func controlSurfacePolicyViewForRuntime() controlSurfacePolicyView {
 			},
 		},
 		RemainingGaps: []string{
-			"wait/resume continuation after ask_user_question is still missing",
+			"blocking wait state and automatic wake after user answer are still missing",
 			"bounded self-correction is intentionally closed-enum and not broad silent self-healing",
 			"surface status is static; future manifest-backed metadata can replace this view",
 		},
