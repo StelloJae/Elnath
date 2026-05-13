@@ -28,6 +28,7 @@ type completionContractSummary struct {
 	SkillCatalogReceipts    []completionSkillCatalogReceipt
 	CommandCatalogReceipts  []completionCommandCatalogReceipt
 	ToolSearchReceipts      []completionToolSearchReceipt
+	ControlToolReceipts     []completionControlToolReceipt
 	CorrectionAttempted     bool
 	CorrectionAttempts      int
 	CorrectionMaxAttempts   int
@@ -96,6 +97,42 @@ type completionToolSearchReceipt struct {
 	Query              string `json:"query"`
 }
 
+type completionControlToolReceipt struct {
+	Tool                    string `json:"tool"`
+	Action                  string `json:"action"`
+	ReadOnly                bool   `json:"read_only"`
+	Persistent              bool   `json:"persistent"`
+	QueueBacked             bool   `json:"queue_backed,omitempty"`
+	RegistryBacked          bool   `json:"registry_backed,omitempty"`
+	ExecutionAvailable      bool   `json:"execution_available,omitempty"`
+	ExecutionPolicy         string `json:"execution_policy,omitempty"`
+	TaskID                  int64  `json:"task_id,omitempty"`
+	Status                  string `json:"status,omitempty"`
+	PreviousStatus          string `json:"previous_status,omitempty"`
+	Terminal                bool   `json:"terminal,omitempty"`
+	Found                   bool   `json:"found,omitempty"`
+	TotalReturned           int    `json:"total_returned,omitempty"`
+	Limit                   int    `json:"limit,omitempty"`
+	Field                   string `json:"field,omitempty"`
+	RetrievalStatus         string `json:"retrieval_status,omitempty"`
+	Name                    string `json:"name,omitempty"`
+	Path                    string `json:"path,omitempty"`
+	Branch                  string `json:"branch,omitempty"`
+	RegistryPath            string `json:"registry_path,omitempty"`
+	Runner                  string `json:"runner,omitempty"`
+	IsError                 bool   `json:"is_error,omitempty"`
+	Removed                 bool   `json:"removed,omitempty"`
+	DryRun                  bool   `json:"dry_run,omitempty"`
+	Total                   int    `json:"total,omitempty"`
+	TaskName                string `json:"task_name,omitempty"`
+	TaskCountBefore         int    `json:"task_count_before,omitempty"`
+	TaskCountAfter          int    `json:"task_count_after,omitempty"`
+	PreviousMode            string `json:"previous_mode,omitempty"`
+	CurrentMode             string `json:"current_mode,omitempty"`
+	Restored                bool   `json:"restored,omitempty"`
+	ReadOnlyAfterTransition bool   `json:"read_only_after_transition,omitempty"`
+}
+
 const (
 	completionRetryDecisionRunVerification   = "run_verification"
 	completionRetryDecisionRetrySmallerScope = "retry_smaller_scope"
@@ -128,6 +165,7 @@ func summarizeCompletionContract(routeCtx *orchestrator.RoutingContext, cfg orch
 	summary.SkillCatalogReceipts = observedSkillCatalogReceipts(result.Messages)
 	summary.CommandCatalogReceipts = observedCommandCatalogReceipts(result.Messages)
 	summary.ToolSearchReceipts = observedToolSearchReceipts(result.Messages)
+	summary.ControlToolReceipts = observedControlToolReceipts(result.Messages)
 
 	verificationCommand, verificationFailed := observedVerificationCommandStatus(result.Messages)
 	observed := verificationCommand != ""
@@ -288,6 +326,88 @@ func commandCatalogReceiptFromOutput(output string) (completionCommandCatalogRec
 		return completionCommandCatalogReceipt{}, false
 	}
 	return parsed.Receipt, true
+}
+
+var completionControlToolReceiptNames = map[string]struct{}{
+	"task_create":     {},
+	"task_list":       {},
+	"task_get":        {},
+	"task_stop":       {},
+	"task_output":     {},
+	"task_monitor":    {},
+	"task_update":     {},
+	"schedule_create": {},
+	"schedule_list":   {},
+	"schedule_delete": {},
+	"enter_plan_mode": {},
+	"exit_plan_mode":  {},
+	"enter_worktree":  {},
+	"exit_worktree":   {},
+	"worktree_list":   {},
+	"worktree_run":    {},
+	"worktree_prune":  {},
+}
+
+func observedControlToolReceipts(messages []llm.Message) []completionControlToolReceipt {
+	toolNamesByID := make(map[string]string)
+	var receipts []completionControlToolReceipt
+	for _, msg := range messages {
+		for _, block := range msg.Content {
+			switch b := block.(type) {
+			case llm.ToolUseBlock:
+				if b.ID != "" {
+					toolNamesByID[b.ID] = b.Name
+				}
+			case llm.ToolResultBlock:
+				toolName := toolNamesByID[b.ToolUseID]
+				if b.IsError || !isCompletionControlTool(toolName) {
+					continue
+				}
+				receipt, ok := controlToolReceiptFromOutput(toolName, b.Content)
+				if ok {
+					receipts = append(receipts, receipt)
+				}
+			}
+		}
+	}
+	if len(receipts) == 0 {
+		return nil
+	}
+	return receipts
+}
+
+func isCompletionControlTool(toolName string) bool {
+	_, ok := completionControlToolReceiptNames[toolName]
+	return ok
+}
+
+func controlToolReceiptFromOutput(toolName, output string) (completionControlToolReceipt, bool) {
+	var parsed struct {
+		Receipt completionControlToolReceipt `json:"receipt"`
+	}
+	if err := json.Unmarshal([]byte(output), &parsed); err != nil {
+		return completionControlToolReceipt{}, false
+	}
+	receipt := parsed.Receipt
+	receipt.Tool = strings.TrimSpace(receipt.Tool)
+	receipt.Action = strings.TrimSpace(receipt.Action)
+	receipt.ExecutionPolicy = strings.TrimSpace(receipt.ExecutionPolicy)
+	receipt.Status = strings.TrimSpace(receipt.Status)
+	receipt.PreviousStatus = strings.TrimSpace(receipt.PreviousStatus)
+	receipt.Field = strings.TrimSpace(receipt.Field)
+	receipt.RetrievalStatus = strings.TrimSpace(receipt.RetrievalStatus)
+	receipt.Name = strings.TrimSpace(receipt.Name)
+	receipt.Path = strings.TrimSpace(receipt.Path)
+	receipt.Branch = strings.TrimSpace(receipt.Branch)
+	receipt.RegistryPath = strings.TrimSpace(receipt.RegistryPath)
+	receipt.Runner = strings.TrimSpace(receipt.Runner)
+	receipt.TaskName = strings.TrimSpace(receipt.TaskName)
+	receipt.PreviousMode = strings.TrimSpace(receipt.PreviousMode)
+	receipt.CurrentMode = strings.TrimSpace(receipt.CurrentMode)
+	if receipt.Tool != toolName || receipt.Action == "" {
+		return completionControlToolReceipt{}, false
+	}
+	return receipt, true
 }
 
 func observedConditionalSkillMatches(messages []llm.Message) []completionConditionalSkillMatch {

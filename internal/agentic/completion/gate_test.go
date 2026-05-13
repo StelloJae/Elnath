@@ -233,6 +233,15 @@ func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testi
 					MaxResults:         3,
 					Query:              "task",
 				}},
+				ControlToolReceipts: []ControlToolReceipt{{
+					Tool:            "task_create",
+					Action:          "create",
+					Persistent:      true,
+					QueueBacked:     true,
+					ExecutionPolicy: "daemon_queue_enqueue",
+					TaskID:          7,
+					Status:          "pending",
+				}},
 				CorrectionAttempts:    1,
 				CorrectionMaxAttempts: 1,
 				RetryDecision:         "retry_smaller_scope",
@@ -299,6 +308,10 @@ func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testi
 	toolSearchReceipts, ok := summary["tool_search_receipts"].([]any)
 	if !ok || len(toolSearchReceipts) != 1 {
 		t.Fatalf("tool_search_receipts missing: summary=%v", summary)
+	}
+	controlToolReceipts, ok := summary["control_tool_receipts"].([]any)
+	if !ok || len(controlToolReceipts) != 1 {
+		t.Fatalf("control_tool_receipts missing: summary=%v", summary)
 	}
 	if summary["correction_attempts"] != float64(1) || summary["correction_max_attempts"] != float64(1) {
 		t.Fatalf("correction budget fields missing: summary=%v", summary)

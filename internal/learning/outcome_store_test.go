@@ -211,6 +211,15 @@ func TestOutcomeRecordCompletionObservabilityJSONCompatibility(t *testing.T) {
 		MaxResults:         3,
 		Query:              "task",
 	}}
+	rec.ControlToolReceipts = []ControlToolReceipt{{
+		Tool:            "task_create",
+		Action:          "create",
+		Persistent:      true,
+		QueueBacked:     true,
+		ExecutionPolicy: "daemon_queue_enqueue",
+		TaskID:          7,
+		Status:          "pending",
+	}}
 	rec.CorrectionAttempted = true
 	rec.CorrectionAttempts = 1
 	rec.CorrectionMaxAttempts = 1
@@ -240,6 +249,7 @@ func TestOutcomeRecordCompletionObservabilityJSONCompatibility(t *testing.T) {
 		`"skill_catalog_receipts":[{"tool":"skill_catalog","action":"recommend"`,
 		`"command_catalog_receipts":[{"tool":"command_catalog","action":"recommend"`,
 		`"tool_search_receipts":[{"tool":"tool_search","action":"search"`,
+		`"control_tool_receipts":[{"tool":"task_create","action":"create"`,
 		`"execution_policy":"metadata_only"`,
 		`"query":"review code"`,
 		`"correction_attempted":true`,

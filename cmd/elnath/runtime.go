@@ -1389,6 +1389,7 @@ func (rt *executionRuntime) recordOutcome(ctx context.Context, in outcomeInput) 
 		SkillCatalogReceipts:    completionSkillCatalogReceiptsToLearning(in.completion.SkillCatalogReceipts),
 		CommandCatalogReceipts:  completionCommandCatalogReceiptsToLearning(in.completion.CommandCatalogReceipts),
 		ToolSearchReceipts:      completionToolSearchReceiptsToLearning(in.completion.ToolSearchReceipts),
+		ControlToolReceipts:     completionControlToolReceiptsToLearning(in.completion.ControlToolReceipts),
 		ConditionalSkillMatches: completionSkillMatchesToLearning(in.completion.ConditionalSkillMatches),
 		CorrectionAttempted:     in.completion.CorrectionAttempted,
 		CorrectionAttempts:      in.completion.CorrectionAttempts,
@@ -1509,6 +1510,51 @@ func completionToolSearchReceiptsToLearning(src []completionToolSearchReceipt) [
 			MaxResults:         receipt.MaxResults,
 			AllowNamesCount:    receipt.AllowNamesCount,
 			Query:              receipt.Query,
+		})
+	}
+	return out
+}
+
+func completionControlToolReceiptsToLearning(src []completionControlToolReceipt) []learning.ControlToolReceipt {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]learning.ControlToolReceipt, 0, len(src))
+	for _, receipt := range src {
+		out = append(out, learning.ControlToolReceipt{
+			Tool:                    receipt.Tool,
+			Action:                  receipt.Action,
+			ReadOnly:                receipt.ReadOnly,
+			Persistent:              receipt.Persistent,
+			QueueBacked:             receipt.QueueBacked,
+			RegistryBacked:          receipt.RegistryBacked,
+			ExecutionAvailable:      receipt.ExecutionAvailable,
+			ExecutionPolicy:         receipt.ExecutionPolicy,
+			TaskID:                  receipt.TaskID,
+			Status:                  receipt.Status,
+			PreviousStatus:          receipt.PreviousStatus,
+			Terminal:                receipt.Terminal,
+			Found:                   receipt.Found,
+			TotalReturned:           receipt.TotalReturned,
+			Limit:                   receipt.Limit,
+			Field:                   receipt.Field,
+			RetrievalStatus:         receipt.RetrievalStatus,
+			Name:                    receipt.Name,
+			Path:                    receipt.Path,
+			Branch:                  receipt.Branch,
+			RegistryPath:            receipt.RegistryPath,
+			Runner:                  receipt.Runner,
+			IsError:                 receipt.IsError,
+			Removed:                 receipt.Removed,
+			DryRun:                  receipt.DryRun,
+			Total:                   receipt.Total,
+			TaskName:                receipt.TaskName,
+			TaskCountBefore:         receipt.TaskCountBefore,
+			TaskCountAfter:          receipt.TaskCountAfter,
+			PreviousMode:            receipt.PreviousMode,
+			CurrentMode:             receipt.CurrentMode,
+			Restored:                receipt.Restored,
+			ReadOnlyAfterTransition: receipt.ReadOnlyAfterTransition,
 		})
 	}
 	return out
