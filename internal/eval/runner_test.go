@@ -216,6 +216,71 @@ EOF
 	}
 }
 
+func TestRunBaselinePlanEnrichesPatchQuality(t *testing.T) {
+	dir := t.TempDir()
+	corpusPath := filepath.Join(dir, "corpus.json")
+	if err := os.WriteFile(corpusPath, []byte(`{
+  "version":"v1",
+  "tasks":[
+    {"id":"V8-PY-BUG-001","title":"task 1","track":"bugfix","language":"python","repo_class":"service_backend","benchmark_family":"v8_public_first_freeze","prompt":"fix it","repo":"https://github.com/example/repo","repo_ref":"deadbeef","acceptance_criteria":["the option propagation edge case is covered by tests"]}
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write corpus: %v", err)
+	}
+
+	wrapperPath := filepath.Join(dir, "wrapper.sh")
+	wrapper := `#!/bin/sh
+out="$1"
+cat > "$out" <<'EOF'
+{
+  "task_id":"V8-PY-BUG-001",
+  "track":"bugfix",
+  "language":"python",
+  "success":true,
+  "intervention_count":0,
+  "intervention_needed":false,
+  "verification_passed":true,
+  "duration_seconds":1,
+  "changed_files":["src/requests/sessions.py"]
+}
+EOF
+`
+	if err := os.WriteFile(wrapperPath, []byte(wrapper), 0o755); err != nil {
+		t.Fatalf("write wrapper: %v", err)
+	}
+	t.Setenv("CURRENT_BIN", wrapperPath)
+
+	scorecardPath := filepath.Join(dir, "current-scorecard.json")
+	scorecard, err := RunBaselinePlan(&BaselineRunPlan{
+		Version:         "v1",
+		System:          "elnath-current",
+		Baseline:        "self",
+		CorpusPath:      corpusPath,
+		CommandTemplate: `"$CURRENT_BIN" {{task_output}}`,
+		OutputPath:      scorecardPath,
+		RepeatedRuns:    1,
+		RequiredEnv:     []string{"CURRENT_BIN"},
+	})
+	if err != nil {
+		t.Fatalf("RunBaselinePlan: %v", err)
+	}
+	result := scorecard.Results[0]
+	if result.PatchQuality != PatchQualityWeak {
+		t.Fatalf("PatchQuality = %q, want %q; result=%+v", result.PatchQuality, PatchQualityWeak, result)
+	}
+	if !hasPatchQualityFinding(result.PatchQualityFindings, PatchQualityFindingMissingTestOrFixtureDiff) {
+		t.Fatalf("PatchQualityFindings = %v, want %q", result.PatchQualityFindings, PatchQualityFindingMissingTestOrFixtureDiff)
+	}
+	data, err := os.ReadFile(scorecardPath)
+	if err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	text := string(data)
+	if !strings.Contains(text, `"patch_quality": "weak"`) || !strings.Contains(text, `"missing_test_or_fixture_diff"`) {
+		t.Fatalf("scorecard missing patch-quality evidence: %s", text)
+	}
+}
+
 func TestRunPlanExposesTaskVerificationCommandEnv(t *testing.T) {
 	dir := t.TempDir()
 	corpusPath := filepath.Join(dir, "corpus.json")

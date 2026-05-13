@@ -219,6 +219,9 @@ func TestBenchmarkScorecardBackwardCompatibility(t *testing.T) {
 	if len(result.ChangedFiles) != 0 || result.EditIntentDetected || result.FinalIncompleteDetected || result.TraceSummary != "" || result.DebugEvidence != nil {
 		t.Fatalf("old scorecard should default trace fields to zero values: %+v", result)
 	}
+	if result.PatchQuality != "" || len(result.PatchQualityFindings) != 0 {
+		t.Fatalf("old scorecard should default patch-quality fields to zero values: %+v", result)
+	}
 }
 
 func TestBenchmarkScorecardRejectsInlineDebugEvidencePaths(t *testing.T) {
@@ -258,6 +261,43 @@ func TestBenchmarkScorecardAcceptsRelativeDebugEvidenceSidecar(t *testing.T) {
 
 	if err := scorecard.Validate(); err != nil {
 		t.Fatalf("Validate: %v", err)
+	}
+}
+
+func TestScorecardSummaryCountsPatchQuality(t *testing.T) {
+	summary := (&Scorecard{Version: "v1", System: "elnath", Results: []RunResult{
+		{TaskID: "A", Track: TrackBugfix, Language: LanguageGo, Success: true, VerificationPassed: true, PatchQuality: PatchQualityStrong},
+		{TaskID: "B", Track: TrackBugfix, Language: LanguageGo, Success: true, VerificationPassed: true, PatchQuality: PatchQualityWeak},
+		{TaskID: "C", Track: TrackBrownfieldFeature, Language: LanguageGo, Success: true, VerificationPassed: true, PatchQuality: PatchQualityWeak},
+		{TaskID: "D", Track: TrackBugfix, Language: LanguageGo, Success: true, VerificationPassed: true, PatchQuality: PatchQualityMissingDiff},
+	}}).Summary()
+
+	if got := summary.PatchQualityCounts[PatchQualityWeak]; got != 2 {
+		t.Fatalf("weak patch quality count = %d, want 2", got)
+	}
+	if got := summary.ByTrack[TrackBugfix].PatchQualityCounts[PatchQualityWeak]; got != 1 {
+		t.Fatalf("bugfix weak patch quality count = %d, want 1", got)
+	}
+	if got := summary.ByTrack[TrackBugfix].PatchQualityCounts[PatchQualityMissingDiff]; got != 1 {
+		t.Fatalf("bugfix missing_diff patch quality count = %d, want 1", got)
+	}
+}
+
+func TestScorecardValidateRejectsInvalidPatchQuality(t *testing.T) {
+	scorecard := &Scorecard{
+		Version: "v1",
+		System:  "elnath",
+		Results: []RunResult{{
+			TaskID:          "A",
+			Track:           TrackBugfix,
+			Language:        LanguageGo,
+			PatchQuality:    "maybe",
+			DurationSeconds: 1,
+		}},
+	}
+
+	if err := scorecard.Validate(); err == nil {
+		t.Fatal("Validate succeeded with invalid patch_quality")
 	}
 }
 

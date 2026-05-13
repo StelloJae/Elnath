@@ -117,6 +117,18 @@ func BuildMarkdownReport(corpus *Corpus, current, baseline *Scorecard) (string, 
 		}
 	}
 
+	if len(current.Summary().PatchQualityCounts) > 0 {
+		fmt.Fprintf(&b, "\n## Patch Quality (Current)\n\n")
+		var qualities []string
+		for quality := range current.Summary().PatchQualityCounts {
+			qualities = append(qualities, quality)
+		}
+		sort.Strings(qualities)
+		for _, quality := range qualities {
+			fmt.Fprintf(&b, "- %s: %d\n", quality, current.Summary().PatchQualityCounts[quality])
+		}
+	}
+
 	return b.String(), nil
 }
 

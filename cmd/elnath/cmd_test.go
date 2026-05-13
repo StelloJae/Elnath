@@ -894,6 +894,33 @@ func TestCmdEvalSummarizeWithFailureFamilies(t *testing.T) {
 	}
 }
 
+func TestCmdEvalSummarizeWithPatchQuality(t *testing.T) {
+	dir := t.TempDir()
+	scorecardPath := filepath.Join(dir, "scorecard.json")
+	if err := os.WriteFile(scorecardPath, []byte(`{
+		"version": "v1",
+		"system": "elnath",
+		"results": [
+			{"task_id":"T1","track":"brownfield_feature","language":"go","success":true,"verification_passed":true,"intervention_count":0,"intervention_needed":false,"patch_quality":"weak","patch_quality_findings":["lock_or_checksum_only_diff"],"duration_seconds":2},
+			{"task_id":"T2","track":"bugfix","language":"go","success":true,"verification_passed":true,"intervention_count":0,"intervention_needed":false,"patch_quality":"strong","duration_seconds":3}
+		]
+	}`), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdEval(context.Background(), []string{"summarize", scorecardPath}); err != nil {
+			t.Fatalf("cmdEval summarize: %v", err)
+		}
+	})
+	if !strings.Contains(stdout, "Patch quality") {
+		t.Fatalf("stdout = %q, want patch quality section", stdout)
+	}
+	if !strings.Contains(stdout, "weak=1") || !strings.Contains(stdout, "strong=1") {
+		t.Fatalf("stdout = %q, want patch quality counts", stdout)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // cmdEval summarize with baseline label
 // ---------------------------------------------------------------------------
