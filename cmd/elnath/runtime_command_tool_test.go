@@ -117,16 +117,18 @@ func TestCommandCatalogToolIncludesDiscoveryReceipt(t *testing.T) {
 			Name string `json:"name"`
 		} `json:"commands"`
 		Receipt struct {
-			Tool               string `json:"tool"`
-			Action             string `json:"action"`
-			ReadOnly           bool   `json:"read_only"`
-			RegistryAvailable  bool   `json:"registry_available"`
-			ExecutionAvailable bool   `json:"execution_available"`
-			ExecutionPolicy    string `json:"execution_policy"`
-			TotalCommands      int    `json:"total_commands"`
-			ReturnedCommands   int    `json:"returned_commands"`
-			MaxResults         int    `json:"max_results"`
-			Query              string `json:"query"`
+			Tool                  string `json:"tool"`
+			Action                string `json:"action"`
+			ReadOnly              bool   `json:"read_only"`
+			RegistryAvailable     bool   `json:"registry_available"`
+			ExecutionAvailable    bool   `json:"execution_available"`
+			ExecutionPolicy       string `json:"execution_policy"`
+			TotalCommands         int    `json:"total_commands"`
+			ReturnedCommands      int    `json:"returned_commands"`
+			ExecutableCommands    int    `json:"executable_commands"`
+			ModelCallableCommands int    `json:"model_callable_commands"`
+			MaxResults            int    `json:"max_results"`
+			Query                 string `json:"query"`
 		} `json:"receipt"`
 	}
 	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
@@ -143,6 +145,9 @@ func TestCommandCatalogToolIncludesDiscoveryReceipt(t *testing.T) {
 	}
 	if out.Receipt.TotalCommands == 0 || out.Receipt.ReturnedCommands != len(out.Commands) {
 		t.Fatalf("receipt counts = %+v commands=%d", out.Receipt, len(out.Commands))
+	}
+	if out.Receipt.ExecutableCommands == 0 {
+		t.Fatalf("receipt executable commands = 0: %+v", out.Receipt)
 	}
 	if out.Receipt.MaxResults != 2 || out.Receipt.Query != "reasoning effort" {
 		t.Fatalf("receipt request bounds = %+v", out.Receipt)
@@ -395,16 +400,16 @@ func TestCommandCatalogToolExposesExecutionPolicyMetadata(t *testing.T) {
 	for _, entry := range out.Commands {
 		seen[entry.Name] = entry
 	}
-	if got := seen["run"]; got.Surface != "cli" || got.ExecutionPolicy != "cli_dispatch" || got.ModelCallable {
+	if got := seen["run"]; got.Surface != "cli" || got.ExecutionPolicy != "cli_dispatch" || !got.ExecutionAvailable || got.ModelCallable {
 		t.Fatalf("run command metadata = %+v, want cli non-model execution policy", got)
 	}
-	if got := seen["/provider"]; got.Surface != "runtime_slash" || got.ExecutionPolicy != "local_runtime_control" || got.ModelCallable {
+	if got := seen["/provider"]; got.Surface != "runtime_slash" || got.ExecutionPolicy != "local_runtime_control" || !got.ExecutionAvailable || got.ModelCallable {
 		t.Fatalf("/provider metadata = %+v, want runtime slash non-model execution policy", got)
 	}
-	if got := seen["/review-pr"]; got.Surface != "skill_slash" || got.ExecutionPolicy != "skill_prompt_invocation" || !got.ModelCallable || got.Source != "claude-command-skill" {
+	if got := seen["/review-pr"]; got.Surface != "skill_slash" || got.ExecutionPolicy != "skill_prompt_invocation" || !got.ExecutionAvailable || !got.ModelCallable || got.Source != "claude-command-skill" {
 		t.Fatalf("/review-pr metadata = %+v, want model-callable skill invocation policy", got)
 	}
-	if got := seen["netproxy"]; got.Surface != "internal" || got.ExecutionPolicy != "internal_exec" || got.ModelCallable {
+	if got := seen["netproxy"]; got.Surface != "internal" || got.ExecutionPolicy != "internal_exec" || !got.ExecutionAvailable || got.ModelCallable {
 		t.Fatalf("hidden internal command metadata = %+v, want internal non-model execution policy", got)
 	}
 }

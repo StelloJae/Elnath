@@ -41,16 +41,17 @@ type commandSpec struct {
 }
 
 type commandCatalogEntry struct {
-	Name            string   `json:"name"`
-	Description     string   `json:"description"`
-	Category        string   `json:"category"`
-	Aliases         []string `json:"aliases,omitempty"`
-	ArgumentHint    string   `json:"argument_hint,omitempty"`
-	Hidden          bool     `json:"hidden,omitempty"`
-	Source          string   `json:"source,omitempty"`
-	Surface         string   `json:"surface,omitempty"`
-	ExecutionPolicy string   `json:"execution_policy,omitempty"`
-	ModelCallable   bool     `json:"model_callable,omitempty"`
+	Name               string   `json:"name"`
+	Description        string   `json:"description"`
+	Category           string   `json:"category"`
+	Aliases            []string `json:"aliases,omitempty"`
+	ArgumentHint       string   `json:"argument_hint,omitempty"`
+	Hidden             bool     `json:"hidden,omitempty"`
+	Source             string   `json:"source,omitempty"`
+	Surface            string   `json:"surface,omitempty"`
+	ExecutionPolicy    string   `json:"execution_policy,omitempty"`
+	ExecutionAvailable bool     `json:"execution_available,omitempty"`
+	ModelCallable      bool     `json:"model_callable,omitempty"`
 }
 
 func commandSpecs() []commandSpec {
@@ -124,14 +125,15 @@ func commandCatalog(includeHidden bool) []commandCatalogEntry {
 			continue
 		}
 		entry := commandCatalogEntry{
-			Name:            spec.Name,
-			Description:     spec.Description,
-			Category:        spec.Category,
-			Aliases:         append([]string(nil), spec.Aliases...),
-			ArgumentHint:    spec.ArgumentHint,
-			Hidden:          spec.Hidden,
-			Surface:         commandSpecSurface(spec),
-			ExecutionPolicy: commandSpecExecutionPolicy(spec),
+			Name:               spec.Name,
+			Description:        spec.Description,
+			Category:           spec.Category,
+			Aliases:            append([]string(nil), spec.Aliases...),
+			ArgumentHint:       spec.ArgumentHint,
+			Hidden:             spec.Hidden,
+			Surface:            commandSpecSurface(spec),
+			ExecutionPolicy:    commandSpecExecutionPolicy(spec),
+			ExecutionAvailable: spec.Runner != nil,
 		}
 		entries = append(entries, entry)
 	}

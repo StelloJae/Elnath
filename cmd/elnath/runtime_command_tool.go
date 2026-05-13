@@ -64,18 +64,20 @@ type commandCatalogRecommendation struct {
 }
 
 type commandCatalogToolReceipt struct {
-	Tool               string `json:"tool"`
-	Action             string `json:"action"`
-	ReadOnly           bool   `json:"read_only"`
-	RegistryAvailable  bool   `json:"registry_available"`
-	ExecutionAvailable bool   `json:"execution_available"`
-	ExecutionPolicy    string `json:"execution_policy"`
-	TotalCommands      int    `json:"total_commands"`
-	ReturnedCommands   int    `json:"returned_commands"`
-	IncludeHidden      bool   `json:"include_hidden"`
-	MaxResults         int    `json:"max_results,omitempty"`
-	Query              string `json:"query,omitempty"`
-	Command            string `json:"command,omitempty"`
+	Tool                  string `json:"tool"`
+	Action                string `json:"action"`
+	ReadOnly              bool   `json:"read_only"`
+	RegistryAvailable     bool   `json:"registry_available"`
+	ExecutionAvailable    bool   `json:"execution_available"`
+	ExecutionPolicy       string `json:"execution_policy"`
+	TotalCommands         int    `json:"total_commands"`
+	ReturnedCommands      int    `json:"returned_commands"`
+	ExecutableCommands    int    `json:"executable_commands,omitempty"`
+	ModelCallableCommands int    `json:"model_callable_commands,omitempty"`
+	IncludeHidden         bool   `json:"include_hidden"`
+	MaxResults            int    `json:"max_results,omitempty"`
+	Query                 string `json:"query,omitempty"`
+	Command               string `json:"command,omitempty"`
 }
 
 func (t *commandCatalogTool) Execute(_ context.Context, params json.RawMessage) (*tools.Result, error) {
@@ -93,7 +95,7 @@ func (t *commandCatalogTool) Execute(_ context.Context, params json.RawMessage) 
 		return marshalCommandCatalogToolOutput(map[string]any{
 			"action":   "list",
 			"commands": commands,
-			"receipt":  commandCatalogReceipt("list", input.IncludeHidden, len(commands), len(commands), 0, "", ""),
+			"receipt":  commandCatalogReceipt("list", input.IncludeHidden, commands, len(commands), 0, "", ""),
 		})
 	case "show":
 		name := strings.TrimSpace(input.Command)
@@ -104,11 +106,11 @@ func (t *commandCatalogTool) Execute(_ context.Context, params json.RawMessage) 
 		if !ok {
 			return tools.ErrorResult(fmt.Sprintf("command_catalog: command %q not found", name)), nil
 		}
-		totalCommands := len(runtimeCommandCatalogWithSkills(t.skillReg, input.IncludeHidden))
+		commands := runtimeCommandCatalogWithSkills(t.skillReg, input.IncludeHidden)
 		return marshalCommandCatalogToolOutput(map[string]any{
 			"action":  "show",
 			"command": entry,
-			"receipt": commandCatalogReceipt("show", input.IncludeHidden, totalCommands, 1, 0, "", entry.Name),
+			"receipt": commandCatalogReceipt("show", input.IncludeHidden, commands, 1, 0, "", entry.Name),
 		})
 	case "recommend":
 		query := strings.TrimSpace(input.Query)
@@ -119,28 +121,50 @@ func (t *commandCatalogTool) Execute(_ context.Context, params json.RawMessage) 
 			"action":   "recommend",
 			"query":    query,
 			"commands": recommendations,
-			"receipt":  commandCatalogReceipt("recommend", input.IncludeHidden, len(commands), len(recommendations), maxResults, query, ""),
+			"receipt":  commandCatalogReceipt("recommend", input.IncludeHidden, commands, len(recommendations), maxResults, query, ""),
 		})
 	default:
 		return tools.ErrorResult(fmt.Sprintf("command_catalog: unsupported action %q; supported actions are list, show, and recommend", input.Action)), nil
 	}
 }
 
-func commandCatalogReceipt(action string, includeHidden bool, totalCommands, returnedCommands, maxResults int, query, command string) commandCatalogToolReceipt {
+func commandCatalogReceipt(action string, includeHidden bool, commands []commandCatalogEntry, returnedCommands, maxResults int, query, command string) commandCatalogToolReceipt {
 	return commandCatalogToolReceipt{
-		Tool:               commandCatalogToolName,
-		Action:             action,
-		ReadOnly:           true,
-		RegistryAvailable:  true,
-		ExecutionAvailable: false,
-		ExecutionPolicy:    "metadata_only",
-		TotalCommands:      totalCommands,
-		ReturnedCommands:   returnedCommands,
-		IncludeHidden:      includeHidden,
-		MaxResults:         maxResults,
-		Query:              strings.TrimSpace(query),
-		Command:            strings.TrimSpace(command),
+		Tool:                  commandCatalogToolName,
+		Action:                action,
+		ReadOnly:              true,
+		RegistryAvailable:     true,
+		ExecutionAvailable:    false,
+		ExecutionPolicy:       "metadata_only",
+		TotalCommands:         len(commands),
+		ReturnedCommands:      returnedCommands,
+		ExecutableCommands:    countCommandCatalogExecutable(commands),
+		ModelCallableCommands: countCommandCatalogModelCallable(commands),
+		IncludeHidden:         includeHidden,
+		MaxResults:            maxResults,
+		Query:                 strings.TrimSpace(query),
+		Command:               strings.TrimSpace(command),
 	}
+}
+
+func countCommandCatalogExecutable(commands []commandCatalogEntry) int {
+	count := 0
+	for _, entry := range commands {
+		if entry.ExecutionAvailable {
+			count++
+		}
+	}
+	return count
+}
+
+func countCommandCatalogModelCallable(commands []commandCatalogEntry) int {
+	count := 0
+	for _, entry := range commands {
+		if entry.ModelCallable {
+			count++
+		}
+	}
+	return count
 }
 
 func findCommandCatalogEntry(name string, includeHidden bool, skillReg ...*skill.Registry) (commandCatalogEntry, bool) {

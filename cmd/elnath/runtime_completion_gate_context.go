@@ -148,18 +148,20 @@ func completionCommandCatalogReceiptsToAgentic(src []completionCommandCatalogRec
 	out := make([]agenticcompletion.CommandCatalogReceipt, 0, len(src))
 	for _, receipt := range src {
 		out = append(out, agenticcompletion.CommandCatalogReceipt{
-			Tool:               receipt.Tool,
-			Action:             receipt.Action,
-			ReadOnly:           receipt.ReadOnly,
-			RegistryAvailable:  receipt.RegistryAvailable,
-			ExecutionAvailable: receipt.ExecutionAvailable,
-			ExecutionPolicy:    receipt.ExecutionPolicy,
-			TotalCommands:      receipt.TotalCommands,
-			ReturnedCommands:   receipt.ReturnedCommands,
-			IncludeHidden:      receipt.IncludeHidden,
-			MaxResults:         receipt.MaxResults,
-			Query:              receipt.Query,
-			Command:            receipt.Command,
+			Tool:                  receipt.Tool,
+			Action:                receipt.Action,
+			ReadOnly:              receipt.ReadOnly,
+			RegistryAvailable:     receipt.RegistryAvailable,
+			ExecutionAvailable:    receipt.ExecutionAvailable,
+			ExecutionPolicy:       receipt.ExecutionPolicy,
+			TotalCommands:         receipt.TotalCommands,
+			ReturnedCommands:      receipt.ReturnedCommands,
+			ExecutableCommands:    receipt.ExecutableCommands,
+			ModelCallableCommands: receipt.ModelCallableCommands,
+			IncludeHidden:         receipt.IncludeHidden,
+			MaxResults:            receipt.MaxResults,
+			Query:                 receipt.Query,
+			Command:               receipt.Command,
 		})
 	}
 	return out

@@ -101,18 +101,20 @@ type completionSkillExecutionReceipt struct {
 }
 
 type completionCommandCatalogReceipt struct {
-	Tool               string `json:"tool"`
-	Action             string `json:"action"`
-	ReadOnly           bool   `json:"read_only"`
-	RegistryAvailable  bool   `json:"registry_available"`
-	ExecutionAvailable bool   `json:"execution_available"`
-	ExecutionPolicy    string `json:"execution_policy"`
-	TotalCommands      int    `json:"total_commands"`
-	ReturnedCommands   int    `json:"returned_commands"`
-	IncludeHidden      bool   `json:"include_hidden"`
-	MaxResults         int    `json:"max_results,omitempty"`
-	Query              string `json:"query,omitempty"`
-	Command            string `json:"command,omitempty"`
+	Tool                  string `json:"tool"`
+	Action                string `json:"action"`
+	ReadOnly              bool   `json:"read_only"`
+	RegistryAvailable     bool   `json:"registry_available"`
+	ExecutionAvailable    bool   `json:"execution_available"`
+	ExecutionPolicy       string `json:"execution_policy"`
+	TotalCommands         int    `json:"total_commands"`
+	ReturnedCommands      int    `json:"returned_commands"`
+	ExecutableCommands    int    `json:"executable_commands,omitempty"`
+	ModelCallableCommands int    `json:"model_callable_commands,omitempty"`
+	IncludeHidden         bool   `json:"include_hidden"`
+	MaxResults            int    `json:"max_results,omitempty"`
+	Query                 string `json:"query,omitempty"`
+	Command               string `json:"command,omitempty"`
 }
 
 type completionToolSearchReceipt struct {

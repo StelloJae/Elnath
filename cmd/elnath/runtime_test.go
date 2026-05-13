@@ -3716,6 +3716,9 @@ func TestRuntimeLocalSlashCommandRegistry(t *testing.T) {
 		if spec.ArgumentHint == "" {
 			t.Fatalf("spec %q has empty argument hint", spec.Name)
 		}
+		if spec.Handler == nil {
+			t.Fatalf("spec %q has nil handler", spec.Name)
+		}
 		names[spec.Name] = true
 	}
 	for _, want := range []string{"/effort", "/model", "/provider", "/commands", "/help", "/skills", "/version", "/status", "/plan"} {
