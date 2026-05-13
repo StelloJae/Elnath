@@ -112,6 +112,93 @@ func TestUserQuestionAnswerToolEnqueuesSessionBoundFollowUp(t *testing.T) {
 	}
 }
 
+type fakeUserQuestionAnswerValidator struct {
+	validation UserQuestionAnswerValidation
+	err        error
+	calls      int
+	sessionID  string
+	requestID  string
+}
+
+func (v *fakeUserQuestionAnswerValidator) ValidateUserQuestionAnswer(_ context.Context, sessionID, requestID string) (UserQuestionAnswerValidation, error) {
+	v.calls++
+	v.sessionID = sessionID
+	v.requestID = requestID
+	return v.validation, v.err
+}
+
+func TestUserQuestionAnswerToolValidatesPendingRequest(t *testing.T) {
+	ctx := context.Background()
+	queue := newTaskToolTestQueue(t)
+	validator := &fakeUserQuestionAnswerValidator{validation: UserQuestionAnswerValidation{
+		Found:         true,
+		Question:      "Which branch?",
+		QuestionChars: len("Which branch?"),
+	}}
+
+	result, err := NewUserQuestionAnswerToolWithValidator(queue, validator).Execute(ctx, json.RawMessage(`{
+		"session_id": "sess-123",
+		"request_id": "req-123",
+		"answer": "Use main."
+	}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute returned error result: %s", result.Output)
+	}
+	if validator.calls != 1 || validator.sessionID != "sess-123" || validator.requestID != "req-123" {
+		t.Fatalf("validator = calls %d session %q request %q, want bound lookup", validator.calls, validator.sessionID, validator.requestID)
+	}
+
+	var output userQuestionAnswerToolOutput
+	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if output.Receipt.QuestionChars != len("Which branch?") {
+		t.Fatalf("receipt QuestionChars = %d, want validator question length", output.Receipt.QuestionChars)
+	}
+
+	task, err := queue.Get(ctx, output.TaskID)
+	if err != nil {
+		t.Fatalf("Get created task: %v", err)
+	}
+	if !strings.Contains(ParseTaskPayload(task.Payload).Prompt, "Question:\nWhich branch?") {
+		t.Fatalf("payload = %q, want validator question in resume prompt", task.Payload)
+	}
+}
+
+func TestUserQuestionAnswerToolRejectsUnboundRequestWhenValidatorConfigured(t *testing.T) {
+	ctx := context.Background()
+	queue := newTaskToolTestQueue(t)
+	validator := &fakeUserQuestionAnswerValidator{}
+	tool := NewUserQuestionAnswerToolWithValidator(queue, validator)
+
+	result, err := tool.Execute(ctx, json.RawMessage(`{"session_id":"sess-123","answer":"Use main."}`))
+	if err != nil {
+		t.Fatalf("missing request Execute error = %v", err)
+	}
+	if !result.IsError || !strings.Contains(result.Output, "request_id is required") {
+		t.Fatalf("missing request result = %+v, want request_id error", result)
+	}
+
+	result, err = tool.Execute(ctx, json.RawMessage(`{"session_id":"sess-123","request_id":"stale-req","answer":"Use main."}`))
+	if err != nil {
+		t.Fatalf("stale request Execute error = %v", err)
+	}
+	if !result.IsError || !strings.Contains(result.Output, "request_id is not pending for session_id") {
+		t.Fatalf("stale request result = %+v, want stale request error", result)
+	}
+
+	tasks, err := queue.List(ctx)
+	if err != nil {
+		t.Fatalf("List tasks: %v", err)
+	}
+	if len(tasks) != 0 {
+		t.Fatalf("tasks = %+v, want no enqueue for unbound answers", tasks)
+	}
+}
+
 func TestUserQuestionAnswerToolRejectsMissingRequiredFields(t *testing.T) {
 	tool := NewUserQuestionAnswerTool(newTaskToolTestQueue(t))
 

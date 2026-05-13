@@ -3777,6 +3777,46 @@ func TestExecutionRuntimeRunTaskProviderSlashCommandRejectsRuntimeSwitch(t *test
 	}
 }
 
+func TestExecutionRuntimeUserQuestionAnswerRequiresPendingRequest(t *testing.T) {
+	rt := newTestExecutionRuntime(t, &countingProvider{})
+	tool, ok := rt.reg.Get("user_question_answer")
+	if !ok {
+		t.Fatal("user_question_answer tool missing")
+	}
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"session_id":"sess-123","request_id":"missing-req","answer":"Use main."}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if !result.IsError || !strings.Contains(result.Output, "request_id is not pending for session_id") {
+		t.Fatalf("result = %+v, want runtime pending-question binding error", result)
+	}
+
+	if err := rt.outcomeStore.Append(learning.OutcomeRecord{
+		Timestamp: time.Date(2026, 5, 13, 7, 0, 0, 0, time.UTC),
+		ControlToolReceipts: []learning.ControlToolReceipt{{
+			Tool:      "ask_user_question",
+			Action:    "request",
+			RequestID: "req-123",
+			SessionID: "sess-123",
+			Question:  "Which branch?",
+		}},
+	}); err != nil {
+		t.Fatalf("Append outcome: %v", err)
+	}
+
+	result, err = tool.Execute(context.Background(), json.RawMessage(`{"session_id":"sess-123","request_id":"req-123","answer":"Use main."}`))
+	if err != nil {
+		t.Fatalf("bound Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("bound Execute returned error result: %s", result.Output)
+	}
+	if !strings.Contains(result.Output, `"type":"user_input_answer_enqueued"`) {
+		t.Fatalf("bound result = %s, want enqueue output", result.Output)
+	}
+}
+
 func TestExecutionRuntimeRunTaskSelfHealingCorrectionRetriesIncompleteFinal(t *testing.T) {
 	provider := &sequenceStreamProvider{responses: []string{
 		"I could not finish the patch.",

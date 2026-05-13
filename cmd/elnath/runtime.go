@@ -237,6 +237,29 @@ type executionRuntime struct {
 	taskStopTool       *daemon.TaskStopTool
 }
 
+type pendingUserQuestionValidator struct {
+	store *learning.OutcomeStore
+}
+
+func (v pendingUserQuestionValidator) ValidateUserQuestionAnswer(_ context.Context, sessionID, requestID string) (daemon.UserQuestionAnswerValidation, error) {
+	if v.store == nil {
+		return daemon.UserQuestionAnswerValidation{}, fmt.Errorf("outcome store unavailable")
+	}
+	records, err := v.store.Recent(0)
+	if err != nil {
+		return daemon.UserQuestionAnswerValidation{}, err
+	}
+	question, ok := learning.FindPendingUserQuestion(records, sessionID, requestID)
+	if !ok {
+		return daemon.UserQuestionAnswerValidation{}, nil
+	}
+	return daemon.UserQuestionAnswerValidation{
+		Found:         true,
+		Question:      question.Question,
+		QuestionChars: question.QuestionChars,
+	}, nil
+}
+
 type delegateEnqueueRuntimeService struct {
 	service *agenticenqueue.Service
 }
@@ -479,7 +502,7 @@ func buildExecutionRuntime(
 		return nil, fmt.Errorf("open task queue tools: %w", err)
 	}
 	reg.Register(daemon.NewTaskCreateTool(taskQueue))
-	reg.Register(daemon.NewUserQuestionAnswerTool(taskQueue))
+	reg.Register(daemon.NewUserQuestionAnswerToolWithValidator(taskQueue, pendingUserQuestionValidator{store: outcomeStore}))
 	reg.Register(daemon.NewTaskListTool(taskQueue))
 	reg.Register(daemon.NewTaskGetTool(taskQueue))
 	taskStopTool := daemon.NewTaskStopTool(taskQueue)

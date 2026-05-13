@@ -77,3 +77,42 @@ func TestPendingUserQuestionsFiltersSessionAndLimit(t *testing.T) {
 		t.Fatalf("pending = %+v, want only sess-2 req-2", pending)
 	}
 }
+
+func TestFindPendingUserQuestionRequiresMatchingPendingRequest(t *testing.T) {
+	now := time.Date(2026, 5, 13, 7, 0, 0, 0, time.UTC)
+	records := []OutcomeRecord{{
+		Timestamp: now,
+		ControlToolReceipts: []ControlToolReceipt{{
+			Tool:      "ask_user_question",
+			Action:    "request",
+			RequestID: "req-1",
+			SessionID: "sess-1",
+			Question:  "Which branch?",
+		}, {
+			Tool:      "ask_user_question",
+			Action:    "request",
+			RequestID: "req-2",
+			SessionID: "sess-2",
+			Question:  "Other session?",
+		}},
+	}, {
+		Timestamp: now.Add(time.Minute),
+		ControlToolReceipts: []ControlToolReceipt{{
+			Tool:      "user_question_answer",
+			Action:    "answer",
+			RequestID: "req-1",
+			SessionID: "sess-1",
+		}},
+	}}
+
+	if _, ok := FindPendingUserQuestion(records, "sess-1", "req-1"); ok {
+		t.Fatal("FindPendingUserQuestion found answered req-1, want stale answer rejected")
+	}
+	if _, ok := FindPendingUserQuestion(records, "sess-1", "req-2"); ok {
+		t.Fatal("FindPendingUserQuestion found cross-session req-2, want session-bound lookup")
+	}
+	got, ok := FindPendingUserQuestion(records, "sess-2", "req-2")
+	if !ok || got.Question != "Other session?" {
+		t.Fatalf("FindPendingUserQuestion = %+v ok=%v, want sess-2 req-2", got, ok)
+	}
+}

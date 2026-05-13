@@ -4,11 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stello/elnath/internal/daemon"
+	"github.com/stello/elnath/internal/learning"
 
 	_ "modernc.org/sqlite"
 )
@@ -44,7 +46,7 @@ func TestCmdTaskUsage(t *testing.T) {
 	if !strings.Contains(stdout, "Usage: elnath task") {
 		t.Fatalf("stdout = %q, want task usage", stdout)
 	}
-	for _, want := range []string{"monitor <id>", "output <id>", "stop <id>"} {
+	for _, want := range []string{"monitor <id>", "output <id>", "stop <id>", "answer"} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("stdout = %q, want usage to contain %q", stdout, want)
 		}
@@ -242,6 +244,78 @@ func TestCmdTaskStopWithQueueRejectsRunningTask(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("err = %q, want %q", err.Error(), want)
 		}
+	}
+}
+
+func TestCmdTaskAnswerWithQueueEnqueuesBoundAnswer(t *testing.T) {
+	ctx := context.Background()
+	queue := newCmdTaskTestQueue(t)
+	store := learning.NewOutcomeStore(filepath.Join(t.TempDir(), "outcomes.jsonl"))
+	if err := store.Append(learning.OutcomeRecord{
+		Timestamp: time.Date(2026, 5, 13, 7, 0, 0, 0, time.UTC),
+		ControlToolReceipts: []learning.ControlToolReceipt{{
+			Tool:      "ask_user_question",
+			Action:    "request",
+			RequestID: "req-123",
+			SessionID: "sess-123",
+			Question:  "Which branch?",
+		}},
+	}); err != nil {
+		t.Fatalf("Append outcome: %v", err)
+	}
+
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdTaskAnswerWithQueue(ctx, queue, store, []string{
+			"--session", "sess-123",
+			"--request", "req-123",
+			"--answer", "Use main.",
+		}); err != nil {
+			t.Fatalf("cmdTaskAnswerWithQueue: %v", err)
+		}
+	})
+	if !strings.Contains(stdout, "Answer task:") || !strings.Contains(stdout, "elnath task monitor") {
+		t.Fatalf("stdout = %q, want answer enqueue summary", stdout)
+	}
+
+	tasks, err := queue.List(ctx)
+	if err != nil {
+		t.Fatalf("List tasks: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("tasks = %+v, want one answer resume task", tasks)
+	}
+	payload := daemon.ParseTaskPayload(tasks[0].Payload)
+	if payload.SessionID != "sess-123" || !strings.Contains(payload.Prompt, "Request ID:\nreq-123") || !strings.Contains(payload.Prompt, "Answer:\nUse main.") {
+		t.Fatalf("payload = %+v, want session-bound answer resume", payload)
+	}
+	records, err := store.Recent(0)
+	if err != nil {
+		t.Fatalf("Recent outcomes: %v", err)
+	}
+	if pending := learning.PendingUserQuestions(records, "sess-123", 10); len(pending) != 0 {
+		t.Fatalf("pending = %+v, want CLI answer receipt to close req-123", pending)
+	}
+}
+
+func TestCmdTaskAnswerWithQueueRejectsStaleRequest(t *testing.T) {
+	ctx := context.Background()
+	queue := newCmdTaskTestQueue(t)
+	store := learning.NewOutcomeStore(filepath.Join(t.TempDir(), "outcomes.jsonl"))
+
+	err := cmdTaskAnswerWithQueue(ctx, queue, store, []string{
+		"--session", "sess-123",
+		"--request", "missing",
+		"--answer", "Use main.",
+	})
+	if err == nil || !strings.Contains(err.Error(), "request_id is not pending for session_id") {
+		t.Fatalf("cmdTaskAnswerWithQueue err = %v, want stale request error", err)
+	}
+	tasks, listErr := queue.List(ctx)
+	if listErr != nil {
+		t.Fatalf("List tasks: %v", listErr)
+	}
+	if len(tasks) != 0 {
+		t.Fatalf("tasks = %+v, want no enqueue for stale answer", tasks)
 	}
 }
 
