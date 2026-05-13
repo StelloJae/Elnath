@@ -2376,7 +2376,7 @@ func TestExecutionRuntimeEffortStatusExplainsAutoRoutingPolicy(t *testing.T) {
 	for _, want := range []string{
 		"Effort level: auto.",
 		"Auto routing policy:",
-		"simple/status/summary -> low",
+		"simple/status/progress/summary -> low",
 		"implementation/debug/benchmark/CI -> high",
 		"root-cause/security/architecture/autonomous -> xhigh",
 		"Auto routing is heuristic",
@@ -3591,7 +3591,7 @@ func TestExecutionRuntimeRunTaskStatusSlashCommand(t *testing.T) {
 }
 
 func TestExecutionRuntimeRunTaskStatusSlashCommandJSON(t *testing.T) {
-	provider := &countingProvider{streamText: "runtime answer"}
+	provider := &capabilityCountingProvider{}
 	rt := newTestExecutionRuntime(t, provider)
 	sess, err := rt.mgr.NewSession()
 	if err != nil {
@@ -3611,13 +3611,15 @@ func TestExecutionRuntimeRunTaskStatusSlashCommandJSON(t *testing.T) {
 		Provider       string `json:"provider"`
 		Model          string `json:"model"`
 		EffortMode     string `json:"effort_mode"`
+		ProviderEffort string `json:"provider_effort"`
+		AutoCompatible bool   `json:"auto_effort_compatible"`
 		PermissionMode string `json:"permission_mode"`
 		ToolExposure   string `json:"tool_exposure"`
 	}
 	if err := json.Unmarshal([]byte(summary), &out); err != nil {
 		t.Fatalf("summary is not JSON: %v\n%s", err, summary)
 	}
-	if out.Version != version || out.Provider != "mock" || out.Model != "mock-model" || out.EffortMode != "auto" || out.PermissionMode != "bypass" || out.ToolExposure != "standard" {
+	if out.Version != version || out.Provider != "openai-responses" || out.Model != "mock-model" || out.EffortMode != "auto" || out.ProviderEffort != llm.ReasoningEffortNativeWithUnsupportedRetry || !out.AutoCompatible || out.PermissionMode != "bypass" || out.ToolExposure != "standard" {
 		t.Fatalf("status output = %+v", out)
 	}
 }

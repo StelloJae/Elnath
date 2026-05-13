@@ -37,6 +37,9 @@ func (a *Agent) resolveReasoningEffortDecision(messages []llm.Message) reasoning
 			}
 			return reasoningEffortDecision{Effort: effort, Mode: reasoningEffortModeAuto, Reason: "configured_fallback"}
 		}
+		if unsupported := providerUnsupportedAutoEffort(a.provider); unsupported != "" {
+			return reasoningEffortDecision{Mode: reasoningEffortModeAuto, Reason: unsupported}
+		}
 		return reasoningEffortDecision{Effort: "medium", Mode: reasoningEffortModeAuto, Reason: "empty_task_default"}
 	}
 	return reasoningEffortDecision{Effort: strings.TrimSpace(a.reasoningEffort), Mode: reasoningEffortModeManual, Reason: "manual"}
@@ -130,12 +133,20 @@ func simpleStatusKeywords() []string {
 		"who",
 		"translate",
 		"summarize",
+		"progress",
+		"percentage",
+		"percent",
+		"completion",
 		"status",
 		"time",
 		"date",
 		"간단",
 		"번역",
 		"요약",
+		"진행도",
+		"완성도",
+		"퍼센트",
+		"퍼센티지",
 		"상태",
 	}
 }
