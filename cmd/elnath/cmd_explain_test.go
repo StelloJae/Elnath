@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -246,6 +247,9 @@ func TestExplainControlSurfacesJSON(t *testing.T) {
 		if strings.Contains(gap, "blocking wait state") {
 			t.Fatalf("remaining gap %q is stale after process_wait and user_question_wait", gap)
 		}
+	}
+	if !slices.Contains(out.RemainingGaps, "bounded process_wait supports literal watch_text; full streaming/async line-watch remains deferred") {
+		t.Fatalf("remaining_gaps = %+v, want process_wait watch_text boundary", out.RemainingGaps)
 	}
 }
 

@@ -156,6 +156,31 @@ func TestCommandRegistryBuiltFromSpecs(t *testing.T) {
 	}
 }
 
+func TestCmdHelpReflectsCommandCatalog(t *testing.T) {
+	stdout, stderr := captureOutput(t, func() {
+		if err := executeCommand(context.Background(), "help", nil); err != nil {
+			t.Fatalf("executeCommand(help) error = %v", err)
+		}
+	})
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+	if !strings.Contains(stdout, "Usage: elnath <command> [args]") {
+		t.Fatalf("help missing usage header:\n%s", stdout)
+	}
+	for _, entry := range commandCatalog(false) {
+		needle := "  " + entry.Name
+		if !strings.Contains(stdout, needle) {
+			t.Fatalf("help missing registered command %q; got:\n%s", entry.Name, stdout)
+		}
+	}
+	for _, hidden := range []string{"netproxy", "netproxy-bridge", "netproxy-bridge-spike"} {
+		if strings.Contains(stdout, "  "+hidden) {
+			t.Fatalf("help exposed hidden command %q; got:\n%s", hidden, stdout)
+		}
+	}
+}
+
 // TestPrintCommandHelp_DaemonMatchesDispatcher guards against help-text drift.
 // cmdDaemon accepts start/submit/status/stop/install; the extended help must
 // not advertise subcommands the dispatcher rejects (like "task submit",

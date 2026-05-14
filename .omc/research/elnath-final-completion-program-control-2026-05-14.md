@@ -26,6 +26,11 @@ Merged structural PRs now include:
 - PR #211: bounded `process_wait`
 - PR #212: bounded `user_question_wait`
 - PR #213: refreshed control-surface gap wording and broad runtime health artifact
+- PR #214: final-control pointer and post-PR213 continuity correction
+- PR #215: gitignored-file filtering for `code_symbols workspace_symbols`
+- PR #216: user-answer character bounds in receipts
+- PR #217: `ask_user_question` answer handoff commands and follow-up hint
+- PR #218: bounded `process_wait watch_text` marker waits
 
 Do not restart old Milestone C/G work unless fresh evidence proves a regression.
 
@@ -48,6 +53,7 @@ First close the post-PR213 structural evidence state.
 Then choose exactly one:
 
 - tiny current-only control smoke to validate receipt behavior in benchmark environment; or
+- command/control-surface discoverability drift repair; or
 - code-intelligence/LSP design slice; or
 - UI-level answer collection design slice.
 

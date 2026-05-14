@@ -57,10 +57,15 @@ Known completed structural slices:
 - Follow-up: bounded `process_wait`
 - Follow-up: bounded `user_question_wait`
 - Follow-up: refreshed control-surface gap wording after wait tools
+- Follow-up: final-control pointer and post-PR213 continuity correction
+- Follow-up: gitignored-file filtering for `code_symbols workspace_symbols`
+- Follow-up: user-answer character bounds in receipts
+- Follow-up: `ask_user_question` answer handoff commands and follow-up hint
+- Follow-up: bounded `process_wait watch_text` marker waits
 
 Do not redo these unless new evidence shows a regression.
 
-Recent merged PRs include #207, #208, #209, #210, #211, #212, and #213. Always confirm branch, HEAD, origin/main, and dirty files first before trusting this note.
+Recent merged PRs include #207 through #218. Always confirm branch, HEAD, origin/main, and dirty files first before trusting this note.
 
 Expected implementation work should start from a clean branch or clean worktree. Preserve unrelated dirty files in `/Users/stello/elnath`.
 
@@ -117,9 +122,10 @@ The old Milestone C/G checklist is complete. Do not restart it.
 
 The next autonomous step should be chosen from fresh code evidence. Current best candidates:
 
-1. closeout/decision artifact after PR #207-#213, then a tiny current-only control smoke only if needed to validate receipt behavior in benchmark environment;
-2. code-intelligence/LSP explicit design and a small `code_symbols` improvement if source-navigation quality is now the highest blocker;
-3. UI-level user answer collection design if interactive wait/resume is now the highest blocker.
+1. closeout/decision artifact after PR #207-#218, then a tiny current-only control smoke only if needed to validate receipt behavior in benchmark environment;
+2. command/control-surface discoverability drift repair if registry-backed status can prevent repeated stale-lane loops;
+3. code-intelligence/LSP explicit design and a small `code_symbols` improvement if source-navigation quality is now the highest blocker;
+4. UI-level user answer collection design if interactive wait/resume is now the highest blocker.
 
 Do not widen into full v8, baseline, Codex comparison, or Claude comparison from this document alone.
 
@@ -128,7 +134,7 @@ Do not widen into full v8, baseline, Codex comparison, or Claude comparison from
 These are product boundaries or future structural work, not proof that the earlier milestones failed:
 
 - UI-level answer collection: runtime request/list/wait/answer receipts exist, but desktop/app-level blocking UX remains outside the current runtime.
-- Streaming line-watch monitor: bounded `process_wait` exists; richer streaming watch remains deferred.
+- Streaming line-watch monitor: bounded `process_wait` and literal `watch_text` marker waits exist; richer async streaming watch remains deferred.
 - Code intelligence: `code_symbols` exists; full LSP lifecycle remains deferred.
 - Registry introspection polish: control-surface manifest and ToolSearch metadata exist; full runtime registry introspection can still improve.
 - Benchmark-readiness validation: use only small current-only control smoke first, not full v8 or comparison lanes.
