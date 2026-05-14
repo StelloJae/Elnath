@@ -135,6 +135,17 @@ func TestTodoWriteToolMetadata(t *testing.T) {
 	if tool.Name() != "todo_write" {
 		t.Fatalf("Name() = %q, want todo_write", tool.Name())
 	}
+	if !strings.Contains(tool.Description(), "active_form") {
+		t.Fatalf("Description() = %q, want active_form guidance", tool.Description())
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(tool.Schema(), &schema); err != nil {
+		t.Fatalf("Schema unmarshal: %v", err)
+	}
+	schemaText := string(tool.Schema())
+	if !strings.Contains(schemaText, "Required when status is in_progress") {
+		t.Fatalf("Schema() = %s, want in_progress active_form requirement", schemaText)
+	}
 	if !tool.IsConcurrencySafe(nil) {
 		t.Fatal("todo_write should be concurrency-safe")
 	}

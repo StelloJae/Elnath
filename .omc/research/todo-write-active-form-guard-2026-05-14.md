@@ -34,6 +34,8 @@ in Elnath's Go-native tool contract.
 - Keeps the existing single-`in_progress` guard intact.
 - Updates `elnath explain control-surfaces` scratchpad notes so the surfaced control contract
   mentions the new active-form guard.
+- Updates the model-facing tool description and schema text so the runtime guard is discoverable
+  before a failed tool call.
 
 ## Verification
 
@@ -87,6 +89,34 @@ go test ./internal/tools ./cmd/elnath -count=1
 PASS (ok github.com/stello/elnath/internal/tools 41.297s; ok github.com/stello/elnath/cmd/elnath 24.458s)
 
 go vet ./internal/tools ./cmd/elnath
+PASS
+
+git diff --check
+PASS
+```
+
+Schema/description TDD probe:
+
+```text
+go test ./internal/tools -run TestTodoWriteToolMetadata -count=1
+FAIL as expected: description/schema did not expose the active_form requirement
+```
+
+Schema/description focused verification:
+
+```text
+gofmt -w internal/tools/todo.go internal/tools/todo_test.go
+go test ./internal/tools -run 'TestTodoWriteToolMetadata|TestTodoWriteTool_RejectsInvalidTodos|TestToolSearchFindsToolsByNameAndDescription' -count=1
+PASS
+```
+
+Package verification after schema/description update:
+
+```text
+go test ./internal/tools -count=1
+PASS (ok github.com/stello/elnath/internal/tools 42.915s)
+
+go vet ./internal/tools
 PASS
 
 git diff --check

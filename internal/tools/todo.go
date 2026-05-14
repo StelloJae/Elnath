@@ -18,7 +18,7 @@ func NewTodoWriteTool() *TodoWriteTool {
 func (t *TodoWriteTool) Name() string { return TodoWriteName }
 
 func (t *TodoWriteTool) Description() string {
-	return "Replace the current session todo checklist with structured task statuses"
+	return "Replace the current session todo checklist; in_progress items require active_form"
 }
 
 func (t *TodoWriteTool) Schema() json.RawMessage {
@@ -42,11 +42,11 @@ func (t *TodoWriteTool) Schema() json.RawMessage {
 						},
 						"active_form": map[string]any{
 							"type":        "string",
-							"description": "Optional in-progress phrasing for UI or progress display.",
+							"description": "Required when status is in_progress. Present-continuous phrasing for UI or progress display.",
 						},
 						"activeForm": map[string]any{
 							"type":        "string",
-							"description": "Camel-case compatibility alias for active_form.",
+							"description": "Camel-case compatibility alias for active_form. Required when status is in_progress if active_form is omitted.",
 						},
 					},
 					"required": []string{"content", "status"},
