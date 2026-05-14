@@ -121,6 +121,9 @@ type taskToolReceipt struct {
 	StatusFilter    TaskStatus `json:"status_filter,omitempty"`
 	Field           string     `json:"field,omitempty"`
 	RetrievalStatus string     `json:"retrieval_status,omitempty"`
+	MaxChars        int        `json:"max_chars,omitempty"`
+	TotalChars      int        `json:"total_chars,omitempty"`
+	Truncated       bool       `json:"truncated,omitempty"`
 	FollowupTool    string     `json:"followup_tool,omitempty"`
 	QuestionChars   int        `json:"question_chars,omitempty"`
 	AnswerChars     int        `json:"answer_chars,omitempty"`
@@ -857,6 +860,9 @@ func (t *TaskOutputTool) Execute(ctx context.Context, params json.RawMessage) (*
 			Terminal:        terminal,
 			Field:           field,
 			RetrievalStatus: retrievalStatus,
+			MaxChars:        limit,
+			TotalChars:      total,
+			Truncated:       truncated,
 		},
 	}
 	raw, err := json.Marshal(output)
@@ -1061,6 +1067,9 @@ func (t *TaskMonitorTool) Execute(ctx context.Context, params json.RawMessage) (
 			Status:          task.Status,
 			Terminal:        terminal,
 			RetrievalStatus: retrievalStatus,
+			MaxChars:        limit,
+			TotalChars:      total,
+			Truncated:       truncated,
 		},
 	}
 	raw, err := json.Marshal(output)

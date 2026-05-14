@@ -175,7 +175,7 @@ func TestBuiltinToolMetadata(t *testing.T) {
 		{
 			name:        "code_symbols unknown operation falls back",
 			tool:        NewCodeSymbolsTool(guard),
-			params:      rawJSON(`{"operation":"definition","file_path":"foo.go"}`),
+			params:      rawJSON(`{"operation":"hover","file_path":"foo.go"}`),
 			wantSafe:    true,
 			wantCancel:  false,
 			wantReverse: true,

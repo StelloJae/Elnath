@@ -228,6 +228,91 @@ func HiddenIgnoredSymbol() {}
 	}
 }
 
+func TestCodeSymbolsToolDefinitionFindsExactGoSymbol(t *testing.T) {
+	root := t.TempDir()
+	writeCodeSymbolFile(t, filepath.Join(root, "worker.go"), `package demo
+
+type Worker struct{}
+
+func NewWorker() *Worker {
+	return &Worker{}
+}
+
+func (w *Worker) Run() error {
+	return nil
+}
+`)
+	writeCodeSymbolFile(t, filepath.Join(root, "other.go"), `package demo
+
+func RunStandalone() {}
+`)
+	tool := NewCodeSymbolsTool(NewPathGuard(root, nil))
+
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"operation":"definition","query":"Worker.Run"}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("Execute returned error result: %s", res.Output)
+	}
+
+	var out codeSymbolsOutput
+	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, res.Output)
+	}
+	if out.Operation != "definition" || out.Status != "success" || out.Count != 1 || out.Query != "Worker.Run" {
+		t.Fatalf("output = %+v, want one definition for Worker.Run", out)
+	}
+	if out.Receipt.Operation != "definition" || out.Receipt.Count != 1 {
+		t.Fatalf("receipt = %+v, want definition receipt", out.Receipt)
+	}
+	got := out.Symbols[0]
+	if got.Name != "Worker.Run" || got.Kind != "function" || got.FilePath != "worker.go" || got.Line == 0 || got.Column == 0 {
+		t.Fatalf("definition = %+v, want Worker.Run in worker.go", got)
+	}
+}
+
+func TestCodeSymbolsToolDefinitionFindsMethodByUnqualifiedName(t *testing.T) {
+	root := t.TempDir()
+	writeCodeSymbolFile(t, filepath.Join(root, "worker.go"), `package demo
+
+type Worker struct{}
+
+func (w *Worker) Run() error {
+	return nil
+}
+`)
+	tool := NewCodeSymbolsTool(NewPathGuard(root, nil))
+
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"operation":"definition","query":"Run"}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("Execute returned error result: %s", res.Output)
+	}
+
+	var out codeSymbolsOutput
+	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, res.Output)
+	}
+	if out.Status != "success" || out.Count != 1 || out.Symbols[0].Name != "Worker.Run" {
+		t.Fatalf("definitions = %+v, want Worker.Run for unqualified Run query", out.Symbols)
+	}
+}
+
+func TestCodeSymbolsToolDefinitionRequiresQuery(t *testing.T) {
+	tool := NewCodeSymbolsTool(NewPathGuard(t.TempDir(), nil))
+
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"operation":"definition"}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if !res.IsError || !strings.Contains(res.Output, "query is required") {
+		t.Fatalf("result = %+v, want query required error", res)
+	}
+}
+
 func TestCodeSymbolsToolUnsupportedLanguageIsStructured(t *testing.T) {
 	root := t.TempDir()
 	writeCodeSymbolFile(t, filepath.Join(root, "notes.txt"), "not go")

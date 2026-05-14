@@ -25,8 +25,8 @@ const (
 )
 
 // CodeSymbolsTool provides a small Go-native code intelligence surface.
-// It intentionally covers only document/workspace symbols for now instead of
-// claiming full LSP parity.
+// It intentionally covers only symbol listing and exact-name definitions for
+// now instead of claiming full LSP parity.
 type CodeSymbolsTool struct{ guard *PathGuard }
 
 func NewCodeSymbolsTool(guard *PathGuard) *CodeSymbolsTool {
@@ -36,15 +36,15 @@ func NewCodeSymbolsTool(guard *PathGuard) *CodeSymbolsTool {
 func (t *CodeSymbolsTool) Name() string { return CodeSymbolsToolName }
 
 func (t *CodeSymbolsTool) Description() string {
-	return "Inspect Go code symbols and file outlines without starting a language server. Supports document_symbols for one Go file and workspace_symbols across Go files."
+	return "Inspect Go code symbols and file outlines without starting a language server. Supports document_symbols for one Go file, workspace_symbols across Go files, and exact-name definition lookup."
 }
 
 func (t *CodeSymbolsTool) Schema() json.RawMessage {
 	return Object(map[string]Property{
-		"operation":   StringEnum("Operation to perform.", "document_symbols", "workspace_symbols"),
+		"operation":   StringEnum("Operation to perform.", "document_symbols", "workspace_symbols", "definition"),
 		"file_path":   String("Go file path for document_symbols."),
-		"path":        String("Base directory for workspace_symbols. Defaults to current workspace."),
-		"query":       String("Optional case-insensitive symbol name filter for workspace_symbols."),
+		"path":        String("Base directory for workspace_symbols or definition. Defaults to current workspace."),
+		"query":       String("Optional case-insensitive symbol name filter for workspace_symbols; required exact symbol name for definition."),
 		"max_results": Int("Maximum symbols to return. Defaults to 50 and caps at 200."),
 	}, []string{"operation"})
 }
@@ -59,7 +59,7 @@ func (t *CodeSymbolsTool) Scope(params json.RawMessage) ToolScope {
 		return ConservativeScope()
 	}
 	switch strings.ToLower(strings.TrimSpace(input.Operation)) {
-	case "document_symbols", "workspace_symbols":
+	case "document_symbols", "workspace_symbols", "definition":
 		return ToolScope{ReadPaths: []string{t.guard.WorkDir()}}
 	default:
 		return ConservativeScope()
@@ -139,8 +139,10 @@ func (t *CodeSymbolsTool) Execute(ctx context.Context, params json.RawMessage) (
 		return t.executeDocumentSymbols(ctx, input)
 	case "workspace_symbols":
 		return t.executeWorkspaceSymbols(ctx, input)
+	case "definition":
+		return t.executeDefinition(ctx, input)
 	default:
-		return ErrorResult("code_symbols: operation must be document_symbols or workspace_symbols"), nil
+		return ErrorResult("code_symbols: operation must be document_symbols, workspace_symbols, or definition"), nil
 	}
 }
 
@@ -254,6 +256,95 @@ func (t *CodeSymbolsTool) executeWorkspaceSymbols(ctx context.Context, input cod
 		Language:  "go",
 		Path:      relPath(sessionBase, searchBase),
 		Query:     strings.TrimSpace(input.Query),
+		Count:     len(symbols),
+		Truncated: truncated,
+		Errors:    parseErrors,
+		Symbols:   symbols,
+	})
+}
+
+func (t *CodeSymbolsTool) executeDefinition(ctx context.Context, input codeSymbolsInput) (*Result, error) {
+	sessionBase, err := SessionWorkDirFromContext(ctx, t.guard)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("code_symbols: session workspace: %v", err)), nil
+	}
+	searchBase, err := resolveSearchBase(t.guard, ctx, sessionBase, input.Path)
+	if err != nil {
+		return ErrorResult("code_symbols: " + err.Error()), nil
+	}
+	query := strings.TrimSpace(input.Query)
+	if query == "" {
+		return ErrorResult("code_symbols: query is required for definition"), nil
+	}
+	maxResults := normalizeCodeSymbolMax(input.MaxResults)
+	var candidates []codeSymbolFileCandidate
+	var symbols []codeSymbolItem
+	var parseErrors []codeSymbolError
+	truncated := false
+	walkErr := filepath.WalkDir(searchBase, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			parseErrors = append(parseErrors, codeSymbolError{FilePath: relPath(sessionBase, path), Error: err.Error()})
+			return nil
+		}
+		if d.IsDir() {
+			if shouldSkipCodeSymbolDir(path, searchBase, d.Name()) {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(path) != ".go" {
+			return nil
+		}
+		rel := relPath(sessionBase, path)
+		scoped, err := t.guard.ResolveSessionScoped(sessionBase, rel)
+		if err != nil {
+			parseErrors = append(parseErrors, codeSymbolError{FilePath: rel, Error: err.Error()})
+			return nil
+		}
+		candidates = append(candidates, codeSymbolFileCandidate{AbsPath: scoped, RelPath: rel})
+		return nil
+	})
+	if walkErr != nil {
+		return ErrorResult(fmt.Sprintf("code_symbols: walk: %v", walkErr)), nil
+	}
+	gitIgnored := gitIgnoredCodeSymbolPaths(ctx, sessionBase, candidates)
+	for _, candidate := range candidates {
+		if gitIgnored[filepath.ToSlash(candidate.RelPath)] {
+			continue
+		}
+		fileSymbols, err := parseGoSymbols(candidate.AbsPath, sessionBase)
+		if err != nil {
+			parseErrors = append(parseErrors, codeSymbolError{FilePath: candidate.RelPath, Error: err.Error()})
+			continue
+		}
+		for _, sym := range fileSymbols {
+			if !matchesDefinitionSymbol(sym.Name, query) {
+				continue
+			}
+			if len(symbols) >= maxResults {
+				truncated = true
+				break
+			}
+			symbols = append(symbols, sym)
+		}
+		if truncated {
+			break
+		}
+	}
+	sortCodeSymbols(symbols)
+	status := "success"
+	if len(parseErrors) > 0 {
+		status = "partial_success"
+	}
+	if len(symbols) == 0 && len(parseErrors) == 0 {
+		status = "not_found"
+	}
+	return codeSymbolsJSON(codeSymbolsOutput{
+		Operation: "definition",
+		Status:    status,
+		Language:  "go",
+		Path:      relPath(sessionBase, searchBase),
+		Query:     query,
 		Count:     len(symbols),
 		Truncated: truncated,
 		Errors:    parseErrors,
@@ -423,6 +514,13 @@ func sortCodeSymbols(symbols []codeSymbolItem) {
 		}
 		return symbols[i].Name < symbols[j].Name
 	})
+}
+
+func matchesDefinitionSymbol(symbolName, query string) bool {
+	if symbolName == query {
+		return true
+	}
+	return !strings.Contains(query, ".") && strings.HasSuffix(symbolName, "."+query)
 }
 
 func functionSymbolName(receiver, name string) string {

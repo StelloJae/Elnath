@@ -3513,6 +3513,18 @@ func TestExecutionRuntimeRegistersDeferredControlSurfaceTools(t *testing.T) {
 	}
 }
 
+func TestExecutionRuntimeRegistersControlSurfaceManifestTools(t *testing.T) {
+	rt := newTestExecutionRuntime(t, &countingProvider{streamText: "unused"})
+
+	for _, surface := range controlSurfaceManifest() {
+		for _, name := range surface.Tools {
+			if _, ok := rt.reg.Get(name); !ok {
+				t.Fatalf("control surface %s lists unregistered runtime tool %s", surface.Name, name)
+			}
+		}
+	}
+}
+
 type fakeRuntimeRunningCanceller struct {
 	called  int
 	taskID  int64
