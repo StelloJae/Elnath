@@ -53,11 +53,15 @@ type BashRunnerProbe struct {
 // (symlink-resolved), and verified to lie within the session workspace by
 // the caller — runners trust these inputs and do not re-validate.
 type BashRunRequest struct {
-	Command    string
-	WorkDir    string
-	SessionDir string
-	EnvDir     string
-	DisplayCWD string
+	Command         string
+	WorkDir         string
+	SessionDir      string
+	EnvDir          string
+	DisplayCWD      string
+	ExecutionPolicy string
+	CommandIntent   string
+	IntentSource    string
+	TimeoutMS       int
 }
 
 // BashRunResult mirrors the public Result envelope (Output, IsError) and
@@ -95,6 +99,10 @@ type BashRunResult struct {
 	StdoutTruncated      bool
 	StderrTruncated      bool
 	Classification       string
+	ExecutionPolicy      string
+	CommandIntent        string
+	IntentSource         string
+	TimeoutMS            int
 	Violations           []SandboxViolation
 	ViolationDropCount   int
 	AuditRecords         []SandboxAuditRecord

@@ -74,6 +74,7 @@ func (t *BashTool) Schema() json.RawMessage {
 		"command":     String("The shell command to execute."),
 		"timeout_ms":  Int("Timeout in milliseconds (default 120000, max 600000)."),
 		"working_dir": String("Working directory for the command (default: tool's workDir)."),
+		"intent":      String("Closed enum command intent: inspect, edit, focused_verify, broad_verify, diagnostic, or background. Defaults to diagnostic for foreground bash."),
 	}, []string{"command"})
 }
 
@@ -102,6 +103,7 @@ type bashParams struct {
 	Command    string `json:"command"`
 	TimeoutMs  int    `json:"timeout_ms"`
 	WorkingDir string `json:"working_dir"`
+	Intent     string `json:"intent"`
 }
 
 func (t *BashTool) Execute(ctx context.Context, params json.RawMessage) (*Result, error) {
@@ -115,6 +117,10 @@ func (t *BashTool) Execute(ctx context.Context, params json.RawMessage) (*Result
 
 	if dangerous, reason := AnalyzeCommandSafety(p.Command); dangerous {
 		return ErrorResult(fmt.Sprintf("command blocked: %s", reason)), nil
+	}
+	intent, intentSource, intentErr := normalizeCommandIntent(p.Intent, CommandIntentDiagnostic)
+	if intentErr != nil {
+		return ErrorResult(intentErr.Error()), nil
 	}
 
 	timeout := t.defaultTimeout
@@ -187,11 +193,15 @@ func (t *BashTool) Execute(ctx context.Context, params json.RawMessage) (*Result
 	defer cancel()
 
 	req := BashRunRequest{
-		Command:    p.Command,
-		WorkDir:    workDir,
-		SessionDir: sessionDir,
-		EnvDir:     envDir,
-		DisplayCWD: displayCWD(sessionDir, workDir),
+		Command:         p.Command,
+		WorkDir:         workDir,
+		SessionDir:      sessionDir,
+		EnvDir:          envDir,
+		DisplayCWD:      displayCWD(sessionDir, workDir),
+		ExecutionPolicy: "foreground_shell",
+		CommandIntent:   intent,
+		IntentSource:    intentSource,
+		TimeoutMS:       int(timeout / time.Millisecond),
 	}
 
 	runResult, runErr := t.runner.Run(execCtx, req)
@@ -239,6 +249,10 @@ func emitBashTelemetry(ctx context.Context, probe BashRunnerProbe, req BashRunRe
 		"sandbox_enforced", probe.SandboxEnforced,
 		"policy_name", probe.PolicyName,
 		"cwd_display", req.DisplayCWD,
+		"execution_policy", req.ExecutionPolicy,
+		"command_intent", req.CommandIntent,
+		"intent_source", req.IntentSource,
+		"timeout_ms", req.TimeoutMS,
 		"command_len", len(req.Command),
 		"duration_ms", res.Duration.Milliseconds(),
 		"exit_code", exitCode,

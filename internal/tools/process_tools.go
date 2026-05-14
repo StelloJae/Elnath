@@ -77,6 +77,10 @@ func (m *ProcessManager) start(ctx context.Context, input processStartInput) (*m
 	if dangerous, reason := AnalyzeCommandSafety(command); dangerous {
 		return nil, fmt.Errorf("process_start: command blocked: %s", reason)
 	}
+	intent, intentSource, intentErr := normalizeCommandIntent(input.Intent, CommandIntentBackground)
+	if intentErr != nil {
+		return nil, intentErr
+	}
 
 	timeout := normalizeProcessTimeout(input.TimeoutMS)
 	sessionDir, err := SessionWorkDirFromContext(ctx, m.guard)
@@ -108,17 +112,19 @@ func (m *ProcessManager) start(ctx context.Context, input processStartInput) (*m
 	configureProcessCleanup(cmd)
 
 	proc := &managedProcess{
-		command:     command,
-		description: strings.TrimSpace(input.Description),
-		cwd:         displayCWD,
-		status:      processStatusRunning,
-		timeout:     timeout,
-		startedAt:   time.Now(),
-		cmd:         cmd,
-		cancel:      cancel,
-		ctx:         procCtx,
-		stdout:      newProcessOutputBuffer(processOutputCap),
-		stderr:      newProcessOutputBuffer(processOutputCap),
+		command:       command,
+		commandIntent: intent,
+		intentSource:  intentSource,
+		description:   strings.TrimSpace(input.Description),
+		cwd:           displayCWD,
+		status:        processStatusRunning,
+		timeout:       timeout,
+		startedAt:     time.Now(),
+		cmd:           cmd,
+		cancel:        cancel,
+		ctx:           procCtx,
+		stdout:        newProcessOutputBuffer(processOutputCap),
+		stderr:        newProcessOutputBuffer(processOutputCap),
 	}
 	cmd.Stdout = proc.stdout
 	cmd.Stderr = proc.stderr
@@ -167,18 +173,20 @@ const (
 type managedProcess struct {
 	mu sync.RWMutex
 
-	id          int64
-	command     string
-	description string
-	cwd         string
-	status      processStatus
-	exitCode    *int
-	timedOut    bool
-	stopped     bool
-	stopReason  string
-	timeout     time.Duration
-	startedAt   time.Time
-	completedAt time.Time
+	id            int64
+	command       string
+	commandIntent string
+	intentSource  string
+	description   string
+	cwd           string
+	status        processStatus
+	exitCode      *int
+	timedOut      bool
+	stopped       bool
+	stopReason    string
+	timeout       time.Duration
+	startedAt     time.Time
+	completedAt   time.Time
 
 	cmd    *exec.Cmd
 	cancel context.CancelFunc
@@ -304,6 +312,8 @@ func (p *managedProcess) snapshot(maxChars int) processSnapshot {
 		ExitCode:        p.exitCode,
 		CWD:             p.cwd,
 		CommandPreview:  truncateProcessText(p.command, processPreviewRunes),
+		CommandIntent:   p.commandIntent,
+		IntentSource:    p.intentSource,
 		StartedAt:       p.startedAt.Format(time.RFC3339Nano),
 		StdoutTail:      stdout,
 		StderrTail:      stderr,
@@ -392,6 +402,7 @@ func (t *ProcessStartTool) Schema() json.RawMessage {
 		"description": String("Short human description of the process."),
 		"timeout_ms":  Int("Maximum runtime in milliseconds. Defaults to 600000 and caps at 3600000."),
 		"working_dir": String("Working directory for the command."),
+		"intent":      String("Closed enum command intent: inspect, edit, focused_verify, broad_verify, diagnostic, or background. Defaults to background for process_start."),
 	}, []string{"command"})
 }
 
@@ -408,6 +419,7 @@ type processStartInput struct {
 	Description string `json:"description"`
 	TimeoutMS   int    `json:"timeout_ms"`
 	WorkingDir  string `json:"working_dir"`
+	Intent      string `json:"intent"`
 }
 
 type processStartOutput struct {
@@ -417,6 +429,8 @@ type processStartOutput struct {
 	CWD            string         `json:"cwd"`
 	TimeoutMS      int            `json:"timeout_ms"`
 	CommandPreview string         `json:"command_preview"`
+	CommandIntent  string         `json:"command_intent"`
+	IntentSource   string         `json:"intent_source"`
 	Receipt        processReceipt `json:"receipt"`
 }
 
@@ -439,12 +453,16 @@ func (t *ProcessStartTool) Execute(ctx context.Context, params json.RawMessage) 
 		CWD:            snap.CWD,
 		TimeoutMS:      int(proc.timeout / time.Millisecond),
 		CommandPreview: snap.CommandPreview,
+		CommandIntent:  snap.CommandIntent,
+		IntentSource:   snap.IntentSource,
 		Receipt: processReceipt{
 			Tool:            ProcessStartToolName,
 			Action:          "start",
 			ReadOnly:        false,
 			Persistent:      true,
 			ExecutionPolicy: "session_process_start",
+			CommandIntent:   snap.CommandIntent,
+			IntentSource:    snap.IntentSource,
 			ProcessID:       proc.id,
 			Status:          snap.Status,
 			Terminal:        snap.Terminal,
@@ -538,6 +556,8 @@ func (t *ProcessMonitorTool) Execute(ctx context.Context, params json.RawMessage
 			ReadOnly:        true,
 			Persistent:      false,
 			ExecutionPolicy: "session_process_observation",
+			CommandIntent:   snap.CommandIntent,
+			IntentSource:    snap.IntentSource,
 			ProcessID:       input.ProcessID,
 			Status:          snap.Status,
 			Terminal:        snap.Terminal,
@@ -660,6 +680,8 @@ func (t *ProcessStopTool) Execute(ctx context.Context, params json.RawMessage) (
 			ReadOnly:        false,
 			Persistent:      true,
 			ExecutionPolicy: "session_process_stop",
+			CommandIntent:   snap.CommandIntent,
+			IntentSource:    snap.IntentSource,
 			ProcessID:       input.ProcessID,
 			Status:          snap.Status,
 			Terminal:        snap.Terminal,
@@ -684,6 +706,8 @@ type processSnapshot struct {
 	ExitCode        *int   `json:"exit_code,omitempty"`
 	CWD             string `json:"cwd,omitempty"`
 	CommandPreview  string `json:"command_preview,omitempty"`
+	CommandIntent   string `json:"command_intent,omitempty"`
+	IntentSource    string `json:"intent_source,omitempty"`
 	StartedAt       string `json:"started_at,omitempty"`
 	CompletedAt     string `json:"completed_at,omitempty"`
 	RunningSeconds  int64  `json:"running_seconds"`
@@ -701,6 +725,8 @@ type processReceipt struct {
 	ReadOnly        bool   `json:"read_only"`
 	Persistent      bool   `json:"persistent"`
 	ExecutionPolicy string `json:"execution_policy"`
+	CommandIntent   string `json:"command_intent,omitempty"`
+	IntentSource    string `json:"intent_source,omitempty"`
 	ProcessID       int64  `json:"process_id,omitempty"`
 	Status          string `json:"status,omitempty"`
 	Terminal        bool   `json:"terminal,omitempty"`

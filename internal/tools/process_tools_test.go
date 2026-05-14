@@ -19,6 +19,8 @@ type processStartTestOutput struct {
 		ReadOnly        bool   `json:"read_only"`
 		Persistent      bool   `json:"persistent"`
 		ExecutionPolicy string `json:"execution_policy"`
+		CommandIntent   string `json:"command_intent"`
+		IntentSource    string `json:"intent_source"`
 		ProcessID       int64  `json:"process_id"`
 		Status          string `json:"status"`
 		Terminal        bool   `json:"terminal"`
@@ -33,6 +35,8 @@ type processMonitorTestOutput struct {
 	Found           bool   `json:"found"`
 	Status          string `json:"status"`
 	Terminal        bool   `json:"terminal"`
+	CommandIntent   string `json:"command_intent"`
+	IntentSource    string `json:"intent_source"`
 	ExitCode        *int   `json:"exit_code"`
 	StdoutTail      string `json:"stdout_tail"`
 	StderrTail      string `json:"stderr_tail"`
@@ -44,6 +48,8 @@ type processMonitorTestOutput struct {
 		ReadOnly        bool   `json:"read_only"`
 		Persistent      bool   `json:"persistent"`
 		ExecutionPolicy string `json:"execution_policy"`
+		CommandIntent   string `json:"command_intent"`
+		IntentSource    string `json:"intent_source"`
 		ProcessID       int64  `json:"process_id"`
 		Status          string `json:"status"`
 		Terminal        bool   `json:"terminal"`
@@ -70,6 +76,8 @@ type processStopTestOutput struct {
 		ReadOnly        bool   `json:"read_only"`
 		Persistent      bool   `json:"persistent"`
 		ExecutionPolicy string `json:"execution_policy"`
+		CommandIntent   string `json:"command_intent"`
+		IntentSource    string `json:"intent_source"`
 		ProcessID       int64  `json:"process_id"`
 		Status          string `json:"status"`
 		Terminal        bool   `json:"terminal"`
@@ -144,12 +152,16 @@ func TestProcessToolsStartMonitorTerminalReceipt(t *testing.T) {
 	start := executeProcessStart(t, NewProcessStartTool(mgr), map[string]any{
 		"command":    "printf hello; printf warn >&2",
 		"timeout_ms": 2000,
+		"intent":     "focused_verify",
 	})
 	if start.ProcessID <= 0 || start.Status != "running" {
 		t.Fatalf("start = %+v, want running process id", start)
 	}
 	if start.Receipt.Tool != ProcessStartToolName || start.Receipt.ExecutionPolicy != "session_process_start" {
 		t.Fatalf("start receipt = %+v", start.Receipt)
+	}
+	if start.Receipt.CommandIntent != "focused_verify" || start.Receipt.IntentSource != "explicit" {
+		t.Fatalf("start receipt intent = %+v", start.Receipt)
 	}
 	if start.Receipt.ReadOnly || !start.Receipt.Persistent || start.Receipt.Terminal {
 		t.Fatalf("start receipt flags = %+v", start.Receipt)
@@ -170,6 +182,9 @@ func TestProcessToolsStartMonitorTerminalReceipt(t *testing.T) {
 	}
 	if mon.Receipt.Tool != ProcessMonitorToolName || mon.Receipt.ExecutionPolicy != "session_process_observation" {
 		t.Fatalf("monitor receipt = %+v", mon.Receipt)
+	}
+	if mon.CommandIntent != "focused_verify" || mon.IntentSource != "explicit" || mon.Receipt.CommandIntent != "focused_verify" || mon.Receipt.IntentSource != "explicit" {
+		t.Fatalf("monitor intent = %+v receipt=%+v", mon, mon.Receipt)
 	}
 	if !mon.Receipt.ReadOnly || mon.Receipt.Persistent || !mon.Receipt.Found || !mon.Receipt.Terminal {
 		t.Fatalf("monitor receipt flags = %+v", mon.Receipt)
@@ -193,9 +208,15 @@ func TestProcessToolsReportRunningMonitorFollowup(t *testing.T) {
 		"command":    "sleep 10",
 		"timeout_ms": 10000,
 	})
+	if start.Receipt.CommandIntent != "background" || start.Receipt.IntentSource != "default" {
+		t.Fatalf("start receipt intent = %+v, want background/default", start.Receipt)
+	}
 	mon := executeProcessMonitor(t, NewProcessMonitorTool(mgr), start.ProcessID, 1000)
 	if !mon.Found || mon.Status != "running" || mon.Terminal {
 		t.Fatalf("monitor = %+v, want running non-terminal process", mon)
+	}
+	if mon.CommandIntent != "background" || mon.IntentSource != "default" || mon.Receipt.CommandIntent != "background" || mon.Receipt.IntentSource != "default" {
+		t.Fatalf("monitor intent = %+v receipt=%+v, want background/default", mon, mon.Receipt)
 	}
 	if mon.Receipt.FollowupTool != ProcessMonitorToolName {
 		t.Fatalf("running monitor followup tool = %q, want %q", mon.Receipt.FollowupTool, ProcessMonitorToolName)
@@ -210,6 +231,29 @@ func TestProcessToolsReportRunningMonitorFollowup(t *testing.T) {
 			t.Fatalf("cleanup stop error = %v", err)
 		}
 		t.Fatalf("cleanup stop returned error: %s", res.Output)
+	}
+}
+
+func TestProcessStartRejectsInvalidCommandIntent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process group cleanup not implemented on windows")
+	}
+	mgr := NewProcessManager(NewPathGuard(t.TempDir(), nil))
+	t.Cleanup(func() { _ = mgr.Close(context.Background()) })
+
+	raw, err := json.Marshal(map[string]any{
+		"command": "echo no",
+		"intent":  "surprise",
+	})
+	if err != nil {
+		t.Fatalf("marshal input: %v", err)
+	}
+	res, err := NewProcessStartTool(mgr).Execute(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if !res.IsError || !strings.Contains(res.Output, "invalid command intent") {
+		t.Fatalf("result = %+v, want invalid command intent error", res)
 	}
 }
 

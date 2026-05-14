@@ -62,6 +62,45 @@ func TestBashTimeout(t *testing.T) {
 	}
 }
 
+func TestBashCommandIntentMetadata(t *testing.T) {
+	tool := NewBashTool(NewPathGuard(t.TempDir(), nil))
+
+	res, err := tool.Execute(context.Background(), makeBashParams(t, "echo ok", map[string]any{
+		"timeout_ms": 2000,
+		"intent":     "focused_verify",
+	}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error result: %s", res.Output)
+	}
+	for _, want := range []string{
+		"execution_policy: foreground_shell",
+		"command_intent: focused_verify",
+		"intent_source: explicit",
+		"timeout_ms: 2000",
+	} {
+		if !strings.Contains(res.Output, want) {
+			t.Fatalf("output missing %q:\n%s", want, res.Output)
+		}
+	}
+}
+
+func TestBashRejectsInvalidCommandIntent(t *testing.T) {
+	tool := NewBashTool(NewPathGuard(t.TempDir(), nil))
+
+	res, err := tool.Execute(context.Background(), makeBashParams(t, "echo no", map[string]any{
+		"intent": "surprise",
+	}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !res.IsError || !strings.Contains(res.Output, "invalid command intent") {
+		t.Fatalf("result = %+v, want invalid command intent error", res)
+	}
+}
+
 // TestBash_OutputSmallWithoutTruncation verifies that commands whose
 // output fits under the per-stream cap are returned verbatim with no
 // truncation marker. P0-3 bounded output.

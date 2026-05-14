@@ -176,6 +176,10 @@ type bashResultMeta struct {
 	StderrShownBytes int64
 	StderrTruncated  bool
 	Classification   string
+	ExecutionPolicy  string
+	CommandIntent    string
+	IntentSource     string
+	TimeoutMS        int
 }
 
 // classifyExitCode maps a process exit code to one of the coarse
@@ -248,6 +252,18 @@ func formatBashResult(meta bashResultMeta, stdout, stderr *cappedOutput) string 
 	sb.WriteByte('\n')
 	sb.WriteString("cwd: ")
 	sb.WriteString(meta.CWD)
+	sb.WriteByte('\n')
+	sb.WriteString("execution_policy: ")
+	sb.WriteString(meta.ExecutionPolicy)
+	sb.WriteByte('\n')
+	sb.WriteString("command_intent: ")
+	sb.WriteString(meta.CommandIntent)
+	sb.WriteByte('\n')
+	sb.WriteString("intent_source: ")
+	sb.WriteString(meta.IntentSource)
+	sb.WriteByte('\n')
+	sb.WriteString("timeout_ms: ")
+	sb.WriteString(strconv.Itoa(meta.TimeoutMS))
 	sb.WriteByte('\n')
 	sb.WriteString("timed_out: ")
 	sb.WriteString(strconv.FormatBool(meta.TimedOut))
