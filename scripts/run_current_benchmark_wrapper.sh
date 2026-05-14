@@ -1197,6 +1197,28 @@ changed_files_include_test_or_fixture() {
     grep -Eq '(^|/)(tests?|__tests__|spec|fixtures?|testdata)/|(^|/)[^/]*(_test\.go|_test\.py|\.test\.[cm]?[jt]sx?|\.spec\.[cm]?[jt]sx?)$'
 }
 
+task_prompt_requires_test_or_fixture_evidence() {
+  python3 - <<'PY' "$TASK_PROMPT"
+import re
+import sys
+
+prompt = sys.argv[1].lower()
+patterns = [
+    r"\b(add|create|write|include|preserve|update)\b.{0,80}\b(test|tests|regression|fixture|fixtures|coverage)\b",
+    r"\b(focused|deterministic)\b.{0,40}\b(test|regression|fixture|coverage)\b",
+    r"\b(regression|test)\s+(coverage|evidence)\b",
+]
+raise SystemExit(0 if any(re.search(pattern, prompt) for pattern in patterns) else 1)
+PY
+}
+
+generic_missing_test_or_fixture_evidence() {
+  task_prompt_requires_test_or_fixture_evidence || return 1
+  [[ -n "$(benchmark_changed_files_all)" ]] || return 1
+  changed_files_include_test_or_fixture && return 1
+  return 0
+}
+
 v8_mix_bf001_missing_behavior_or_regression() {
   is_v8_mix_bf001_kustomize_task || return 1
   local changed
@@ -1588,6 +1610,10 @@ write_passed_verification_task_specific_failure() {
     write_result false true "incomplete_patch" "$recovery_attempted" false "$prefix, but TS-BF-002 deleted existing configurable-module build coverage while adding cancellation regression coverage"
     return 0
   fi
+  if generic_missing_test_or_fixture_evidence; then
+    write_result false true "incomplete_patch" "$recovery_attempted" false "$prefix, but the task prompt required focused test/regression evidence and the diff changed no test or fixture files"
+    return 0
+  fi
   return 1
 }
 
@@ -1646,6 +1672,10 @@ task_specific_completion_failure_reason() {
   fi
   if ts_bf002_deleted_existing_build_coverage; then
     echo "TS-BF-002 deleted existing configurable-module build coverage while adding cancellation regression coverage."
+    return 0
+  fi
+  if generic_missing_test_or_fixture_evidence; then
+    echo "Task prompt required focused test/regression evidence, but the diff changed no test or fixture files."
     return 0
   fi
   return 1
