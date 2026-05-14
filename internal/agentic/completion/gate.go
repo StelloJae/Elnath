@@ -191,6 +191,8 @@ type ControlToolReceipt struct {
 	RegistryBacked          bool     `json:"registry_backed,omitempty"`
 	ExecutionAvailable      bool     `json:"execution_available,omitempty"`
 	ExecutionPolicy         string   `json:"execution_policy,omitempty"`
+	CommandIntent           string   `json:"command_intent,omitempty"`
+	IntentSource            string   `json:"intent_source,omitempty"`
 	FollowupTool            string   `json:"followup_tool,omitempty"`
 	TaskID                  int64    `json:"task_id,omitempty"`
 	ParentTaskID            int64    `json:"parent_task_id,omitempty"`
