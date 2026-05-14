@@ -37,6 +37,8 @@ type processMonitorTestOutput struct {
 	Terminal        bool   `json:"terminal"`
 	CommandIntent   string `json:"command_intent"`
 	IntentSource    string `json:"intent_source"`
+	TimedOut        bool   `json:"timed_out"`
+	TimeoutMS       int    `json:"timeout_ms"`
 	ExitCode        *int   `json:"exit_code"`
 	StdoutTail      string `json:"stdout_tail"`
 	StderrTail      string `json:"stderr_tail"`
@@ -53,6 +55,8 @@ type processMonitorTestOutput struct {
 		ProcessID       int64  `json:"process_id"`
 		Status          string `json:"status"`
 		Terminal        bool   `json:"terminal"`
+		TimedOut        bool   `json:"timed_out"`
+		TimeoutMS       int    `json:"timeout_ms"`
 		ExitCode        *int   `json:"exit_code"`
 		Found           bool   `json:"found"`
 		TailBytes       int    `json:"tail_bytes"`
@@ -231,6 +235,36 @@ func TestProcessToolsReportRunningMonitorFollowup(t *testing.T) {
 			t.Fatalf("cleanup stop error = %v", err)
 		}
 		t.Fatalf("cleanup stop returned error: %s", res.Output)
+	}
+}
+
+func TestProcessToolsReportTimeoutMonitorReceipt(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process group cleanup not implemented on windows")
+	}
+	mgr := NewProcessManager(NewPathGuard(t.TempDir(), nil))
+	t.Cleanup(func() { _ = mgr.Close(context.Background()) })
+
+	start := executeProcessStart(t, NewProcessStartTool(mgr), map[string]any{
+		"command":    "sleep 10",
+		"timeout_ms": 50,
+		"intent":     "focused_verify",
+	})
+	mon := waitProcessTerminal(t, NewProcessMonitorTool(mgr), start.ProcessID)
+	if mon.Status != "timeout" || !mon.Terminal || !mon.TimedOut {
+		t.Fatalf("monitor = %+v, want terminal timeout with timed_out=true", mon)
+	}
+	if mon.TimeoutMS != 50 {
+		t.Fatalf("monitor timeout_ms = %d, want 50", mon.TimeoutMS)
+	}
+	if mon.Receipt.Status != "timeout" || !mon.Receipt.Terminal || !mon.Receipt.TimedOut {
+		t.Fatalf("monitor receipt = %+v, want terminal timeout with timed_out=true", mon.Receipt)
+	}
+	if mon.Receipt.TimeoutMS != 50 {
+		t.Fatalf("monitor receipt timeout_ms = %d, want 50", mon.Receipt.TimeoutMS)
+	}
+	if mon.Receipt.FollowupTool != "" {
+		t.Fatalf("timeout monitor followup tool = %q, want empty", mon.Receipt.FollowupTool)
 	}
 }
 

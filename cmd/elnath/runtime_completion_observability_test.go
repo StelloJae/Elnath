@@ -1056,6 +1056,28 @@ func TestCompletionContractSummaryRecordsProcessToolReceipts(t *testing.T) {
 	}
 }
 
+func TestCompletionContractSummaryRecordsProcessTimeoutReceipt(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("monitor timed out process"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "process-1", Name: "process_monitor", Input: json.RawMessage(`{"process_id":4}`)},
+			}},
+			llm.NewToolResultMessage("process-1", `{"process_id":4,"status":"timeout","terminal":true,"timed_out":true,"timeout_ms":50,"receipt":{"tool":"process_monitor","action":"monitor","read_only":true,"persistent":false,"execution_policy":"session_process_observation","command_intent":"focused_verify","intent_source":"explicit","process_id":4,"status":"timeout","terminal":true,"timed_out":true,"timeout_ms":50,"found":true,"tail_bytes":4000}}`, false),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(nil, orchestrator.WorkflowConfig{}, result)
+
+	if len(summary.ControlToolReceipts) != 1 {
+		t.Fatalf("ControlToolReceipts = %#v, want one process receipt", summary.ControlToolReceipts)
+	}
+	receipt := summary.ControlToolReceipts[0]
+	if receipt.Tool != "process_monitor" || receipt.Action != "monitor" || receipt.Status != "timeout" || !receipt.Terminal || !receipt.TimedOut || receipt.TimeoutMS != 50 {
+		t.Fatalf("timeout receipt = %+v", receipt)
+	}
+}
+
 func TestCompletionContractSummaryRecordsSleepToolReceipt(t *testing.T) {
 	result := &orchestrator.WorkflowResult{
 		Messages: []llm.Message{
@@ -1157,6 +1179,8 @@ func TestProcessControlReceiptsConvertToLearningAndAgentic(t *testing.T) {
 		ProcessID:       4,
 		Status:          "completed",
 		Terminal:        true,
+		TimedOut:        true,
+		TimeoutMS:       50,
 		Found:           true,
 		TailBytes:       4000,
 		StdoutRawBytes:  5,
@@ -1180,11 +1204,11 @@ func TestProcessControlReceiptsConvertToLearningAndAgentic(t *testing.T) {
 	}}
 
 	learningReceipts := completionControlToolReceiptsToLearning(src)
-	if len(learningReceipts) != 3 || learningReceipts[0].ProcessID != 4 || learningReceipts[0].CommandIntent != "focused_verify" || learningReceipts[0].IntentSource != "explicit" || learningReceipts[0].TimeoutMS != 600000 || learningReceipts[0].FollowupTool != "process_monitor" || learningReceipts[1].CommandIntent != "focused_verify" || learningReceipts[1].TailBytes != 4000 || learningReceipts[1].StdoutRawBytes != 5 || !learningReceipts[1].StderrTruncated || learningReceipts[2].CommandIntent != "focused_verify" || learningReceipts[2].StopSignal != "SIGTERM" || learningReceipts[2].FollowupTool != "process_monitor" {
+	if len(learningReceipts) != 3 || learningReceipts[0].ProcessID != 4 || learningReceipts[0].CommandIntent != "focused_verify" || learningReceipts[0].IntentSource != "explicit" || learningReceipts[0].TimeoutMS != 600000 || learningReceipts[0].FollowupTool != "process_monitor" || learningReceipts[1].CommandIntent != "focused_verify" || !learningReceipts[1].TimedOut || learningReceipts[1].TimeoutMS != 50 || learningReceipts[1].TailBytes != 4000 || learningReceipts[1].StdoutRawBytes != 5 || !learningReceipts[1].StderrTruncated || learningReceipts[2].CommandIntent != "focused_verify" || learningReceipts[2].StopSignal != "SIGTERM" || learningReceipts[2].FollowupTool != "process_monitor" {
 		t.Fatalf("learning receipts = %+v", learningReceipts)
 	}
 	agenticReceipts := completionControlToolReceiptsToAgentic(src)
-	if len(agenticReceipts) != 3 || agenticReceipts[0].ProcessID != 4 || agenticReceipts[0].CommandIntent != "focused_verify" || agenticReceipts[0].IntentSource != "explicit" || agenticReceipts[0].CWD != "/tmp/work" || agenticReceipts[0].FollowupTool != "process_monitor" || agenticReceipts[1].CommandIntent != "focused_verify" || agenticReceipts[1].TailBytes != 4000 || agenticReceipts[1].StderrRawBytes != 4 || agenticReceipts[2].CommandIntent != "focused_verify" || agenticReceipts[2].StopSignal != "SIGTERM" || agenticReceipts[2].FollowupTool != "process_monitor" {
+	if len(agenticReceipts) != 3 || agenticReceipts[0].ProcessID != 4 || agenticReceipts[0].CommandIntent != "focused_verify" || agenticReceipts[0].IntentSource != "explicit" || agenticReceipts[0].CWD != "/tmp/work" || agenticReceipts[0].FollowupTool != "process_monitor" || agenticReceipts[1].CommandIntent != "focused_verify" || !agenticReceipts[1].TimedOut || agenticReceipts[1].TimeoutMS != 50 || agenticReceipts[1].TailBytes != 4000 || agenticReceipts[1].StderrRawBytes != 4 || agenticReceipts[2].CommandIntent != "focused_verify" || agenticReceipts[2].StopSignal != "SIGTERM" || agenticReceipts[2].FollowupTool != "process_monitor" {
 		t.Fatalf("agentic receipts = %+v", agenticReceipts)
 	}
 }

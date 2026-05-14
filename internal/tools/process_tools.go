@@ -309,6 +309,8 @@ func (p *managedProcess) snapshot(maxChars int) processSnapshot {
 		Found:           true,
 		Status:          string(p.status),
 		Terminal:        isTerminalProcessStatus(p.status),
+		TimedOut:        p.timedOut,
+		TimeoutMS:       int(p.timeout / time.Millisecond),
 		ExitCode:        p.exitCode,
 		CWD:             p.cwd,
 		CommandPreview:  truncateProcessText(p.command, processPreviewRunes),
@@ -561,6 +563,8 @@ func (t *ProcessMonitorTool) Execute(ctx context.Context, params json.RawMessage
 			ProcessID:       input.ProcessID,
 			Status:          snap.Status,
 			Terminal:        snap.Terminal,
+			TimedOut:        snap.TimedOut,
+			TimeoutMS:       snap.TimeoutMS,
 			ExitCode:        snap.ExitCode,
 			Found:           true,
 			TailBytes:       limit,
@@ -685,6 +689,8 @@ func (t *ProcessStopTool) Execute(ctx context.Context, params json.RawMessage) (
 			ProcessID:       input.ProcessID,
 			Status:          snap.Status,
 			Terminal:        snap.Terminal,
+			TimedOut:        snap.TimedOut,
+			TimeoutMS:       snap.TimeoutMS,
 			Found:           true,
 			StopSignal:      stopSignal,
 			CWD:             snap.CWD,
@@ -703,6 +709,8 @@ type processSnapshot struct {
 	Found           bool   `json:"found"`
 	Status          string `json:"status"`
 	Terminal        bool   `json:"terminal"`
+	TimedOut        bool   `json:"timed_out,omitempty"`
+	TimeoutMS       int    `json:"timeout_ms,omitempty"`
 	ExitCode        *int   `json:"exit_code,omitempty"`
 	CWD             string `json:"cwd,omitempty"`
 	CommandPreview  string `json:"command_preview,omitempty"`
@@ -730,6 +738,7 @@ type processReceipt struct {
 	ProcessID       int64  `json:"process_id,omitempty"`
 	Status          string `json:"status,omitempty"`
 	Terminal        bool   `json:"terminal,omitempty"`
+	TimedOut        bool   `json:"timed_out,omitempty"`
 	ExitCode        *int   `json:"exit_code,omitempty"`
 	TimeoutMS       int    `json:"timeout_ms,omitempty"`
 	CWD             string `json:"cwd,omitempty"`
