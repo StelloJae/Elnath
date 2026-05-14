@@ -243,6 +243,9 @@ func TestExplainControlSurfacesJSON(t *testing.T) {
 		if strings.Contains(gap, "surface status is static") {
 			t.Fatalf("remaining gap %q should be replaced after manifest-backed control-surface metadata", gap)
 		}
+		if strings.Contains(gap, "blocking wait state") {
+			t.Fatalf("remaining gap %q is stale after process_wait and user_question_wait", gap)
+		}
 	}
 }
 

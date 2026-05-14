@@ -223,9 +223,10 @@ func controlSurfacePolicyViewForRuntime() controlSurfacePolicyView {
 	return controlSurfacePolicyView{
 		Surfaces: surfaces,
 		RemainingGaps: []string{
-			"blocking wait state and UI-level answer collection are still missing",
+			"UI-level answer collection remains outside the runtime; request/list/wait/answer receipts are implemented",
 			"bounded self-correction is intentionally closed-enum and not broad silent self-healing",
-			"streaming line-watch process monitor and full LSP lifecycle remain deferred",
+			"streaming line-watch process monitor remains deferred; bounded process_wait is implemented",
+			"full LSP lifecycle remains deferred; code_symbols is the current Go-native code-intelligence hook",
 			"control-surface view is manifest-backed; full runtime registry introspection remains future polish",
 		},
 	}
