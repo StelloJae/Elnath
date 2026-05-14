@@ -267,9 +267,15 @@ func TestExplainControlSurfacesJSON(t *testing.T) {
 		if strings.Contains(gap, "blocking wait state") {
 			t.Fatalf("remaining gap %q is stale after process_wait and user_question_wait", gap)
 		}
+		if strings.Contains(gap, "full runtime registry introspection remains future polish") {
+			t.Fatalf("remaining gap %q is stale after runtime status registry introspection", gap)
+		}
 	}
 	if !slices.Contains(out.RemainingGaps, "bounded process_wait supports literal watch_text; full streaming/async line-watch remains deferred") {
 		t.Fatalf("remaining_gaps = %+v, want process_wait watch_text boundary", out.RemainingGaps)
+	}
+	if !slices.Contains(out.RemainingGaps, "runtime /status now reports registry/control-surface coverage; deeper registry diagnostics remain future polish") {
+		t.Fatalf("remaining_gaps = %+v, want runtime status registry introspection boundary", out.RemainingGaps)
 	}
 }
 
