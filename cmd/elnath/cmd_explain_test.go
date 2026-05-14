@@ -178,7 +178,7 @@ func TestExplainControlSurfacesJSON(t *testing.T) {
 			toolCount:              len(surface.Tools),
 		}
 	}
-	for _, name := range []string{"task", "schedule", "plan", "worktree", "process", "skill", "command"} {
+	for _, name := range []string{"discovery", "task", "schedule", "plan", "worktree", "process", "skill", "command", "scratchpad"} {
 		entry, ok := byName[name]
 		if !ok {
 			t.Fatalf("missing control surface %q in %+v", name, byName)
@@ -193,6 +193,13 @@ func TestExplainControlSurfacesJSON(t *testing.T) {
 	}
 	if userInput.status != "partial" || !userInput.toolSearchDiscoverable || !userInput.receiptBacked || userInput.toolCount != 3 {
 		t.Fatalf("user_input surface = %+v, want partial ToolSearch-discoverable receipt-backed with three tools", userInput)
+	}
+	codeIntelligence, ok := byName["code_intelligence"]
+	if !ok {
+		t.Fatalf("missing control surface code_intelligence in %+v", byName)
+	}
+	if codeIntelligence.status != "partial" || !codeIntelligence.toolSearchDiscoverable || !codeIntelligence.receiptBacked || codeIntelligence.toolCount != 1 {
+		t.Fatalf("code_intelligence surface = %+v, want partial ToolSearch-discoverable receipt-backed with one tool", codeIntelligence)
 	}
 	if len(out.RemainingGaps) == 0 {
 		t.Fatal("remaining_gaps empty, want honest non-complete boundary")
@@ -230,9 +237,12 @@ func TestExplainControlSurfacesText(t *testing.T) {
 
 	for _, want := range []string{
 		"Control surfaces:",
+		"discovery: implemented",
 		"task: implemented",
 		"user_input: partial",
 		"worktree: implemented",
+		"scratchpad: implemented",
+		"code_intelligence: partial",
 		"Remaining gaps:",
 	} {
 		if !strings.Contains(stdout, want) {

@@ -36,6 +36,12 @@ func TestTodoWriteTool_SummarizesChecklist(t *testing.T) {
 	if output.Todos[1].ActiveForm != "implementing todo tool" {
 		t.Fatalf("active_form = %q, want camel-case compatibility value", output.Todos[1].ActiveForm)
 	}
+	if output.Receipt.Tool != TodoWriteName || output.Receipt.ExecutionPolicy != "session_todo_scratchpad" {
+		t.Fatalf("receipt = %+v, want todo_write scratchpad receipt", output.Receipt)
+	}
+	if output.Receipt.Total != 3 || output.Receipt.Pending != 1 || output.Receipt.InProgress != 1 || output.Receipt.Completed != 1 {
+		t.Fatalf("receipt counts = %+v, want one of each status", output.Receipt)
+	}
 }
 
 func TestTodoWriteTool_RejectsInvalidTodos(t *testing.T) {

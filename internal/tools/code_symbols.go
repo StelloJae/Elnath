@@ -77,16 +77,34 @@ type codeSymbolsInput struct {
 }
 
 type codeSymbolsOutput struct {
-	Operation string            `json:"operation"`
-	Status    string            `json:"status"`
-	Language  string            `json:"language"`
-	FilePath  string            `json:"file_path,omitempty"`
-	Path      string            `json:"path,omitempty"`
-	Query     string            `json:"query,omitempty"`
-	Count     int               `json:"count"`
-	Truncated bool              `json:"truncated"`
-	Errors    []codeSymbolError `json:"errors,omitempty"`
-	Symbols   []codeSymbolItem  `json:"symbols"`
+	Operation string             `json:"operation"`
+	Status    string             `json:"status"`
+	Language  string             `json:"language"`
+	FilePath  string             `json:"file_path,omitempty"`
+	Path      string             `json:"path,omitempty"`
+	Query     string             `json:"query,omitempty"`
+	Count     int                `json:"count"`
+	Truncated bool               `json:"truncated"`
+	Errors    []codeSymbolError  `json:"errors,omitempty"`
+	Symbols   []codeSymbolItem   `json:"symbols"`
+	Receipt   codeSymbolsReceipt `json:"receipt"`
+}
+
+type codeSymbolsReceipt struct {
+	Tool            string `json:"tool"`
+	Action          string `json:"action"`
+	ReadOnly        bool   `json:"read_only"`
+	Persistent      bool   `json:"persistent"`
+	ExecutionPolicy string `json:"execution_policy"`
+	Operation       string `json:"operation"`
+	Status          string `json:"status"`
+	Language        string `json:"language"`
+	FilePath        string `json:"file_path,omitempty"`
+	Path            string `json:"path,omitempty"`
+	Query           string `json:"query,omitempty"`
+	Count           int    `json:"count"`
+	Truncated       bool   `json:"truncated"`
+	ErrorCount      int    `json:"error_count"`
 }
 
 type codeSymbolError struct {
@@ -284,6 +302,22 @@ func parseGoSymbols(absPath, basePath string) ([]codeSymbolItem, error) {
 }
 
 func codeSymbolsJSON(out codeSymbolsOutput) (*Result, error) {
+	out.Receipt = codeSymbolsReceipt{
+		Tool:            CodeSymbolsToolName,
+		Action:          out.Operation,
+		ReadOnly:        true,
+		Persistent:      false,
+		ExecutionPolicy: "code_symbols_observation",
+		Operation:       out.Operation,
+		Status:          out.Status,
+		Language:        out.Language,
+		FilePath:        out.FilePath,
+		Path:            out.Path,
+		Query:           out.Query,
+		Count:           out.Count,
+		Truncated:       out.Truncated,
+		ErrorCount:      len(out.Errors),
+	}
 	raw, err := json.Marshal(out)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("code_symbols: marshal output: %v", err)), nil
