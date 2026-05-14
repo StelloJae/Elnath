@@ -64,7 +64,7 @@ func NewBashToolWithRunner(guard *PathGuard, runner BashRunner) *BashTool {
 
 func (t *BashTool) Name() string { return "bash" }
 func (t *BashTool) Description() string {
-	return "Execute a shell command in the working directory.\n\nIMPORTANT: Do NOT use bash for tasks that have a dedicated tool:\n- File search: use glob (not find or ls)\n- Content search: use grep (not grep or rg)\n- Read files: use read_file (not cat/head/tail)\n- Edit files: use edit_file (not sed/awk)\n- Write files: use write_file (not echo/cat heredoc)\n\nUsing dedicated tools is faster and lets the user review your work more easily."
+	return "Execute a shell command in the working directory.\n\nIMPORTANT: Do NOT use bash for tasks that have a dedicated tool:\n- File search: use glob (not find or ls)\n- Content search: use grep (not grep or rg)\n- Read files: use read_file (not cat/head/tail)\n- Edit files: use edit_file (not sed/awk)\n- Write files: use write_file (not echo/cat heredoc)\n\nUse process_start for long-running or background commands, then process_monitor to inspect progress. Prefer focused verification before broad verification. A broad verification failure is diagnostic evidence, not permission to edit unrelated files. Obey the current task scope lock; stop if recovery would edit outside allowed scope.\n\nUsing dedicated tools is faster and lets the user review your work more easily."
 }
 
 func (t *BashTool) ArgsTarget() any { return &bashParams{} }

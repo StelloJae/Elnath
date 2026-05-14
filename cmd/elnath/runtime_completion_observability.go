@@ -2,8 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"path"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/stello/elnath/internal/llm"
@@ -14,6 +16,8 @@ type completionContractSummary struct {
 	VerificationHint         bool
 	VerificationObserved     *bool
 	VerificationCommand      string
+	VerificationClass        string
+	VerificationOwnership    string
 	CompletionWarning        string
 	UserInputRequired        bool
 	EditIntent               bool
@@ -29,6 +33,7 @@ type completionContractSummary struct {
 	SkillCatalogReceipts     []completionSkillCatalogReceipt
 	SkillExecutionReceipts   []completionSkillExecutionReceipt
 	CommandCatalogReceipts   []completionCommandCatalogReceipt
+	ShellCommandReceipts     []completionShellCommandReceipt
 	ToolSearchReceipts       []completionToolSearchReceipt
 	ControlToolReceipts      []completionControlToolReceipt
 	CorrectionAttempted      bool
@@ -41,16 +46,23 @@ type completionContractSummary struct {
 	CorrectionAttemptDetails []completionCorrectionAttemptReceipt
 	RetryDecision            string
 	RetryReason              string
+	RecoveryScopeLabel       string
+	AllowedRecoveryPaths     []string
+	ForbiddenRecoveryPaths   []string
+	MutatedPaths             []string
+	OutOfScopeChangedFiles   []string
 }
 
 type completionCorrectionAttemptReceipt struct {
-	Attempt             int    `json:"attempt"`
-	Decision            string `json:"decision,omitempty"`
-	Reason              string `json:"reason,omitempty"`
-	Status              string `json:"status,omitempty"`
-	FailureFamily       string `json:"failure_family,omitempty"`
-	VerificationCommand string `json:"verification_command,omitempty"`
-	CompletionWarning   string `json:"completion_warning,omitempty"`
+	Attempt             int      `json:"attempt"`
+	Decision            string   `json:"decision,omitempty"`
+	Reason              string   `json:"reason,omitempty"`
+	Status              string   `json:"status,omitempty"`
+	FailureFamily       string   `json:"failure_family,omitempty"`
+	VerificationCommand string   `json:"verification_command,omitempty"`
+	CompletionWarning   string   `json:"completion_warning,omitempty"`
+	ChangedFiles        []string `json:"changed_files,omitempty"`
+	OutOfScopeFiles     []string `json:"out_of_scope_files,omitempty"`
 }
 
 type completionConditionalSkillMatch struct {
@@ -117,6 +129,21 @@ type completionCommandCatalogReceipt struct {
 	Query                 string `json:"query,omitempty"`
 	Command               string `json:"command,omitempty"`
 	FollowupTool          string `json:"followup_tool,omitempty"`
+}
+
+type completionShellCommandReceipt struct {
+	Tool                  string `json:"tool"`
+	Action                string `json:"action"`
+	CommandClass          string `json:"command_class,omitempty"`
+	Status                string `json:"status,omitempty"`
+	Classification        string `json:"classification,omitempty"`
+	TimedOut              bool   `json:"timed_out,omitempty"`
+	Canceled              bool   `json:"canceled,omitempty"`
+	IsError               bool   `json:"is_error,omitempty"`
+	TimeoutMS             int    `json:"timeout_ms,omitempty"`
+	WorkingDirSet         bool   `json:"working_dir_set,omitempty"`
+	CommandLen            int    `json:"command_len,omitempty"`
+	BackgroundRecommended bool   `json:"background_recommended,omitempty"`
 }
 
 type completionToolSearchReceipt struct {
@@ -208,6 +235,19 @@ type completionControlToolReceipt struct {
 const (
 	completionRetryDecisionRunVerification   = "run_verification"
 	completionRetryDecisionRetrySmallerScope = "retry_smaller_scope"
+
+	completionVerificationClassFocused = "focused"
+	completionVerificationClassBroad   = "broad"
+	completionVerificationClassUnknown = "unknown"
+
+	completionVerificationOwnershipModel      = "model"
+	completionVerificationOwnershipHarness    = "harness"
+	completionVerificationOwnershipDiagnostic = "diagnostic"
+	completionVerificationOwnershipUnknown    = "unknown"
+
+	completionWarningVerificationCommandFailed = "verification_command_failed"
+	completionWarningBroadVerificationFailed   = "broad_verification_failed"
+	completionWarningHarnessVerificationFailed = "harness_verification_failed"
 )
 
 var verificationCommandRE = regexp.MustCompile(`(?i)(^|[;&|()\s])((go\s+test|go\s+vet|git\s+diff\s+--check|bash\s+-n|make\s+(test|lint|vet)|npm\s+(test|run\s+test|run\s+lint)|pnpm\s+(test|run\s+test|run\s+lint)|yarn\s+(test|run\s+test|run\s+lint)|bun\s+test|pytest|python\d*(\.\d+)?\s+-m\s+pytest|ruff\s+check|cargo\s+test|mvn\s+test|gradle\s+test))([;&|()\s]|$)`)
@@ -218,6 +258,13 @@ func summarizeCompletionContract(routeCtx *orchestrator.RoutingContext, cfg orch
 	summary := completionContractSummary{
 		ReasoningEffort:     strings.TrimSpace(cfg.ReasoningEffort),
 		ReasoningEffortMode: strings.TrimSpace(cfg.ReasoningEffortMode),
+		RecoveryScopeLabel:  strings.TrimSpace(cfg.CorrectionScope.Label),
+		AllowedRecoveryPaths: normalizeCompletionScopePaths(
+			cfg.CorrectionScope.AllowedPaths,
+		),
+		ForbiddenRecoveryPaths: normalizeCompletionScopePaths(
+			cfg.CorrectionScope.ForbiddenPaths,
+		),
 	}
 	if routeCtx != nil {
 		summary.VerificationHint = routeCtx.VerificationHint
@@ -237,18 +284,30 @@ func summarizeCompletionContract(routeCtx *orchestrator.RoutingContext, cfg orch
 	summary.SkillCatalogReceipts = observedSkillCatalogReceipts(result.Messages)
 	summary.SkillExecutionReceipts = observedSkillExecutionReceipts(result.Messages)
 	summary.CommandCatalogReceipts = observedCommandCatalogReceipts(result.Messages)
+	summary.ShellCommandReceipts = observedShellCommandReceipts(result.Messages)
 	summary.ToolSearchReceipts = observedToolSearchReceipts(result.Messages)
 	summary.ControlToolReceipts = observedControlToolReceipts(result.Messages)
 	summary.UserInputRequired = controlToolReceiptsContain(summary.ControlToolReceipts, "ask_user_question", "request")
 
 	verificationCommand, verificationFailed := observedVerificationCommandStatus(result.Messages)
+	verificationClass, verificationOwnership := classifyCompletionVerification(
+		verificationCommand,
+		cfg.VerificationPolicy,
+	)
 	observed := verificationCommand != ""
 	if summary.VerificationHint || observed {
 		summary.VerificationObserved = &observed
 	}
 	summary.VerificationCommand = verificationCommand
+	if observed {
+		summary.VerificationClass = verificationClass
+		summary.VerificationOwnership = verificationOwnership
+	}
 	editIntent := editIntentDetected(result.Messages)
 	editObserved := mutationObservedInMessages(result.Messages)
+	mutatedPaths := observedMutatingPaths(result.Messages)
+	summary.MutatedPaths = mutatedPaths
+	summary.OutOfScopeChangedFiles = outOfScopeMutatingPaths(mutatedPaths, summary.AllowedRecoveryPaths, summary.ForbiddenRecoveryPaths)
 	summary.EditIntent = editIntent
 	if editIntent || editObserved {
 		summary.EditObserved = &editObserved
@@ -257,7 +316,7 @@ func summarizeCompletionContract(routeCtx *orchestrator.RoutingContext, cfg orch
 		summary.CompletionWarning = "final_response_reports_incomplete"
 	}
 	if summary.CompletionWarning == "" && verificationFailed {
-		summary.CompletionWarning = "verification_command_failed"
+		summary.CompletionWarning = completionVerificationFailureWarning(verificationClass, verificationOwnership)
 	}
 	if summary.CompletionWarning == "" && verificationCommand == "" && finalAssistantClaimsVerificationSuccess(result.Messages) {
 		summary.CompletionWarning = "unsupported_verification_success_claim"
@@ -267,6 +326,9 @@ func summarizeCompletionContract(routeCtx *orchestrator.RoutingContext, cfg orch
 	}
 	if summary.CompletionWarning == "" && editIntent && strings.EqualFold(strings.TrimSpace(result.FinishReason), "budget_exceeded") {
 		summary.CompletionWarning = "budget_exceeded_after_edit_intent"
+	}
+	if len(summary.OutOfScopeChangedFiles) > 0 {
+		summary.CompletionWarning = "scope_drift"
 	}
 	summary.RetryDecision, summary.RetryReason = completionRetryPlan(summary)
 	return summary
@@ -492,6 +554,204 @@ func commandCatalogReceiptFromOutput(output string) (completionCommandCatalogRec
 	return parsed.Receipt, true
 }
 
+type completionShellCommandUse struct {
+	Command    string
+	TimeoutMS  int
+	WorkingDir string
+}
+
+func observedShellCommandReceipts(messages []llm.Message) []completionShellCommandReceipt {
+	pending := make(map[string]completionShellCommandUse)
+	var receipts []completionShellCommandReceipt
+	for _, msg := range messages {
+		for _, block := range msg.Content {
+			switch b := block.(type) {
+			case llm.ToolUseBlock:
+				if b.ID == "" || b.Name != "bash" {
+					continue
+				}
+				use, ok := shellCommandUseFromInput(b.Input)
+				if ok {
+					pending[b.ID] = use
+				}
+			case llm.ToolResultBlock:
+				use, ok := pending[b.ToolUseID]
+				if !ok {
+					continue
+				}
+				receipts = append(receipts, shellCommandReceiptFromResult(use, b))
+				delete(pending, b.ToolUseID)
+			}
+		}
+	}
+	if len(receipts) == 0 {
+		return nil
+	}
+	return receipts
+}
+
+func shellCommandUseFromInput(input json.RawMessage) (completionShellCommandUse, bool) {
+	var payload struct {
+		Command    string `json:"command"`
+		TimeoutMS  int    `json:"timeout_ms"`
+		WorkingDir string `json:"working_dir"`
+	}
+	if err := json.Unmarshal(input, &payload); err != nil {
+		return completionShellCommandUse{}, false
+	}
+	command := strings.TrimSpace(payload.Command)
+	if command == "" {
+		return completionShellCommandUse{}, false
+	}
+	return completionShellCommandUse{
+		Command:    command,
+		TimeoutMS:  payload.TimeoutMS,
+		WorkingDir: strings.TrimSpace(payload.WorkingDir),
+	}, true
+}
+
+func shellCommandReceiptFromResult(use completionShellCommandUse, result llm.ToolResultBlock) completionShellCommandReceipt {
+	fields := bashResultHeaderFields(result.Content)
+	return completionShellCommandReceipt{
+		Tool:                  "bash",
+		Action:                "run",
+		CommandClass:          classifyShellCommand(use.Command),
+		Status:                fields["status"],
+		Classification:        fields["classification"],
+		TimedOut:              parseBashResultBool(fields["timed_out"]),
+		Canceled:              parseBashResultBool(fields["canceled"]),
+		IsError:               result.IsError,
+		TimeoutMS:             use.TimeoutMS,
+		WorkingDirSet:         use.WorkingDir != "",
+		CommandLen:            len(use.Command),
+		BackgroundRecommended: shellCommandBackgroundRecommended(use.Command),
+	}
+}
+
+func bashResultHeaderFields(output string) map[string]string {
+	fields := make(map[string]string)
+	lines := strings.Split(output, "\n")
+	for i, line := range lines {
+		line = strings.TrimSpace(line)
+		if i == 0 && line == "BASH RESULT" {
+			continue
+		}
+		if line == "" || line == "STDOUT:" || line == "STDERR:" || line == "SANDBOX VIOLATIONS:" {
+			break
+		}
+		key, value, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		fields[strings.TrimSpace(key)] = strings.TrimSpace(value)
+	}
+	return fields
+}
+
+func parseBashResultBool(raw string) bool {
+	parsed, err := strconv.ParseBool(strings.TrimSpace(raw))
+	return err == nil && parsed
+}
+
+func classifyShellCommand(command string) string {
+	normalized := strings.ToLower(strings.TrimSpace(command))
+	if normalized == "" {
+		return "unknown"
+	}
+	if isVerificationCommand(normalized) {
+		verificationClass, _ := classifyCompletionVerification(normalized, orchestrator.VerificationPolicy{})
+		if verificationClass == completionVerificationClassBroad {
+			return "broad_verify"
+		}
+		return "focused_verify"
+	}
+	if shellCommandBackgroundRecommended(normalized) {
+		return "background"
+	}
+	if bashCommandLooksMutating(normalized) {
+		return "edit"
+	}
+	if shellCommandLooksDiagnostic(normalized) {
+		return "diagnostic"
+	}
+	if shellCommandLooksInspect(normalized) {
+		return "inspect"
+	}
+	return "unknown"
+}
+
+func shellCommandBackgroundRecommended(command string) bool {
+	command = strings.ToLower(strings.TrimSpace(command))
+	for _, marker := range []string{
+		"npm run dev",
+		"pnpm dev",
+		"pnpm run dev",
+		"yarn dev",
+		"yarn run dev",
+		"bun run dev",
+		"next dev",
+		"vite",
+		"tail -f",
+		"watch ",
+		"python -m http.server",
+		"python3 -m http.server",
+	} {
+		if strings.Contains(command, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func shellCommandLooksDiagnostic(command string) bool {
+	command = strings.ToLower(strings.TrimSpace(command))
+	for _, prefix := range []string{
+		"pwd",
+		"env",
+		"which ",
+		"command -v ",
+		"date",
+		"whoami",
+		"go env",
+		"node --version",
+		"python --version",
+		"python3 --version",
+	} {
+		if command == strings.TrimSpace(prefix) || strings.HasPrefix(command, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func shellCommandLooksInspect(command string) bool {
+	command = strings.ToLower(strings.TrimSpace(command))
+	for _, prefix := range []string{
+		"git status",
+		"git diff",
+		"git log",
+		"ls",
+		"find ",
+		"rg ",
+		"grep ",
+		"cat ",
+		"head ",
+		"tail ",
+		"sed -n",
+		"wc ",
+		"du ",
+		"go list",
+		"npm ls",
+		"pnpm ls",
+		"yarn list",
+	} {
+		if command == strings.TrimSpace(prefix) || strings.HasPrefix(command, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 var completionControlToolReceiptNames = map[string]struct{}{
 	"task_create":              {},
 	"user_question_answer":     {},
@@ -669,13 +929,19 @@ func completionRetryPlan(summary completionContractSummary) (string, string) {
 	if summary.UserInputRequired {
 		return "", ""
 	}
+	if summary.CompletionWarning == "scope_drift" {
+		return "", ""
+	}
+	if summary.CompletionWarning == completionWarningBroadVerificationFailed || summary.CompletionWarning == completionWarningHarnessVerificationFailed {
+		return "", ""
+	}
 	if summary.CompletionWarning == "final_response_reports_incomplete" {
 		return completionRetryDecisionRetrySmallerScope, summary.CompletionWarning
 	}
 	if summary.CompletionWarning == "edit_intent_without_mutation" {
 		return completionRetryDecisionRetrySmallerScope, summary.CompletionWarning
 	}
-	if summary.CompletionWarning == "verification_command_failed" {
+	if summary.CompletionWarning == completionWarningVerificationCommandFailed {
 		return completionRetryDecisionRetrySmallerScope, summary.CompletionWarning
 	}
 	if summary.CompletionWarning == "unsupported_verification_success_claim" {
@@ -748,6 +1014,117 @@ func isVerificationCommand(command string) bool {
 	return verificationCommandRE.MatchString(command)
 }
 
+func classifyCompletionVerification(command string, policy orchestrator.VerificationPolicy) (string, string) {
+	class := normalizeCompletionVerificationClass(policy.Class)
+	if class == "" {
+		class = inferCompletionVerificationClass(command)
+	}
+	ownership := normalizeCompletionVerificationOwnership(policy.Ownership)
+	if ownership == "" {
+		ownership = inferCompletionVerificationOwnership(class)
+	}
+	return class, ownership
+}
+
+func completionVerificationFailureWarning(class string, ownership string) string {
+	if class == completionVerificationClassBroad {
+		return completionWarningBroadVerificationFailed
+	}
+	if ownership == completionVerificationOwnershipHarness {
+		return completionWarningHarnessVerificationFailed
+	}
+	return completionWarningVerificationCommandFailed
+}
+
+func inferCompletionVerificationOwnership(class string) string {
+	switch class {
+	case completionVerificationClassBroad:
+		return completionVerificationOwnershipHarness
+	case completionVerificationClassFocused:
+		return completionVerificationOwnershipModel
+	default:
+		return completionVerificationOwnershipUnknown
+	}
+}
+
+func normalizeCompletionVerificationClass(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "auto":
+		return ""
+	case completionVerificationClassFocused, "target", "task":
+		return completionVerificationClassFocused
+	case completionVerificationClassBroad, "global", "repo":
+		return completionVerificationClassBroad
+	case completionVerificationClassUnknown:
+		return completionVerificationClassUnknown
+	default:
+		return completionVerificationClassUnknown
+	}
+}
+
+func normalizeCompletionVerificationOwnership(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "auto":
+		return ""
+	case completionVerificationOwnershipModel, "agent":
+		return completionVerificationOwnershipModel
+	case completionVerificationOwnershipHarness, "runner":
+		return completionVerificationOwnershipHarness
+	case completionVerificationOwnershipDiagnostic, "diagnostics":
+		return completionVerificationOwnershipDiagnostic
+	case completionVerificationOwnershipUnknown:
+		return completionVerificationOwnershipUnknown
+	default:
+		return completionVerificationOwnershipUnknown
+	}
+}
+
+func inferCompletionVerificationClass(command string) string {
+	command = strings.ToLower(strings.TrimSpace(command))
+	if command == "" {
+		return completionVerificationClassUnknown
+	}
+	if completionVerificationCommandLooksBroad(command) {
+		return completionVerificationClassBroad
+	}
+	return completionVerificationClassFocused
+}
+
+func completionVerificationCommandLooksBroad(command string) bool {
+	command = strings.Join(strings.Fields(command), " ")
+	if command == "" {
+		return false
+	}
+	if strings.Contains(command, " ./...") || strings.HasSuffix(command, " ./...") {
+		return true
+	}
+	broadExact := map[string]struct{}{
+		"make test":         {},
+		"make lint":         {},
+		"make vet":          {},
+		"npm test":          {},
+		"npm run test":      {},
+		"npm run lint":      {},
+		"pnpm test":         {},
+		"pnpm run test":     {},
+		"pnpm run lint":     {},
+		"yarn test":         {},
+		"yarn run test":     {},
+		"yarn run lint":     {},
+		"yarn jest":         {},
+		"bun test":          {},
+		"pytest":            {},
+		"python -m pytest":  {},
+		"python3 -m pytest": {},
+		"ruff check":        {},
+		"cargo test":        {},
+		"mvn test":          {},
+		"gradle test":       {},
+	}
+	_, ok := broadExact[command]
+	return ok
+}
+
 func editIntentDetected(messages []llm.Message) bool {
 	text := strings.ToLower(strings.TrimSpace(userMessageText(messages)))
 	if text == "" {
@@ -798,6 +1175,150 @@ func mutationObservedInMessages(messages []llm.Message) bool {
 		}
 	}
 	return false
+}
+
+func observedMutatingPaths(messages []llm.Message) []string {
+	pending := make(map[string][]string)
+	seen := make(map[string]struct{})
+	for _, msg := range messages {
+		for _, block := range msg.Content {
+			switch b := block.(type) {
+			case llm.ToolUseBlock:
+				paths := mutatingToolUsePaths(b)
+				if len(paths) == 0 {
+					continue
+				}
+				if b.ID == "" {
+					addObservedMutatingPaths(seen, paths)
+					continue
+				}
+				pending[b.ID] = paths
+			case llm.ToolResultBlock:
+				paths, ok := pending[b.ToolUseID]
+				if !ok {
+					continue
+				}
+				if !b.IsError && !mutatingToolResultLooksNoop(b.Content) {
+					addObservedMutatingPaths(seen, paths)
+				}
+				delete(pending, b.ToolUseID)
+			}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for p := range seen {
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func addObservedMutatingPaths(seen map[string]struct{}, paths []string) {
+	for _, p := range paths {
+		if normalized := normalizeCompletionScopePath(p); normalized != "" {
+			seen[normalized] = struct{}{}
+		}
+	}
+}
+
+func mutatingToolUsePaths(toolUse llm.ToolUseBlock) []string {
+	switch toolUse.Name {
+	case "write_file", "edit_file":
+		var payload struct {
+			FilePath string `json:"file_path"`
+			Path     string `json:"path"`
+		}
+		if err := json.Unmarshal(toolUse.Input, &payload); err != nil {
+			return nil
+		}
+		if payload.FilePath != "" {
+			return []string{payload.FilePath}
+		}
+		if payload.Path != "" {
+			return []string{payload.Path}
+		}
+	}
+	return nil
+}
+
+func normalizeCompletionScopePaths(paths []string) []string {
+	if len(paths) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(paths))
+	for _, p := range paths {
+		if normalized := normalizeCompletionScopePath(p); normalized != "" {
+			seen[normalized] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for p := range seen {
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func normalizeCompletionScopePath(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return ""
+	}
+	p = strings.ReplaceAll(p, "\\", "/")
+	p = strings.TrimPrefix(p, "./")
+	p = strings.TrimPrefix(p, "/")
+	clean := path.Clean(p)
+	if clean == "." {
+		return ""
+	}
+	return clean
+}
+
+func outOfScopeMutatingPaths(mutated []string, allowed []string, forbidden []string) []string {
+	if len(mutated) == 0 || (len(allowed) == 0 && len(forbidden) == 0) {
+		return nil
+	}
+	var out []string
+	for _, p := range mutated {
+		if completionPathForbidden(p, forbidden) || !completionPathAllowed(p, allowed) {
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	sort.Strings(out)
+	return out
+}
+
+func completionPathAllowed(p string, allowed []string) bool {
+	if len(allowed) == 0 {
+		return true
+	}
+	for _, scope := range allowed {
+		if completionPathMatchesScope(p, scope) {
+			return true
+		}
+	}
+	return false
+}
+
+func completionPathForbidden(p string, forbidden []string) bool {
+	for _, scope := range forbidden {
+		if completionPathMatchesScope(p, scope) {
+			return true
+		}
+	}
+	return false
+}
+
+func completionPathMatchesScope(p string, scope string) bool {
+	p = normalizeCompletionScopePath(p)
+	scope = normalizeCompletionScopePath(scope)
+	if p == "" || scope == "" {
+		return false
+	}
+	return p == scope || strings.HasPrefix(p, scope+"/")
 }
 
 func mutatingToolUseObserved(toolUse llm.ToolUseBlock) bool {

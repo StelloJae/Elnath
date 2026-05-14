@@ -36,6 +36,8 @@ func (rt *executionRuntime) CompletionContext(_ context.Context, _ daemon.Task, 
 		VerificationHint:         summary.VerificationHint,
 		VerificationObserved:     summary.VerificationObserved,
 		VerificationCommand:      summary.VerificationCommand,
+		VerificationClass:        summary.VerificationClass,
+		VerificationOwnership:    summary.VerificationOwnership,
 		CompletionWarning:        summary.CompletionWarning,
 		UserInputRequired:        summary.UserInputRequired,
 		EditIntent:               summary.EditIntent,
@@ -50,6 +52,7 @@ func (rt *executionRuntime) CompletionContext(_ context.Context, _ daemon.Task, 
 		SkillCatalogReceipts:     completionSkillCatalogReceiptsToAgentic(summary.SkillCatalogReceipts),
 		SkillExecutionReceipts:   completionSkillExecutionReceiptsToAgentic(summary.SkillExecutionReceipts),
 		CommandCatalogReceipts:   completionCommandCatalogReceiptsToAgentic(summary.CommandCatalogReceipts),
+		ShellCommandReceipts:     completionShellCommandReceiptsToAgentic(summary.ShellCommandReceipts),
 		ToolSearchReceipts:       completionToolSearchReceiptsToAgentic(summary.ToolSearchReceipts),
 		ControlToolReceipts:      completionControlToolReceiptsToAgentic(summary.ControlToolReceipts),
 		ConditionalSkillMatches:  completionSkillMatchesToAgentic(summary.ConditionalSkillMatches),
@@ -63,6 +66,11 @@ func (rt *executionRuntime) CompletionContext(_ context.Context, _ daemon.Task, 
 		CorrectionAttemptDetails: completionCorrectionAttemptDetailsToAgentic(summary.CorrectionAttemptDetails),
 		RetryDecision:            summary.RetryDecision,
 		RetryReason:              summary.RetryReason,
+		RecoveryScopeLabel:       summary.RecoveryScopeLabel,
+		AllowedRecoveryPaths:     append([]string(nil), summary.AllowedRecoveryPaths...),
+		ForbiddenRecoveryPaths:   append([]string(nil), summary.ForbiddenRecoveryPaths...),
+		MutatedPaths:             append([]string(nil), summary.MutatedPaths...),
+		OutOfScopeChangedFiles:   append([]string(nil), summary.OutOfScopeChangedFiles...),
 	}, nil
 }
 
@@ -80,6 +88,8 @@ func completionCorrectionAttemptDetailsToAgentic(src []completionCorrectionAttem
 			FailureFamily:       detail.FailureFamily,
 			VerificationCommand: detail.VerificationCommand,
 			CompletionWarning:   detail.CompletionWarning,
+			ChangedFiles:        append([]string(nil), detail.ChangedFiles...),
+			OutOfScopeFiles:     append([]string(nil), detail.OutOfScopeFiles...),
 		})
 	}
 	return out
@@ -164,6 +174,30 @@ func completionCommandCatalogReceiptsToAgentic(src []completionCommandCatalogRec
 			Query:                 receipt.Query,
 			Command:               receipt.Command,
 			FollowupTool:          receipt.FollowupTool,
+		})
+	}
+	return out
+}
+
+func completionShellCommandReceiptsToAgentic(src []completionShellCommandReceipt) []agenticcompletion.ShellCommandReceipt {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]agenticcompletion.ShellCommandReceipt, 0, len(src))
+	for _, receipt := range src {
+		out = append(out, agenticcompletion.ShellCommandReceipt{
+			Tool:                  receipt.Tool,
+			Action:                receipt.Action,
+			CommandClass:          receipt.CommandClass,
+			Status:                receipt.Status,
+			Classification:        receipt.Classification,
+			TimedOut:              receipt.TimedOut,
+			Canceled:              receipt.Canceled,
+			IsError:               receipt.IsError,
+			TimeoutMS:             receipt.TimeoutMS,
+			WorkingDirSet:         receipt.WorkingDirSet,
+			CommandLen:            receipt.CommandLen,
+			BackgroundRecommended: receipt.BackgroundRecommended,
 		})
 	}
 	return out

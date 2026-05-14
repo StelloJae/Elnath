@@ -46,6 +46,12 @@ func (w *Worker) Run() error {
 	if out.Operation != "document_symbols" || out.Status != "success" || out.FilePath != "worker.go" {
 		t.Fatalf("output header = %+v", out)
 	}
+	if out.Receipt.Tool != CodeSymbolsToolName || out.Receipt.ExecutionPolicy != "code_symbols_observation" {
+		t.Fatalf("receipt = %+v, want code_symbols observation receipt", out.Receipt)
+	}
+	if !out.Receipt.ReadOnly || out.Receipt.Operation != "document_symbols" || out.Receipt.Status != "success" || out.Receipt.Count == 0 {
+		t.Fatalf("receipt metadata = %+v, want read-only document_symbols success", out.Receipt)
+	}
 	seen := map[string]codeSymbolItem{}
 	for _, sym := range out.Symbols {
 		seen[sym.Name] = sym
@@ -134,6 +140,9 @@ func Broken( {
 	}
 	if out.Status != "partial_success" || len(out.Errors) != 1 {
 		t.Fatalf("output = %+v, want partial_success with one parse error", out)
+	}
+	if out.Receipt.ErrorCount != 1 || out.Receipt.Status != "partial_success" {
+		t.Fatalf("receipt = %+v, want partial_success with one parse error", out.Receipt)
 	}
 	if out.Errors[0].FilePath != "broken.go" {
 		t.Fatalf("error file = %q, want broken.go", out.Errors[0].FilePath)

@@ -540,11 +540,25 @@ func TestApplyEnvOverrides(t *testing.T) {
 			want:   "responses-key",
 		},
 		{
+			name:   "ELNATH_RESPONSES_API_KEY",
+			envKey: "ELNATH_RESPONSES_API_KEY",
+			envVal: "generic-responses-key",
+			check:  func(c *Config) string { return c.OpenAIResponses.APIKey },
+			want:   "generic-responses-key",
+		},
+		{
 			name:   "ELNATH_OPENAI_RESPONSES_BASE_URL",
 			envKey: "ELNATH_OPENAI_RESPONSES_BASE_URL",
 			envVal: "https://api.minimax.io/v1",
 			check:  func(c *Config) string { return c.OpenAIResponses.BaseURL },
 			want:   "https://api.minimax.io/v1",
+		},
+		{
+			name:   "ELNATH_RESPONSES_BASE_URL",
+			envKey: "ELNATH_RESPONSES_BASE_URL",
+			envVal: "https://api.moonshot.ai/v1",
+			check:  func(c *Config) string { return c.OpenAIResponses.BaseURL },
+			want:   "https://api.moonshot.ai/v1",
 		},
 		{
 			name:   "ELNATH_OPENAI_RESPONSES_MODEL",
@@ -554,6 +568,13 @@ func TestApplyEnvOverrides(t *testing.T) {
 			want:   "minimax-m2.7",
 		},
 		{
+			name:   "ELNATH_RESPONSES_MODEL",
+			envKey: "ELNATH_RESPONSES_MODEL",
+			envVal: "kimi-k2.5",
+			check:  func(c *Config) string { return c.OpenAIResponses.Model },
+			want:   "kimi-k2.5",
+		},
+		{
 			name:   "ELNATH_OPENAI_RESPONSES_REASONING_EFFORT",
 			envKey: "ELNATH_OPENAI_RESPONSES_REASONING_EFFORT",
 			envVal: "medium",
@@ -561,11 +582,25 @@ func TestApplyEnvOverrides(t *testing.T) {
 			want:   "medium",
 		},
 		{
+			name:   "ELNATH_RESPONSES_REASONING_EFFORT",
+			envKey: "ELNATH_RESPONSES_REASONING_EFFORT",
+			envVal: "high",
+			check:  func(c *Config) string { return c.OpenAIResponses.ReasoningEffort },
+			want:   "high",
+		},
+		{
 			name:   "ELNATH_OPENAI_RESPONSES_TIMEOUT_SECONDS",
 			envKey: "ELNATH_OPENAI_RESPONSES_TIMEOUT_SECONDS",
 			envVal: "95",
 			check:  func(c *Config) string { return strconv.Itoa(c.OpenAIResponses.Timeout) },
 			want:   "95",
+		},
+		{
+			name:   "ELNATH_RESPONSES_TIMEOUT_SECONDS",
+			envKey: "ELNATH_RESPONSES_TIMEOUT_SECONDS",
+			envVal: "105",
+			check:  func(c *Config) string { return strconv.Itoa(c.OpenAIResponses.Timeout) },
+			want:   "105",
 		},
 		{
 			name:   "ELNATH_REASONING_EFFORT_MODE",
@@ -707,6 +742,38 @@ func TestApplyEnvOverrides(t *testing.T) {
 				t.Errorf("expected %q, got %q", tc.want, got)
 			}
 		})
+	}
+}
+
+func TestApplyEnvOverrides_OpenAIResponsesEnvWinsOverGenericResponsesAlias(t *testing.T) {
+	cfg := DefaultConfig()
+	t.Setenv("ELNATH_RESPONSES_API_KEY", "generic-key")
+	t.Setenv("ELNATH_RESPONSES_BASE_URL", "https://generic.example/v1")
+	t.Setenv("ELNATH_RESPONSES_MODEL", "generic-model")
+	t.Setenv("ELNATH_RESPONSES_REASONING_EFFORT", "low")
+	t.Setenv("ELNATH_RESPONSES_TIMEOUT_SECONDS", "91")
+	t.Setenv("ELNATH_OPENAI_RESPONSES_API_KEY", "specific-key")
+	t.Setenv("ELNATH_OPENAI_RESPONSES_BASE_URL", "https://specific.example/v1")
+	t.Setenv("ELNATH_OPENAI_RESPONSES_MODEL", "specific-model")
+	t.Setenv("ELNATH_OPENAI_RESPONSES_REASONING_EFFORT", "xhigh")
+	t.Setenv("ELNATH_OPENAI_RESPONSES_TIMEOUT_SECONDS", "92")
+
+	applyEnvOverrides(cfg)
+
+	if cfg.OpenAIResponses.APIKey != "specific-key" {
+		t.Fatalf("OpenAIResponses.APIKey = %q, want specific-key", cfg.OpenAIResponses.APIKey)
+	}
+	if cfg.OpenAIResponses.BaseURL != "https://specific.example/v1" {
+		t.Fatalf("OpenAIResponses.BaseURL = %q, want specific URL", cfg.OpenAIResponses.BaseURL)
+	}
+	if cfg.OpenAIResponses.Model != "specific-model" {
+		t.Fatalf("OpenAIResponses.Model = %q, want specific-model", cfg.OpenAIResponses.Model)
+	}
+	if cfg.OpenAIResponses.ReasoningEffort != "xhigh" {
+		t.Fatalf("OpenAIResponses.ReasoningEffort = %q, want xhigh", cfg.OpenAIResponses.ReasoningEffort)
+	}
+	if cfg.OpenAIResponses.Timeout != 92 {
+		t.Fatalf("OpenAIResponses.Timeout = %d, want 92", cfg.OpenAIResponses.Timeout)
 	}
 }
 

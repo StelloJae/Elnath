@@ -306,6 +306,23 @@ func applyEnvOverrides(cfg *Config) {
 			cfg.OpenAI.Timeout = timeout
 		}
 	}
+	if v := os.Getenv("ELNATH_RESPONSES_API_KEY"); v != "" {
+		cfg.OpenAIResponses.APIKey = v
+	}
+	if v := os.Getenv("ELNATH_RESPONSES_BASE_URL"); v != "" {
+		cfg.OpenAIResponses.BaseURL = v
+	}
+	if v := os.Getenv("ELNATH_RESPONSES_MODEL"); v != "" {
+		cfg.OpenAIResponses.Model = v
+	}
+	if v := os.Getenv("ELNATH_RESPONSES_REASONING_EFFORT"); v != "" {
+		cfg.OpenAIResponses.ReasoningEffort = v
+	}
+	if v := os.Getenv("ELNATH_RESPONSES_TIMEOUT_SECONDS"); v != "" {
+		if timeout, err := strconv.Atoi(v); err == nil {
+			cfg.OpenAIResponses.Timeout = timeout
+		}
+	}
 	if v := os.Getenv("ELNATH_OPENAI_RESPONSES_API_KEY"); v != "" {
 		cfg.OpenAIResponses.APIKey = v
 	}

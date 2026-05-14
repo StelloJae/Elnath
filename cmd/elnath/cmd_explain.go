@@ -225,6 +225,7 @@ func controlSurfacePolicyViewForRuntime() controlSurfacePolicyView {
 		RemainingGaps: []string{
 			"blocking wait state and UI-level answer collection are still missing",
 			"bounded self-correction is intentionally closed-enum and not broad silent self-healing",
+			"streaming line-watch process monitor and full LSP lifecycle remain deferred",
 			"control-surface view is manifest-backed; full runtime registry introspection remains future polish",
 		},
 	}
@@ -232,6 +233,13 @@ func controlSurfacePolicyViewForRuntime() controlSurfacePolicyView {
 
 func controlSurfaceManifest() []controlSurfaceManifestEntry {
 	return []controlSurfaceManifestEntry{
+		{
+			Name:          "discovery",
+			Status:        "implemented",
+			Tools:         []string{"tool_search"},
+			ReceiptBacked: true,
+			Notes:         "deferred tool catalog and selection receipts",
+		},
 		{
 			Name:          "task",
 			Status:        "implemented",
@@ -287,6 +295,20 @@ func controlSurfaceManifest() []controlSurfaceManifestEntry {
 			Tools:         []string{"command_catalog", "runtime_command"},
 			ReceiptBacked: true,
 			Notes:         "read-only command catalog and safe runtime slash execution",
+		},
+		{
+			Name:          "scratchpad",
+			Status:        "implemented",
+			Tools:         []string{"todo_write"},
+			ReceiptBacked: true,
+			Notes:         "session task scratchpad with verification nudge receipt",
+		},
+		{
+			Name:          "code_intelligence",
+			Status:        "partial",
+			Tools:         []string{"code_symbols"},
+			ReceiptBacked: true,
+			Notes:         "Go-native symbol lookup; full LSP lifecycle is deferred",
 		},
 	}
 }

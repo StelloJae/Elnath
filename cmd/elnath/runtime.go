@@ -702,6 +702,8 @@ func buildExecutionRuntime(
 		Permission:           perm,
 		ContextWindow:        wrappedCtxWindow,
 		CompressionMaxTokens: compressionBudget,
+		CorrectionScope:      runtimeCorrectionScopeFromEnv(),
+		VerificationPolicy:   runtimeVerificationPolicyFromEnv(),
 	}
 	learningPath := filepath.Join(cfg.DataDir, "lessons.jsonl")
 	learningStore := learning.NewStore(
@@ -1410,6 +1412,8 @@ func (rt *executionRuntime) recordOutcome(ctx context.Context, in outcomeInput) 
 		VerificationHint:         in.completion.VerificationHint,
 		VerificationObserved:     in.completion.VerificationObserved,
 		VerificationCommand:      in.completion.VerificationCommand,
+		VerificationClass:        in.completion.VerificationClass,
+		VerificationOwnership:    in.completion.VerificationOwnership,
 		CompletionWarning:        in.completion.CompletionWarning,
 		UserInputRequired:        in.completion.UserInputRequired,
 		ReasoningEffort:          in.completion.ReasoningEffort,
@@ -1422,6 +1426,7 @@ func (rt *executionRuntime) recordOutcome(ctx context.Context, in outcomeInput) 
 		SkillCatalogReceipts:     completionSkillCatalogReceiptsToLearning(in.completion.SkillCatalogReceipts),
 		SkillExecutionReceipts:   completionSkillExecutionReceiptsToLearning(in.completion.SkillExecutionReceipts),
 		CommandCatalogReceipts:   completionCommandCatalogReceiptsToLearning(in.completion.CommandCatalogReceipts),
+		ShellCommandReceipts:     completionShellCommandReceiptsToLearning(in.completion.ShellCommandReceipts),
 		ToolSearchReceipts:       completionToolSearchReceiptsToLearning(in.completion.ToolSearchReceipts),
 		ControlToolReceipts:      completionControlToolReceiptsToLearning(in.completion.ControlToolReceipts),
 		ConditionalSkillMatches:  completionSkillMatchesToLearning(in.completion.ConditionalSkillMatches),
@@ -1435,6 +1440,11 @@ func (rt *executionRuntime) recordOutcome(ctx context.Context, in outcomeInput) 
 		CorrectionAttemptDetails: completionCorrectionAttemptDetailsToLearning(in.completion.CorrectionAttemptDetails),
 		RetryDecision:            in.completion.RetryDecision,
 		RetryReason:              in.completion.RetryReason,
+		RecoveryScopeLabel:       in.completion.RecoveryScopeLabel,
+		AllowedRecoveryPaths:     append([]string(nil), in.completion.AllowedRecoveryPaths...),
+		ForbiddenRecoveryPaths:   append([]string(nil), in.completion.ForbiddenRecoveryPaths...),
+		MutatedPaths:             append([]string(nil), in.completion.MutatedPaths...),
+		OutOfScopeChangedFiles:   append([]string(nil), in.completion.OutOfScopeChangedFiles...),
 	}
 	if appendErr := rt.outcomeStore.Append(record); appendErr != nil {
 		rt.app.Logger.Warn("outcome store: append failed", "error", appendErr)
@@ -1471,6 +1481,8 @@ func completionCorrectionAttemptDetailsToLearning(src []completionCorrectionAtte
 			FailureFamily:       detail.FailureFamily,
 			VerificationCommand: detail.VerificationCommand,
 			CompletionWarning:   detail.CompletionWarning,
+			ChangedFiles:        append([]string(nil), detail.ChangedFiles...),
+			OutOfScopeFiles:     append([]string(nil), detail.OutOfScopeFiles...),
 		})
 	}
 	return out
@@ -1573,6 +1585,30 @@ func completionCommandCatalogReceiptsToLearning(src []completionCommandCatalogRe
 			Query:                 receipt.Query,
 			Command:               receipt.Command,
 			FollowupTool:          receipt.FollowupTool,
+		})
+	}
+	return out
+}
+
+func completionShellCommandReceiptsToLearning(src []completionShellCommandReceipt) []learning.ShellCommandReceipt {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]learning.ShellCommandReceipt, 0, len(src))
+	for _, receipt := range src {
+		out = append(out, learning.ShellCommandReceipt{
+			Tool:                  receipt.Tool,
+			Action:                receipt.Action,
+			CommandClass:          receipt.CommandClass,
+			Status:                receipt.Status,
+			Classification:        receipt.Classification,
+			TimedOut:              receipt.TimedOut,
+			Canceled:              receipt.Canceled,
+			IsError:               receipt.IsError,
+			TimeoutMS:             receipt.TimeoutMS,
+			WorkingDirSet:         receipt.WorkingDirSet,
+			CommandLen:            receipt.CommandLen,
+			BackgroundRecommended: receipt.BackgroundRecommended,
 		})
 	}
 	return out
@@ -2067,6 +2103,37 @@ func benchmarkEnvDir() string {
 
 func taskLanguageFromEnv() string {
 	return os.Getenv("ELNATH_TASK_LANGUAGE")
+}
+
+func runtimeCorrectionScopeFromEnv() orchestrator.CorrectionScope {
+	return orchestrator.CorrectionScope{
+		Label:          strings.TrimSpace(os.Getenv("ELNATH_CORRECTION_SCOPE_LABEL")),
+		AllowedPaths:   splitEnvPathList(os.Getenv("ELNATH_CORRECTION_SCOPE_ALLOWED_PATHS")),
+		ForbiddenPaths: splitEnvPathList(os.Getenv("ELNATH_CORRECTION_SCOPE_FORBIDDEN_PATHS")),
+	}
+}
+
+func runtimeVerificationPolicyFromEnv() orchestrator.VerificationPolicy {
+	return orchestrator.VerificationPolicy{
+		Class:     strings.TrimSpace(os.Getenv("ELNATH_VERIFICATION_CLASS")),
+		Ownership: strings.TrimSpace(os.Getenv("ELNATH_VERIFICATION_OWNERSHIP")),
+	}
+}
+
+func splitEnvPathList(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	fields := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == '\n'
+	})
+	out := make([]string, 0, len(fields))
+	for _, field := range fields {
+		if field = strings.TrimSpace(field); field != "" {
+			out = append(out, field)
+		}
+	}
+	return out
 }
 
 func maxIterationsFromEnv() int {

@@ -38,6 +38,17 @@ type WorkflowInput struct {
 	ActorRecorder        AgenticActorRecorder
 }
 
+type CorrectionScope struct {
+	Label          string
+	AllowedPaths   []string
+	ForbiddenPaths []string
+}
+
+type VerificationPolicy struct {
+	Class     string
+	Ownership string
+}
+
 type AgenticVerificationRecorder interface {
 	RecordVerificationRun(ctx context.Context, run agentic.VerificationRun) (*agentic.VerificationRun, error)
 }
@@ -108,4 +119,6 @@ type WorkflowConfig struct {
 	// must be non-blocking; runtime adapters typically wrap
 	// internal/agent/reflection.Pool.Enqueue.
 	ReflectionEnqueuer agent.ReflectionEnqueuer
+	CorrectionScope    CorrectionScope
+	VerificationPolicy VerificationPolicy
 }

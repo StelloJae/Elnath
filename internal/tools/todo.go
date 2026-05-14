@@ -85,12 +85,28 @@ type todoWriteOutput struct {
 	AllCompleted             bool             `json:"all_completed"`
 	VerificationNudgeNeeded  bool             `json:"verification_nudge_needed,omitempty"`
 	VerificationNudgeMessage string           `json:"verification_nudge_message,omitempty"`
+	Receipt                  todoWriteReceipt `json:"receipt"`
 }
 
 type todoItemOutput struct {
 	Content    string `json:"content"`
 	Status     string `json:"status"`
 	ActiveForm string `json:"active_form,omitempty"`
+}
+
+type todoWriteReceipt struct {
+	Tool                       string `json:"tool"`
+	Action                     string `json:"action"`
+	ReadOnly                   bool   `json:"read_only"`
+	Persistent                 bool   `json:"persistent"`
+	ExecutionPolicy            string `json:"execution_policy"`
+	Total                      int    `json:"total"`
+	Pending                    int    `json:"pending"`
+	InProgress                 int    `json:"in_progress"`
+	Completed                  int    `json:"completed"`
+	AllCompleted               bool   `json:"all_completed"`
+	VerificationNudgeNeeded    bool   `json:"verification_nudge_needed"`
+	VerificationNudgeAvailable bool   `json:"verification_nudge_available"`
 }
 
 func (t *TodoWriteTool) Execute(_ context.Context, params json.RawMessage) (*Result, error) {
@@ -148,6 +164,20 @@ func (t *TodoWriteTool) Execute(_ context.Context, params json.RawMessage) (*Res
 		Counts:                  counts,
 		AllCompleted:            allCompleted,
 		VerificationNudgeNeeded: nudgeNeeded,
+		Receipt: todoWriteReceipt{
+			Tool:                       TodoWriteName,
+			Action:                     "replace",
+			ReadOnly:                   false,
+			Persistent:                 false,
+			ExecutionPolicy:            "session_todo_scratchpad",
+			Total:                      len(todos),
+			Pending:                    counts["pending"],
+			InProgress:                 counts["in_progress"],
+			Completed:                  counts["completed"],
+			AllCompleted:               allCompleted,
+			VerificationNudgeNeeded:    nudgeNeeded,
+			VerificationNudgeAvailable: true,
+		},
 	}
 	if nudgeNeeded {
 		output.VerificationNudgeMessage = "All tasks are completed, but no verification-oriented todo was present. Run or record verification before making a final success claim."

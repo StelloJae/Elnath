@@ -38,6 +38,8 @@ type OutcomeRecord struct {
 	VerificationHint         bool                       `json:"verification_hint,omitempty"`
 	VerificationObserved     *bool                      `json:"verification_observed,omitempty"`
 	VerificationCommand      string                     `json:"verification_command,omitempty"`
+	VerificationClass        string                     `json:"verification_class,omitempty"`
+	VerificationOwnership    string                     `json:"verification_ownership,omitempty"`
 	CompletionWarning        string                     `json:"completion_warning,omitempty"`
 	UserInputRequired        bool                       `json:"user_input_required,omitempty"`
 	ReasoningEffort          string                     `json:"reasoning_effort,omitempty"`
@@ -50,6 +52,7 @@ type OutcomeRecord struct {
 	SkillCatalogReceipts     []SkillCatalogReceipt      `json:"skill_catalog_receipts,omitempty"`
 	SkillExecutionReceipts   []SkillExecutionReceipt    `json:"skill_execution_receipts,omitempty"`
 	CommandCatalogReceipts   []CommandCatalogReceipt    `json:"command_catalog_receipts,omitempty"`
+	ShellCommandReceipts     []ShellCommandReceipt      `json:"shell_command_receipts,omitempty"`
 	ToolSearchReceipts       []ToolSearchReceipt        `json:"tool_search_receipts,omitempty"`
 	ControlToolReceipts      []ControlToolReceipt       `json:"control_tool_receipts,omitempty"`
 	ConditionalSkillMatches  []ConditionalSkillMatch    `json:"conditional_skill_matches,omitempty"`
@@ -63,16 +66,23 @@ type OutcomeRecord struct {
 	CorrectionAttemptDetails []CorrectionAttemptReceipt `json:"correction_attempt_details,omitempty"`
 	RetryDecision            string                     `json:"retry_decision,omitempty"`
 	RetryReason              string                     `json:"retry_reason,omitempty"`
+	RecoveryScopeLabel       string                     `json:"recovery_scope_label,omitempty"`
+	AllowedRecoveryPaths     []string                   `json:"allowed_recovery_paths,omitempty"`
+	ForbiddenRecoveryPaths   []string                   `json:"forbidden_recovery_paths,omitempty"`
+	MutatedPaths             []string                   `json:"mutated_paths,omitempty"`
+	OutOfScopeChangedFiles   []string                   `json:"out_of_scope_changed_files,omitempty"`
 }
 
 type CorrectionAttemptReceipt struct {
-	Attempt             int    `json:"attempt"`
-	Decision            string `json:"decision,omitempty"`
-	Reason              string `json:"reason,omitempty"`
-	Status              string `json:"status,omitempty"`
-	FailureFamily       string `json:"failure_family,omitempty"`
-	VerificationCommand string `json:"verification_command,omitempty"`
-	CompletionWarning   string `json:"completion_warning,omitempty"`
+	Attempt             int      `json:"attempt"`
+	Decision            string   `json:"decision,omitempty"`
+	Reason              string   `json:"reason,omitempty"`
+	Status              string   `json:"status,omitempty"`
+	FailureFamily       string   `json:"failure_family,omitempty"`
+	VerificationCommand string   `json:"verification_command,omitempty"`
+	CompletionWarning   string   `json:"completion_warning,omitempty"`
+	ChangedFiles        []string `json:"changed_files,omitempty"`
+	OutOfScopeFiles     []string `json:"out_of_scope_files,omitempty"`
 }
 
 type ConditionalSkillMatch struct {
@@ -139,6 +149,21 @@ type CommandCatalogReceipt struct {
 	Query                 string `json:"query,omitempty"`
 	Command               string `json:"command,omitempty"`
 	FollowupTool          string `json:"followup_tool,omitempty"`
+}
+
+type ShellCommandReceipt struct {
+	Tool                  string `json:"tool"`
+	Action                string `json:"action"`
+	CommandClass          string `json:"command_class,omitempty"`
+	Status                string `json:"status,omitempty"`
+	Classification        string `json:"classification,omitempty"`
+	TimedOut              bool   `json:"timed_out,omitempty"`
+	Canceled              bool   `json:"canceled,omitempty"`
+	IsError               bool   `json:"is_error,omitempty"`
+	TimeoutMS             int    `json:"timeout_ms,omitempty"`
+	WorkingDirSet         bool   `json:"working_dir_set,omitempty"`
+	CommandLen            int    `json:"command_len,omitempty"`
+	BackgroundRecommended bool   `json:"background_recommended,omitempty"`
 }
 
 type ToolSearchReceipt struct {

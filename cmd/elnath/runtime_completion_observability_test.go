@@ -88,11 +88,69 @@ func TestCompletionContractSummaryDetectsFailedBashVerification(t *testing.T) {
 	if summary.VerificationCommand != "go test ./internal/llm -count=1" {
 		t.Fatalf("VerificationCommand = %q", summary.VerificationCommand)
 	}
+	if summary.VerificationClass != "focused" || summary.VerificationOwnership != "model" {
+		t.Fatalf("verification policy = class %q ownership %q, want focused/model", summary.VerificationClass, summary.VerificationOwnership)
+	}
 	if summary.CompletionWarning != "verification_command_failed" {
 		t.Fatalf("CompletionWarning = %q, want verification_command_failed", summary.CompletionWarning)
 	}
 	if summary.RetryDecision != completionRetryDecisionRetrySmallerScope || summary.RetryReason != "verification_command_failed" {
 		t.Fatalf("retry plan = %q/%q, want retry_smaller_scope/verification_command_failed", summary.RetryDecision, summary.RetryReason)
+	}
+}
+
+func TestCompletionContractSummaryStopsOnBroadVerificationFailure(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("fix the daemon and run broad tests"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "bash-1", Name: "bash", Input: json.RawMessage(`{"command":"go test ./..."}`)},
+			}},
+			llm.NewToolResultMessage("bash-1", "FAIL", true),
+			llm.NewAssistantMessage("Broad verification failed."),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(&orchestrator.RoutingContext{VerificationHint: true}, orchestrator.WorkflowConfig{}, result)
+
+	if summary.VerificationClass != "broad" || summary.VerificationOwnership != "harness" {
+		t.Fatalf("verification policy = class %q ownership %q, want broad/harness", summary.VerificationClass, summary.VerificationOwnership)
+	}
+	if summary.CompletionWarning != "broad_verification_failed" {
+		t.Fatalf("CompletionWarning = %q, want broad_verification_failed", summary.CompletionWarning)
+	}
+	if summary.RetryDecision != "" || summary.RetryReason != "" {
+		t.Fatalf("retry plan = %q/%q, want fail-closed empty retry", summary.RetryDecision, summary.RetryReason)
+	}
+}
+
+func TestCompletionContractSummaryHonorsHarnessVerificationOverride(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("fix the daemon and run harness check"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "bash-1", Name: "bash", Input: json.RawMessage(`{"command":"go test ./cmd/elnath -count=1"}`)},
+			}},
+			llm.NewToolResultMessage("bash-1", "FAIL", true),
+			llm.NewAssistantMessage("Harness verification failed."),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(&orchestrator.RoutingContext{VerificationHint: true}, orchestrator.WorkflowConfig{
+		VerificationPolicy: orchestrator.VerificationPolicy{
+			Class:     "focused",
+			Ownership: "harness",
+		},
+	}, result)
+
+	if summary.VerificationClass != "focused" || summary.VerificationOwnership != "harness" {
+		t.Fatalf("verification policy = class %q ownership %q, want focused/harness", summary.VerificationClass, summary.VerificationOwnership)
+	}
+	if summary.CompletionWarning != "harness_verification_failed" {
+		t.Fatalf("CompletionWarning = %q, want harness_verification_failed", summary.CompletionWarning)
+	}
+	if summary.RetryDecision != "" || summary.RetryReason != "" {
+		t.Fatalf("retry plan = %q/%q, want fail-closed empty retry", summary.RetryDecision, summary.RetryReason)
 	}
 }
 
@@ -231,6 +289,117 @@ func TestCompletionRetryPromptGuidesBudgetAfterEditIntent(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
 		}
+	}
+}
+
+func TestCompletionContractSummaryDetectsScopeDriftForOutOfScopeEdit(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("fix the daemon and stay inside allowed paths"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "edit-1", Name: "edit_file", Input: json.RawMessage(`{"file_path":"docs/unrelated.md","old_string":"old","new_string":"new"}`)},
+			}},
+			llm.NewToolResultMessage("edit-1", "ok", false),
+			llm.NewAssistantMessage("Done."),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(nil, orchestrator.WorkflowConfig{
+		CorrectionScope: orchestrator.CorrectionScope{
+			Label:        "daemon-only",
+			AllowedPaths: []string{"internal/daemon/"},
+		},
+	}, result)
+
+	if summary.CompletionWarning != "scope_drift" {
+		t.Fatalf("CompletionWarning = %q, want scope_drift", summary.CompletionWarning)
+	}
+	if summary.RetryDecision != "" || summary.RetryReason != "" {
+		t.Fatalf("retry plan = %q/%q, want fail-closed with no retry", summary.RetryDecision, summary.RetryReason)
+	}
+	if got, want := summary.MutatedPaths, []string{"docs/unrelated.md"}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("MutatedPaths = %#v, want %#v", got, want)
+	}
+	if got, want := summary.OutOfScopeChangedFiles, []string{"docs/unrelated.md"}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("OutOfScopeChangedFiles = %#v, want %#v", got, want)
+	}
+}
+
+func TestCompletionContractSummaryAllowsInScopeEdit(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("fix the daemon and stay inside allowed paths"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "edit-1", Name: "edit_file", Input: json.RawMessage(`{"file_path":"internal/daemon/runner.go","old_string":"old","new_string":"new"}`)},
+			}},
+			llm.NewToolResultMessage("edit-1", "ok", false),
+			llm.NewAssistantMessage("Done."),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(nil, orchestrator.WorkflowConfig{
+		CorrectionScope: orchestrator.CorrectionScope{
+			Label:        "daemon-only",
+			AllowedPaths: []string{"internal/daemon/"},
+		},
+	}, result)
+
+	if summary.CompletionWarning != "" {
+		t.Fatalf("CompletionWarning = %q, want empty for in-scope edit", summary.CompletionWarning)
+	}
+	if len(summary.OutOfScopeChangedFiles) != 0 {
+		t.Fatalf("OutOfScopeChangedFiles = %#v, want empty", summary.OutOfScopeChangedFiles)
+	}
+}
+
+func TestCompletionRetryPromptIncludesScopeLock(t *testing.T) {
+	prompt := completionRetryPrompt(completionContractSummary{
+		RetryDecision:          completionRetryDecisionRetrySmallerScope,
+		RetryReason:            "verification_command_failed",
+		RecoveryScopeLabel:     "prettier-while-like",
+		AllowedRecoveryPaths:   []string{"src/language-js/comments/attach", "tests/format/js/comments/while-like"},
+		ForbiddenRecoveryPaths: []string{"tests/integration"},
+	})
+
+	for _, want := range []string{
+		"Scope lock:",
+		"Scope label: prettier-while-like",
+		"Allowed recovery paths: src/language-js/comments/attach, tests/format/js/comments/while-like",
+		"Forbidden recovery paths: tests/integration",
+		"report scope_drift instead of editing unrelated files",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
+func TestRuntimeCorrectionScopeFromEnv(t *testing.T) {
+	t.Setenv("ELNATH_CORRECTION_SCOPE_LABEL", "prettier-while-like")
+	t.Setenv("ELNATH_CORRECTION_SCOPE_ALLOWED_PATHS", "src/language-js/comments/attach, tests/format/js/comments/while-like\nscripts")
+	t.Setenv("ELNATH_CORRECTION_SCOPE_FORBIDDEN_PATHS", "tests/integration")
+
+	scope := runtimeCorrectionScopeFromEnv()
+
+	if scope.Label != "prettier-while-like" {
+		t.Fatalf("Label = %q", scope.Label)
+	}
+	if got, want := scope.AllowedPaths, []string{"src/language-js/comments/attach", "tests/format/js/comments/while-like", "scripts"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		t.Fatalf("AllowedPaths = %#v, want %#v", got, want)
+	}
+	if got, want := scope.ForbiddenPaths, []string{"tests/integration"}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("ForbiddenPaths = %#v, want %#v", got, want)
+	}
+}
+
+func TestRuntimeVerificationPolicyFromEnv(t *testing.T) {
+	t.Setenv("ELNATH_VERIFICATION_CLASS", "broad")
+	t.Setenv("ELNATH_VERIFICATION_OWNERSHIP", "harness")
+
+	policy := runtimeVerificationPolicyFromEnv()
+
+	if policy.Class != "broad" || policy.Ownership != "harness" {
+		t.Fatalf("verification policy = class %q ownership %q, want broad/harness", policy.Class, policy.Ownership)
 	}
 }
 
@@ -455,6 +624,61 @@ func TestCompletionContractSummaryDoesNotCountNoopWriteFileResultAsMutation(t *t
 	}
 	if summary.CompletionWarning != "edit_intent_without_mutation" {
 		t.Fatalf("CompletionWarning = %q, want edit_intent_without_mutation", summary.CompletionWarning)
+	}
+}
+
+func TestCompletionContractSummaryRecordsShellCommandReceipts(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("run broad verification"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "bash-1", Name: "bash", Input: json.RawMessage(`{"command":"go test ./...","timeout_ms":1234,"working_dir":"sub"}`)},
+			}},
+			llm.NewToolResultMessage("bash-1", "BASH RESULT\nstatus: timeout\nexit_code: null\nduration_ms: 1234\ncwd: sub\ntimed_out: true\ncanceled: false\nstdout_bytes_raw: 0\nstdout_bytes_shown: 0\nstdout_truncated: false\nstderr_bytes_raw: 4\nstderr_bytes_shown: 4\nstderr_truncated: false\nclassification: timeout\n\nSTDERR:\nFAIL", true),
+			llm.NewAssistantMessage("Verification failed."),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(&orchestrator.RoutingContext{VerificationHint: true}, orchestrator.WorkflowConfig{}, result)
+
+	if len(summary.ShellCommandReceipts) != 1 {
+		t.Fatalf("ShellCommandReceipts = %#v, want one receipt", summary.ShellCommandReceipts)
+	}
+	receipt := summary.ShellCommandReceipts[0]
+	if receipt.Tool != "bash" || receipt.Action != "run" {
+		t.Fatalf("receipt identity = %+v", receipt)
+	}
+	if receipt.CommandClass != "broad_verify" {
+		t.Fatalf("CommandClass = %q, want broad_verify", receipt.CommandClass)
+	}
+	if receipt.Status != "timeout" || receipt.Classification != "timeout" || !receipt.TimedOut || receipt.Canceled || !receipt.IsError {
+		t.Fatalf("receipt status = %+v", receipt)
+	}
+	if receipt.TimeoutMS != 1234 || !receipt.WorkingDirSet || receipt.CommandLen != len("go test ./...") {
+		t.Fatalf("receipt bounds = %+v", receipt)
+	}
+}
+
+func TestCompletionContractSummaryFlagsBackgroundShellCommand(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("start the dev server"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "bash-1", Name: "bash", Input: json.RawMessage(`{"command":"npm run dev"}`)},
+			}},
+			llm.NewToolResultMessage("bash-1", "BASH RESULT\nstatus: success\nexit_code: 0\nduration_ms: 10\ncwd: .\ntimed_out: false\ncanceled: false\nstdout_bytes_raw: 0\nstdout_bytes_shown: 0\nstdout_truncated: false\nstderr_bytes_raw: 0\nstderr_bytes_shown: 0\nstderr_truncated: false\nclassification: success\n", false),
+			llm.NewAssistantMessage("Server started."),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(nil, orchestrator.WorkflowConfig{}, result)
+
+	if len(summary.ShellCommandReceipts) != 1 {
+		t.Fatalf("ShellCommandReceipts = %#v, want one receipt", summary.ShellCommandReceipts)
+	}
+	receipt := summary.ShellCommandReceipts[0]
+	if receipt.CommandClass != "background" || !receipt.BackgroundRecommended {
+		t.Fatalf("receipt background policy = %+v, want background class with recommendation", receipt)
 	}
 }
 
@@ -1063,6 +1287,15 @@ func TestRecordOutcomePersistsCompletionObservability(t *testing.T) {
 				Query:                 "commands",
 				FollowupTool:          "skill",
 			}},
+			ShellCommandReceipts: []completionShellCommandReceipt{{
+				Tool:           "bash",
+				Action:         "run",
+				CommandClass:   "focused_verify",
+				Status:         "success",
+				Classification: "success",
+				TimeoutMS:      1000,
+				CommandLen:     len("go test ./cmd/elnath -count=1"),
+			}},
 			ToolSearchReceipts: []completionToolSearchReceipt{{
 				Tool:               "tool_search",
 				Action:             "search",
@@ -1186,6 +1419,15 @@ func TestCompletionGateContextProviderConsumesRuntimeSummary(t *testing.T) {
 			Query:                 "commands",
 			FollowupTool:          "skill",
 		}},
+		ShellCommandReceipts: []completionShellCommandReceipt{{
+			Tool:                  "bash",
+			Action:                "run",
+			CommandClass:          "background",
+			Status:                "success",
+			Classification:        "success",
+			CommandLen:            len("npm run dev"),
+			BackgroundRecommended: true,
+		}},
 		ToolSearchReceipts: []completionToolSearchReceipt{{
 			Tool:               "tool_search",
 			Action:             "search",
@@ -1269,6 +1511,9 @@ func TestCompletionGateContextProviderConsumesRuntimeSummary(t *testing.T) {
 	}
 	if len(summary.CommandCatalogReceipts) != 1 || summary.CommandCatalogReceipts[0].ExecutionPolicy != "metadata_only" || summary.CommandCatalogReceipts[0].ExecutableCommands != 11 || summary.CommandCatalogReceipts[0].ModelCallableCommands != 1 || summary.CommandCatalogReceipts[0].FollowupTool != "skill" {
 		t.Fatalf("CommandCatalogReceipts = %+v", summary.CommandCatalogReceipts)
+	}
+	if len(summary.ShellCommandReceipts) != 1 || summary.ShellCommandReceipts[0].CommandClass != "background" || !summary.ShellCommandReceipts[0].BackgroundRecommended {
+		t.Fatalf("ShellCommandReceipts = %+v", summary.ShellCommandReceipts)
 	}
 	if len(summary.ToolSearchReceipts) != 1 || summary.ToolSearchReceipts[0].ExecutionPolicy != "metadata_only" {
 		t.Fatalf("ToolSearchReceipts = %+v", summary.ToolSearchReceipts)
@@ -1582,6 +1827,9 @@ func assertCompletionOutcome(t *testing.T, rec learning.OutcomeRecord) {
 	}
 	if len(rec.CommandCatalogReceipts) != 1 || rec.CommandCatalogReceipts[0].ExecutionPolicy != "metadata_only" || rec.CommandCatalogReceipts[0].ExecutableCommands != 11 || rec.CommandCatalogReceipts[0].ModelCallableCommands != 1 || rec.CommandCatalogReceipts[0].FollowupTool != "skill" {
 		t.Fatalf("CommandCatalogReceipts = %+v", rec.CommandCatalogReceipts)
+	}
+	if len(rec.ShellCommandReceipts) != 1 || rec.ShellCommandReceipts[0].CommandClass != "focused_verify" || rec.ShellCommandReceipts[0].TimeoutMS != 1000 {
+		t.Fatalf("ShellCommandReceipts = %+v", rec.ShellCommandReceipts)
 	}
 	if len(rec.ToolSearchReceipts) != 1 || rec.ToolSearchReceipts[0].ExecutionPolicy != "metadata_only" {
 		t.Fatalf("ToolSearchReceipts = %+v", rec.ToolSearchReceipts)

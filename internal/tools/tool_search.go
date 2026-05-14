@@ -405,7 +405,7 @@ func toolSearchRoutingMetadataForName(name string) toolSearchRoutingMetadata {
 	case "code_symbols":
 		return toolSearchRoutingMetadata{Category: "code_intelligence", Surface: "builtin"}
 	case "todo_write":
-		return toolSearchRoutingMetadata{Category: "plan", Surface: "builtin"}
+		return toolSearchRoutingMetadata{Category: "scratchpad", Surface: "builtin"}
 	case "sleep":
 		return toolSearchRoutingMetadata{Category: "timer", Surface: "builtin"}
 	case "tool_search":

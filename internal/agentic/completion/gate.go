@@ -32,6 +32,8 @@ type CompletionContext struct {
 	VerificationHint         bool
 	VerificationObserved     *bool
 	VerificationCommand      string
+	VerificationClass        string
+	VerificationOwnership    string
 	CompletionWarning        string
 	UserInputRequired        bool
 	EditIntent               bool
@@ -46,6 +48,7 @@ type CompletionContext struct {
 	SkillCatalogReceipts     []SkillCatalogReceipt
 	SkillExecutionReceipts   []SkillExecutionReceipt
 	CommandCatalogReceipts   []CommandCatalogReceipt
+	ShellCommandReceipts     []ShellCommandReceipt
 	ToolSearchReceipts       []ToolSearchReceipt
 	ControlToolReceipts      []ControlToolReceipt
 	ConditionalSkillMatches  []ConditionalSkillMatch
@@ -59,16 +62,23 @@ type CompletionContext struct {
 	CorrectionAttemptDetails []CorrectionAttemptReceipt
 	RetryDecision            string
 	RetryReason              string
+	RecoveryScopeLabel       string
+	AllowedRecoveryPaths     []string
+	ForbiddenRecoveryPaths   []string
+	MutatedPaths             []string
+	OutOfScopeChangedFiles   []string
 }
 
 type CorrectionAttemptReceipt struct {
-	Attempt             int    `json:"attempt"`
-	Decision            string `json:"decision,omitempty"`
-	Reason              string `json:"reason,omitempty"`
-	Status              string `json:"status,omitempty"`
-	FailureFamily       string `json:"failure_family,omitempty"`
-	VerificationCommand string `json:"verification_command,omitempty"`
-	CompletionWarning   string `json:"completion_warning,omitempty"`
+	Attempt             int      `json:"attempt"`
+	Decision            string   `json:"decision,omitempty"`
+	Reason              string   `json:"reason,omitempty"`
+	Status              string   `json:"status,omitempty"`
+	FailureFamily       string   `json:"failure_family,omitempty"`
+	VerificationCommand string   `json:"verification_command,omitempty"`
+	CompletionWarning   string   `json:"completion_warning,omitempty"`
+	ChangedFiles        []string `json:"changed_files,omitempty"`
+	OutOfScopeFiles     []string `json:"out_of_scope_files,omitempty"`
 }
 
 type ConditionalSkillMatch struct {
@@ -135,6 +145,21 @@ type CommandCatalogReceipt struct {
 	Query                 string `json:"query,omitempty"`
 	Command               string `json:"command,omitempty"`
 	FollowupTool          string `json:"followup_tool,omitempty"`
+}
+
+type ShellCommandReceipt struct {
+	Tool                  string `json:"tool"`
+	Action                string `json:"action"`
+	CommandClass          string `json:"command_class,omitempty"`
+	Status                string `json:"status,omitempty"`
+	Classification        string `json:"classification,omitempty"`
+	TimedOut              bool   `json:"timed_out,omitempty"`
+	Canceled              bool   `json:"canceled,omitempty"`
+	IsError               bool   `json:"is_error,omitempty"`
+	TimeoutMS             int    `json:"timeout_ms,omitempty"`
+	WorkingDirSet         bool   `json:"working_dir_set,omitempty"`
+	CommandLen            int    `json:"command_len,omitempty"`
+	BackgroundRecommended bool   `json:"background_recommended,omitempty"`
 }
 
 type ToolSearchReceipt struct {
@@ -402,6 +427,12 @@ func encodeReceiptSummary(summary map[string]int, completionContext CompletionCo
 	if completionContext.VerificationCommand != "" {
 		payload["verification_command"] = completionContext.VerificationCommand
 	}
+	if completionContext.VerificationClass != "" {
+		payload["verification_class"] = completionContext.VerificationClass
+	}
+	if completionContext.VerificationOwnership != "" {
+		payload["verification_ownership"] = completionContext.VerificationOwnership
+	}
 	if completionContext.CompletionWarning != "" {
 		payload["completion_warning"] = completionContext.CompletionWarning
 	}
@@ -444,6 +475,9 @@ func encodeReceiptSummary(summary map[string]int, completionContext CompletionCo
 	if len(completionContext.CommandCatalogReceipts) > 0 {
 		payload["command_catalog_receipts"] = completionContext.CommandCatalogReceipts
 	}
+	if len(completionContext.ShellCommandReceipts) > 0 {
+		payload["shell_command_receipts"] = completionContext.ShellCommandReceipts
+	}
 	if len(completionContext.ToolSearchReceipts) > 0 {
 		payload["tool_search_receipts"] = completionContext.ToolSearchReceipts
 	}
@@ -482,6 +516,21 @@ func encodeReceiptSummary(summary map[string]int, completionContext CompletionCo
 	}
 	if completionContext.RetryReason != "" {
 		payload["retry_reason"] = completionContext.RetryReason
+	}
+	if completionContext.RecoveryScopeLabel != "" {
+		payload["recovery_scope_label"] = completionContext.RecoveryScopeLabel
+	}
+	if len(completionContext.AllowedRecoveryPaths) > 0 {
+		payload["allowed_recovery_paths"] = completionContext.AllowedRecoveryPaths
+	}
+	if len(completionContext.ForbiddenRecoveryPaths) > 0 {
+		payload["forbidden_recovery_paths"] = completionContext.ForbiddenRecoveryPaths
+	}
+	if len(completionContext.MutatedPaths) > 0 {
+		payload["mutated_paths"] = completionContext.MutatedPaths
+	}
+	if len(completionContext.OutOfScopeChangedFiles) > 0 {
+		payload["out_of_scope_changed_files"] = completionContext.OutOfScopeChangedFiles
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {

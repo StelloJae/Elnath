@@ -383,7 +383,7 @@ func NewProcessStartTool(manager *ProcessManager) *ProcessStartTool {
 func (t *ProcessStartTool) Name() string { return ProcessStartToolName }
 
 func (t *ProcessStartTool) Description() string {
-	return "Start a bounded session-local background shell process for later monitoring"
+	return "Start a bounded session-local background shell process for long-running commands. Use process_monitor to inspect progress instead of polling with sleep loops."
 }
 
 func (t *ProcessStartTool) Schema() json.RawMessage {
@@ -471,7 +471,7 @@ func NewProcessMonitorTool(manager *ProcessManager) *ProcessMonitorTool {
 func (t *ProcessMonitorTool) Name() string { return ProcessMonitorToolName }
 
 func (t *ProcessMonitorTool) Description() string {
-	return "Read a snapshot and bounded output tails for a session-local background process"
+	return "Read a snapshot and bounded output tails for a session-local background process started by process_start"
 }
 
 func (t *ProcessMonitorTool) Schema() json.RawMessage {

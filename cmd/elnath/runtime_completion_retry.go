@@ -58,6 +58,7 @@ func (rt *executionRuntime) runSmallerScopeCompletionRetry(
 	summary completionContractSummary,
 	attempt int,
 ) (*orchestrator.WorkflowResult, completionContractSummary) {
+	beforeFiles := rt.completionChangedFilesSnapshot(ctx, input)
 	retryInput := input
 	retryInput.Messages = result.Messages
 	retryInput.Message = completionRetryPrompt(summary)
@@ -67,6 +68,8 @@ func (rt *executionRuntime) runSmallerScopeCompletionRetry(
 		retryInput.Config.ReasoningEffortMode = "manual"
 	}
 	retryResult, err := wf.Run(ctx, retryInput)
+	afterFiles := rt.completionChangedFilesSnapshot(ctx, input)
+	retryChangedFiles := completionChangedFilesDelta(beforeFiles, afterFiles)
 	if err != nil {
 		rt.app.Logger.Warn("completion correction retry failed",
 			"decision", summary.RetryDecision,
@@ -76,13 +79,19 @@ func (rt *executionRuntime) runSmallerScopeCompletionRetry(
 		return result, completionCorrectionFailedSummary(summary, "workflow_error", attempt)
 	}
 	retrySummary := withProviderCapabilities(summarizeCompletionContract(completionRetryRoutingContext(summary), retryInput.Config, retryResult), rt.provider)
+	retrySummary = withCompletionRetryChangedFiles(retrySummary, retryChangedFiles)
 	retrySummary.CorrectionAttempted = true
 	retrySummary.CorrectionAttempts = attempt
 	retrySummary.CorrectionMaxAttempts = summary.CorrectionMaxAttempts
 	retrySummary.CorrectionDecision = summary.RetryDecision
 	retrySummary.CorrectionReason = summary.RetryReason
 	if retrySummary.CompletionWarning != "" {
-		if attempt >= summary.CorrectionMaxAttempts {
+		if completionWarningFailsClosed(retrySummary.CompletionWarning) {
+			retrySummary.CorrectionStatus = "failed"
+			retrySummary.CorrectionFailureFamily = retrySummary.CompletionWarning
+			retrySummary.RetryDecision = ""
+			retrySummary.RetryReason = ""
+		} else if attempt >= summary.CorrectionMaxAttempts {
 			retrySummary.CorrectionStatus = "failed"
 			retrySummary.CorrectionFailureFamily = "completion_warning_unresolved"
 		} else {
@@ -103,8 +112,20 @@ func (rt *executionRuntime) runSmallerScopeCompletionRetry(
 		Status:            retrySummary.CorrectionStatus,
 		FailureFamily:     retrySummary.CorrectionFailureFamily,
 		CompletionWarning: retrySummary.CompletionWarning,
+		ChangedFiles:      append([]string(nil), retryChangedFiles...),
+		OutOfScopeFiles:   append([]string(nil), retrySummary.OutOfScopeChangedFiles...),
 	})
 	return retryResult, retrySummary
+}
+
+func completionWarningFailsClosed(warning string) bool {
+	return completionFailureFamilyFailsClosed(warning)
+}
+
+func completionFailureFamilyFailsClosed(failureFamily string) bool {
+	return failureFamily == "scope_drift" ||
+		failureFamily == completionWarningBroadVerificationFailed ||
+		failureFamily == completionWarningHarnessVerificationFailed
 }
 
 func completionRetryRoutingContext(summary completionContractSummary) *orchestrator.RoutingContext {
@@ -123,6 +144,10 @@ func completionCorrectionFailedSummary(summary completionContractSummary, failur
 	updated.CorrectionReason = summary.RetryReason
 	updated.CorrectionStatus = "failed"
 	updated.CorrectionFailureFamily = failureFamily
+	if completionFailureFamilyFailsClosed(failureFamily) {
+		updated.RetryDecision = ""
+		updated.RetryReason = ""
+	}
 	updated.CorrectionAttemptDetails = appendCompletionCorrectionAttemptDetail(summary, completionCorrectionAttemptReceipt{
 		Attempt:       attempt,
 		Decision:      summary.RetryDecision,
@@ -191,7 +216,7 @@ func (rt *executionRuntime) runVerificationCompletionRetry(
 	if command == "" {
 		return result, completionCorrectionSkippedSummary(summary, "missing_explicit_verification_command", attempt)
 	}
-	summary = completionVerificationObservedSummary(summary, command)
+	summary = completionVerificationObservedSummary(summary, command, input.Config.VerificationPolicy)
 	exec := completionVerificationExecutor(input)
 	if exec == nil {
 		return result, completionCorrectionSkippedSummary(summary, "missing_verification_executor", attempt)
@@ -217,7 +242,7 @@ func (rt *executionRuntime) runVerificationCompletionRetry(
 			"reason", summary.RetryReason,
 			"command", command,
 		)
-		return result, completionCorrectionFailedSummary(summary, "verification_command_failed", attempt)
+		return result, completionCorrectionFailedSummary(summary, completionVerificationFailureWarning(summary.VerificationClass, summary.VerificationOwnership), attempt)
 	}
 
 	updated := summary
@@ -239,11 +264,14 @@ func (rt *executionRuntime) runVerificationCompletionRetry(
 	return result, updated
 }
 
-func completionVerificationObservedSummary(summary completionContractSummary, command string) completionContractSummary {
+func completionVerificationObservedSummary(summary completionContractSummary, command string, policy orchestrator.VerificationPolicy) completionContractSummary {
 	observed := true
+	class, ownership := classifyCompletionVerification(command, policy)
 	updated := summary
 	updated.VerificationObserved = &observed
 	updated.VerificationCommand = command
+	updated.VerificationClass = class
+	updated.VerificationOwnership = ownership
 	return updated
 }
 
@@ -252,12 +280,34 @@ func completionRetryPrompt(summary completionContractSummary) string {
 	if reasonGuidance != "" {
 		reasonGuidance = "\nReason-specific guidance:\n" + reasonGuidance
 	}
+	scopeGuidance := completionRetryScopeGuidance(summary)
+	if scopeGuidance != "" {
+		scopeGuidance = "\nScope lock:\n" + scopeGuidance
+	}
 	return fmt.Sprintf(
-		"Run one bounded correction pass for the previous task.\nRetry decision: %s\nRetry reason: %s\nKeep scope smaller than the original attempt. Provide a concrete completed result, or explicitly state what remains incomplete.%s",
+		"Run one bounded correction pass for the previous task.\nRetry decision: %s\nRetry reason: %s\nKeep scope smaller than the original attempt. Provide a concrete completed result, or explicitly state what remains incomplete.%s%s",
 		summary.RetryDecision,
 		summary.RetryReason,
 		reasonGuidance,
+		scopeGuidance,
 	)
+}
+
+func completionRetryScopeGuidance(summary completionContractSummary) string {
+	var parts []string
+	if summary.RecoveryScopeLabel != "" {
+		parts = append(parts, "- Scope label: "+summary.RecoveryScopeLabel)
+	}
+	if len(summary.AllowedRecoveryPaths) > 0 {
+		parts = append(parts, "- Allowed recovery paths: "+strings.Join(summary.AllowedRecoveryPaths, ", "))
+	}
+	if len(summary.ForbiddenRecoveryPaths) > 0 {
+		parts = append(parts, "- Forbidden recovery paths: "+strings.Join(summary.ForbiddenRecoveryPaths, ", "))
+	}
+	if len(summary.AllowedRecoveryPaths) > 0 || len(summary.ForbiddenRecoveryPaths) > 0 {
+		parts = append(parts, "- If the root cause appears outside this scope, stop and report scope_drift instead of editing unrelated files.")
+	}
+	return strings.Join(parts, "\n")
 }
 
 func completionRetryReasonGuidance(summary completionContractSummary) string {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -96,6 +97,17 @@ type failingRetryWorkflow struct {
 	err  error
 }
 
+type scopeDriftRetryWorkflow struct {
+	name string
+	path string
+}
+
+type shellMutationRetryWorkflow struct {
+	name string
+	root string
+	path string
+}
+
 type captureLearningWorkflow struct {
 	name        string
 	sawLearning bool
@@ -154,6 +166,49 @@ func (w *failingRetryWorkflow) Run(context.Context, orchestrator.WorkflowInput) 
 		return nil, w.err
 	}
 	return nil, fmt.Errorf("retry workflow failed")
+}
+
+func (w *scopeDriftRetryWorkflow) Name() string { return w.name }
+
+func (w *scopeDriftRetryWorkflow) Run(_ context.Context, input orchestrator.WorkflowInput) (*orchestrator.WorkflowResult, error) {
+	messages := append([]llm.Message{}, input.Messages...)
+	messages = append(messages,
+		llm.Message{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+			llm.ToolUseBlock{ID: "edit-1", Name: "edit_file", Input: json.RawMessage(`{"file_path":"` + w.path + `","old_string":"old","new_string":"new"}`)},
+		}},
+		llm.NewToolResultMessage("edit-1", "ok", false),
+		llm.NewAssistantMessage("Done."),
+	)
+	return &orchestrator.WorkflowResult{
+		Messages: messages,
+		Summary:  "Done.",
+		Workflow: w.name,
+	}, nil
+}
+
+func (w *shellMutationRetryWorkflow) Name() string { return w.name }
+
+func (w *shellMutationRetryWorkflow) Run(_ context.Context, input orchestrator.WorkflowInput) (*orchestrator.WorkflowResult, error) {
+	target := filepath.Join(w.root, filepath.FromSlash(w.path))
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(target, []byte("patched\n"), 0o644); err != nil {
+		return nil, err
+	}
+	messages := append([]llm.Message{}, input.Messages...)
+	messages = append(messages,
+		llm.Message{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+			llm.ToolUseBlock{ID: "bash-1", Name: "bash", Input: json.RawMessage(`{"command":"python3 - <<'PY'\nfrom pathlib import Path\nPath('` + w.path + `').write_text('patched\\n')\nPY"}`)},
+		}},
+		llm.NewToolResultMessage("bash-1", "ok", false),
+		llm.NewAssistantMessage("Done."),
+	)
+	return &orchestrator.WorkflowResult{
+		Messages: messages,
+		Summary:  "Done.",
+		Workflow: w.name,
+	}, nil
 }
 
 func (w *captureLearningWorkflow) Name() string { return w.name }
@@ -421,6 +476,15 @@ func containsString(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func initGitWorktreeForTest(t *testing.T, dir string) {
+	t.Helper()
+	cmd := exec.Command("git", "init")
+	cmd.Dir = dir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, output)
+	}
 }
 
 func newTestExecutionRuntime(t *testing.T, provider llm.Provider) *executionRuntime {
@@ -4189,6 +4253,117 @@ func TestCompletionRetryMarksUnresolvedWarningFailed(t *testing.T) {
 	}
 }
 
+func TestCompletionRetryFailsClosedOnScopeDrift(t *testing.T) {
+	rt := newTestExecutionRuntimeWithConfig(t, &countingProvider{}, false, func(cfg *config.Config) {
+		cfg.SelfHealing.Enabled = true
+		cfg.SelfHealing.ObserveOnly = false
+	})
+	rt.completionRetryMax = 2
+	result := &orchestrator.WorkflowResult{
+		Messages:     []llm.Message{llm.NewAssistantMessage("I could not finish the patch.")},
+		Summary:      "I could not finish the patch.",
+		FinishReason: "stop",
+		Workflow:     "single",
+	}
+	summary := completionContractSummary{
+		CompletionWarning: "final_response_reports_incomplete",
+		RetryDecision:     completionRetryDecisionRetrySmallerScope,
+		RetryReason:       "final_response_reports_incomplete",
+	}
+
+	_, gotSummary := rt.maybeRunCompletionRetry(context.Background(), &scopeDriftRetryWorkflow{
+		name: "single",
+		path: "docs/unrelated.md",
+	}, orchestrator.WorkflowInput{
+		Provider: rt.provider,
+		Config: orchestrator.WorkflowConfig{
+			CorrectionScope: orchestrator.CorrectionScope{
+				Label:        "daemon-only",
+				AllowedPaths: []string{"internal/daemon/"},
+			},
+		},
+	}, result, summary)
+
+	if gotSummary.CompletionWarning != "scope_drift" {
+		t.Fatalf("CompletionWarning = %q, want scope_drift", gotSummary.CompletionWarning)
+	}
+	if gotSummary.CorrectionStatus != "failed" || gotSummary.CorrectionFailureFamily != "scope_drift" {
+		t.Fatalf("correction status = %q family %q, want failed/scope_drift", gotSummary.CorrectionStatus, gotSummary.CorrectionFailureFamily)
+	}
+	if gotSummary.RetryDecision != "" || gotSummary.RetryReason != "" {
+		t.Fatalf("retry = %q/%q, want fail-closed empty retry", gotSummary.RetryDecision, gotSummary.RetryReason)
+	}
+	if len(gotSummary.CorrectionAttemptDetails) != 1 || gotSummary.CorrectionAttemptDetails[0].FailureFamily != "scope_drift" {
+		t.Fatalf("correction attempt details = %+v, want scope_drift detail", gotSummary.CorrectionAttemptDetails)
+	}
+	if got := gotSummary.OutOfScopeChangedFiles; len(got) != 1 || got[0] != "docs/unrelated.md" {
+		t.Fatalf("OutOfScopeChangedFiles = %#v, want docs/unrelated.md", gotSummary.OutOfScopeChangedFiles)
+	}
+}
+
+func TestCompletionRetryFailsClosedOnShellDiffScopeDrift(t *testing.T) {
+	rt := newTestExecutionRuntimeWithConfig(t, &countingProvider{}, false, func(cfg *config.Config) {
+		cfg.SelfHealing.Enabled = true
+		cfg.SelfHealing.ObserveOnly = false
+	})
+	initGitWorktreeForTest(t, rt.workDir)
+	rt.completionRetryMax = 2
+	result := &orchestrator.WorkflowResult{
+		Messages:     []llm.Message{llm.NewAssistantMessage("I could not finish the patch.")},
+		Summary:      "I could not finish the patch.",
+		FinishReason: "stop",
+		Workflow:     "single",
+	}
+	summary := completionContractSummary{
+		CompletionWarning: "final_response_reports_incomplete",
+		RetryDecision:     completionRetryDecisionRetrySmallerScope,
+		RetryReason:       "final_response_reports_incomplete",
+	}
+
+	_, gotSummary := rt.maybeRunCompletionRetry(context.Background(), &shellMutationRetryWorkflow{
+		name: "single",
+		root: rt.workDir,
+		path: "docs/unrelated.md",
+	}, orchestrator.WorkflowInput{
+		Provider: rt.provider,
+		Config: orchestrator.WorkflowConfig{
+			CorrectionScope: orchestrator.CorrectionScope{
+				Label:        "daemon-only",
+				AllowedPaths: []string{"internal/daemon/"},
+			},
+		},
+	}, result, summary)
+
+	if gotSummary.CompletionWarning != "scope_drift" {
+		t.Fatalf("CompletionWarning = %q, want scope_drift", gotSummary.CompletionWarning)
+	}
+	if gotSummary.CorrectionStatus != "failed" || gotSummary.CorrectionFailureFamily != "scope_drift" {
+		t.Fatalf("correction status = %q family %q, want failed/scope_drift", gotSummary.CorrectionStatus, gotSummary.CorrectionFailureFamily)
+	}
+	if gotSummary.RetryDecision != "" || gotSummary.RetryReason != "" {
+		t.Fatalf("retry = %q/%q, want fail-closed empty retry", gotSummary.RetryDecision, gotSummary.RetryReason)
+	}
+	if got := gotSummary.MutatedPaths; len(got) != 1 || got[0] != "docs/unrelated.md" {
+		t.Fatalf("MutatedPaths = %#v, want docs/unrelated.md", gotSummary.MutatedPaths)
+	}
+	if got := gotSummary.OutOfScopeChangedFiles; len(got) != 1 || got[0] != "docs/unrelated.md" {
+		t.Fatalf("OutOfScopeChangedFiles = %#v, want docs/unrelated.md", gotSummary.OutOfScopeChangedFiles)
+	}
+	if len(gotSummary.CorrectionAttemptDetails) != 1 {
+		t.Fatalf("CorrectionAttemptDetails = %+v, want one detail", gotSummary.CorrectionAttemptDetails)
+	}
+	detail := gotSummary.CorrectionAttemptDetails[0]
+	if detail.FailureFamily != "scope_drift" {
+		t.Fatalf("attempt failure family = %q, want scope_drift", detail.FailureFamily)
+	}
+	if got := detail.ChangedFiles; len(got) != 1 || got[0] != "docs/unrelated.md" {
+		t.Fatalf("attempt changed files = %#v, want docs/unrelated.md", detail.ChangedFiles)
+	}
+	if got := detail.OutOfScopeFiles; len(got) != 1 || got[0] != "docs/unrelated.md" {
+		t.Fatalf("attempt out-of-scope files = %#v, want docs/unrelated.md", detail.OutOfScopeFiles)
+	}
+}
+
 func TestCompletionRetryRunsExplicitVerificationCommand(t *testing.T) {
 	rt := newTestExecutionRuntimeWithConfig(t, &countingProvider{}, false, func(cfg *config.Config) {
 		cfg.SelfHealing.Enabled = true
@@ -4281,6 +4456,52 @@ func TestCompletionRetryRecordsFailedVerificationCommand(t *testing.T) {
 	}
 	if !gotSummary.CorrectionAttempted || gotSummary.CorrectionStatus != "failed" || gotSummary.CorrectionFailureFamily != "verification_command_failed" {
 		t.Fatalf("correction failure summary = %+v", gotSummary)
+	}
+}
+
+func TestCompletionRetryFailsClosedOnBroadVerificationCommand(t *testing.T) {
+	rt := newTestExecutionRuntimeWithConfig(t, &countingProvider{}, false, func(cfg *config.Config) {
+		cfg.SelfHealing.Enabled = true
+		cfg.SelfHealing.ObserveOnly = false
+	})
+	rt.completionRetryMax = 1
+	reg := tools.NewRegistry()
+	bash := &recordingRuntimeTool{name: "bash", output: "FAIL", isError: true}
+	reg.Register(bash)
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("fix the daemon\n\ngo test ./..."),
+			llm.NewAssistantMessage("Done."),
+		},
+		Summary:      "Done.",
+		FinishReason: "stop",
+		Workflow:     "single",
+	}
+	observed := false
+	summary := completionContractSummary{
+		VerificationHint:     true,
+		VerificationObserved: &observed,
+		RetryDecision:        completionRetryDecisionRunVerification,
+		RetryReason:          "verification_hint_not_observed",
+	}
+
+	_, gotSummary := rt.maybeRunCompletionRetry(context.Background(), &stubWorkflow{name: "single"}, orchestrator.WorkflowInput{
+		Session:  &agent.Session{ID: "verify-session"},
+		Tools:    reg,
+		Provider: rt.provider,
+	}, result, summary)
+
+	if bash.calls != 1 || bash.command != "go test ./..." {
+		t.Fatalf("bash calls = %d command = %q, want broad verification command", bash.calls, bash.command)
+	}
+	if gotSummary.VerificationClass != "broad" || gotSummary.VerificationOwnership != "harness" {
+		t.Fatalf("verification policy = class %q ownership %q, want broad/harness", gotSummary.VerificationClass, gotSummary.VerificationOwnership)
+	}
+	if gotSummary.CorrectionStatus != "failed" || gotSummary.CorrectionFailureFamily != "broad_verification_failed" {
+		t.Fatalf("correction failure = status %q family %q, want failed/broad_verification_failed", gotSummary.CorrectionStatus, gotSummary.CorrectionFailureFamily)
+	}
+	if gotSummary.RetryDecision != "" || gotSummary.RetryReason != "" {
+		t.Fatalf("retry = %q/%q, want fail-closed empty retry", gotSummary.RetryDecision, gotSummary.RetryReason)
 	}
 }
 

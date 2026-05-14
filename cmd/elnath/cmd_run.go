@@ -252,7 +252,7 @@ func cmdRun(ctx context.Context, args []string) error {
 }
 
 func noProviderConfiguredMessage() string {
-	return "No LLM provider configured. Set ELNATH_OPENAI_RESPONSES_API_KEY, ELNATH_OPENAI_API_KEY, or ELNATH_ANTHROPIC_API_KEY; configure openai_responses.api_key, openai.api_key, or anthropic.api_key in config.yaml; or sign in with Codex OAuth."
+	return "No LLM provider configured. Set ELNATH_RESPONSES_API_KEY, ELNATH_OPENAI_RESPONSES_API_KEY, ELNATH_OPENAI_API_KEY, or ELNATH_ANTHROPIC_API_KEY; configure openai_responses.api_key, openai.api_key, or anthropic.api_key in config.yaml; or sign in with Codex OAuth."
 }
 
 func interactiveSessionIngestEvent(dataDir string, sess *agent.Session, messages []llm.Message) (wiki.IngestEvent, error) {
