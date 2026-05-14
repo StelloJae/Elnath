@@ -918,7 +918,7 @@ func TestCompletionContractSummaryRecordsAskUserQuestionReceipt(t *testing.T) {
 			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
 				llm.ToolUseBlock{ID: "ask-1", Name: "ask_user_question", Input: json.RawMessage(`{"question":"Which branch?","options":["main","new"],"allow_free_text":false,"timeout_seconds":120}`)},
 			}},
-			llm.NewToolResultMessage("ask-1", `{"type":"user_input_required","question":"Which branch?","options":["main","new"],"allow_free_text":false,"timeout_seconds":120,"request_id":"req-123","session_id":"sess-123","receipt":{"tool":"ask_user_question","action":"request","read_only":true,"execution_policy":"user_input_request","question":"Which branch?","question_chars":13,"option_count":2,"allow_free_text":false,"timeout_seconds":120,"request_id":"req-123","session_id":"sess-123"}}`, false),
+			llm.NewToolResultMessage("ask-1", `{"type":"user_input_required","question":"Which branch?","options":["main","new"],"allow_free_text":false,"timeout_seconds":120,"request_id":"req-123","session_id":"sess-123","answerable":true,"answer_command":"elnath task answer --session 'sess-123' --request 'req-123' --answer 'ANSWER_TEXT'","pending_command":"elnath explain pending-questions --session 'sess-123'","receipt":{"tool":"ask_user_question","action":"request","read_only":true,"execution_policy":"user_input_request","question":"Which branch?","question_chars":13,"option_count":2,"allow_free_text":false,"timeout_seconds":120,"request_id":"req-123","session_id":"sess-123","followup_tool":"user_question_wait"}}`, false),
 		},
 		FinishReason: "stop",
 	}
@@ -931,7 +931,7 @@ func TestCompletionContractSummaryRecordsAskUserQuestionReceipt(t *testing.T) {
 	if receipt.Tool != "ask_user_question" || receipt.Action != "request" || !receipt.ReadOnly || receipt.ExecutionPolicy != "user_input_request" {
 		t.Fatalf("receipt identity = %+v", receipt)
 	}
-	if receipt.Question != "Which branch?" || receipt.QuestionChars != 13 || receipt.OptionCount != 2 || receipt.AllowFreeText || receipt.TimeoutSeconds != 120 || receipt.RequestID != "req-123" || receipt.SessionID != "sess-123" {
+	if receipt.Question != "Which branch?" || receipt.QuestionChars != 13 || receipt.OptionCount != 2 || receipt.AllowFreeText || receipt.TimeoutSeconds != 120 || receipt.RequestID != "req-123" || receipt.SessionID != "sess-123" || receipt.FollowupTool != "user_question_wait" {
 		t.Fatalf("receipt bounds = %+v", receipt)
 	}
 	if !summary.UserInputRequired {
