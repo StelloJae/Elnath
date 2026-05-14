@@ -278,7 +278,7 @@ func controlSurfaceManifest() []controlSurfaceManifestEntry {
 		{
 			Name:          "process",
 			Status:        "implemented",
-			Tools:         []string{"process_start", "process_monitor", "process_stop"},
+			Tools:         []string{"process_start", "process_monitor", "process_wait", "process_stop"},
 			ReceiptBacked: true,
 			Notes:         "session-scoped long-running command observation",
 		},
@@ -365,10 +365,13 @@ type telegramTimeoutPolicyView struct {
 type processTimeoutPolicyView struct {
 	DefaultTimeoutMS    int      `json:"default_timeout_ms"`
 	MaxTimeoutMS        int      `json:"max_timeout_ms"`
+	DefaultWaitMS       int      `json:"default_wait_ms"`
+	MaxWaitMS           int      `json:"max_wait_ms"`
 	KillGraceMS         int      `json:"kill_grace_ms"`
 	DefaultTailBytes    int      `json:"default_tail_bytes"`
 	MaxTailBytes        int      `json:"max_tail_bytes"`
 	MonitorFollowupTool string   `json:"monitor_followup_tool"`
+	WaitFollowupTool    string   `json:"wait_followup_tool"`
 	ReceiptFields       []string `json:"receipt_fields"`
 }
 
@@ -411,13 +414,16 @@ func explainTimeouts(cfg *config.Config, args []string) error {
 		view.SelfHealing.CompletionRetrySupportedMax,
 		strings.Join(view.SelfHealing.CompletionRetryDecisions, ","),
 	)
-	fmt.Fprintf(os.Stdout, "  Process tools: default_timeout=%dms max_timeout=%dms kill_grace=%dms tail=%d/%d followup=%s receipt_fields=%s\n",
+	fmt.Fprintf(os.Stdout, "  Process tools: default_timeout=%dms max_timeout=%dms default_wait=%dms max_wait=%dms kill_grace=%dms tail=%d/%d monitor_followup=%s wait_followup=%s receipt_fields=%s\n",
 		view.Process.DefaultTimeoutMS,
 		view.Process.MaxTimeoutMS,
+		view.Process.DefaultWaitMS,
+		view.Process.MaxWaitMS,
 		view.Process.KillGraceMS,
 		view.Process.DefaultTailBytes,
 		view.Process.MaxTailBytes,
 		view.Process.MonitorFollowupTool,
+		view.Process.WaitFollowupTool,
 		strings.Join(view.Process.ReceiptFields, ","),
 	)
 	fmt.Fprintf(os.Stdout, "  Telegram: poll_timeout=%ds\n", view.Telegram.PollTimeoutSeconds)
@@ -462,10 +468,13 @@ func timeoutPolicyViewForConfig(cfg *config.Config) timeoutPolicyView {
 		Process: processTimeoutPolicyView{
 			DefaultTimeoutMS:    processPolicy.DefaultTimeoutMS,
 			MaxTimeoutMS:        processPolicy.MaxTimeoutMS,
+			DefaultWaitMS:       processPolicy.DefaultWaitMS,
+			MaxWaitMS:           processPolicy.MaxWaitMS,
 			KillGraceMS:         processPolicy.KillGraceMS,
 			DefaultTailBytes:    processPolicy.DefaultTailBytes,
 			MaxTailBytes:        processPolicy.MaxTailBytes,
 			MonitorFollowupTool: processPolicy.MonitorFollowupTool,
+			WaitFollowupTool:    processPolicy.WaitFollowupTool,
 			ReceiptFields:       append([]string(nil), processPolicy.ReceiptFields...),
 		},
 		Telegram: telegramTimeoutPolicyView{

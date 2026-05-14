@@ -491,6 +491,7 @@ func buildExecutionRuntime(
 	app.RegisterCloser("process manager", processManagerCloser{manager: processManager})
 	reg.Register(tools.NewProcessStartTool(processManager))
 	reg.Register(tools.NewProcessMonitorTool(processManager))
+	reg.Register(tools.NewProcessWaitTool(processManager))
 	reg.Register(tools.NewProcessStopTool(processManager))
 	planModeController := agent.NewPlanModeController(perm)
 	reg.Register(agent.NewEnterPlanModeTool(planModeController))
@@ -1675,6 +1676,9 @@ func completionControlToolReceiptsToLearning(src []completionControlToolReceipt)
 			ExitCode:                receipt.ExitCode,
 			Found:                   receipt.Found,
 			TimeoutMS:               receipt.TimeoutMS,
+			WaitMS:                  receipt.WaitMS,
+			WaitElapsedMS:           receipt.WaitElapsedMS,
+			WaitTimedOut:            receipt.WaitTimedOut,
 			CWD:                     receipt.CWD,
 			TailBytes:               receipt.TailBytes,
 			StdoutRawBytes:          receipt.StdoutRawBytes,

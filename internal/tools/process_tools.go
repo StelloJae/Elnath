@@ -16,10 +16,13 @@ import (
 const (
 	ProcessStartToolName   = "process_start"
 	ProcessMonitorToolName = "process_monitor"
+	ProcessWaitToolName    = "process_wait"
 	ProcessStopToolName    = "process_stop"
 
 	processDefaultTimeout = 10 * time.Minute
 	processMaxTimeout     = 60 * time.Minute
+	processDefaultWait    = 1 * time.Second
+	processMaxWait        = 60 * time.Second
 	processKillGrace      = 2 * time.Second
 	processDefaultTail    = 4000
 	processMaxTail        = 20000
@@ -40,10 +43,13 @@ type ProcessManager struct {
 type ProcessExecutionPolicy struct {
 	DefaultTimeoutMS    int
 	MaxTimeoutMS        int
+	DefaultWaitMS       int
+	MaxWaitMS           int
 	KillGraceMS         int
 	DefaultTailBytes    int
 	MaxTailBytes        int
 	MonitorFollowupTool string
+	WaitFollowupTool    string
 	ReceiptFields       []string
 }
 
@@ -51,10 +57,13 @@ func ProcessExecutionPolicySnapshot() ProcessExecutionPolicy {
 	return ProcessExecutionPolicy{
 		DefaultTimeoutMS:    int(processDefaultTimeout / time.Millisecond),
 		MaxTimeoutMS:        int(processMaxTimeout / time.Millisecond),
+		DefaultWaitMS:       int(processDefaultWait / time.Millisecond),
+		MaxWaitMS:           int(processMaxWait / time.Millisecond),
 		KillGraceMS:         int(processKillGrace / time.Millisecond),
 		DefaultTailBytes:    processDefaultTail,
 		MaxTailBytes:        processMaxTail,
 		MonitorFollowupTool: ProcessMonitorToolName,
+		WaitFollowupTool:    ProcessWaitToolName,
 		ReceiptFields: []string{
 			"status",
 			"terminal",
@@ -66,6 +75,9 @@ func ProcessExecutionPolicySnapshot() ProcessExecutionPolicy {
 			"tail_bytes",
 			"stdout_raw_bytes",
 			"stderr_raw_bytes",
+			"wait_ms",
+			"wait_elapsed_ms",
+			"wait_timed_out",
 		},
 	}
 }
@@ -428,7 +440,7 @@ func NewProcessStartTool(manager *ProcessManager) *ProcessStartTool {
 func (t *ProcessStartTool) Name() string { return ProcessStartToolName }
 
 func (t *ProcessStartTool) Description() string {
-	return "Start a bounded session-local background shell process for long-running commands. Use process_monitor to inspect progress instead of polling with sleep loops."
+	return "Start a bounded session-local background shell process for long-running commands. Use process_wait for bounded waits or process_monitor to inspect progress instead of polling with sleep loops."
 }
 
 func (t *ProcessStartTool) Schema() json.RawMessage {
@@ -616,6 +628,132 @@ func (t *ProcessMonitorTool) Execute(ctx context.Context, params json.RawMessage
 	return SuccessResult(string(raw)), nil
 }
 
+type ProcessWaitTool struct {
+	manager *ProcessManager
+}
+
+func NewProcessWaitTool(manager *ProcessManager) *ProcessWaitTool {
+	return &ProcessWaitTool{manager: manager}
+}
+
+func (t *ProcessWaitTool) Name() string { return ProcessWaitToolName }
+
+func (t *ProcessWaitTool) Description() string {
+	return "Wait briefly for a session-local background process started by process_start, bounded by wait_ms, without sleep polling."
+}
+
+func (t *ProcessWaitTool) Schema() json.RawMessage {
+	return Object(map[string]Property{
+		"process_id": Int("Process id returned by process_start."),
+		"wait_ms":    Int("Maximum time to wait in milliseconds. Defaults to 1000 and caps at 60000."),
+		"max_chars":  Int("Maximum trailing characters per stream. Defaults to 4000 and caps at 20000."),
+	}, []string{"process_id"})
+}
+
+func (t *ProcessWaitTool) IsConcurrencySafe(json.RawMessage) bool { return true }
+func (t *ProcessWaitTool) Reversible() bool                       { return true }
+func (t *ProcessWaitTool) Scope(json.RawMessage) ToolScope        { return ToolScope{} }
+func (t *ProcessWaitTool) ShouldCancelSiblingsOnError() bool      { return false }
+func (t *ProcessWaitTool) DeferInitialToolSchema() bool           { return true }
+
+type processWaitInput struct {
+	ProcessID int64 `json:"process_id"`
+	WaitMS    int   `json:"wait_ms"`
+	MaxChars  int   `json:"max_chars"`
+}
+
+type processWaitOutput struct {
+	processSnapshot
+	WaitMS        int            `json:"wait_ms"`
+	WaitElapsedMS int            `json:"wait_elapsed_ms"`
+	WaitTimedOut  bool           `json:"wait_timed_out"`
+	Receipt       processReceipt `json:"receipt"`
+}
+
+func (t *ProcessWaitTool) Execute(ctx context.Context, params json.RawMessage) (*Result, error) {
+	var input processWaitInput
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &input); err != nil {
+			return ErrorResult(fmt.Sprintf("invalid params: %v", err)), nil
+		}
+	}
+	if input.ProcessID <= 0 {
+		return ErrorResult("process_wait: process_id must be positive"), nil
+	}
+	wait := normalizeProcessWait(input.WaitMS)
+	limit := normalizeProcessTail(input.MaxChars)
+	started := time.Now()
+	proc, found := t.manager.get(input.ProcessID)
+	if !found {
+		elapsedMS := int(time.Since(started) / time.Millisecond)
+		out := processWaitOutput{
+			processSnapshot: processSnapshot{ProcessID: input.ProcessID, Found: false},
+			WaitMS:          int(wait / time.Millisecond),
+			WaitElapsedMS:   elapsedMS,
+			Receipt: processReceipt{
+				Tool:            ProcessWaitToolName,
+				Action:          "wait",
+				ReadOnly:        true,
+				Persistent:      false,
+				ExecutionPolicy: "session_process_wait",
+				ProcessID:       input.ProcessID,
+				Found:           false,
+				TailBytes:       limit,
+				WaitMS:          int(wait / time.Millisecond),
+				WaitElapsedMS:   elapsedMS,
+			},
+		}
+		raw, err := json.Marshal(out)
+		if err != nil {
+			return ErrorResult(fmt.Sprintf("process_wait: marshal output: %v", err)), nil
+		}
+		return SuccessResult(string(raw)), nil
+	}
+	snap, elapsed, waitTimedOut, err := waitForProcessSnapshot(ctx, proc, wait, limit)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("process_wait: %v", err)), nil
+	}
+	elapsedMS := int(elapsed / time.Millisecond)
+	waitMS := int(wait / time.Millisecond)
+	out := processWaitOutput{
+		processSnapshot: snap,
+		WaitMS:          waitMS,
+		WaitElapsedMS:   elapsedMS,
+		WaitTimedOut:    waitTimedOut,
+		Receipt: processReceipt{
+			Tool:            ProcessWaitToolName,
+			Action:          "wait",
+			ReadOnly:        true,
+			Persistent:      false,
+			ExecutionPolicy: "session_process_wait",
+			CommandIntent:   snap.CommandIntent,
+			IntentSource:    snap.IntentSource,
+			ProcessID:       input.ProcessID,
+			Status:          snap.Status,
+			Terminal:        snap.Terminal,
+			TimedOut:        snap.TimedOut,
+			TimeoutMS:       snap.TimeoutMS,
+			ExitCode:        snap.ExitCode,
+			Found:           true,
+			TailBytes:       limit,
+			StdoutRawBytes:  snap.StdoutRawBytes,
+			StderrRawBytes:  snap.StderrRawBytes,
+			StdoutTruncated: snap.StdoutTruncated,
+			StderrTruncated: snap.StderrTruncated,
+			CWD:             snap.CWD,
+			WaitMS:          waitMS,
+			WaitElapsedMS:   elapsedMS,
+			WaitTimedOut:    waitTimedOut,
+			FollowupTool:    processFollowupTool(ProcessWaitToolName, true, snap.Terminal),
+		},
+	}
+	raw, err := json.Marshal(out)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("process_wait: marshal output: %v", err)), nil
+	}
+	return SuccessResult(string(raw)), nil
+}
+
 type ProcessStopTool struct {
 	manager *ProcessManager
 }
@@ -783,6 +921,9 @@ type processReceipt struct {
 	StopSignal      string `json:"stop_signal,omitempty"`
 	Found           bool   `json:"found,omitempty"`
 	FollowupTool    string `json:"followup_tool,omitempty"`
+	WaitMS          int    `json:"wait_ms,omitempty"`
+	WaitElapsedMS   int    `json:"wait_elapsed_ms,omitempty"`
+	WaitTimedOut    bool   `json:"wait_timed_out,omitempty"`
 }
 
 func processFollowupTool(tool string, found bool, terminal bool) string {
@@ -792,6 +933,10 @@ func processFollowupTool(tool string, found bool, terminal bool) string {
 	case ProcessMonitorToolName:
 		if found && !terminal {
 			return ProcessMonitorToolName
+		}
+	case ProcessWaitToolName:
+		if found && !terminal {
+			return ProcessWaitToolName
 		}
 	case ProcessStopToolName:
 		if found {
@@ -812,6 +957,17 @@ func normalizeProcessTimeout(ms int) time.Duration {
 	return d
 }
 
+func normalizeProcessWait(ms int) time.Duration {
+	if ms <= 0 {
+		return processDefaultWait
+	}
+	d := time.Duration(ms) * time.Millisecond
+	if d > processMaxWait {
+		return processMaxWait
+	}
+	return d
+}
+
 func normalizeProcessTail(maxChars int) int {
 	if maxChars <= 0 {
 		return processDefaultTail
@@ -820,6 +976,41 @@ func normalizeProcessTail(maxChars int) int {
 		return processMaxTail
 	}
 	return maxChars
+}
+
+func waitForProcessSnapshot(ctx context.Context, proc *managedProcess, wait time.Duration, maxChars int) (processSnapshot, time.Duration, bool, error) {
+	started := time.Now()
+	snap := proc.snapshot(maxChars)
+	if snap.Terminal {
+		return snap, time.Since(started), false, nil
+	}
+	deadline := started.Add(wait)
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return proc.snapshot(maxChars), time.Since(started), true, nil
+		}
+		sleepFor := 25 * time.Millisecond
+		if remaining < sleepFor {
+			sleepFor = remaining
+		}
+		timer := time.NewTimer(sleepFor)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return processSnapshot{}, time.Since(started), false, ctx.Err()
+		case <-timer.C:
+		}
+		snap = proc.snapshot(maxChars)
+		if snap.Terminal {
+			return snap, time.Since(started), false, nil
+		}
+	}
 }
 
 func truncateProcessText(s string, max int) string {

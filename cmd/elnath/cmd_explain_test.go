@@ -79,10 +79,13 @@ func TestCmdExplainTimeoutsJSON(t *testing.T) {
 		Process struct {
 			DefaultTimeoutMS    int      `json:"default_timeout_ms"`
 			MaxTimeoutMS        int      `json:"max_timeout_ms"`
+			DefaultWaitMS       int      `json:"default_wait_ms"`
+			MaxWaitMS           int      `json:"max_wait_ms"`
 			KillGraceMS         int      `json:"kill_grace_ms"`
 			DefaultTailBytes    int      `json:"default_tail_bytes"`
 			MaxTailBytes        int      `json:"max_tail_bytes"`
 			MonitorFollowupTool string   `json:"monitor_followup_tool"`
+			WaitFollowupTool    string   `json:"wait_followup_tool"`
 			ReceiptFields       []string `json:"receipt_fields"`
 		} `json:"process"`
 		Telegram struct {
@@ -122,10 +125,13 @@ func TestCmdExplainTimeoutsJSON(t *testing.T) {
 	if out.Process.DefaultTimeoutMS != 600000 || out.Process.MaxTimeoutMS != 3600000 || out.Process.KillGraceMS != 2000 {
 		t.Fatalf("process timeout policy = %+v, want default/max/kill-grace milliseconds", out.Process)
 	}
-	if out.Process.DefaultTailBytes != 4000 || out.Process.MaxTailBytes != 20000 || out.Process.MonitorFollowupTool != basetools.ProcessMonitorToolName {
+	if out.Process.DefaultWaitMS != 1000 || out.Process.MaxWaitMS != 60000 {
+		t.Fatalf("process wait policy = %+v, want default/max wait milliseconds", out.Process)
+	}
+	if out.Process.DefaultTailBytes != 4000 || out.Process.MaxTailBytes != 20000 || out.Process.MonitorFollowupTool != basetools.ProcessMonitorToolName || out.Process.WaitFollowupTool != basetools.ProcessWaitToolName {
 		t.Fatalf("process tail/followup policy = %+v", out.Process)
 	}
-	for _, want := range []string{"status", "terminal", "timed_out", "timeout_ms", "followup_tool", "command_intent", "intent_source"} {
+	for _, want := range []string{"status", "terminal", "timed_out", "timeout_ms", "followup_tool", "command_intent", "intent_source", "wait_ms", "wait_elapsed_ms", "wait_timed_out"} {
 		found := false
 		for _, got := range out.Process.ReceiptFields {
 			if got == want {
@@ -159,8 +165,8 @@ func TestCmdExplainTimeoutsTextShowsCorrectionPolicy(t *testing.T) {
 		"supported_max=2",
 		"decisions=retry_smaller_scope,run_verification",
 		"verification_retry=standalone_command_only",
-		"Process tools: default_timeout=600000ms max_timeout=3600000ms kill_grace=2000ms tail=4000/20000",
-		"receipt_fields=status,terminal,timed_out,timeout_ms,followup_tool,command_intent,intent_source",
+		"Process tools: default_timeout=600000ms max_timeout=3600000ms default_wait=1000ms max_wait=60000ms kill_grace=2000ms tail=4000/20000",
+		"receipt_fields=status,terminal,timed_out,timeout_ms,followup_tool,command_intent,intent_source,tail_bytes,stdout_raw_bytes,stderr_raw_bytes,wait_ms,wait_elapsed_ms,wait_timed_out",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("stdout missing %q:\n%s", want, stdout)
