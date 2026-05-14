@@ -3656,6 +3656,8 @@ func TestExecutionRuntimeRunTaskStatusSlashCommand(t *testing.T) {
 		"effort:         auto",
 		"permission:     bypass",
 		"tool_exposure:  standard",
+		"tools:          ",
+		"control_surface: ok",
 	} {
 		if !strings.Contains(summary, want) {
 			t.Fatalf("summary = %q missing %q", summary, want)
@@ -3691,12 +3693,21 @@ func TestExecutionRuntimeRunTaskStatusSlashCommandJSON(t *testing.T) {
 		AutoCompatible bool   `json:"auto_effort_compatible"`
 		PermissionMode string `json:"permission_mode"`
 		ToolExposure   string `json:"tool_exposure"`
+		ToolCount      int    `json:"tool_count"`
+		DeferredTools  int    `json:"deferred_tool_count"`
+		ControlSurface struct {
+			ToolCount int      `json:"tool_count"`
+			Missing   []string `json:"missing"`
+		} `json:"control_surface"`
 	}
 	if err := json.Unmarshal([]byte(summary), &out); err != nil {
 		t.Fatalf("summary is not JSON: %v\n%s", err, summary)
 	}
 	if out.Version != version || out.Provider != "openai-responses" || out.Model != "mock-model" || out.EffortMode != "auto" || out.ProviderEffort != llm.ReasoningEffortNativeWithUnsupportedRetry || !out.AutoCompatible || out.PermissionMode != "bypass" || out.ToolExposure != "standard" {
 		t.Fatalf("status output = %+v", out)
+	}
+	if out.ToolCount == 0 || out.DeferredTools == 0 || out.ControlSurface.ToolCount == 0 || len(out.ControlSurface.Missing) != 0 {
+		t.Fatalf("registry status = tool_count %d deferred %d control_surface %+v", out.ToolCount, out.DeferredTools, out.ControlSurface)
 	}
 }
 

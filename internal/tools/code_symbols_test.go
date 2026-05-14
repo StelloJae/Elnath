@@ -153,6 +153,41 @@ func Broken( {
 	}
 }
 
+func TestCodeSymbolsToolDiagnosticsReportsGoParseErrors(t *testing.T) {
+	root := t.TempDir()
+	writeCodeSymbolFile(t, filepath.Join(root, "ok.go"), `package demo
+
+func Alpha() {}
+`)
+	writeCodeSymbolFile(t, filepath.Join(root, "broken.go"), `package demo
+
+func Broken( {
+`)
+	tool := NewCodeSymbolsTool(NewPathGuard(root, nil))
+
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"operation":"diagnostics"}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("Execute returned error result: %s", res.Output)
+	}
+
+	var out codeSymbolsOutput
+	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, res.Output)
+	}
+	if out.Operation != "diagnostics" || out.Status != "diagnostics_found" || out.Count == 0 {
+		t.Fatalf("output = %+v, want diagnostics_found with parse errors", out)
+	}
+	if out.Receipt.Operation != "diagnostics" || out.Receipt.Count != out.Count || out.Receipt.ErrorCount != len(out.Errors) {
+		t.Fatalf("receipt = %+v, want diagnostics receipt", out.Receipt)
+	}
+	if len(out.Errors) == 0 || out.Errors[0].FilePath != "broken.go" || out.Errors[0].Line == 0 || out.Errors[0].Column == 0 {
+		t.Fatalf("diagnostics = %+v, want located broken.go parse diagnostic", out.Errors)
+	}
+}
+
 func TestCodeSymbolsToolWorkspaceSymbolsReportsSymlinkEscape(t *testing.T) {
 	root, sessionDir, ctx := b3b1Setup(t, "sess-code-symbols")
 	outside := t.TempDir()

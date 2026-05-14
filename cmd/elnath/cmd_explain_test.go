@@ -247,12 +247,18 @@ func TestExplainControlSurfacesJSON(t *testing.T) {
 	if !strings.Contains(codeIntelligence.notes, "hover") {
 		t.Fatalf("code_intelligence notes = %q, want hover capability", codeIntelligence.notes)
 	}
+	if !strings.Contains(codeIntelligence.notes, "diagnostics") {
+		t.Fatalf("code_intelligence notes = %q, want diagnostics capability", codeIntelligence.notes)
+	}
 	scratchpad, ok := byName["scratchpad"]
 	if !ok {
 		t.Fatalf("missing control surface scratchpad in %+v", byName)
 	}
 	if !strings.Contains(scratchpad.notes, "single in_progress") {
 		t.Fatalf("scratchpad notes = %q, want single in_progress guard", scratchpad.notes)
+	}
+	if !strings.Contains(scratchpad.notes, "active_form") {
+		t.Fatalf("scratchpad notes = %q, want active_form guard", scratchpad.notes)
 	}
 	if len(out.RemainingGaps) == 0 {
 		t.Fatal("remaining_gaps empty, want honest non-complete boundary")
@@ -264,9 +270,15 @@ func TestExplainControlSurfacesJSON(t *testing.T) {
 		if strings.Contains(gap, "blocking wait state") {
 			t.Fatalf("remaining gap %q is stale after process_wait and user_question_wait", gap)
 		}
+		if strings.Contains(gap, "full runtime registry introspection remains future polish") {
+			t.Fatalf("remaining gap %q is stale after runtime status registry introspection", gap)
+		}
 	}
 	if !slices.Contains(out.RemainingGaps, "bounded process_wait supports literal watch_text; full streaming/async line-watch remains deferred") {
 		t.Fatalf("remaining_gaps = %+v, want process_wait watch_text boundary", out.RemainingGaps)
+	}
+	if !slices.Contains(out.RemainingGaps, "runtime /status now reports registry/control-surface coverage; deeper registry diagnostics remain future polish") {
+		t.Fatalf("remaining_gaps = %+v, want runtime status registry introspection boundary", out.RemainingGaps)
 	}
 }
 

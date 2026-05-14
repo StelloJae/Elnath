@@ -54,7 +54,8 @@ func TestTodoWriteTool_RejectsInvalidTodos(t *testing.T) {
 		{name: "missing todos", params: `{}`, want: "missing todos"},
 		{name: "empty content", params: `{"todos":[{"content":" ","status":"pending"}]}`, want: "content is required"},
 		{name: "bad status", params: `{"todos":[{"content":"ship","status":"blocked"}]}`, want: "status must be"},
-		{name: "multiple in progress", params: `{"todos":[{"content":"one","status":"in_progress"},{"content":"two","status":"in_progress"}]}`, want: "at most one in_progress"},
+		{name: "multiple in progress", params: `{"todos":[{"content":"one","status":"in_progress","activeForm":"doing one"},{"content":"two","status":"in_progress","activeForm":"doing two"}]}`, want: "at most one in_progress"},
+		{name: "in progress missing active form", params: `{"todos":[{"content":"ship","status":"in_progress"}]}`, want: "active_form is required"},
 	}
 
 	for _, tc := range cases {
@@ -133,6 +134,17 @@ func TestTodoWriteToolMetadata(t *testing.T) {
 	tool := NewTodoWriteTool()
 	if tool.Name() != "todo_write" {
 		t.Fatalf("Name() = %q, want todo_write", tool.Name())
+	}
+	if !strings.Contains(tool.Description(), "active_form") {
+		t.Fatalf("Description() = %q, want active_form guidance", tool.Description())
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(tool.Schema(), &schema); err != nil {
+		t.Fatalf("Schema unmarshal: %v", err)
+	}
+	schemaText := string(tool.Schema())
+	if !strings.Contains(schemaText, "Required when status is in_progress") {
+		t.Fatalf("Schema() = %s, want in_progress active_form requirement", schemaText)
 	}
 	if !tool.IsConcurrencySafe(nil) {
 		t.Fatal("todo_write should be concurrency-safe")

@@ -8,6 +8,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/printer"
+	"go/scanner"
 	"go/token"
 	"io/fs"
 	"os"
@@ -37,14 +38,14 @@ func NewCodeSymbolsTool(guard *PathGuard) *CodeSymbolsTool {
 func (t *CodeSymbolsTool) Name() string { return CodeSymbolsToolName }
 
 func (t *CodeSymbolsTool) Description() string {
-	return "Inspect Go code symbols and file outlines without starting a language server. Supports document_symbols for one Go file, workspace_symbols across Go files, exact-name definition lookup, Go identifier references, and basic Go hover signatures."
+	return "Inspect Go code symbols and file outlines without starting a language server. Supports document_symbols for one Go file, workspace_symbols across Go files, exact-name definition lookup, Go identifier references, basic Go hover signatures, and Go syntax diagnostics."
 }
 
 func (t *CodeSymbolsTool) Schema() json.RawMessage {
 	return Object(map[string]Property{
-		"operation":   StringEnum("Operation to perform.", "document_symbols", "workspace_symbols", "definition", "references", "hover"),
-		"file_path":   String("Go file path for document_symbols."),
-		"path":        String("Base directory for workspace_symbols, definition, references, or hover. Defaults to current workspace."),
+		"operation":   StringEnum("Operation to perform.", "document_symbols", "workspace_symbols", "definition", "references", "hover", "diagnostics"),
+		"file_path":   String("Go file path for document_symbols or diagnostics."),
+		"path":        String("Base directory for workspace_symbols, definition, references, hover, or diagnostics. Defaults to current workspace."),
 		"query":       String("Optional case-insensitive symbol name filter for workspace_symbols; required exact symbol name for definition, references, or hover unless file_path, line, and column identify a Go symbol."),
 		"line":        Int("Optional 1-based line used with file_path and column to derive a Go identifier for definition, references, or hover."),
 		"column":      Int("Optional 1-based column used with file_path and line to derive a Go identifier for definition, references, or hover."),
@@ -62,7 +63,7 @@ func (t *CodeSymbolsTool) Scope(params json.RawMessage) ToolScope {
 		return ConservativeScope()
 	}
 	switch strings.ToLower(strings.TrimSpace(input.Operation)) {
-	case "document_symbols", "workspace_symbols", "definition", "references", "hover":
+	case "document_symbols", "workspace_symbols", "definition", "references", "hover", "diagnostics":
 		return ToolScope{ReadPaths: []string{t.guard.WorkDir()}}
 	default:
 		return ConservativeScope()
@@ -116,6 +117,8 @@ type codeSymbolsReceipt struct {
 
 type codeSymbolError struct {
 	FilePath string `json:"file_path"`
+	Line     int    `json:"line,omitempty"`
+	Column   int    `json:"column,omitempty"`
 	Error    string `json:"error"`
 }
 
@@ -150,8 +153,10 @@ func (t *CodeSymbolsTool) Execute(ctx context.Context, params json.RawMessage) (
 		return t.executeReferences(ctx, input)
 	case "hover":
 		return t.executeHover(ctx, input)
+	case "diagnostics":
+		return t.executeDiagnostics(ctx, input)
 	default:
-		return ErrorResult("code_symbols: operation must be document_symbols, workspace_symbols, definition, references, or hover"), nil
+		return ErrorResult("code_symbols: operation must be document_symbols, workspace_symbols, definition, references, hover, or diagnostics"), nil
 	}
 }
 
@@ -407,6 +412,97 @@ func (t *CodeSymbolsTool) executeReferences(ctx context.Context, input codeSymbo
 	})
 }
 
+func (t *CodeSymbolsTool) executeDiagnostics(ctx context.Context, input codeSymbolsInput) (*Result, error) {
+	sessionBase, err := SessionWorkDirFromContext(ctx, t.guard)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("code_symbols: session workspace: %v", err)), nil
+	}
+	maxResults := normalizeCodeSymbolMax(input.MaxResults)
+	if strings.TrimSpace(input.FilePath) != "" {
+		abs, err := resolveFileTarget(t.guard, ctx, input.FilePath)
+		if err != nil {
+			return ErrorResult("code_symbols: " + err.Error()), nil
+		}
+		if filepath.Ext(abs) != ".go" {
+			return codeSymbolsJSON(codeSymbolsOutput{
+				Operation: "diagnostics",
+				Status:    "unsupported_language",
+				FilePath:  relPath(sessionBase, abs),
+				Language:  "unsupported",
+			})
+		}
+		diagnostics := trimCodeSymbolErrors(parseGoDiagnostics(abs, sessionBase), maxResults)
+		return codeSymbolsJSON(codeSymbolsOutput{
+			Operation: "diagnostics",
+			Status:    codeDiagnosticsStatus(diagnostics),
+			Language:  "go",
+			FilePath:  relPath(sessionBase, abs),
+			Count:     len(diagnostics),
+			Errors:    diagnostics,
+		})
+	}
+
+	searchBase, err := resolveSearchBase(t.guard, ctx, sessionBase, input.Path)
+	if err != nil {
+		return ErrorResult("code_symbols: " + err.Error()), nil
+	}
+	var candidates []codeSymbolFileCandidate
+	var diagnostics []codeSymbolError
+	truncated := false
+	walkErr := filepath.WalkDir(searchBase, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			diagnostics = append(diagnostics, codeSymbolError{FilePath: relPath(sessionBase, path), Error: err.Error()})
+			return nil
+		}
+		if d.IsDir() {
+			if shouldSkipCodeSymbolDir(path, searchBase, d.Name()) {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(path) != ".go" {
+			return nil
+		}
+		rel := relPath(sessionBase, path)
+		scoped, err := t.guard.ResolveSessionScoped(sessionBase, rel)
+		if err != nil {
+			diagnostics = append(diagnostics, codeSymbolError{FilePath: rel, Error: err.Error()})
+			return nil
+		}
+		candidates = append(candidates, codeSymbolFileCandidate{AbsPath: scoped, RelPath: rel})
+		return nil
+	})
+	if walkErr != nil {
+		return ErrorResult(fmt.Sprintf("code_symbols: walk: %v", walkErr)), nil
+	}
+	gitIgnored := gitIgnoredCodeSymbolPaths(ctx, sessionBase, candidates)
+	for _, candidate := range candidates {
+		if gitIgnored[filepath.ToSlash(candidate.RelPath)] {
+			continue
+		}
+		for _, diagnostic := range parseGoDiagnostics(candidate.AbsPath, sessionBase) {
+			if len(diagnostics) >= maxResults {
+				truncated = true
+				break
+			}
+			diagnostics = append(diagnostics, diagnostic)
+		}
+		if truncated {
+			break
+		}
+	}
+	sortCodeSymbolErrors(diagnostics)
+	return codeSymbolsJSON(codeSymbolsOutput{
+		Operation: "diagnostics",
+		Status:    codeDiagnosticsStatus(diagnostics),
+		Language:  "go",
+		Path:      relPath(sessionBase, searchBase),
+		Count:     len(diagnostics),
+		Truncated: truncated,
+		Errors:    diagnostics,
+	})
+}
+
 func (t *CodeSymbolsTool) collectDefinitions(ctx context.Context, sessionBase string, searchBase string, input codeSymbolsInput) (codeSymbolsOutput, error) {
 	query, err := t.resolveCodeSymbolQuery(ctx, sessionBase, input, "definition")
 	if err != nil {
@@ -643,6 +739,41 @@ func parseGoReferences(absPath, basePath, query string) ([]codeSymbolItem, error
 	return references, nil
 }
 
+func parseGoDiagnostics(absPath, basePath string) []codeSymbolError {
+	src, err := os.ReadFile(absPath)
+	if err != nil {
+		return []codeSymbolError{{FilePath: relPath(basePath, absPath), Error: err.Error()}}
+	}
+	fset := token.NewFileSet()
+	_, err = parser.ParseFile(fset, absPath, src, parser.AllErrors)
+	if err == nil {
+		return nil
+	}
+	switch parseErr := err.(type) {
+	case scanner.ErrorList:
+		parseErr.Sort()
+		out := make([]codeSymbolError, 0, len(parseErr))
+		for _, item := range parseErr {
+			out = append(out, codeSymbolError{
+				FilePath: relPath(basePath, absPath),
+				Line:     item.Pos.Line,
+				Column:   item.Pos.Column,
+				Error:    item.Msg,
+			})
+		}
+		return out
+	case *scanner.Error:
+		return []codeSymbolError{{
+			FilePath: relPath(basePath, absPath),
+			Line:     parseErr.Pos.Line,
+			Column:   parseErr.Pos.Column,
+			Error:    parseErr.Msg,
+		}}
+	default:
+		return []codeSymbolError{{FilePath: relPath(basePath, absPath), Error: err.Error()}}
+	}
+}
+
 func goIdentifierAtPosition(absPath string, line, column int) (string, error) {
 	src, err := os.ReadFile(absPath)
 	if err != nil {
@@ -747,6 +878,36 @@ func sortCodeSymbols(symbols []codeSymbolItem) {
 		}
 		return symbols[i].Name < symbols[j].Name
 	})
+}
+
+func sortCodeSymbolErrors(errors []codeSymbolError) {
+	sort.Slice(errors, func(i, j int) bool {
+		if errors[i].FilePath != errors[j].FilePath {
+			return errors[i].FilePath < errors[j].FilePath
+		}
+		if errors[i].Line != errors[j].Line {
+			return errors[i].Line < errors[j].Line
+		}
+		if errors[i].Column != errors[j].Column {
+			return errors[i].Column < errors[j].Column
+		}
+		return errors[i].Error < errors[j].Error
+	})
+}
+
+func trimCodeSymbolErrors(errors []codeSymbolError, max int) []codeSymbolError {
+	sortCodeSymbolErrors(errors)
+	if len(errors) <= max {
+		return errors
+	}
+	return errors[:max]
+}
+
+func codeDiagnosticsStatus(errors []codeSymbolError) string {
+	if len(errors) == 0 {
+		return "success"
+	}
+	return "diagnostics_found"
 }
 
 func matchesDefinitionSymbol(symbolName, query string) bool {
