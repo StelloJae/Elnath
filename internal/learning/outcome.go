@@ -215,6 +215,9 @@ type ControlToolReceipt struct {
 	WaitMS                  int      `json:"wait_ms,omitempty"`
 	WaitElapsedMS           int      `json:"wait_elapsed_ms,omitempty"`
 	WaitTimedOut            bool     `json:"wait_timed_out,omitempty"`
+	WatchText               string   `json:"watch_text,omitempty"`
+	WatchMatched            bool     `json:"watch_matched,omitempty"`
+	WatchStream             string   `json:"watch_stream,omitempty"`
 	CWD                     string   `json:"cwd,omitempty"`
 	TailBytes               int      `json:"tail_bytes,omitempty"`
 	StdoutRawBytes          int64    `json:"stdout_raw_bytes,omitempty"`
