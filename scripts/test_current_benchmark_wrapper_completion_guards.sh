@@ -330,6 +330,25 @@ JS
     echo "Modified files: lib/application.js"
     echo "Verification: go test ./... passed."
     ;;
+  v8_js_bug001_prod_with_regression)
+    mkdir -p lib test
+    cat > lib/application.js <<'JS'
+function routeError(err, next) {
+  next(err === 'router' ? null : err)
+}
+
+module.exports = { routeError }
+JS
+    cat > test/app.use.js <<'JS'
+'use strict'
+
+describe('mounted app next router', function () {
+  it('continues parent routing when child app calls next router', function () {})
+})
+JS
+    echo "Modified files: lib/application.js, test/app.use.js"
+    echo "Verification: go test ./... passed."
+    ;;
   *)
     echo "unknown FAKE_SCENARIO=${FAKE_SCENARIO}" >&2
     exit 2
@@ -537,6 +556,25 @@ assert data["verification_passed"] is True, data
 assert data["failure_family"] == "incomplete_patch", data
 assert "lib/application.js" in data["changed_files"], data
 assert "focused test" in data["notes"] or "regression" in data["notes"], data
+'
+
+run_wrapper_case generic_prod_only_without_required_test "$TMP_DIR/v8-js-bug001-prod-only.json" "$SOURCE_REPO" "V8-JS-BUG-001" "Fix Express mounted-app next('\''router'\'') propagation so the parent router continues to the next matching middleware without treating the sentinel as a real error."
+assert_json_case "$TMP_DIR/v8-js-bug001-prod-only.json" '
+assert data["success"] is False, data
+assert data["verification_passed"] is True, data
+assert data["failure_family"] == "incomplete_patch", data
+assert "lib/application.js" in data["changed_files"], data
+assert "V8-JS-BUG-001" in data["notes"], data
+assert "regression" in data["notes"] or "test" in data["notes"], data
+'
+
+run_wrapper_case v8_js_bug001_prod_with_regression "$TMP_DIR/v8-js-bug001-prod-with-regression.json" "$SOURCE_REPO" "V8-JS-BUG-001" "Fix Express mounted-app next('\''router'\'') propagation so the parent router continues to the next matching middleware without treating the sentinel as a real error."
+assert_json_case "$TMP_DIR/v8-js-bug001-prod-with-regression.json" '
+assert data["success"] is True, data
+assert data["verification_passed"] is True, data
+assert data["failure_family"] == "", data
+assert "lib/application.js" in data["changed_files"], data
+assert "test/app.use.js" in data["changed_files"], data
 '
 
 run_wrapper_case go_bug002_unbounded_wait_test "$TMP_DIR/go-bug002-unbounded-wait-test.json" "$SOURCE_REPO" "GO-BUG-002"
