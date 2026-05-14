@@ -175,6 +175,8 @@ type completionControlToolReceipt struct {
 	RegistryBacked          bool     `json:"registry_backed,omitempty"`
 	ExecutionAvailable      bool     `json:"execution_available,omitempty"`
 	ExecutionPolicy         string   `json:"execution_policy,omitempty"`
+	CommandIntent           string   `json:"command_intent,omitempty"`
+	IntentSource            string   `json:"intent_source,omitempty"`
 	FollowupTool            string   `json:"followup_tool,omitempty"`
 	TaskID                  int64    `json:"task_id,omitempty"`
 	ParentTaskID            int64    `json:"parent_task_id,omitempty"`
@@ -857,6 +859,8 @@ func controlToolReceiptFromOutput(toolName, output string) (completionControlToo
 	receipt.Tool = strings.TrimSpace(receipt.Tool)
 	receipt.Action = strings.TrimSpace(receipt.Action)
 	receipt.ExecutionPolicy = strings.TrimSpace(receipt.ExecutionPolicy)
+	receipt.CommandIntent = strings.TrimSpace(receipt.CommandIntent)
+	receipt.IntentSource = strings.TrimSpace(receipt.IntentSource)
 	receipt.FollowupTool = strings.TrimSpace(receipt.FollowupTool)
 	receipt.RequestID = strings.TrimSpace(receipt.RequestID)
 	receipt.Status = strings.TrimSpace(receipt.Status)

@@ -247,6 +247,8 @@ func completionControlToolReceiptsToAgentic(src []completionControlToolReceipt) 
 			RegistryBacked:          receipt.RegistryBacked,
 			ExecutionAvailable:      receipt.ExecutionAvailable,
 			ExecutionPolicy:         receipt.ExecutionPolicy,
+			CommandIntent:           receipt.CommandIntent,
+			IntentSource:            receipt.IntentSource,
 			FollowupTool:            receipt.FollowupTool,
 			TaskID:                  receipt.TaskID,
 			ParentTaskID:            receipt.ParentTaskID,
