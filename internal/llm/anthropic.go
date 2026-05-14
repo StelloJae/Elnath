@@ -294,6 +294,7 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req Request, cb func(Str
 
 	if resp.StatusCode != http.StatusOK {
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		providerErr := NewProviderHTTPError(p.Name(), resp.StatusCode, errBody)
 		if dumpPath := os.Getenv("ELNATH_ANTHROPIC_DUMP"); dumpPath != "" {
 			// On a 1M-suffix 429 the handler below recursively re-enters
 			// Stream with the base model; writing both failures to the
@@ -315,12 +316,12 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req Request, cb func(Str
 				fallbackReq.Model = apiModelID(effectiveModel)
 				return p.Stream(ctx, fallbackReq, cb)
 			}
-			inner := fmt.Errorf("anthropic: rate limit (429): %s", errBody)
+			inner := fmt.Errorf("anthropic: rate limit (429): %w", providerErr)
 			return userfacingerr.Wrap(userfacingerr.ELN080, inner, "anthropic 429")
 		case 529:
-			return fmt.Errorf("anthropic: overloaded (529): %s", errBody)
+			return fmt.Errorf("anthropic: overloaded (529): %w", providerErr)
 		default:
-			return fmt.Errorf("anthropic: status %d: %s", resp.StatusCode, errBody)
+			return fmt.Errorf("anthropic: status %d: %w", resp.StatusCode, providerErr)
 		}
 	}
 

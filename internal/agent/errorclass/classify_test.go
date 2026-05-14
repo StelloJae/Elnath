@@ -24,6 +24,33 @@ func TestClassify_RateLimit429(t *testing.T) {
 	assertClassification(t, got, RateLimit, Recovery{Retryable: true, ShouldRotateCred: true})
 }
 
+type providerMetadataErr struct {
+	msg        string
+	provider   string
+	statusCode int
+	code       string
+}
+
+func (e providerMetadataErr) Error() string { return e.msg }
+
+func (e providerMetadataErr) ProviderName() string { return e.provider }
+
+func (e providerMetadataErr) HTTPStatusCode() int { return e.statusCode }
+
+func (e providerMetadataErr) ProviderErrorCode() string { return e.code }
+
+func TestClassify_UsesProviderErrorMetadata(t *testing.T) {
+	err := providerMetadataErr{
+		msg:        "upstream rejected request",
+		provider:   "responses",
+		statusCode: 429,
+		code:       "rate_limit_exceeded",
+	}
+
+	got := Classify(fmt.Errorf("outer: %w", err), Context{})
+	assertClassification(t, got, RateLimit, Recovery{Retryable: true, ShouldRotateCred: true})
+}
+
 func TestClassify_RateLimitRaw429WithProviderContext(t *testing.T) {
 	got := Classify(errors.New("upstream returned 429"), Context{Provider: "mock"})
 	assertClassification(t, got, RateLimit, Recovery{Retryable: true, ShouldRotateCred: true})
