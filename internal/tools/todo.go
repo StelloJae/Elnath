@@ -149,6 +149,9 @@ func (t *TodoWriteTool) Execute(_ context.Context, params json.RawMessage) (*Res
 		if activeForm == "" {
 			activeForm = strings.TrimSpace(item.ActiveFormCamel)
 		}
+		if status == "in_progress" && activeForm == "" {
+			return ErrorResult(fmt.Sprintf("todo_write: todos[%d].active_form is required for in_progress", i)), nil
+		}
 		todos = append(todos, todoItemOutput{
 			Content:    content,
 			Status:     status,

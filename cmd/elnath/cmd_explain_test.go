@@ -254,6 +254,9 @@ func TestExplainControlSurfacesJSON(t *testing.T) {
 	if !strings.Contains(scratchpad.notes, "single in_progress") {
 		t.Fatalf("scratchpad notes = %q, want single in_progress guard", scratchpad.notes)
 	}
+	if !strings.Contains(scratchpad.notes, "active_form") {
+		t.Fatalf("scratchpad notes = %q, want active_form guard", scratchpad.notes)
+	}
 	if len(out.RemainingGaps) == 0 {
 		t.Fatal("remaining_gaps empty, want honest non-complete boundary")
 	}

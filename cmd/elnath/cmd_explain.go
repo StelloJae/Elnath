@@ -302,7 +302,7 @@ func controlSurfaceManifest() []controlSurfaceManifestEntry {
 			Status:        "implemented",
 			Tools:         []string{"todo_write"},
 			ReceiptBacked: true,
-			Notes:         "session task scratchpad with single in_progress guard and verification nudge receipt",
+			Notes:         "session task scratchpad with single in_progress and active_form guards plus verification nudge receipt",
 		},
 		{
 			Name:          "code_intelligence",
