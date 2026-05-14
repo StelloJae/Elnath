@@ -68,7 +68,7 @@ func TestExecutionRuntimeRegistersAskUserQuestionTool(t *testing.T) {
 func TestExecutionRuntimeRegistersProcessTools(t *testing.T) {
 	rt := newTestExecutionRuntime(t, &countingProvider{})
 
-	for _, name := range []string{tools.ProcessStartToolName, tools.ProcessMonitorToolName, tools.ProcessStopToolName} {
+	for _, name := range []string{tools.ProcessStartToolName, tools.ProcessMonitorToolName, tools.ProcessWaitToolName, tools.ProcessStopToolName} {
 		tool, ok := rt.reg.Get(name)
 		if !ok {
 			t.Fatalf("%s tool missing", name)

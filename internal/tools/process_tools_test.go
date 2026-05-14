@@ -68,6 +68,44 @@ type processMonitorTestOutput struct {
 	} `json:"receipt"`
 }
 
+type processWaitTestOutput struct {
+	ProcessID     int64  `json:"process_id"`
+	Found         bool   `json:"found"`
+	Status        string `json:"status"`
+	Terminal      bool   `json:"terminal"`
+	CommandIntent string `json:"command_intent"`
+	IntentSource  string `json:"intent_source"`
+	TimedOut      bool   `json:"timed_out"`
+	TimeoutMS     int    `json:"timeout_ms"`
+	ExitCode      *int   `json:"exit_code"`
+	StdoutTail    string `json:"stdout_tail"`
+	StderrTail    string `json:"stderr_tail"`
+	WaitMS        int    `json:"wait_ms"`
+	WaitElapsedMS int    `json:"wait_elapsed_ms"`
+	WaitTimedOut  bool   `json:"wait_timed_out"`
+	Receipt       struct {
+		Tool            string `json:"tool"`
+		Action          string `json:"action"`
+		ReadOnly        bool   `json:"read_only"`
+		Persistent      bool   `json:"persistent"`
+		ExecutionPolicy string `json:"execution_policy"`
+		CommandIntent   string `json:"command_intent"`
+		IntentSource    string `json:"intent_source"`
+		ProcessID       int64  `json:"process_id"`
+		Status          string `json:"status"`
+		Terminal        bool   `json:"terminal"`
+		TimedOut        bool   `json:"timed_out"`
+		TimeoutMS       int    `json:"timeout_ms"`
+		ExitCode        *int   `json:"exit_code"`
+		Found           bool   `json:"found"`
+		TailBytes       int    `json:"tail_bytes"`
+		WaitMS          int    `json:"wait_ms"`
+		WaitElapsedMS   int    `json:"wait_elapsed_ms"`
+		WaitTimedOut    bool   `json:"wait_timed_out"`
+		FollowupTool    string `json:"followup_tool"`
+	} `json:"receipt"`
+}
+
 type processStopTestOutput struct {
 	ProcessID int64  `json:"process_id"`
 	Found     bool   `json:"found"`
@@ -125,6 +163,26 @@ func executeProcessMonitor(t *testing.T, tool *ProcessMonitorTool, id int64, max
 		t.Fatalf("Execute returned error: %s", res.Output)
 	}
 	var out processMonitorTestOutput
+	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, res.Output)
+	}
+	return out
+}
+
+func executeProcessWait(t *testing.T, tool *ProcessWaitTool, id int64, waitMS int, maxChars int) processWaitTestOutput {
+	t.Helper()
+	raw, err := json.Marshal(map[string]any{"process_id": id, "wait_ms": waitMS, "max_chars": maxChars})
+	if err != nil {
+		t.Fatalf("marshal input: %v", err)
+	}
+	res, err := tool.Execute(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("Execute returned error: %s", res.Output)
+	}
+	var out processWaitTestOutput
 	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
 		t.Fatalf("output is not JSON: %v\n%s", err, res.Output)
 	}
@@ -268,15 +326,86 @@ func TestProcessToolsReportTimeoutMonitorReceipt(t *testing.T) {
 	}
 }
 
+func TestProcessWaitReturnsTerminalSnapshot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process group cleanup not implemented on windows")
+	}
+	mgr := NewProcessManager(NewPathGuard(t.TempDir(), nil))
+	t.Cleanup(func() { _ = mgr.Close(context.Background()) })
+
+	start := executeProcessStart(t, NewProcessStartTool(mgr), map[string]any{
+		"command":    "printf done",
+		"timeout_ms": 2000,
+		"intent":     "diagnostic",
+	})
+	wait := executeProcessWait(t, NewProcessWaitTool(mgr), start.ProcessID, 1000, 1000)
+	if !wait.Found || wait.Status != "completed" || !wait.Terminal || wait.WaitTimedOut {
+		t.Fatalf("wait = %+v, want completed terminal without wait timeout", wait)
+	}
+	if wait.ExitCode == nil || *wait.ExitCode != 0 || !strings.Contains(wait.StdoutTail, "done") {
+		t.Fatalf("wait exit/output = exit:%v stdout:%q", wait.ExitCode, wait.StdoutTail)
+	}
+	if wait.CommandIntent != "diagnostic" || wait.IntentSource != "explicit" || wait.Receipt.CommandIntent != "diagnostic" || wait.Receipt.IntentSource != "explicit" {
+		t.Fatalf("wait intent = %+v receipt=%+v", wait, wait.Receipt)
+	}
+	if wait.Receipt.Tool != ProcessWaitToolName || wait.Receipt.Action != "wait" || wait.Receipt.ExecutionPolicy != "session_process_wait" {
+		t.Fatalf("wait receipt identity = %+v", wait.Receipt)
+	}
+	if !wait.Receipt.ReadOnly || wait.Receipt.Persistent || !wait.Receipt.Found || !wait.Receipt.Terminal || wait.Receipt.WaitTimedOut {
+		t.Fatalf("wait receipt flags = %+v", wait.Receipt)
+	}
+	if wait.Receipt.WaitMS != 1000 || wait.Receipt.WaitElapsedMS < 0 || wait.Receipt.FollowupTool != "" {
+		t.Fatalf("wait receipt wait/followup = %+v", wait.Receipt)
+	}
+}
+
+func TestProcessWaitReportsRunningWhenWaitExpires(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process group cleanup not implemented on windows")
+	}
+	mgr := NewProcessManager(NewPathGuard(t.TempDir(), nil))
+	t.Cleanup(func() { _ = mgr.Close(context.Background()) })
+
+	start := executeProcessStart(t, NewProcessStartTool(mgr), map[string]any{
+		"command":    "sleep 10",
+		"timeout_ms": 10000,
+		"intent":     "focused_verify",
+	})
+	wait := executeProcessWait(t, NewProcessWaitTool(mgr), start.ProcessID, 20, 1000)
+	if !wait.Found || wait.Status != "running" || wait.Terminal || !wait.WaitTimedOut || wait.TimedOut {
+		t.Fatalf("wait = %+v, want running non-terminal wait timeout", wait)
+	}
+	if wait.Receipt.Tool != ProcessWaitToolName || !wait.Receipt.ReadOnly || wait.Receipt.Persistent || !wait.Receipt.WaitTimedOut {
+		t.Fatalf("wait receipt = %+v, want read-only timed-out wait", wait.Receipt)
+	}
+	if wait.Receipt.FollowupTool != ProcessWaitToolName {
+		t.Fatalf("wait followup tool = %q, want %q", wait.Receipt.FollowupTool, ProcessWaitToolName)
+	}
+
+	raw, err := json.Marshal(map[string]any{"process_id": start.ProcessID, "reason": "cleanup"})
+	if err != nil {
+		t.Fatalf("marshal stop: %v", err)
+	}
+	if res, err := NewProcessStopTool(mgr).Execute(context.Background(), raw); err != nil || res.IsError {
+		if err != nil {
+			t.Fatalf("cleanup stop error = %v", err)
+		}
+		t.Fatalf("cleanup stop returned error: %s", res.Output)
+	}
+}
+
 func TestProcessExecutionPolicySnapshot(t *testing.T) {
 	policy := ProcessExecutionPolicySnapshot()
 	if policy.DefaultTimeoutMS != 600000 || policy.MaxTimeoutMS != 3600000 || policy.KillGraceMS != 2000 {
 		t.Fatalf("timeout policy = %+v, want process default/max/kill-grace milliseconds", policy)
 	}
+	if policy.DefaultWaitMS != 1000 || policy.MaxWaitMS != 60000 {
+		t.Fatalf("wait policy = %+v, want default/max wait milliseconds", policy)
+	}
 	if policy.DefaultTailBytes != processDefaultTail || policy.MaxTailBytes != processMaxTail {
 		t.Fatalf("tail policy = %+v, want default/max tail bytes", policy)
 	}
-	wantFields := []string{"status", "terminal", "timed_out", "timeout_ms", "followup_tool", "command_intent", "intent_source"}
+	wantFields := []string{"status", "terminal", "timed_out", "timeout_ms", "followup_tool", "command_intent", "intent_source", "wait_ms", "wait_elapsed_ms", "wait_timed_out"}
 	for _, field := range wantFields {
 		found := false
 		for _, got := range policy.ReceiptFields {
@@ -291,6 +420,9 @@ func TestProcessExecutionPolicySnapshot(t *testing.T) {
 	}
 	if policy.MonitorFollowupTool != ProcessMonitorToolName {
 		t.Fatalf("monitor_followup_tool = %q, want %q", policy.MonitorFollowupTool, ProcessMonitorToolName)
+	}
+	if policy.WaitFollowupTool != ProcessWaitToolName {
+		t.Fatalf("wait_followup_tool = %q, want %q", policy.WaitFollowupTool, ProcessWaitToolName)
 	}
 }
 
@@ -379,6 +511,7 @@ func TestProcessToolsAreDeferredInToolSearch(t *testing.T) {
 	reg := NewRegistry()
 	reg.Register(NewProcessStartTool(mgr))
 	reg.Register(NewProcessMonitorTool(mgr))
+	reg.Register(NewProcessWaitTool(mgr))
 	reg.Register(NewProcessStopTool(mgr))
 	search := NewToolSearchTool(reg)
 	reg.Register(search)
@@ -393,7 +526,7 @@ func TestProcessToolsAreDeferredInToolSearch(t *testing.T) {
 			}
 		}
 	}
-	for _, name := range []string{ProcessStartToolName, ProcessMonitorToolName, ProcessStopToolName} {
+	for _, name := range []string{ProcessStartToolName, ProcessMonitorToolName, ProcessWaitToolName, ProcessStopToolName} {
 		if !seen[name] {
 			t.Fatalf("ToolSearch did not return %s; matches=%+v", name, out.Matches)
 		}

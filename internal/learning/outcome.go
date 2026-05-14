@@ -212,6 +212,9 @@ type ControlToolReceipt struct {
 	ExitCode                *int     `json:"exit_code,omitempty"`
 	Found                   bool     `json:"found,omitempty"`
 	TimeoutMS               int      `json:"timeout_ms,omitempty"`
+	WaitMS                  int      `json:"wait_ms,omitempty"`
+	WaitElapsedMS           int      `json:"wait_elapsed_ms,omitempty"`
+	WaitTimedOut            bool     `json:"wait_timed_out,omitempty"`
 	CWD                     string   `json:"cwd,omitempty"`
 	TailBytes               int      `json:"tail_bytes,omitempty"`
 	StdoutRawBytes          int64    `json:"stdout_raw_bytes,omitempty"`

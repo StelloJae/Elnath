@@ -173,7 +173,7 @@ func TestBuiltinToolDescriptions(t *testing.T) {
 			contains: []string{
 				"bounded session-local background shell process",
 				"long-running commands",
-				"Use process_monitor to inspect progress",
+				"Use process_wait for bounded waits",
 				"instead of polling with sleep loops",
 			},
 		},
@@ -183,6 +183,15 @@ func TestBuiltinToolDescriptions(t *testing.T) {
 			contains: []string{
 				"Read a snapshot and bounded output tails",
 				"started by process_start",
+			},
+		},
+		{
+			name: "process_wait guidance",
+			got:  NewProcessWaitTool(processManager).Description(),
+			contains: []string{
+				"Wait briefly for a session-local background process",
+				"bounded by wait_ms",
+				"without sleep polling",
 			},
 		},
 		{
