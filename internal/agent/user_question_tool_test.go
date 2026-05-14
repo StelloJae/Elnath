@@ -101,6 +101,18 @@ func TestAskUserQuestionToolIncludesSessionIDWhenBound(t *testing.T) {
 	if output.SessionID != "sess-123" || output.Receipt.SessionID != "sess-123" {
 		t.Fatalf("session ids = output:%q receipt:%q, want sess-123", output.SessionID, output.Receipt.SessionID)
 	}
+	if !output.Answerable || output.AnswerCommand == "" || output.PendingCommand == "" {
+		t.Fatalf("answer hints = answerable:%t answer:%q pending:%q, want session-bound CLI hints", output.Answerable, output.AnswerCommand, output.PendingCommand)
+	}
+	if !strings.Contains(output.AnswerCommand, "elnath task answer --session 'sess-123' --request '"+output.RequestID+"' --answer 'ANSWER_TEXT'") {
+		t.Fatalf("AnswerCommand = %q, want task answer command", output.AnswerCommand)
+	}
+	if !strings.Contains(output.PendingCommand, "elnath explain pending-questions --session 'sess-123'") {
+		t.Fatalf("PendingCommand = %q, want pending-questions command", output.PendingCommand)
+	}
+	if output.Receipt.FollowupTool != "user_question_wait" {
+		t.Fatalf("FollowupTool = %q, want user_question_wait", output.Receipt.FollowupTool)
+	}
 }
 
 func TestAskUserQuestionToolOmitsSessionIDWhenUnbound(t *testing.T) {
@@ -121,9 +133,18 @@ func TestAskUserQuestionToolOmitsSessionIDWhenUnbound(t *testing.T) {
 	if _, ok := raw["session_id"]; ok {
 		t.Fatalf("session_id present in unbound output: %s", result.Output)
 	}
+	if raw["answerable"] != false {
+		t.Fatalf("answerable = %v, want false for unbound output", raw["answerable"])
+	}
+	if _, ok := raw["answer_command"]; ok {
+		t.Fatalf("answer_command present in unbound output: %s", result.Output)
+	}
 	receipt, _ := raw["receipt"].(map[string]any)
 	if _, ok := receipt["session_id"]; ok {
 		t.Fatalf("receipt session_id present in unbound output: %s", result.Output)
+	}
+	if _, ok := receipt["followup_tool"]; ok {
+		t.Fatalf("receipt followup_tool present in unbound output: %s", result.Output)
 	}
 }
 

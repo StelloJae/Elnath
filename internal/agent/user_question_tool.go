@@ -56,6 +56,9 @@ type askUserQuestionToolOutput struct {
 	TimeoutSeconds int                    `json:"timeout_seconds"`
 	RequestID      string                 `json:"request_id"`
 	SessionID      string                 `json:"session_id,omitempty"`
+	Answerable     bool                   `json:"answerable"`
+	AnswerCommand  string                 `json:"answer_command,omitempty"`
+	PendingCommand string                 `json:"pending_command,omitempty"`
 	Instruction    string                 `json:"instruction"`
 	Receipt        askUserQuestionReceipt `json:"receipt"`
 }
@@ -72,6 +75,7 @@ type askUserQuestionReceipt struct {
 	TimeoutSeconds  int    `json:"timeout_seconds"`
 	RequestID       string `json:"request_id"`
 	SessionID       string `json:"session_id,omitempty"`
+	FollowupTool    string `json:"followup_tool,omitempty"`
 }
 
 func (t *AskUserQuestionTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
@@ -96,6 +100,11 @@ func (t *AskUserQuestionTool) Execute(ctx context.Context, params json.RawMessag
 		SessionID:      tools.SessionIDFrom(ctx),
 		Instruction:    "Stop and ask the user this question; do not guess an answer or continue with assumptions.",
 	}
+	if output.SessionID != "" {
+		output.Answerable = true
+		output.AnswerCommand = buildUserQuestionAnswerCommand(output.SessionID, output.RequestID)
+		output.PendingCommand = buildPendingUserQuestionsCommand(output.SessionID)
+	}
 	if input.AllowFreeText != nil {
 		output.AllowFreeText = *input.AllowFreeText
 	}
@@ -112,12 +121,27 @@ func (t *AskUserQuestionTool) Execute(ctx context.Context, params json.RawMessag
 		RequestID:       output.RequestID,
 		SessionID:       output.SessionID,
 	}
+	if output.Answerable {
+		output.Receipt.FollowupTool = "user_question_wait"
+	}
 
 	raw, err := json.Marshal(output)
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("ask_user_question: marshal output: %v", err)), nil
 	}
 	return tools.SuccessResult(string(raw)), nil
+}
+
+func buildUserQuestionAnswerCommand(sessionID, requestID string) string {
+	return "elnath task answer --session " + shellQuoteUserQuestionArg(sessionID) + " --request " + shellQuoteUserQuestionArg(requestID) + " --answer 'ANSWER_TEXT'"
+}
+
+func buildPendingUserQuestionsCommand(sessionID string) string {
+	return "elnath explain pending-questions --session " + shellQuoteUserQuestionArg(sessionID)
+}
+
+func shellQuoteUserQuestionArg(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 func cleanUserQuestionOptions(options []string) []string {
