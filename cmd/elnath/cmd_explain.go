@@ -226,7 +226,7 @@ func controlSurfacePolicyViewForRuntime() controlSurfacePolicyView {
 			"UI-level answer collection remains outside the runtime; request/list/wait/answer receipts are implemented",
 			"bounded self-correction is intentionally closed-enum and not broad silent self-healing",
 			"bounded process_wait supports literal watch_text; full streaming/async line-watch remains deferred",
-			"full LSP lifecycle remains deferred; code_symbols is the current Go-native code-intelligence hook",
+			"full LSP lifecycle remains deferred; code_symbols is the current Go-native symbols/definitions/references/hover hook",
 			"control-surface view is manifest-backed; full runtime registry introspection remains future polish",
 		},
 	}
@@ -309,7 +309,7 @@ func controlSurfaceManifest() []controlSurfaceManifestEntry {
 			Status:        "partial",
 			Tools:         []string{"code_symbols"},
 			ReceiptBacked: true,
-			Notes:         "Go-native symbol lookup; full LSP lifecycle is deferred",
+			Notes:         "Go-native symbols, definitions, references, and hover signatures; full LSP lifecycle is deferred",
 		},
 	}
 }
