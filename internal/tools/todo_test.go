@@ -54,6 +54,7 @@ func TestTodoWriteTool_RejectsInvalidTodos(t *testing.T) {
 		{name: "missing todos", params: `{}`, want: "missing todos"},
 		{name: "empty content", params: `{"todos":[{"content":" ","status":"pending"}]}`, want: "content is required"},
 		{name: "bad status", params: `{"todos":[{"content":"ship","status":"blocked"}]}`, want: "status must be"},
+		{name: "multiple in progress", params: `{"todos":[{"content":"one","status":"in_progress"},{"content":"two","status":"in_progress"}]}`, want: "at most one in_progress"},
 	}
 
 	for _, tc := range cases {

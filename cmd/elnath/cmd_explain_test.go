@@ -189,6 +189,7 @@ func TestExplainControlSurfacesJSON(t *testing.T) {
 			Tools                  []string `json:"tools"`
 			ToolSearchDiscoverable bool     `json:"tool_search_discoverable"`
 			ReceiptBacked          bool     `json:"receipt_backed"`
+			Notes                  string   `json:"notes"`
 		} `json:"surfaces"`
 		RemainingGaps []string `json:"remaining_gaps"`
 	}
@@ -200,6 +201,7 @@ func TestExplainControlSurfacesJSON(t *testing.T) {
 		toolSearchDiscoverable bool
 		receiptBacked          bool
 		toolCount              int
+		notes                  string
 	}{}
 	for _, surface := range out.Surfaces {
 		byName[surface.Name] = struct {
@@ -207,11 +209,13 @@ func TestExplainControlSurfacesJSON(t *testing.T) {
 			toolSearchDiscoverable bool
 			receiptBacked          bool
 			toolCount              int
+			notes                  string
 		}{
 			status:                 surface.Status,
 			toolSearchDiscoverable: surface.ToolSearchDiscoverable,
 			receiptBacked:          surface.ReceiptBacked,
 			toolCount:              len(surface.Tools),
+			notes:                  surface.Notes,
 		}
 	}
 	for _, name := range []string{"discovery", "task", "schedule", "plan", "worktree", "process", "skill", "command", "scratchpad"} {
@@ -236,6 +240,19 @@ func TestExplainControlSurfacesJSON(t *testing.T) {
 	}
 	if codeIntelligence.status != "partial" || !codeIntelligence.toolSearchDiscoverable || !codeIntelligence.receiptBacked || codeIntelligence.toolCount != 1 {
 		t.Fatalf("code_intelligence surface = %+v, want partial ToolSearch-discoverable receipt-backed with one tool", codeIntelligence)
+	}
+	if !strings.Contains(codeIntelligence.notes, "references") {
+		t.Fatalf("code_intelligence notes = %q, want references capability", codeIntelligence.notes)
+	}
+	if !strings.Contains(codeIntelligence.notes, "hover") {
+		t.Fatalf("code_intelligence notes = %q, want hover capability", codeIntelligence.notes)
+	}
+	scratchpad, ok := byName["scratchpad"]
+	if !ok {
+		t.Fatalf("missing control surface scratchpad in %+v", byName)
+	}
+	if !strings.Contains(scratchpad.notes, "single in_progress") {
+		t.Fatalf("scratchpad notes = %q, want single in_progress guard", scratchpad.notes)
 	}
 	if len(out.RemainingGaps) == 0 {
 		t.Fatal("remaining_gaps empty, want honest non-complete boundary")

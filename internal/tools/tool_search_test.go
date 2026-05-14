@@ -293,7 +293,7 @@ func TestToolSearchFindsCodeSymbolsAsDeferredCodeIntelligence(t *testing.T) {
 	search := NewToolSearchTool(reg)
 	reg.Register(search)
 
-	out := executeToolSearch(t, search, `{"query":"symbols outline code intelligence","max_results":5}`)
+	out := executeToolSearch(t, search, `{"query":"symbols references hover code intelligence","max_results":5}`)
 
 	if len(out.Matches) != 1 {
 		t.Fatalf("matches len = %d, want 1: %+v", len(out.Matches), out.Matches)
@@ -307,6 +307,12 @@ func TestToolSearchFindsCodeSymbolsAsDeferredCodeIntelligence(t *testing.T) {
 	}
 	if !match.ConcurrencySafe || !match.Reversible {
 		t.Fatalf("metadata = %+v, want read-only", match)
+	}
+	if !strings.Contains(match.SchemaPreview, "references") {
+		t.Fatalf("schema preview = %q, want references operation discoverable", match.SchemaPreview)
+	}
+	if !strings.Contains(match.SchemaPreview, "hover") {
+		t.Fatalf("schema preview = %q, want hover operation discoverable", match.SchemaPreview)
 	}
 }
 

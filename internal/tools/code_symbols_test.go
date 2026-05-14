@@ -313,6 +313,176 @@ func TestCodeSymbolsToolDefinitionRequiresQuery(t *testing.T) {
 	}
 }
 
+func TestCodeSymbolsToolReferencesFindsGoIdentifierUses(t *testing.T) {
+	root := t.TempDir()
+	writeCodeSymbolFile(t, filepath.Join(root, "worker.go"), `package demo
+
+type Worker struct{}
+
+func (w *Worker) Run() error {
+	return nil
+}
+
+func Use(worker *Worker) error {
+	return worker.Run()
+}
+`)
+	writeCodeSymbolFile(t, filepath.Join(root, "other.go"), `package demo
+
+func UseAgain(worker *Worker) error {
+	return worker.Run()
+}
+`)
+	tool := NewCodeSymbolsTool(NewPathGuard(root, nil))
+
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"operation":"references","query":"Worker.Run"}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("Execute returned error result: %s", res.Output)
+	}
+
+	var out codeSymbolsOutput
+	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, res.Output)
+	}
+	if out.Operation != "references" || out.Status != "success" || out.Query != "Worker.Run" {
+		t.Fatalf("output = %+v, want successful Worker.Run references", out)
+	}
+	if out.Receipt.Operation != "references" || out.Receipt.Count != out.Count {
+		t.Fatalf("receipt = %+v, want references receipt", out.Receipt)
+	}
+	if out.Count != 3 {
+		t.Fatalf("references = %+v, want declaration plus two call references", out.Symbols)
+	}
+	seen := map[string]bool{}
+	for _, ref := range out.Symbols {
+		if ref.Kind != "reference" || ref.Name != "Run" {
+			t.Fatalf("reference = %+v, want Run reference", ref)
+		}
+		seen[ref.FilePath] = true
+	}
+	if !seen["worker.go"] || !seen["other.go"] {
+		t.Fatalf("references = %+v, want references across worker.go and other.go", out.Symbols)
+	}
+}
+
+func TestCodeSymbolsToolReferencesDerivesQueryFromCursor(t *testing.T) {
+	root := t.TempDir()
+	writeCodeSymbolFile(t, filepath.Join(root, "worker.go"), `package demo
+
+type Worker struct{}
+
+func (w *Worker) Run() error {
+	return nil
+}
+
+func Use(worker *Worker) error {
+	return worker.Run()
+}
+`)
+	tool := NewCodeSymbolsTool(NewPathGuard(root, nil))
+
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"operation":"references","file_path":"worker.go","line":10,"column":16}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("Execute returned error result: %s", res.Output)
+	}
+
+	var out codeSymbolsOutput
+	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, res.Output)
+	}
+	if out.Status != "success" || out.Query != "Run" || out.Count != 2 {
+		t.Fatalf("output = %+v, want cursor-derived Run references", out)
+	}
+}
+
+func TestCodeSymbolsToolDefinitionDerivesQueryFromCursor(t *testing.T) {
+	root := t.TempDir()
+	writeCodeSymbolFile(t, filepath.Join(root, "worker.go"), `package demo
+
+type Worker struct{}
+
+func (w *Worker) Run() error {
+	return nil
+}
+
+func Use(worker *Worker) error {
+	return worker.Run()
+}
+`)
+	tool := NewCodeSymbolsTool(NewPathGuard(root, nil))
+
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"operation":"definition","file_path":"worker.go","line":10,"column":16}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("Execute returned error result: %s", res.Output)
+	}
+
+	var out codeSymbolsOutput
+	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, res.Output)
+	}
+	if out.Status != "success" || out.Query != "Run" || out.Count != 1 || out.Symbols[0].Name != "Worker.Run" {
+		t.Fatalf("output = %+v, want cursor-derived Worker.Run definition", out)
+	}
+}
+
+func TestCodeSymbolsToolHoverReturnsDefinitionSignatureFromCursor(t *testing.T) {
+	root := t.TempDir()
+	writeCodeSymbolFile(t, filepath.Join(root, "worker.go"), `package demo
+
+type Worker struct{}
+
+func (w *Worker) Run() error {
+	return nil
+}
+
+func Use(worker *Worker) error {
+	return worker.Run()
+}
+`)
+	tool := NewCodeSymbolsTool(NewPathGuard(root, nil))
+
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"operation":"hover","file_path":"worker.go","line":10,"column":16}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("Execute returned error result: %s", res.Output)
+	}
+
+	var out codeSymbolsOutput
+	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, res.Output)
+	}
+	if out.Operation != "hover" || out.Status != "success" || out.Query != "Run" || out.Count != 1 {
+		t.Fatalf("output = %+v, want cursor-derived Run hover", out)
+	}
+	got := out.Symbols[0]
+	if got.Name != "Worker.Run" || got.Kind != "function" || !strings.Contains(got.Signature, "func (Worker) Run() error") {
+		t.Fatalf("hover symbol = %+v, want Worker.Run signature", got)
+	}
+}
+
+func TestCodeSymbolsToolReferencesRequiresQuery(t *testing.T) {
+	tool := NewCodeSymbolsTool(NewPathGuard(t.TempDir(), nil))
+
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"operation":"references"}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if !res.IsError || !strings.Contains(res.Output, "query is required") {
+		t.Fatalf("result = %+v, want query required error", res)
+	}
+}
+
 func TestCodeSymbolsToolUnsupportedLanguageIsStructured(t *testing.T) {
 	root := t.TempDir()
 	writeCodeSymbolFile(t, filepath.Join(root, "notes.txt"), "not go")
