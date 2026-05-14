@@ -946,7 +946,7 @@ func TestCompletionContractSummaryRecordsUserQuestionAnswerReceipt(t *testing.T)
 			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
 				llm.ToolUseBlock{ID: "answer-1", Name: "user_question_answer", Input: json.RawMessage(`{"session_id":"sess-123","answer":"main"}`)},
 			}},
-			llm.NewToolResultMessage("answer-1", `{"type":"user_input_answer_enqueued","task_id":8,"status":"pending","request_id":"req-123","session_id":"sess-123","answer_chars":4,"receipt":{"tool":"user_question_answer","action":"answer","read_only":false,"persistent":true,"queue_backed":true,"execution_policy":"daemon_queue_user_answer_resume","task_id":8,"request_id":"req-123","session_id":"sess-123","status":"pending","followup_tool":"task_monitor","question_chars":13}}`, false),
+			llm.NewToolResultMessage("answer-1", `{"type":"user_input_answer_enqueued","task_id":8,"status":"pending","request_id":"req-123","session_id":"sess-123","answer_chars":4,"receipt":{"tool":"user_question_answer","action":"answer","read_only":false,"persistent":true,"queue_backed":true,"execution_policy":"daemon_queue_user_answer_resume","task_id":8,"request_id":"req-123","session_id":"sess-123","status":"pending","followup_tool":"task_monitor","question_chars":13,"answer_chars":4}}`, false),
 		},
 		FinishReason: "stop",
 	}
@@ -959,7 +959,7 @@ func TestCompletionContractSummaryRecordsUserQuestionAnswerReceipt(t *testing.T)
 	if receipt.Tool != "user_question_answer" || receipt.Action != "answer" || receipt.ReadOnly || !receipt.Persistent || !receipt.QueueBacked || receipt.ExecutionPolicy != "daemon_queue_user_answer_resume" {
 		t.Fatalf("receipt identity = %+v", receipt)
 	}
-	if receipt.TaskID != 8 || receipt.RequestID != "req-123" || receipt.SessionID != "sess-123" || receipt.Status != "pending" || receipt.FollowupTool != "task_monitor" || receipt.QuestionChars != 13 {
+	if receipt.TaskID != 8 || receipt.RequestID != "req-123" || receipt.SessionID != "sess-123" || receipt.Status != "pending" || receipt.FollowupTool != "task_monitor" || receipt.QuestionChars != 13 || receipt.AnswerChars != 4 {
 		t.Fatalf("receipt routing = %+v", receipt)
 	}
 }
@@ -992,7 +992,7 @@ func TestCompletionContractSummaryRecordsUserQuestionWaitReceipt(t *testing.T) {
 			{Role: "assistant", Content: []llm.ContentBlock{
 				llm.ToolUseBlock{ID: "wait-1", Name: "user_question_wait", Input: json.RawMessage(`{"session_id":"sess-123","request_id":"req-123","wait_ms":500}`)},
 			}},
-			llm.NewToolResultMessage("wait-1", `{"status":"answered","request_id":"req-123","session_id":"sess-123","task_id":8,"wait_ms":500,"wait_elapsed_ms":25,"wait_timed_out":false,"receipt":{"tool":"user_question_wait","action":"wait","read_only":true,"execution_policy":"user_input_wait","request_id":"req-123","session_id":"sess-123","status":"answered","task_id":8,"wait_ms":500,"wait_elapsed_ms":25,"wait_timed_out":false,"followup_tool":"task_monitor"}}`, false),
+			llm.NewToolResultMessage("wait-1", `{"status":"answered","request_id":"req-123","session_id":"sess-123","task_id":8,"answer_chars":4,"wait_ms":500,"wait_elapsed_ms":25,"wait_timed_out":false,"receipt":{"tool":"user_question_wait","action":"wait","read_only":true,"execution_policy":"user_input_wait","request_id":"req-123","session_id":"sess-123","status":"answered","task_id":8,"answer_chars":4,"wait_ms":500,"wait_elapsed_ms":25,"wait_timed_out":false,"followup_tool":"task_monitor"}}`, false),
 		},
 		FinishReason: "stop",
 	}
@@ -1004,7 +1004,7 @@ func TestCompletionContractSummaryRecordsUserQuestionWaitReceipt(t *testing.T) {
 	if receipt.Tool != "user_question_wait" || receipt.Action != "wait" || !receipt.ReadOnly || receipt.ExecutionPolicy != "user_input_wait" {
 		t.Fatalf("receipt = %+v, want wait receipt", receipt)
 	}
-	if receipt.RequestID != "req-123" || receipt.SessionID != "sess-123" || receipt.Status != "answered" || receipt.TaskID != 8 || receipt.WaitMS != 500 || receipt.WaitElapsedMS != 25 || receipt.WaitTimedOut || receipt.FollowupTool != "task_monitor" {
+	if receipt.RequestID != "req-123" || receipt.SessionID != "sess-123" || receipt.Status != "answered" || receipt.TaskID != 8 || receipt.AnswerChars != 4 || receipt.WaitMS != 500 || receipt.WaitElapsedMS != 25 || receipt.WaitTimedOut || receipt.FollowupTool != "task_monitor" {
 		t.Fatalf("receipt metadata = %+v", receipt)
 	}
 }

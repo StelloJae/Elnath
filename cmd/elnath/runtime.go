@@ -1721,6 +1721,7 @@ func completionControlToolReceiptsToLearning(src []completionControlToolReceipt)
 			StateMutation:           receipt.StateMutation,
 			Question:                receipt.Question,
 			QuestionChars:           receipt.QuestionChars,
+			AnswerChars:             receipt.AnswerChars,
 			OptionCount:             receipt.OptionCount,
 			AllowFreeText:           receipt.AllowFreeText,
 			TimeoutSeconds:          receipt.TimeoutSeconds,

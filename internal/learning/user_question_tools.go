@@ -160,6 +160,7 @@ type userQuestionWaitToolOutput struct {
 	RequestID     string                      `json:"request_id"`
 	SessionID     string                      `json:"session_id"`
 	QuestionChars int                         `json:"question_chars,omitempty"`
+	AnswerChars   int                         `json:"answer_chars,omitempty"`
 	TaskID        int64                       `json:"task_id,omitempty"`
 	WaitMS        int                         `json:"wait_ms"`
 	WaitElapsedMS int                         `json:"wait_elapsed_ms"`
@@ -177,6 +178,7 @@ type userQuestionWaitToolReceipt struct {
 	Status          string `json:"status"`
 	TaskID          int64  `json:"task_id,omitempty"`
 	QuestionChars   int    `json:"question_chars,omitempty"`
+	AnswerChars     int    `json:"answer_chars,omitempty"`
 	WaitMS          int    `json:"wait_ms"`
 	WaitElapsedMS   int    `json:"wait_elapsed_ms"`
 	WaitTimedOut    bool   `json:"wait_timed_out"`
@@ -189,6 +191,7 @@ type userQuestionWaitState struct {
 	RequestID     string
 	SessionID     string
 	QuestionChars int
+	AnswerChars   int
 	TaskID        int64
 	FollowupTool  string
 }
@@ -269,6 +272,7 @@ func (t *UserQuestionWaitTool) userQuestionWaitResult(state userQuestionWaitStat
 		RequestID:     requestID,
 		SessionID:     sessionID,
 		QuestionChars: state.QuestionChars,
+		AnswerChars:   state.AnswerChars,
 		TaskID:        state.TaskID,
 		WaitMS:        waitMS,
 		WaitElapsedMS: elapsedMS,
@@ -283,6 +287,7 @@ func (t *UserQuestionWaitTool) userQuestionWaitResult(state userQuestionWaitStat
 			Status:          status,
 			TaskID:          state.TaskID,
 			QuestionChars:   state.QuestionChars,
+			AnswerChars:     state.AnswerChars,
 			WaitMS:          waitMS,
 			WaitElapsedMS:   elapsedMS,
 			WaitTimedOut:    waitTimedOut,
@@ -329,6 +334,7 @@ func findUserQuestionWaitState(records []OutcomeRecord, sessionID, requestID str
 					RequestID:     requestID,
 					SessionID:     sessionID,
 					QuestionChars: receipt.QuestionChars,
+					AnswerChars:   receipt.AnswerChars,
 					TaskID:        receipt.TaskID,
 					FollowupTool:  followup,
 				}

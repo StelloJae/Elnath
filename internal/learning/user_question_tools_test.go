@@ -97,6 +97,7 @@ func TestUserQuestionWaitToolReturnsAnsweredWhenAnswerArrives(t *testing.T) {
 				RequestID:    "req-1",
 				SessionID:    "sess-1",
 				TaskID:       42,
+				AnswerChars:  8,
 				FollowupTool: "task_monitor",
 			}},
 		})
@@ -113,13 +114,13 @@ func TestUserQuestionWaitToolReturnsAnsweredWhenAnswerArrives(t *testing.T) {
 	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
 		t.Fatalf("unmarshal output: %v", err)
 	}
-	if output.Status != "answered" || output.TaskID != 42 || output.WaitTimedOut {
+	if output.Status != "answered" || output.TaskID != 42 || output.AnswerChars != 8 || output.WaitTimedOut {
 		t.Fatalf("output = %+v, want answered task 42 without wait timeout", output)
 	}
 	if output.Receipt.Tool != UserQuestionWaitToolName || output.Receipt.Action != "wait" || !output.Receipt.ReadOnly || output.Receipt.ExecutionPolicy != "user_input_wait" {
 		t.Fatalf("receipt = %+v, want user_question_wait receipt", output.Receipt)
 	}
-	if output.Receipt.WaitMS != 500 || output.Receipt.WaitTimedOut || output.Receipt.FollowupTool != "task_monitor" || output.Receipt.TaskID != 42 {
+	if output.Receipt.WaitMS != 500 || output.Receipt.WaitTimedOut || output.Receipt.FollowupTool != "task_monitor" || output.Receipt.TaskID != 42 || output.Receipt.AnswerChars != 8 {
 		t.Fatalf("receipt wait/followup = %+v", output.Receipt)
 	}
 }
