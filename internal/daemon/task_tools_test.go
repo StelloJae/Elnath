@@ -95,7 +95,7 @@ func TestUserQuestionAnswerToolEnqueuesSessionBoundFollowUp(t *testing.T) {
 	if output.Receipt.Tool != UserQuestionAnswerToolName || output.Receipt.Action != "answer" || output.Receipt.ReadOnly || !output.Receipt.Persistent || !output.Receipt.QueueBacked || output.Receipt.TaskID != output.TaskID || output.Receipt.RequestID != "req-123" || output.Receipt.SessionID != "sess-123" || output.Receipt.FollowupTool != TaskMonitorToolName {
 		t.Fatalf("receipt = %+v, want user answer queue-backed mutation receipt", output.Receipt)
 	}
-	if output.Receipt.ExecutionPolicy != "daemon_queue_user_answer_resume" || output.Receipt.QuestionChars != len("Which branch?") {
+	if output.Receipt.ExecutionPolicy != "daemon_queue_user_answer_resume" || output.Receipt.QuestionChars != len("Which branch?") || output.Receipt.AnswerChars != len("Use main.") {
 		t.Fatalf("receipt policy/bounds = %+v", output.Receipt)
 	}
 

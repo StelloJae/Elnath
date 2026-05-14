@@ -252,6 +252,7 @@ type ControlToolReceipt struct {
 	StateMutation           bool     `json:"state_mutation,omitempty"`
 	Question                string   `json:"question,omitempty"`
 	QuestionChars           int      `json:"question_chars,omitempty"`
+	AnswerChars             int      `json:"answer_chars,omitempty"`
 	OptionCount             int      `json:"option_count,omitempty"`
 	AllowFreeText           bool     `json:"allow_free_text,omitempty"`
 	TimeoutSeconds          int      `json:"timeout_seconds,omitempty"`

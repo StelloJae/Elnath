@@ -123,6 +123,7 @@ type taskToolReceipt struct {
 	RetrievalStatus string     `json:"retrieval_status,omitempty"`
 	FollowupTool    string     `json:"followup_tool,omitempty"`
 	QuestionChars   int        `json:"question_chars,omitempty"`
+	AnswerChars     int        `json:"answer_chars,omitempty"`
 }
 
 func (t *TaskCreateTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
@@ -330,6 +331,7 @@ func (t *UserQuestionAnswerTool) Execute(ctx context.Context, params json.RawMes
 			Deduplicated:    deduped,
 			FollowupTool:    TaskMonitorToolName,
 			QuestionChars:   questionChars,
+			AnswerChars:     len([]rune(answer)),
 		},
 	}
 	raw, err := json.Marshal(output)
