@@ -122,6 +122,7 @@ func TestSchemaArray(t *testing.T) {
 func TestBuiltinToolDescriptions(t *testing.T) {
 	guard := NewPathGuard(t.TempDir(), nil)
 	tracker := NewReadTracker()
+	processManager := NewProcessManager(guard)
 
 	cases := []struct {
 		name     string
@@ -160,6 +161,28 @@ func TestBuiltinToolDescriptions(t *testing.T) {
 				"Do NOT use bash for tasks that have a dedicated tool",
 				"File search: use glob",
 				"Read files: use read_file",
+				"Use process_start for long-running or background commands",
+				"Prefer focused verification before broad verification",
+				"A broad verification failure is diagnostic evidence, not permission to edit unrelated files",
+				"Obey the current task scope lock",
+			},
+		},
+		{
+			name: "process_start guidance",
+			got:  NewProcessStartTool(processManager).Description(),
+			contains: []string{
+				"bounded session-local background shell process",
+				"long-running commands",
+				"Use process_monitor to inspect progress",
+				"instead of polling with sleep loops",
+			},
+		},
+		{
+			name: "process_monitor guidance",
+			got:  NewProcessMonitorTool(processManager).Description(),
+			contains: []string{
+				"Read a snapshot and bounded output tails",
+				"started by process_start",
 			},
 		},
 		{
