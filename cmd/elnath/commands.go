@@ -117,6 +117,20 @@ func commandRegistry() map[string]commandRunner {
 	return registry
 }
 
+func commandSpecByName(name string) (commandSpec, bool) {
+	for _, spec := range commandSpecs() {
+		if spec.Name == name {
+			return spec, true
+		}
+		for _, alias := range spec.Aliases {
+			if alias == name {
+				return spec, true
+			}
+		}
+	}
+	return commandSpec{}, false
+}
+
 func commandCatalog(includeHidden bool) []commandCatalogEntry {
 	specs := commandSpecs()
 	entries := make([]commandCatalogEntry, 0, len(specs))
@@ -158,14 +172,14 @@ func commandSpecExecutionPolicy(spec commandSpec) string {
 }
 
 func executeCommand(ctx context.Context, name string, args []string) error {
-	if hasFlag(args, "--help") || hasFlag(args, "-h") {
-		return printCommandHelp(name)
-	}
 	registry := commandRegistry()
 	cmd, ok := registry[name]
 	if !ok {
 		fmt.Fprintln(os.Stderr, fmt.Sprintf(onboarding.T(loadLocale(), "cli.unknown_command"), name))
 		return cmdHelp(ctx, args)
+	}
+	if hasFlag(args, "--help") || hasFlag(args, "-h") {
+		return printCommandHelp(name)
 	}
 	return cmd(ctx, args)
 }
@@ -176,10 +190,30 @@ func printCommandHelp(name string) error {
 	}
 	text := onboarding.TOptional(loadLocale(), "cmd."+name+".help")
 	if text == "" {
-		return cmdHelp(nil, nil)
+		if commandUsesInlineHelp(name) {
+			spec, ok := commandSpecByName(name)
+			if ok {
+				return spec.Runner(context.Background(), []string{"help"})
+			}
+		}
+		spec, ok := commandSpecByName(name)
+		if !ok {
+			return cmdHelp(nil, nil)
+		}
+		fmt.Print(formatGeneratedCommandHelp(spec))
+		return nil
 	}
 	fmt.Println(text)
 	return nil
+}
+
+func commandUsesInlineHelp(name string) bool {
+	switch name {
+	case "agentic", "chaos", "debug", "explain", "lessons", "portability", "provider", "research", "task", "telegram":
+		return true
+	default:
+		return false
+	}
 }
 
 func cmdVersion(_ context.Context, _ []string) error {
@@ -244,6 +278,23 @@ func formatTopLevelHelp(entries []commandCatalogEntry) string {
 	}
 	b.WriteString("\nRun `elnath <command> --help` for command-specific help.\n")
 	b.WriteString("Run `elnath commands --json` for the structured command catalog.\n")
+	return b.String()
+}
+
+func formatGeneratedCommandHelp(spec commandSpec) string {
+	label := spec.Name
+	if spec.ArgumentHint != "" {
+		label += " " + spec.ArgumentHint
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Usage: elnath %s\n\n", label)
+	fmt.Fprintf(&b, "%s\n", spec.Description)
+	if spec.Category != "" {
+		fmt.Fprintf(&b, "\nCategory: %s\n", spec.Category)
+	}
+	if len(spec.Aliases) > 0 {
+		fmt.Fprintf(&b, "Aliases: %s\n", strings.Join(spec.Aliases, ", "))
+	}
 	return b.String()
 }
 
