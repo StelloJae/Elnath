@@ -1260,6 +1260,34 @@ func TestProcessControlReceiptsConvertToLearningAndAgentic(t *testing.T) {
 	}
 }
 
+func TestTaskOutputControlReceiptFieldsConvertToLearningAndAgentic(t *testing.T) {
+	src := []completionControlToolReceipt{{
+		Tool:            "task_output",
+		Action:          "output",
+		ReadOnly:        true,
+		QueueBacked:     true,
+		ExecutionPolicy: "daemon_queue_observation",
+		TaskID:          7,
+		Status:          "done",
+		Terminal:        true,
+		Field:           "result",
+		RetrievalStatus: "success",
+		MaxChars:        3,
+		TotalChars:      6,
+		Truncated:       true,
+	}}
+
+	learningReceipts := completionControlToolReceiptsToLearning(src)
+	if len(learningReceipts) != 1 || learningReceipts[0].Tool != "task_output" || learningReceipts[0].MaxChars != 3 || learningReceipts[0].TotalChars != 6 || !learningReceipts[0].Truncated {
+		t.Fatalf("learning receipts = %+v", learningReceipts)
+	}
+
+	agenticReceipts := completionControlToolReceiptsToAgentic(src)
+	if len(agenticReceipts) != 1 || agenticReceipts[0].Tool != "task_output" || agenticReceipts[0].MaxChars != 3 || agenticReceipts[0].TotalChars != 6 || !agenticReceipts[0].Truncated {
+		t.Fatalf("agentic receipts = %+v", agenticReceipts)
+	}
+}
+
 func TestDelegationControlReceiptsConvertToLearningAndAgentic(t *testing.T) {
 	src := []completionControlToolReceipt{{
 		Tool:            "agentic_delegate_enqueue",

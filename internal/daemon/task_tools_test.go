@@ -650,6 +650,9 @@ func TestTaskOutputToolReturnsBoundedResultTail(t *testing.T) {
 	if output.Receipt.Tool != TaskOutputToolName || output.Receipt.Action != "output" || !output.Receipt.ReadOnly || output.Receipt.TaskID != task.ID || output.Receipt.Field != "result" || output.Receipt.RetrievalStatus != taskOutputRetrievalSuccess {
 		t.Fatalf("receipt = %+v, want task_output observation receipt", output.Receipt)
 	}
+	if output.Receipt.MaxChars != 3 || output.Receipt.TotalChars != 6 || !output.Receipt.Truncated {
+		t.Fatalf("receipt bounds = %+v, want max=3 total=6 truncated=true", output.Receipt)
+	}
 }
 
 func TestTaskOutputToolReadsProgressField(t *testing.T) {
@@ -759,6 +762,9 @@ func TestTaskOutputToolBlocksUntilTaskCompletes(t *testing.T) {
 	}
 	if output.Content != "def" || output.TotalChars != 6 || !output.Truncated {
 		t.Fatalf("content = %q total=%d truncated=%v, want def/6/true", output.Content, output.TotalChars, output.Truncated)
+	}
+	if output.Receipt.MaxChars != 3 || output.Receipt.TotalChars != 6 || !output.Receipt.Truncated {
+		t.Fatalf("receipt bounds = %+v, want max=3 total=6 truncated=true", output.Receipt)
 	}
 }
 
@@ -1103,6 +1109,9 @@ func TestTaskMonitorToolReturnsTerminalResultTail(t *testing.T) {
 	}
 	if output.ResultTail != "def" || output.ResultTotalChars != 6 || !output.ResultTruncated {
 		t.Fatalf("result tail = %q total=%d truncated=%v, want def/6/true", output.ResultTail, output.ResultTotalChars, output.ResultTruncated)
+	}
+	if output.Receipt.MaxChars != 3 || output.Receipt.TotalChars != 6 || !output.Receipt.Truncated {
+		t.Fatalf("receipt bounds = %+v, want max=3 total=6 truncated=true", output.Receipt)
 	}
 }
 

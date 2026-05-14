@@ -232,6 +232,9 @@ type ControlToolReceipt struct {
 	Limit                   int      `json:"limit,omitempty"`
 	Field                   string   `json:"field,omitempty"`
 	RetrievalStatus         string   `json:"retrieval_status,omitempty"`
+	MaxChars                int      `json:"max_chars,omitempty"`
+	TotalChars              int      `json:"total_chars,omitempty"`
+	Truncated               bool     `json:"truncated,omitempty"`
 	Name                    string   `json:"name,omitempty"`
 	Path                    string   `json:"path,omitempty"`
 	Branch                  string   `json:"branch,omitempty"`

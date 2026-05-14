@@ -254,6 +254,27 @@ func TestExecuteCommand_SubcommandHelpCoverage(t *testing.T) {
 	}
 }
 
+func TestVisibleCommandsHaveCommandSpecificHelp(t *testing.T) {
+	for _, entry := range commandCatalog(false) {
+		t.Run(entry.Name, func(t *testing.T) {
+			stdout, stderr := captureOutput(t, func() {
+				if err := executeCommand(context.Background(), entry.Name, []string{"--help"}); err != nil {
+					t.Fatalf("executeCommand(%s --help) error = %v", entry.Name, err)
+				}
+			})
+			if stderr != "" {
+				t.Fatalf("stderr = %q, want empty", stderr)
+			}
+			if strings.Contains(stdout, "Run `elnath <command> --help`") {
+				t.Fatalf("help for %q fell back to top-level help:\n%s", entry.Name, stdout)
+			}
+			if !strings.Contains(stdout, "Usage: elnath "+entry.Name) && !strings.Contains(stdout, "USAGE") {
+				t.Fatalf("help for %q missing command-specific usage:\n%s", entry.Name, stdout)
+			}
+		})
+	}
+}
+
 // TestPrintCommandHelp_DaemonMatchesDispatcher guards against help-text drift.
 // cmdDaemon accepts start/submit/status/stop/install; the extended help must
 // not advertise subcommands the dispatcher rejects (like "task submit",
