@@ -18,17 +18,8 @@ import (
 )
 
 func cmdTask(ctx context.Context, args []string) error {
-	if len(args) == 0 {
-		fmt.Println(`Usage: elnath task <subcommand>
-
-Subcommands:
-  list               List recent tasks (last 20)
-  show <id>          Show task details
-  monitor <id>       Show or wait for task monitor snapshot
-  output <id>        Read bounded task output
-  stop <id>          Stop a pending task
-  answer             Answer a pending user-input request and enqueue resume
-  resume <id>        Resume the session created by a task`)
+	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
+		fmt.Println(taskUsage())
 		return nil
 	}
 	switch args[0] {
@@ -49,6 +40,19 @@ Subcommands:
 	default:
 		return fmt.Errorf("unknown task subcommand: %s", args[0])
 	}
+}
+
+func taskUsage() string {
+	return `Usage: elnath task <subcommand>
+
+Subcommands:
+  list               List recent tasks (last 20)
+  show <id>          Show task details
+  monitor <id>       Show or wait for task monitor snapshot
+  output <id>        Read bounded task output
+  stop <id>          Stop a pending task
+  answer             Answer a pending user-input request and enqueue resume
+  resume <id>        Resume the session created by a task`
 }
 
 func cmdTaskList(ctx context.Context) error {
