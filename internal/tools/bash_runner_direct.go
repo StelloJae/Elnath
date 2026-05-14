@@ -182,6 +182,16 @@ func buildBashResult(
 	timedOut, canceledRun bool,
 ) BashRunResult {
 	isError := status != "success"
+	executionPolicy := req.ExecutionPolicy
+	if executionPolicy == "" {
+		executionPolicy = "foreground_shell"
+	}
+	commandIntent := req.CommandIntent
+	intentSource := req.IntentSource
+	if commandIntent == "" {
+		commandIntent = CommandIntentDiagnostic
+		intentSource = commandIntentSourceDefault
+	}
 	meta := bashResultMeta{
 		Status:           status,
 		ExitCode:         exitCode,
@@ -196,6 +206,10 @@ func buildBashResult(
 		StderrShownBytes: int64(stderr.Kept()),
 		StderrTruncated:  stderr.Truncated(),
 		Classification:   classification,
+		ExecutionPolicy:  executionPolicy,
+		CommandIntent:    commandIntent,
+		IntentSource:     intentSource,
+		TimeoutMS:        req.TimeoutMS,
 	}
 	return BashRunResult{
 		Output:          formatBashResult(meta, stdout, stderr),
@@ -210,6 +224,10 @@ func buildBashResult(
 		StdoutTruncated: stdout.Truncated(),
 		StderrTruncated: stderr.Truncated(),
 		Classification:  classification,
+		ExecutionPolicy: executionPolicy,
+		CommandIntent:   commandIntent,
+		IntentSource:    intentSource,
+		TimeoutMS:       req.TimeoutMS,
 		Violations:      nil,
 	}
 }
