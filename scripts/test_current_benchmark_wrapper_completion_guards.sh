@@ -318,6 +318,18 @@ GO
       echo "Verification: go test ./... passed."
     fi
     ;;
+  generic_prod_only_without_required_test)
+    mkdir -p lib
+    cat > lib/application.js <<'JS'
+function routeError(err, next) {
+  next(err === 'router' ? null : err)
+}
+
+module.exports = { routeError }
+JS
+    echo "Modified files: lib/application.js"
+    echo "Verification: go test ./... passed."
+    ;;
   *)
     echo "unknown FAKE_SCENARIO=${FAKE_SCENARIO}" >&2
     exit 2
@@ -332,6 +344,7 @@ run_wrapper_case() {
   local output_path="$2"
   local source_repo="$3"
   local task_id="${4:-GO-BF-002}"
+  local task_prompt="${5:-Fix the benchmark fixture and verify it.}"
   FAKE_SCENARIO="$scenario" \
   FAKE_COUNT_FILE="$TMP_DIR/fake-count-$scenario" \
   ELNATH_BIN="$TMP_DIR/fake-elnath.sh" \
@@ -343,7 +356,7 @@ run_wrapper_case() {
     "$task_id" \
     "bugfix" \
     "go" \
-    "Fix the benchmark fixture and verify it." \
+    "$task_prompt" \
     "file://$source_repo" \
     "" \
     "brownfield" \
@@ -515,6 +528,15 @@ assert data["recovery_succeeded"] is True, data
 assert "api/internal/accumulator/namereferencetransformer.go" in data["changed_files"], data
 assert "api/internal/accumulator/namereferencetransformer_test.go" in data["changed_files"], data
 assert "go.work.sum" in data["changed_files"], data
+'
+
+run_wrapper_case generic_prod_only_without_required_test "$TMP_DIR/generic-prod-only-without-required-test.json" "$SOURCE_REPO" "V8-JS-BUG-001" "Fix the router error handling bug and add focused regression test coverage."
+assert_json_case "$TMP_DIR/generic-prod-only-without-required-test.json" '
+assert data["success"] is False, data
+assert data["verification_passed"] is True, data
+assert data["failure_family"] == "incomplete_patch", data
+assert "lib/application.js" in data["changed_files"], data
+assert "focused test" in data["notes"] or "regression" in data["notes"], data
 '
 
 run_wrapper_case go_bug002_unbounded_wait_test "$TMP_DIR/go-bug002-unbounded-wait-test.json" "$SOURCE_REPO" "GO-BUG-002"
