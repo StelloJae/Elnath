@@ -188,7 +188,7 @@ func cmdVersion(_ context.Context, _ []string) error {
 }
 
 func cmdHelp(_ context.Context, _ []string) error {
-	fmt.Println(onboarding.T(loadLocale(), "cli.help"))
+	fmt.Print(formatTopLevelHelp(commandCatalog(false)))
 	return nil
 }
 
@@ -228,6 +228,22 @@ func formatCommandCatalog(entries []commandCatalogEntry) string {
 		}
 		b.WriteString("\n")
 	}
+	return b.String()
+}
+
+func formatTopLevelHelp(entries []commandCatalogEntry) string {
+	var b strings.Builder
+	b.WriteString("Usage: elnath <command> [args]\n\n")
+	b.WriteString("Commands:\n")
+	for _, entry := range entries {
+		label := entry.Name
+		if entry.ArgumentHint != "" {
+			label += " " + entry.ArgumentHint
+		}
+		fmt.Fprintf(&b, "  %-34s %s\n", label, entry.Description)
+	}
+	b.WriteString("\nRun `elnath <command> --help` for command-specific help.\n")
+	b.WriteString("Run `elnath commands --json` for the structured command catalog.\n")
 	return b.String()
 }
 
