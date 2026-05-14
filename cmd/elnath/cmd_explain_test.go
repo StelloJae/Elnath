@@ -315,6 +315,7 @@ func TestExplainControlSurfacesText(t *testing.T) {
 		"scratchpad: implemented",
 		"code_intelligence: partial",
 		"Remaining gaps:",
+		"pending-list answer commands",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("stdout missing %q:\n%s", want, stdout)
@@ -350,9 +351,12 @@ func TestExplainPendingQuestionsJSON(t *testing.T) {
 	var out struct {
 		Count   int `json:"count"`
 		Pending []struct {
-			RequestID string `json:"request_id"`
-			SessionID string `json:"session_id"`
-			Question  string `json:"question"`
+			RequestID      string `json:"request_id"`
+			SessionID      string `json:"session_id"`
+			Question       string `json:"question"`
+			Answerable     bool   `json:"answerable"`
+			AnswerCommand  string `json:"answer_command"`
+			PendingCommand string `json:"pending_command"`
 		} `json:"pending"`
 	}
 	if err := json.Unmarshal([]byte(stdout), &out); err != nil {
@@ -360,6 +364,38 @@ func TestExplainPendingQuestionsJSON(t *testing.T) {
 	}
 	if out.Count != 1 || len(out.Pending) != 1 || out.Pending[0].RequestID != "req-1" || out.Pending[0].SessionID != "sess-1" || out.Pending[0].Question != "Which branch?" {
 		t.Fatalf("pending output = %+v, want req-1", out)
+	}
+	if !out.Pending[0].Answerable || out.Pending[0].AnswerCommand != "elnath task answer --session 'sess-1' --request 'req-1' --answer 'ANSWER_TEXT'" || out.Pending[0].PendingCommand != "elnath explain pending-questions --session 'sess-1'" {
+		t.Fatalf("pending handoff = %+v, want answerable CLI commands", out.Pending[0])
+	}
+}
+
+func TestExplainPendingQuestionsTextShowsAnswerCommand(t *testing.T) {
+	store := learning.NewOutcomeStore(filepath.Join(t.TempDir(), "outcomes.jsonl"))
+	askedAt := time.Date(2026, 5, 13, 7, 0, 0, 0, time.UTC)
+	if err := store.Append(learning.OutcomeRecord{
+		ProjectID: "elnath",
+		Intent:    "complex_task",
+		Workflow:  "single",
+		Timestamp: askedAt,
+		ControlToolReceipts: []learning.ControlToolReceipt{{
+			Tool:      "ask_user_question",
+			Action:    "request",
+			RequestID: "req-1",
+			SessionID: "sess-1",
+			Question:  "Which branch?",
+		}},
+	}); err != nil {
+		t.Fatalf("Append ask record: %v", err)
+	}
+
+	stdout, _ := captureOutput(t, func() {
+		if err := explainPendingQuestions(store, []string{"--session", "sess-1"}); err != nil {
+			t.Fatalf("explainPendingQuestions: %v", err)
+		}
+	})
+	if !strings.Contains(stdout, "answer: elnath task answer --session 'sess-1' --request 'req-1' --answer 'ANSWER_TEXT'") {
+		t.Fatalf("stdout missing answer command:\n%s", stdout)
 	}
 }
 

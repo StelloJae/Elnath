@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/tools"
 )
 
@@ -102,8 +103,8 @@ func (t *AskUserQuestionTool) Execute(ctx context.Context, params json.RawMessag
 	}
 	if output.SessionID != "" {
 		output.Answerable = true
-		output.AnswerCommand = buildUserQuestionAnswerCommand(output.SessionID, output.RequestID)
-		output.PendingCommand = buildPendingUserQuestionsCommand(output.SessionID)
+		output.AnswerCommand = learning.UserQuestionAnswerCommand(output.SessionID, output.RequestID)
+		output.PendingCommand = learning.PendingUserQuestionsCommand(output.SessionID)
 	}
 	if input.AllowFreeText != nil {
 		output.AllowFreeText = *input.AllowFreeText
@@ -130,18 +131,6 @@ func (t *AskUserQuestionTool) Execute(ctx context.Context, params json.RawMessag
 		return tools.ErrorResult(fmt.Sprintf("ask_user_question: marshal output: %v", err)), nil
 	}
 	return tools.SuccessResult(string(raw)), nil
-}
-
-func buildUserQuestionAnswerCommand(sessionID, requestID string) string {
-	return "elnath task answer --session " + shellQuoteUserQuestionArg(sessionID) + " --request " + shellQuoteUserQuestionArg(requestID) + " --answer 'ANSWER_TEXT'"
-}
-
-func buildPendingUserQuestionsCommand(sessionID string) string {
-	return "elnath explain pending-questions --session " + shellQuoteUserQuestionArg(sessionID)
-}
-
-func shellQuoteUserQuestionArg(value string) string {
-	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 func cleanUserQuestionOptions(options []string) []string {
