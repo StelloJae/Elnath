@@ -11,9 +11,11 @@ import (
 	"go/token"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 const (
@@ -122,6 +124,11 @@ type codeSymbolItem struct {
 	Signature string `json:"signature,omitempty"`
 }
 
+type codeSymbolFileCandidate struct {
+	AbsPath string
+	RelPath string
+}
+
 func (t *CodeSymbolsTool) Execute(ctx context.Context, params json.RawMessage) (*Result, error) {
 	var input codeSymbolsInput
 	if err := json.Unmarshal(params, &input); err != nil {
@@ -182,6 +189,7 @@ func (t *CodeSymbolsTool) executeWorkspaceSymbols(ctx context.Context, input cod
 	}
 	maxResults := normalizeCodeSymbolMax(input.MaxResults)
 	query := strings.ToLower(strings.TrimSpace(input.Query))
+	var candidates []codeSymbolFileCandidate
 	var symbols []codeSymbolItem
 	var parseErrors []codeSymbolError
 	truncated := false
@@ -205,10 +213,21 @@ func (t *CodeSymbolsTool) executeWorkspaceSymbols(ctx context.Context, input cod
 			parseErrors = append(parseErrors, codeSymbolError{FilePath: rel, Error: err.Error()})
 			return nil
 		}
-		fileSymbols, err := parseGoSymbols(scoped, sessionBase)
+		candidates = append(candidates, codeSymbolFileCandidate{AbsPath: scoped, RelPath: rel})
+		return nil
+	})
+	if walkErr != nil {
+		return ErrorResult(fmt.Sprintf("code_symbols: walk: %v", walkErr)), nil
+	}
+	gitIgnored := gitIgnoredCodeSymbolPaths(ctx, sessionBase, candidates)
+	for _, candidate := range candidates {
+		if gitIgnored[filepath.ToSlash(candidate.RelPath)] {
+			continue
+		}
+		fileSymbols, err := parseGoSymbols(candidate.AbsPath, sessionBase)
 		if err != nil {
-			parseErrors = append(parseErrors, codeSymbolError{FilePath: rel, Error: err.Error()})
-			return nil
+			parseErrors = append(parseErrors, codeSymbolError{FilePath: candidate.RelPath, Error: err.Error()})
+			continue
 		}
 		for _, sym := range fileSymbols {
 			if query != "" && !strings.Contains(strings.ToLower(sym.Name), query) {
@@ -216,14 +235,13 @@ func (t *CodeSymbolsTool) executeWorkspaceSymbols(ctx context.Context, input cod
 			}
 			if len(symbols) >= maxResults {
 				truncated = true
-				return fs.SkipAll
+				break
 			}
 			symbols = append(symbols, sym)
 		}
-		return nil
-	})
-	if walkErr != nil {
-		return ErrorResult(fmt.Sprintf("code_symbols: walk: %v", walkErr)), nil
+		if truncated {
+			break
+		}
 	}
 	sortCodeSymbols(symbols)
 	status := "success"
@@ -241,6 +259,43 @@ func (t *CodeSymbolsTool) executeWorkspaceSymbols(ctx context.Context, input cod
 		Errors:    parseErrors,
 		Symbols:   symbols,
 	})
+}
+
+func gitIgnoredCodeSymbolPaths(ctx context.Context, base string, candidates []codeSymbolFileCandidate) map[string]bool {
+	if len(candidates) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(candidates))
+	var stdin bytes.Buffer
+	for _, candidate := range candidates {
+		rel := filepath.ToSlash(candidate.RelPath)
+		if _, ok := seen[rel]; ok {
+			continue
+		}
+		seen[rel] = struct{}{}
+		stdin.WriteString(rel)
+		stdin.WriteByte(0)
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(checkCtx, "git", "-C", base, "check-ignore", "--stdin", "-z")
+	cmd.Stdin = &stdin
+	output, err := cmd.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return nil
+		}
+		return nil
+	}
+	ignored := make(map[string]bool)
+	for _, part := range bytes.Split(output, []byte{0}) {
+		rel := strings.TrimSpace(string(part))
+		if rel == "" {
+			continue
+		}
+		ignored[filepath.ToSlash(rel)] = true
+	}
+	return ignored
 }
 
 func parseGoSymbols(absPath, basePath string) ([]codeSymbolItem, error) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -190,6 +191,43 @@ func SecretOutside() {}
 	}
 }
 
+func TestCodeSymbolsToolWorkspaceSymbolsSkipsGitIgnoredFiles(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git unavailable")
+	}
+	root := t.TempDir()
+	runCodeSymbolsGit(t, root, "init")
+	writeCodeSymbolFile(t, filepath.Join(root, ".gitignore"), "ignored/\n")
+	writeCodeSymbolFile(t, filepath.Join(root, "visible.go"), `package demo
+
+func VisibleSymbol() {}
+`)
+	writeCodeSymbolFile(t, filepath.Join(root, "ignored", "hidden.go"), `package demo
+
+func HiddenIgnoredSymbol() {}
+`)
+	tool := NewCodeSymbolsTool(NewPathGuard(root, nil))
+
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"operation":"workspace_symbols","query":"Symbol"}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("Execute returned error result: %s", res.Output)
+	}
+
+	var out codeSymbolsOutput
+	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, res.Output)
+	}
+	if out.Status != "success" {
+		t.Fatalf("status = %q, want success: %+v", out.Status, out)
+	}
+	if len(out.Symbols) != 1 || out.Symbols[0].Name != "VisibleSymbol" {
+		t.Fatalf("symbols = %+v, want only VisibleSymbol", out.Symbols)
+	}
+}
+
 func TestCodeSymbolsToolUnsupportedLanguageIsStructured(t *testing.T) {
 	root := t.TempDir()
 	writeCodeSymbolFile(t, filepath.Join(root, "notes.txt"), "not go")
@@ -232,5 +270,13 @@ func writeCodeSymbolFile(t *testing.T, path, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write file: %v", err)
+	}
+}
+
+func runCodeSymbolsGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, output)
 	}
 }
