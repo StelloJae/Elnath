@@ -52,6 +52,7 @@ func (rt *executionRuntime) CompletionContext(_ context.Context, _ daemon.Task, 
 		SkillCatalogReceipts:     completionSkillCatalogReceiptsToAgentic(summary.SkillCatalogReceipts),
 		SkillExecutionReceipts:   completionSkillExecutionReceiptsToAgentic(summary.SkillExecutionReceipts),
 		CommandCatalogReceipts:   completionCommandCatalogReceiptsToAgentic(summary.CommandCatalogReceipts),
+		ShellCommandReceipts:     completionShellCommandReceiptsToAgentic(summary.ShellCommandReceipts),
 		ToolSearchReceipts:       completionToolSearchReceiptsToAgentic(summary.ToolSearchReceipts),
 		ControlToolReceipts:      completionControlToolReceiptsToAgentic(summary.ControlToolReceipts),
 		ConditionalSkillMatches:  completionSkillMatchesToAgentic(summary.ConditionalSkillMatches),
@@ -173,6 +174,30 @@ func completionCommandCatalogReceiptsToAgentic(src []completionCommandCatalogRec
 			Query:                 receipt.Query,
 			Command:               receipt.Command,
 			FollowupTool:          receipt.FollowupTool,
+		})
+	}
+	return out
+}
+
+func completionShellCommandReceiptsToAgentic(src []completionShellCommandReceipt) []agenticcompletion.ShellCommandReceipt {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]agenticcompletion.ShellCommandReceipt, 0, len(src))
+	for _, receipt := range src {
+		out = append(out, agenticcompletion.ShellCommandReceipt{
+			Tool:                  receipt.Tool,
+			Action:                receipt.Action,
+			CommandClass:          receipt.CommandClass,
+			Status:                receipt.Status,
+			Classification:        receipt.Classification,
+			TimedOut:              receipt.TimedOut,
+			Canceled:              receipt.Canceled,
+			IsError:               receipt.IsError,
+			TimeoutMS:             receipt.TimeoutMS,
+			WorkingDirSet:         receipt.WorkingDirSet,
+			CommandLen:            receipt.CommandLen,
+			BackgroundRecommended: receipt.BackgroundRecommended,
 		})
 	}
 	return out

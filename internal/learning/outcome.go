@@ -52,6 +52,7 @@ type OutcomeRecord struct {
 	SkillCatalogReceipts     []SkillCatalogReceipt      `json:"skill_catalog_receipts,omitempty"`
 	SkillExecutionReceipts   []SkillExecutionReceipt    `json:"skill_execution_receipts,omitempty"`
 	CommandCatalogReceipts   []CommandCatalogReceipt    `json:"command_catalog_receipts,omitempty"`
+	ShellCommandReceipts     []ShellCommandReceipt      `json:"shell_command_receipts,omitempty"`
 	ToolSearchReceipts       []ToolSearchReceipt        `json:"tool_search_receipts,omitempty"`
 	ControlToolReceipts      []ControlToolReceipt       `json:"control_tool_receipts,omitempty"`
 	ConditionalSkillMatches  []ConditionalSkillMatch    `json:"conditional_skill_matches,omitempty"`
@@ -148,6 +149,21 @@ type CommandCatalogReceipt struct {
 	Query                 string `json:"query,omitempty"`
 	Command               string `json:"command,omitempty"`
 	FollowupTool          string `json:"followup_tool,omitempty"`
+}
+
+type ShellCommandReceipt struct {
+	Tool                  string `json:"tool"`
+	Action                string `json:"action"`
+	CommandClass          string `json:"command_class,omitempty"`
+	Status                string `json:"status,omitempty"`
+	Classification        string `json:"classification,omitempty"`
+	TimedOut              bool   `json:"timed_out,omitempty"`
+	Canceled              bool   `json:"canceled,omitempty"`
+	IsError               bool   `json:"is_error,omitempty"`
+	TimeoutMS             int    `json:"timeout_ms,omitempty"`
+	WorkingDirSet         bool   `json:"working_dir_set,omitempty"`
+	CommandLen            int    `json:"command_len,omitempty"`
+	BackgroundRecommended bool   `json:"background_recommended,omitempty"`
 }
 
 type ToolSearchReceipt struct {

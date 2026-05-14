@@ -1426,6 +1426,7 @@ func (rt *executionRuntime) recordOutcome(ctx context.Context, in outcomeInput) 
 		SkillCatalogReceipts:     completionSkillCatalogReceiptsToLearning(in.completion.SkillCatalogReceipts),
 		SkillExecutionReceipts:   completionSkillExecutionReceiptsToLearning(in.completion.SkillExecutionReceipts),
 		CommandCatalogReceipts:   completionCommandCatalogReceiptsToLearning(in.completion.CommandCatalogReceipts),
+		ShellCommandReceipts:     completionShellCommandReceiptsToLearning(in.completion.ShellCommandReceipts),
 		ToolSearchReceipts:       completionToolSearchReceiptsToLearning(in.completion.ToolSearchReceipts),
 		ControlToolReceipts:      completionControlToolReceiptsToLearning(in.completion.ControlToolReceipts),
 		ConditionalSkillMatches:  completionSkillMatchesToLearning(in.completion.ConditionalSkillMatches),
@@ -1584,6 +1585,30 @@ func completionCommandCatalogReceiptsToLearning(src []completionCommandCatalogRe
 			Query:                 receipt.Query,
 			Command:               receipt.Command,
 			FollowupTool:          receipt.FollowupTool,
+		})
+	}
+	return out
+}
+
+func completionShellCommandReceiptsToLearning(src []completionShellCommandReceipt) []learning.ShellCommandReceipt {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]learning.ShellCommandReceipt, 0, len(src))
+	for _, receipt := range src {
+		out = append(out, learning.ShellCommandReceipt{
+			Tool:                  receipt.Tool,
+			Action:                receipt.Action,
+			CommandClass:          receipt.CommandClass,
+			Status:                receipt.Status,
+			Classification:        receipt.Classification,
+			TimedOut:              receipt.TimedOut,
+			Canceled:              receipt.Canceled,
+			IsError:               receipt.IsError,
+			TimeoutMS:             receipt.TimeoutMS,
+			WorkingDirSet:         receipt.WorkingDirSet,
+			CommandLen:            receipt.CommandLen,
+			BackgroundRecommended: receipt.BackgroundRecommended,
 		})
 	}
 	return out

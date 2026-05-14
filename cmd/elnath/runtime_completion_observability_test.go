@@ -627,6 +627,61 @@ func TestCompletionContractSummaryDoesNotCountNoopWriteFileResultAsMutation(t *t
 	}
 }
 
+func TestCompletionContractSummaryRecordsShellCommandReceipts(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("run broad verification"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "bash-1", Name: "bash", Input: json.RawMessage(`{"command":"go test ./...","timeout_ms":1234,"working_dir":"sub"}`)},
+			}},
+			llm.NewToolResultMessage("bash-1", "BASH RESULT\nstatus: timeout\nexit_code: null\nduration_ms: 1234\ncwd: sub\ntimed_out: true\ncanceled: false\nstdout_bytes_raw: 0\nstdout_bytes_shown: 0\nstdout_truncated: false\nstderr_bytes_raw: 4\nstderr_bytes_shown: 4\nstderr_truncated: false\nclassification: timeout\n\nSTDERR:\nFAIL", true),
+			llm.NewAssistantMessage("Verification failed."),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(&orchestrator.RoutingContext{VerificationHint: true}, orchestrator.WorkflowConfig{}, result)
+
+	if len(summary.ShellCommandReceipts) != 1 {
+		t.Fatalf("ShellCommandReceipts = %#v, want one receipt", summary.ShellCommandReceipts)
+	}
+	receipt := summary.ShellCommandReceipts[0]
+	if receipt.Tool != "bash" || receipt.Action != "run" {
+		t.Fatalf("receipt identity = %+v", receipt)
+	}
+	if receipt.CommandClass != "broad_verify" {
+		t.Fatalf("CommandClass = %q, want broad_verify", receipt.CommandClass)
+	}
+	if receipt.Status != "timeout" || receipt.Classification != "timeout" || !receipt.TimedOut || receipt.Canceled || !receipt.IsError {
+		t.Fatalf("receipt status = %+v", receipt)
+	}
+	if receipt.TimeoutMS != 1234 || !receipt.WorkingDirSet || receipt.CommandLen != len("go test ./...") {
+		t.Fatalf("receipt bounds = %+v", receipt)
+	}
+}
+
+func TestCompletionContractSummaryFlagsBackgroundShellCommand(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("start the dev server"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "bash-1", Name: "bash", Input: json.RawMessage(`{"command":"npm run dev"}`)},
+			}},
+			llm.NewToolResultMessage("bash-1", "BASH RESULT\nstatus: success\nexit_code: 0\nduration_ms: 10\ncwd: .\ntimed_out: false\ncanceled: false\nstdout_bytes_raw: 0\nstdout_bytes_shown: 0\nstdout_truncated: false\nstderr_bytes_raw: 0\nstderr_bytes_shown: 0\nstderr_truncated: false\nclassification: success\n", false),
+			llm.NewAssistantMessage("Server started."),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(nil, orchestrator.WorkflowConfig{}, result)
+
+	if len(summary.ShellCommandReceipts) != 1 {
+		t.Fatalf("ShellCommandReceipts = %#v, want one receipt", summary.ShellCommandReceipts)
+	}
+	receipt := summary.ShellCommandReceipts[0]
+	if receipt.CommandClass != "background" || !receipt.BackgroundRecommended {
+		t.Fatalf("receipt background policy = %+v, want background class with recommendation", receipt)
+	}
+}
+
 func TestCompletionContractSummaryRecordsReasoningConfig(t *testing.T) {
 	result := &orchestrator.WorkflowResult{
 		Messages:              []llm.Message{llm.NewAssistantMessage("Done.")},
@@ -1232,6 +1287,15 @@ func TestRecordOutcomePersistsCompletionObservability(t *testing.T) {
 				Query:                 "commands",
 				FollowupTool:          "skill",
 			}},
+			ShellCommandReceipts: []completionShellCommandReceipt{{
+				Tool:           "bash",
+				Action:         "run",
+				CommandClass:   "focused_verify",
+				Status:         "success",
+				Classification: "success",
+				TimeoutMS:      1000,
+				CommandLen:     len("go test ./cmd/elnath -count=1"),
+			}},
 			ToolSearchReceipts: []completionToolSearchReceipt{{
 				Tool:               "tool_search",
 				Action:             "search",
@@ -1355,6 +1419,15 @@ func TestCompletionGateContextProviderConsumesRuntimeSummary(t *testing.T) {
 			Query:                 "commands",
 			FollowupTool:          "skill",
 		}},
+		ShellCommandReceipts: []completionShellCommandReceipt{{
+			Tool:                  "bash",
+			Action:                "run",
+			CommandClass:          "background",
+			Status:                "success",
+			Classification:        "success",
+			CommandLen:            len("npm run dev"),
+			BackgroundRecommended: true,
+		}},
 		ToolSearchReceipts: []completionToolSearchReceipt{{
 			Tool:               "tool_search",
 			Action:             "search",
@@ -1438,6 +1511,9 @@ func TestCompletionGateContextProviderConsumesRuntimeSummary(t *testing.T) {
 	}
 	if len(summary.CommandCatalogReceipts) != 1 || summary.CommandCatalogReceipts[0].ExecutionPolicy != "metadata_only" || summary.CommandCatalogReceipts[0].ExecutableCommands != 11 || summary.CommandCatalogReceipts[0].ModelCallableCommands != 1 || summary.CommandCatalogReceipts[0].FollowupTool != "skill" {
 		t.Fatalf("CommandCatalogReceipts = %+v", summary.CommandCatalogReceipts)
+	}
+	if len(summary.ShellCommandReceipts) != 1 || summary.ShellCommandReceipts[0].CommandClass != "background" || !summary.ShellCommandReceipts[0].BackgroundRecommended {
+		t.Fatalf("ShellCommandReceipts = %+v", summary.ShellCommandReceipts)
 	}
 	if len(summary.ToolSearchReceipts) != 1 || summary.ToolSearchReceipts[0].ExecutionPolicy != "metadata_only" {
 		t.Fatalf("ToolSearchReceipts = %+v", summary.ToolSearchReceipts)
@@ -1751,6 +1827,9 @@ func assertCompletionOutcome(t *testing.T, rec learning.OutcomeRecord) {
 	}
 	if len(rec.CommandCatalogReceipts) != 1 || rec.CommandCatalogReceipts[0].ExecutionPolicy != "metadata_only" || rec.CommandCatalogReceipts[0].ExecutableCommands != 11 || rec.CommandCatalogReceipts[0].ModelCallableCommands != 1 || rec.CommandCatalogReceipts[0].FollowupTool != "skill" {
 		t.Fatalf("CommandCatalogReceipts = %+v", rec.CommandCatalogReceipts)
+	}
+	if len(rec.ShellCommandReceipts) != 1 || rec.ShellCommandReceipts[0].CommandClass != "focused_verify" || rec.ShellCommandReceipts[0].TimeoutMS != 1000 {
+		t.Fatalf("ShellCommandReceipts = %+v", rec.ShellCommandReceipts)
 	}
 	if len(rec.ToolSearchReceipts) != 1 || rec.ToolSearchReceipts[0].ExecutionPolicy != "metadata_only" {
 		t.Fatalf("ToolSearchReceipts = %+v", rec.ToolSearchReceipts)

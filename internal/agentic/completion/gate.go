@@ -48,6 +48,7 @@ type CompletionContext struct {
 	SkillCatalogReceipts     []SkillCatalogReceipt
 	SkillExecutionReceipts   []SkillExecutionReceipt
 	CommandCatalogReceipts   []CommandCatalogReceipt
+	ShellCommandReceipts     []ShellCommandReceipt
 	ToolSearchReceipts       []ToolSearchReceipt
 	ControlToolReceipts      []ControlToolReceipt
 	ConditionalSkillMatches  []ConditionalSkillMatch
@@ -144,6 +145,21 @@ type CommandCatalogReceipt struct {
 	Query                 string `json:"query,omitempty"`
 	Command               string `json:"command,omitempty"`
 	FollowupTool          string `json:"followup_tool,omitempty"`
+}
+
+type ShellCommandReceipt struct {
+	Tool                  string `json:"tool"`
+	Action                string `json:"action"`
+	CommandClass          string `json:"command_class,omitempty"`
+	Status                string `json:"status,omitempty"`
+	Classification        string `json:"classification,omitempty"`
+	TimedOut              bool   `json:"timed_out,omitempty"`
+	Canceled              bool   `json:"canceled,omitempty"`
+	IsError               bool   `json:"is_error,omitempty"`
+	TimeoutMS             int    `json:"timeout_ms,omitempty"`
+	WorkingDirSet         bool   `json:"working_dir_set,omitempty"`
+	CommandLen            int    `json:"command_len,omitempty"`
+	BackgroundRecommended bool   `json:"background_recommended,omitempty"`
 }
 
 type ToolSearchReceipt struct {
@@ -458,6 +474,9 @@ func encodeReceiptSummary(summary map[string]int, completionContext CompletionCo
 	}
 	if len(completionContext.CommandCatalogReceipts) > 0 {
 		payload["command_catalog_receipts"] = completionContext.CommandCatalogReceipts
+	}
+	if len(completionContext.ShellCommandReceipts) > 0 {
+		payload["shell_command_receipts"] = completionContext.ShellCommandReceipts
 	}
 	if len(completionContext.ToolSearchReceipts) > 0 {
 		payload["tool_search_receipts"] = completionContext.ToolSearchReceipts

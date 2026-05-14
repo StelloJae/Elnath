@@ -5,6 +5,7 @@ import (
 	"path"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/stello/elnath/internal/llm"
@@ -32,6 +33,7 @@ type completionContractSummary struct {
 	SkillCatalogReceipts     []completionSkillCatalogReceipt
 	SkillExecutionReceipts   []completionSkillExecutionReceipt
 	CommandCatalogReceipts   []completionCommandCatalogReceipt
+	ShellCommandReceipts     []completionShellCommandReceipt
 	ToolSearchReceipts       []completionToolSearchReceipt
 	ControlToolReceipts      []completionControlToolReceipt
 	CorrectionAttempted      bool
@@ -127,6 +129,21 @@ type completionCommandCatalogReceipt struct {
 	Query                 string `json:"query,omitempty"`
 	Command               string `json:"command,omitempty"`
 	FollowupTool          string `json:"followup_tool,omitempty"`
+}
+
+type completionShellCommandReceipt struct {
+	Tool                  string `json:"tool"`
+	Action                string `json:"action"`
+	CommandClass          string `json:"command_class,omitempty"`
+	Status                string `json:"status,omitempty"`
+	Classification        string `json:"classification,omitempty"`
+	TimedOut              bool   `json:"timed_out,omitempty"`
+	Canceled              bool   `json:"canceled,omitempty"`
+	IsError               bool   `json:"is_error,omitempty"`
+	TimeoutMS             int    `json:"timeout_ms,omitempty"`
+	WorkingDirSet         bool   `json:"working_dir_set,omitempty"`
+	CommandLen            int    `json:"command_len,omitempty"`
+	BackgroundRecommended bool   `json:"background_recommended,omitempty"`
 }
 
 type completionToolSearchReceipt struct {
@@ -267,6 +284,7 @@ func summarizeCompletionContract(routeCtx *orchestrator.RoutingContext, cfg orch
 	summary.SkillCatalogReceipts = observedSkillCatalogReceipts(result.Messages)
 	summary.SkillExecutionReceipts = observedSkillExecutionReceipts(result.Messages)
 	summary.CommandCatalogReceipts = observedCommandCatalogReceipts(result.Messages)
+	summary.ShellCommandReceipts = observedShellCommandReceipts(result.Messages)
 	summary.ToolSearchReceipts = observedToolSearchReceipts(result.Messages)
 	summary.ControlToolReceipts = observedControlToolReceipts(result.Messages)
 	summary.UserInputRequired = controlToolReceiptsContain(summary.ControlToolReceipts, "ask_user_question", "request")
@@ -534,6 +552,204 @@ func commandCatalogReceiptFromOutput(output string) (completionCommandCatalogRec
 		return completionCommandCatalogReceipt{}, false
 	}
 	return parsed.Receipt, true
+}
+
+type completionShellCommandUse struct {
+	Command    string
+	TimeoutMS  int
+	WorkingDir string
+}
+
+func observedShellCommandReceipts(messages []llm.Message) []completionShellCommandReceipt {
+	pending := make(map[string]completionShellCommandUse)
+	var receipts []completionShellCommandReceipt
+	for _, msg := range messages {
+		for _, block := range msg.Content {
+			switch b := block.(type) {
+			case llm.ToolUseBlock:
+				if b.ID == "" || b.Name != "bash" {
+					continue
+				}
+				use, ok := shellCommandUseFromInput(b.Input)
+				if ok {
+					pending[b.ID] = use
+				}
+			case llm.ToolResultBlock:
+				use, ok := pending[b.ToolUseID]
+				if !ok {
+					continue
+				}
+				receipts = append(receipts, shellCommandReceiptFromResult(use, b))
+				delete(pending, b.ToolUseID)
+			}
+		}
+	}
+	if len(receipts) == 0 {
+		return nil
+	}
+	return receipts
+}
+
+func shellCommandUseFromInput(input json.RawMessage) (completionShellCommandUse, bool) {
+	var payload struct {
+		Command    string `json:"command"`
+		TimeoutMS  int    `json:"timeout_ms"`
+		WorkingDir string `json:"working_dir"`
+	}
+	if err := json.Unmarshal(input, &payload); err != nil {
+		return completionShellCommandUse{}, false
+	}
+	command := strings.TrimSpace(payload.Command)
+	if command == "" {
+		return completionShellCommandUse{}, false
+	}
+	return completionShellCommandUse{
+		Command:    command,
+		TimeoutMS:  payload.TimeoutMS,
+		WorkingDir: strings.TrimSpace(payload.WorkingDir),
+	}, true
+}
+
+func shellCommandReceiptFromResult(use completionShellCommandUse, result llm.ToolResultBlock) completionShellCommandReceipt {
+	fields := bashResultHeaderFields(result.Content)
+	return completionShellCommandReceipt{
+		Tool:                  "bash",
+		Action:                "run",
+		CommandClass:          classifyShellCommand(use.Command),
+		Status:                fields["status"],
+		Classification:        fields["classification"],
+		TimedOut:              parseBashResultBool(fields["timed_out"]),
+		Canceled:              parseBashResultBool(fields["canceled"]),
+		IsError:               result.IsError,
+		TimeoutMS:             use.TimeoutMS,
+		WorkingDirSet:         use.WorkingDir != "",
+		CommandLen:            len(use.Command),
+		BackgroundRecommended: shellCommandBackgroundRecommended(use.Command),
+	}
+}
+
+func bashResultHeaderFields(output string) map[string]string {
+	fields := make(map[string]string)
+	lines := strings.Split(output, "\n")
+	for i, line := range lines {
+		line = strings.TrimSpace(line)
+		if i == 0 && line == "BASH RESULT" {
+			continue
+		}
+		if line == "" || line == "STDOUT:" || line == "STDERR:" || line == "SANDBOX VIOLATIONS:" {
+			break
+		}
+		key, value, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		fields[strings.TrimSpace(key)] = strings.TrimSpace(value)
+	}
+	return fields
+}
+
+func parseBashResultBool(raw string) bool {
+	parsed, err := strconv.ParseBool(strings.TrimSpace(raw))
+	return err == nil && parsed
+}
+
+func classifyShellCommand(command string) string {
+	normalized := strings.ToLower(strings.TrimSpace(command))
+	if normalized == "" {
+		return "unknown"
+	}
+	if isVerificationCommand(normalized) {
+		verificationClass, _ := classifyCompletionVerification(normalized, orchestrator.VerificationPolicy{})
+		if verificationClass == completionVerificationClassBroad {
+			return "broad_verify"
+		}
+		return "focused_verify"
+	}
+	if shellCommandBackgroundRecommended(normalized) {
+		return "background"
+	}
+	if bashCommandLooksMutating(normalized) {
+		return "edit"
+	}
+	if shellCommandLooksDiagnostic(normalized) {
+		return "diagnostic"
+	}
+	if shellCommandLooksInspect(normalized) {
+		return "inspect"
+	}
+	return "unknown"
+}
+
+func shellCommandBackgroundRecommended(command string) bool {
+	command = strings.ToLower(strings.TrimSpace(command))
+	for _, marker := range []string{
+		"npm run dev",
+		"pnpm dev",
+		"pnpm run dev",
+		"yarn dev",
+		"yarn run dev",
+		"bun run dev",
+		"next dev",
+		"vite",
+		"tail -f",
+		"watch ",
+		"python -m http.server",
+		"python3 -m http.server",
+	} {
+		if strings.Contains(command, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func shellCommandLooksDiagnostic(command string) bool {
+	command = strings.ToLower(strings.TrimSpace(command))
+	for _, prefix := range []string{
+		"pwd",
+		"env",
+		"which ",
+		"command -v ",
+		"date",
+		"whoami",
+		"go env",
+		"node --version",
+		"python --version",
+		"python3 --version",
+	} {
+		if command == strings.TrimSpace(prefix) || strings.HasPrefix(command, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func shellCommandLooksInspect(command string) bool {
+	command = strings.ToLower(strings.TrimSpace(command))
+	for _, prefix := range []string{
+		"git status",
+		"git diff",
+		"git log",
+		"ls",
+		"find ",
+		"rg ",
+		"grep ",
+		"cat ",
+		"head ",
+		"tail ",
+		"sed -n",
+		"wc ",
+		"du ",
+		"go list",
+		"npm ls",
+		"pnpm ls",
+		"yarn list",
+	} {
+		if command == strings.TrimSpace(prefix) || strings.HasPrefix(command, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 var completionControlToolReceiptNames = map[string]struct{}{
