@@ -26,10 +26,46 @@ type fakeTool struct {
 	sleep       time.Duration
 	failWith    error
 	failResult  bool
+	gate        *executionGate
 
 	mu         sync.Mutex
 	startedAt  time.Time
 	finishedAt time.Time
+}
+
+type executionGate struct {
+	want int
+
+	mu      sync.Mutex
+	started int
+	ready   chan struct{}
+	closed  bool
+}
+
+func newExecutionGate(want int) *executionGate {
+	return &executionGate{want: want, ready: make(chan struct{})}
+}
+
+func (g *executionGate) wait(ctx context.Context) error {
+	if g == nil {
+		return nil
+	}
+
+	g.mu.Lock()
+	g.started++
+	if !g.closed && g.started >= g.want {
+		close(g.ready)
+		g.closed = true
+	}
+	ready := g.ready
+	g.mu.Unlock()
+
+	select {
+	case <-ready:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (t *fakeTool) Name() string                           { return t.name }
@@ -50,6 +86,10 @@ func (t *fakeTool) Execute(ctx context.Context, _ json.RawMessage) (*tools.Resul
 		t.finishedAt = time.Now()
 		t.mu.Unlock()
 	}()
+
+	if err := t.gate.wait(ctx); err != nil {
+		return nil, err
+	}
 
 	if t.sleep > 0 {
 		select {
@@ -135,57 +175,54 @@ func (h *mutateResultHook) PostToolUse(_ context.Context, _ string, _ json.RawMe
 
 func TestPartition_AllReadsParallel(t *testing.T) {
 	root := t.TempDir()
-	r1 := &fakeTool{name: "read_a", safe: true, reversible: true, scope: tools.ToolScope{ReadPaths: []string{filepath.Join(root, "a")}}, sleep: 50 * time.Millisecond}
-	r2 := &fakeTool{name: "read_b", safe: true, reversible: true, scope: tools.ToolScope{ReadPaths: []string{filepath.Join(root, "b")}}, sleep: 50 * time.Millisecond}
-	r3 := &fakeTool{name: "read_c", safe: true, reversible: true, scope: tools.ToolScope{ReadPaths: []string{filepath.Join(root, "c")}}, sleep: 50 * time.Millisecond}
+	gate := newExecutionGate(3)
+	r1 := &fakeTool{name: "read_a", safe: true, reversible: true, scope: tools.ToolScope{ReadPaths: []string{filepath.Join(root, "a")}}, sleep: 50 * time.Millisecond, gate: gate}
+	r2 := &fakeTool{name: "read_b", safe: true, reversible: true, scope: tools.ToolScope{ReadPaths: []string{filepath.Join(root, "b")}}, sleep: 50 * time.Millisecond, gate: gate}
+	r3 := &fakeTool{name: "read_c", safe: true, reversible: true, scope: tools.ToolScope{ReadPaths: []string{filepath.Join(root, "c")}}, sleep: 50 * time.Millisecond, gate: gate}
 
 	reg := tools.NewRegistry()
 	reg.Register(r1)
 	reg.Register(r2)
 	reg.Register(r3)
 
-	start := time.Now()
-	messages, err := newTestAgent(reg).executeTools(context.Background(), nil, []llm.ToolUseBlock{
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	messages, err := newTestAgent(reg).executeTools(ctx, nil, []llm.ToolUseBlock{
 		{ID: "r1", Name: r1.Name(), Input: json.RawMessage(`{}`)},
 		{ID: "r2", Name: r2.Name(), Input: json.RawMessage(`{}`)},
 		{ID: "r3", Name: r3.Name(), Input: json.RawMessage(`{}`)},
 	}, nil)
-	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("executeTools: %v", err)
 	}
-	if elapsed >= 100*time.Millisecond {
-		t.Fatalf("wallclock = %s, want < 100ms", elapsed)
-	}
 	assertToolResultIDs(t, messages, []string{"r1", "r2", "r3"})
-	assertStartWindow(t, 20*time.Millisecond, r1, r2, r3)
+	assertIntervalsOverlap(t, r1, r2, r3)
 }
 
 func TestPartition_WritesDifferentPaths_Parallel(t *testing.T) {
 	root := t.TempDir()
-	w1 := &fakeTool{name: "write_a", scope: tools.ToolScope{WritePaths: []string{filepath.Join(root, "a")}, Persistent: true}, sleep: 50 * time.Millisecond}
-	w2 := &fakeTool{name: "write_b", scope: tools.ToolScope{WritePaths: []string{filepath.Join(root, "b")}, Persistent: true}, sleep: 50 * time.Millisecond}
-	w3 := &fakeTool{name: "write_c", scope: tools.ToolScope{WritePaths: []string{filepath.Join(root, "c")}, Persistent: true}, sleep: 50 * time.Millisecond}
+	gate := newExecutionGate(3)
+	w1 := &fakeTool{name: "write_a", scope: tools.ToolScope{WritePaths: []string{filepath.Join(root, "a")}, Persistent: true}, sleep: 50 * time.Millisecond, gate: gate}
+	w2 := &fakeTool{name: "write_b", scope: tools.ToolScope{WritePaths: []string{filepath.Join(root, "b")}, Persistent: true}, sleep: 50 * time.Millisecond, gate: gate}
+	w3 := &fakeTool{name: "write_c", scope: tools.ToolScope{WritePaths: []string{filepath.Join(root, "c")}, Persistent: true}, sleep: 50 * time.Millisecond, gate: gate}
 
 	reg := tools.NewRegistry()
 	reg.Register(w1)
 	reg.Register(w2)
 	reg.Register(w3)
 
-	start := time.Now()
-	messages, err := newTestAgent(reg).executeTools(context.Background(), nil, []llm.ToolUseBlock{
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	messages, err := newTestAgent(reg).executeTools(ctx, nil, []llm.ToolUseBlock{
 		{ID: "w1", Name: w1.Name(), Input: json.RawMessage(`{}`)},
 		{ID: "w2", Name: w2.Name(), Input: json.RawMessage(`{}`)},
 		{ID: "w3", Name: w3.Name(), Input: json.RawMessage(`{}`)},
 	}, nil)
-	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("executeTools: %v", err)
 	}
-	if elapsed >= 100*time.Millisecond {
-		t.Fatalf("wallclock = %s, want < 100ms", elapsed)
-	}
 	assertToolResultIDs(t, messages, []string{"w1", "w2", "w3"})
+	assertIntervalsOverlap(t, w1, w2, w3)
 }
 
 func TestPartition_WritesSamePath_Serial(t *testing.T) {
@@ -197,17 +234,12 @@ func TestPartition_WritesSamePath_Serial(t *testing.T) {
 	reg.Register(w1)
 	reg.Register(w2)
 
-	start := time.Now()
 	messages, err := newTestAgent(reg).executeTools(context.Background(), nil, []llm.ToolUseBlock{
 		{ID: "w1", Name: w1.Name(), Input: json.RawMessage(`{}`)},
 		{ID: "w2", Name: w2.Name(), Input: json.RawMessage(`{}`)},
 	}, nil)
-	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("executeTools: %v", err)
-	}
-	if elapsed < 100*time.Millisecond {
-		t.Fatalf("wallclock = %s, want >= 100ms", elapsed)
 	}
 	assertToolResultIDs(t, messages, []string{"w1", "w2"})
 	assertIntervalsDisjoint(t, w1, w2)
@@ -216,26 +248,24 @@ func TestPartition_WritesSamePath_Serial(t *testing.T) {
 func TestPartition_BashBlocksReads(t *testing.T) {
 	workDir := t.TempDir()
 	bash := &fakeTool{name: "bash_like", scope: tools.ToolScope{WritePaths: []string{workDir}, Persistent: true}, sleep: 30 * time.Millisecond}
-	r1 := &fakeTool{name: "read_a", safe: true, reversible: true, scope: tools.ToolScope{ReadPaths: []string{filepath.Join(workDir, "a")}}, sleep: 30 * time.Millisecond}
-	r2 := &fakeTool{name: "read_b", safe: true, reversible: true, scope: tools.ToolScope{ReadPaths: []string{filepath.Join(workDir, "b")}}, sleep: 30 * time.Millisecond}
+	readGate := newExecutionGate(2)
+	r1 := &fakeTool{name: "read_a", safe: true, reversible: true, scope: tools.ToolScope{ReadPaths: []string{filepath.Join(workDir, "a")}}, sleep: 30 * time.Millisecond, gate: readGate}
+	r2 := &fakeTool{name: "read_b", safe: true, reversible: true, scope: tools.ToolScope{ReadPaths: []string{filepath.Join(workDir, "b")}}, sleep: 30 * time.Millisecond, gate: readGate}
 
 	reg := tools.NewRegistry()
 	reg.Register(bash)
 	reg.Register(r1)
 	reg.Register(r2)
 
-	start := time.Now()
-	messages, err := newTestAgent(reg).executeTools(context.Background(), nil, []llm.ToolUseBlock{
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	messages, err := newTestAgent(reg).executeTools(ctx, nil, []llm.ToolUseBlock{
 		{ID: "bash", Name: bash.Name(), Input: json.RawMessage(`{}`)},
 		{ID: "r1", Name: r1.Name(), Input: json.RawMessage(`{}`)},
 		{ID: "r2", Name: r2.Name(), Input: json.RawMessage(`{}`)},
 	}, nil)
-	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("executeTools: %v", err)
-	}
-	if elapsed < 60*time.Millisecond || elapsed >= 90*time.Millisecond {
-		t.Fatalf("wallclock = %s, want bash batch then parallel reads", elapsed)
 	}
 	assertToolResultIDs(t, messages, []string{"bash", "r1", "r2"})
 	bashStart, bashFinish := bash.interval()
@@ -244,6 +274,7 @@ func TestPartition_BashBlocksReads(t *testing.T) {
 	if r1Start.Before(bashFinish) || r2Start.Before(bashFinish) {
 		t.Fatalf("read batch started before bash finished: bash=%s..%s r1=%s r2=%s", bashStart, bashFinish, r1Start, r2Start)
 	}
+	assertIntervalsOverlap(t, r1, r2)
 }
 
 func TestPartition_MixedOrder_PreservesResults(t *testing.T) {
@@ -389,17 +420,12 @@ func TestPartition_ConservativeScopeSerializes(t *testing.T) {
 	reg.Register(badWrite)
 	reg.Register(read)
 
-	start := time.Now()
 	messages, err := newTestAgent(reg).executeTools(context.Background(), nil, []llm.ToolUseBlock{
 		{ID: "write", Name: badWrite.Name(), Input: json.RawMessage("{not valid")},
 		{ID: "read", Name: read.Name(), Input: json.RawMessage(`{}`)},
 	}, nil)
-	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("executeTools: %v", err)
-	}
-	if elapsed < 80*time.Millisecond {
-		t.Fatalf("wallclock = %s, want conservative scope to force serialization", elapsed)
 	}
 	blocks := toolResultBlocks(t, messages)
 	if len(blocks) != 2 {
@@ -622,23 +648,25 @@ func assertToolResultIDs(t *testing.T, messages []llm.Message, want []string) {
 	}
 }
 
-func assertStartWindow(t *testing.T, window time.Duration, tools ...*fakeTool) {
+func assertIntervalsOverlap(t *testing.T, tools ...*fakeTool) {
 	t.Helper()
-	var minStart, maxStart time.Time
-	for i, tool := range tools {
-		start, _ := tool.interval()
+	for i := 0; i < len(tools); i++ {
+		start, finish := tools[i].interval()
 		if start.IsZero() {
 			t.Fatalf("tool[%d] did not start", i)
 		}
-		if minStart.IsZero() || start.Before(minStart) {
-			minStart = start
-		}
-		if maxStart.IsZero() || start.After(maxStart) {
-			maxStart = start
+		if finish.IsZero() {
+			t.Fatalf("tool[%d] did not finish", i)
 		}
 	}
-	if maxStart.Sub(minStart) > window {
-		t.Fatalf("start window = %s, want <= %s", maxStart.Sub(minStart), window)
+	for i := 0; i < len(tools); i++ {
+		for j := i + 1; j < len(tools); j++ {
+			aStart, aFinish := tools[i].interval()
+			bStart, bFinish := tools[j].interval()
+			if !intervalsOverlap([2]time.Time{aStart, aFinish}, [2]time.Time{bStart, bFinish}) {
+				t.Fatalf("intervals did not overlap: tool[%d]=%s..%s tool[%d]=%s..%s", i, aStart, aFinish, j, bStart, bFinish)
+			}
+		}
 	}
 }
 
@@ -653,4 +681,8 @@ func assertIntervalsDisjoint(t *testing.T, a, b *fakeTool) {
 
 func intervalsDisjoint(a, b [2]time.Time) bool {
 	return !a[1].After(b[0]) || !b[1].After(a[0])
+}
+
+func intervalsOverlap(a, b [2]time.Time) bool {
+	return a[1].After(b[0]) && b[1].After(a[0])
 }
