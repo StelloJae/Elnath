@@ -56,12 +56,14 @@ func TestExecutionRuntimeRegistersSkillCatalogTool(t *testing.T) {
 func TestExecutionRuntimeRegistersAskUserQuestionTool(t *testing.T) {
 	rt := newTestExecutionRuntime(t, &countingProvider{})
 
-	tool, ok := rt.reg.Get("ask_user_question")
-	if !ok {
-		t.Fatal("ask_user_question tool missing")
-	}
-	if !tool.IsConcurrencySafe(nil) || !tool.Reversible() {
-		t.Fatal("ask_user_question should be read-only and reversible")
+	for _, name := range []string{"ask_user_question", "user_question_wait"} {
+		tool, ok := rt.reg.Get(name)
+		if !ok {
+			t.Fatalf("%s tool missing", name)
+		}
+		if !tool.IsConcurrencySafe(nil) || !tool.Reversible() {
+			t.Fatalf("%s should be read-only and reversible", name)
+		}
 	}
 }
 

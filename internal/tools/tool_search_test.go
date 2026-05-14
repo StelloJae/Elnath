@@ -196,6 +196,7 @@ func TestToolSearchReportsRoutingMetadata(t *testing.T) {
 	reg.Register(&toolSearchMetadataTool{name: "task_create", description: "Create daemon task"})
 	reg.Register(&toolSearchMetadataTool{name: "user_question_answer", description: "Resume from user answer"})
 	reg.Register(&toolSearchMetadataTool{name: "user_question_list", description: "List pending user questions"})
+	reg.Register(&toolSearchMetadataTool{name: "user_question_wait", description: "Wait for pending user answer"})
 	reg.Register(&toolSearchMetadataTool{name: "schedule_list", description: "List scheduled tasks"})
 	reg.Register(&toolSearchMetadataTool{name: "enter_worktree", description: "Create managed worktree"})
 	reg.Register(&toolSearchMetadataTool{name: "skill", description: "Invoke a skill"})
@@ -223,6 +224,7 @@ func TestToolSearchReportsRoutingMetadata(t *testing.T) {
 		"task_create":          {category: "task", surface: "daemon"},
 		"user_question_answer": {category: "user_input", surface: "runtime"},
 		"user_question_list":   {category: "user_input", surface: "runtime"},
+		"user_question_wait":   {category: "user_input", surface: "runtime"},
 		"schedule_list":        {category: "schedule", surface: "scheduler"},
 		"enter_worktree":       {category: "worktree", surface: "worktree"},
 		"skill":                {category: "skill", surface: "skill"},

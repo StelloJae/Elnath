@@ -226,8 +226,8 @@ func TestExplainControlSurfacesJSON(t *testing.T) {
 	if !ok {
 		t.Fatalf("missing control surface user_input in %+v", byName)
 	}
-	if userInput.status != "partial" || !userInput.toolSearchDiscoverable || !userInput.receiptBacked || userInput.toolCount != 3 {
-		t.Fatalf("user_input surface = %+v, want partial ToolSearch-discoverable receipt-backed with three tools", userInput)
+	if userInput.status != "partial" || !userInput.toolSearchDiscoverable || !userInput.receiptBacked || userInput.toolCount != 4 {
+		t.Fatalf("user_input surface = %+v, want partial ToolSearch-discoverable receipt-backed with four tools", userInput)
 	}
 	codeIntelligence, ok := byName["code_intelligence"]
 	if !ok {
