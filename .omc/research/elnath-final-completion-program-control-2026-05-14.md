@@ -33,6 +33,14 @@ Merged structural PRs now include:
 - PR #218: bounded `process_wait watch_text` marker waits
 - PR #219: registry-backed top-level CLI help and control-surface status refresh
 - PR #220: command-specific `--help` dispatch repair
+- PR #221: subcommand help coverage guard
+- PR #222: stronger control-surface evidence
+- PR #223: code-intelligence and todo guard batch
+- PR #224: control-surface introspection and Go diagnostics
+
+Local post-PR224 work may also include:
+
+- pending user-question answer commands in pending-question views
 
 Do not restart old Milestone C/G work unless fresh evidence proves a regression.
 
@@ -45,19 +53,21 @@ Do not restart old Milestone C/G work unless fresh evidence proves a regression.
    - `.omc/research/completion-program-post-pr213-closeout-2026-05-14.md`
    - `.omc/research/control-surface-gap-refresh-2026-05-14.md`
    - `.omc/research/completion-program-runtime-health-check-2026-05-14.md`
+   - `.omc/research/pr224-control-surface-introspection-closure-2026-05-14.md`
+   - `.omc/research/user-question-pending-answer-handoff-2026-05-14.md`
 4. Choose the next structural blocker from current code evidence.
-5. Prefer no benchmark work until the post-PR213 closeout is understood.
+5. Prefer no benchmark work until the post-PR224 and local post-PR224 control-surface state is understood.
 
 ## Current recommended next lane
 
-First close the post-PR213 structural evidence state.
+First close the post-PR224 structural evidence state and avoid repeating stale
+PR #207-#224 work.
 
 Then choose exactly one:
 
-- tiny current-only control smoke to validate receipt behavior in benchmark environment; or
-- command/control-surface discoverability drift repair; or
-- code-intelligence/LSP design slice; or
-- UI-level answer collection design slice.
+- final control-boundary refresh / closeout artifact; or
+- small current-only control smoke only if needed to validate receipt behavior in benchmark environment; or
+- one more runtime-only boundary improvement with focused tests.
 
 Do not run full v8, baseline, Codex comparison, Claude comparison, or superiority lanes from this document.
 
@@ -65,8 +75,8 @@ Do not run full v8, baseline, Codex comparison, Claude comparison, or superiorit
 
 Allowed:
 
-- Elnath has stronger supervisor/control-loop/tool/provider structure after PR #207-#213.
-- Local `go test ./... -count=1` and `go vet ./...` were clean in the PR #213 evidence artifact.
+- Elnath has stronger supervisor/control-loop/tool/provider structure after PR #207-#224.
+- PR #224 local broad checks and CI were clean per its closure artifact.
 
 Forbidden:
 
@@ -75,4 +85,4 @@ Forbidden:
 - v8 benchmark passed.
 - baseline/comparison evidence exists.
 - full LSP lifecycle exists.
-- UI-level answer collection is complete.
+- UI-level modal answer collection is complete.

@@ -144,6 +144,9 @@ func explainPendingQuestions(outcomeStore *learning.OutcomeStore, args []string)
 			item.AskedAt.UTC().Format("2006-01-02 15:04:05 UTC"),
 			item.Question,
 		)
+		if item.AnswerCommand != "" {
+			fmt.Fprintf(os.Stdout, "    answer: %s\n", item.AnswerCommand)
+		}
 	}
 	return nil
 }
@@ -223,7 +226,7 @@ func controlSurfacePolicyViewForRuntime() controlSurfacePolicyView {
 	return controlSurfacePolicyView{
 		Surfaces: surfaces,
 		RemainingGaps: []string{
-			"UI-level answer collection remains outside the runtime; request/list/wait/answer receipts are implemented",
+			"UI-level modal answer collection remains outside the runtime; request/list/wait/answer receipts and pending-list answer commands are implemented",
 			"bounded self-correction is intentionally closed-enum and not broad silent self-healing",
 			"bounded process_wait supports literal watch_text; full streaming/async line-watch remains deferred",
 			"full LSP lifecycle remains deferred; code_symbols is the current Go-native symbols/definitions/references/hover hook",

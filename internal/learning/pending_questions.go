@@ -14,6 +14,9 @@ type PendingUserQuestion struct {
 	OptionCount    int       `json:"option_count,omitempty"`
 	TimeoutSeconds int       `json:"timeout_seconds,omitempty"`
 	AskedAt        time.Time `json:"asked_at"`
+	Answerable     bool      `json:"answerable"`
+	AnswerCommand  string    `json:"answer_command,omitempty"`
+	PendingCommand string    `json:"pending_command,omitempty"`
 }
 
 func PendingUserQuestions(records []OutcomeRecord, sessionID string, limit int) []PendingUserQuestion {
@@ -49,6 +52,7 @@ func PendingUserQuestions(records []OutcomeRecord, sessionID string, limit int) 
 					TimeoutSeconds: receipt.TimeoutSeconds,
 					AskedAt:        record.Timestamp,
 				}
+				pending[requestID] = withUserQuestionHandoff(pending[requestID])
 			case receipt.Tool == "user_question_answer" && receipt.Action == "answer":
 				delete(pending, requestID)
 			}
@@ -81,4 +85,35 @@ func FindPendingUserQuestion(records []OutcomeRecord, sessionID, requestID strin
 		}
 	}
 	return PendingUserQuestion{}, false
+}
+
+func withUserQuestionHandoff(question PendingUserQuestion) PendingUserQuestion {
+	if strings.TrimSpace(question.SessionID) == "" || strings.TrimSpace(question.RequestID) == "" {
+		return question
+	}
+	question.Answerable = true
+	question.AnswerCommand = UserQuestionAnswerCommand(question.SessionID, question.RequestID)
+	question.PendingCommand = PendingUserQuestionsCommand(question.SessionID)
+	return question
+}
+
+func UserQuestionAnswerCommand(sessionID, requestID string) string {
+	sessionID = strings.TrimSpace(sessionID)
+	requestID = strings.TrimSpace(requestID)
+	if sessionID == "" || requestID == "" {
+		return ""
+	}
+	return "elnath task answer --session " + shellQuoteUserQuestionArg(sessionID) + " --request " + shellQuoteUserQuestionArg(requestID) + " --answer 'ANSWER_TEXT'"
+}
+
+func PendingUserQuestionsCommand(sessionID string) string {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return ""
+	}
+	return "elnath explain pending-questions --session " + shellQuoteUserQuestionArg(sessionID)
+}
+
+func shellQuoteUserQuestionArg(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
