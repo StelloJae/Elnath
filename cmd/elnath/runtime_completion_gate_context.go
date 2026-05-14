@@ -188,6 +188,9 @@ func completionShellCommandReceiptsToAgentic(src []completionShellCommandReceipt
 		out = append(out, agenticcompletion.ShellCommandReceipt{
 			Tool:                  receipt.Tool,
 			Action:                receipt.Action,
+			ExecutionPolicy:       receipt.ExecutionPolicy,
+			CommandIntent:         receipt.CommandIntent,
+			IntentSource:          receipt.IntentSource,
 			CommandClass:          receipt.CommandClass,
 			Status:                receipt.Status,
 			Classification:        receipt.Classification,

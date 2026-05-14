@@ -632,9 +632,9 @@ func TestCompletionContractSummaryRecordsShellCommandReceipts(t *testing.T) {
 		Messages: []llm.Message{
 			llm.NewUserMessage("run broad verification"),
 			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
-				llm.ToolUseBlock{ID: "bash-1", Name: "bash", Input: json.RawMessage(`{"command":"go test ./...","timeout_ms":1234,"working_dir":"sub"}`)},
+				llm.ToolUseBlock{ID: "bash-1", Name: "bash", Input: json.RawMessage(`{"command":"go test ./...","intent":"broad_verify","timeout_ms":1234,"working_dir":"sub"}`)},
 			}},
-			llm.NewToolResultMessage("bash-1", "BASH RESULT\nstatus: timeout\nexit_code: null\nduration_ms: 1234\ncwd: sub\ntimed_out: true\ncanceled: false\nstdout_bytes_raw: 0\nstdout_bytes_shown: 0\nstdout_truncated: false\nstderr_bytes_raw: 4\nstderr_bytes_shown: 4\nstderr_truncated: false\nclassification: timeout\n\nSTDERR:\nFAIL", true),
+			llm.NewToolResultMessage("bash-1", "BASH RESULT\nstatus: timeout\nexit_code: null\nduration_ms: 1234\ncwd: sub\nexecution_policy: foreground_shell\ncommand_intent: broad_verify\nintent_source: explicit\ntimeout_ms: 1234\ntimed_out: true\ncanceled: false\nstdout_bytes_raw: 0\nstdout_bytes_shown: 0\nstdout_truncated: false\nstderr_bytes_raw: 4\nstderr_bytes_shown: 4\nstderr_truncated: false\nclassification: timeout\n\nSTDERR:\nFAIL", true),
 			llm.NewAssistantMessage("Verification failed."),
 		},
 		FinishReason: "stop",
@@ -650,6 +650,9 @@ func TestCompletionContractSummaryRecordsShellCommandReceipts(t *testing.T) {
 	}
 	if receipt.CommandClass != "broad_verify" {
 		t.Fatalf("CommandClass = %q, want broad_verify", receipt.CommandClass)
+	}
+	if receipt.ExecutionPolicy != "foreground_shell" || receipt.CommandIntent != "broad_verify" || receipt.IntentSource != "explicit" {
+		t.Fatalf("receipt execution intent = %+v", receipt)
 	}
 	if receipt.Status != "timeout" || receipt.Classification != "timeout" || !receipt.TimedOut || receipt.Canceled || !receipt.IsError {
 		t.Fatalf("receipt status = %+v", receipt)
@@ -1288,13 +1291,16 @@ func TestRecordOutcomePersistsCompletionObservability(t *testing.T) {
 				FollowupTool:          "skill",
 			}},
 			ShellCommandReceipts: []completionShellCommandReceipt{{
-				Tool:           "bash",
-				Action:         "run",
-				CommandClass:   "focused_verify",
-				Status:         "success",
-				Classification: "success",
-				TimeoutMS:      1000,
-				CommandLen:     len("go test ./cmd/elnath -count=1"),
+				Tool:            "bash",
+				Action:          "run",
+				ExecutionPolicy: "foreground_shell",
+				CommandIntent:   "focused_verify",
+				IntentSource:    "explicit",
+				CommandClass:    "focused_verify",
+				Status:          "success",
+				Classification:  "success",
+				TimeoutMS:       1000,
+				CommandLen:      len("go test ./cmd/elnath -count=1"),
 			}},
 			ToolSearchReceipts: []completionToolSearchReceipt{{
 				Tool:               "tool_search",
@@ -1422,6 +1428,9 @@ func TestCompletionGateContextProviderConsumesRuntimeSummary(t *testing.T) {
 		ShellCommandReceipts: []completionShellCommandReceipt{{
 			Tool:                  "bash",
 			Action:                "run",
+			ExecutionPolicy:       "foreground_shell",
+			CommandIntent:         "background",
+			IntentSource:          "explicit",
 			CommandClass:          "background",
 			Status:                "success",
 			Classification:        "success",
@@ -1512,7 +1521,7 @@ func TestCompletionGateContextProviderConsumesRuntimeSummary(t *testing.T) {
 	if len(summary.CommandCatalogReceipts) != 1 || summary.CommandCatalogReceipts[0].ExecutionPolicy != "metadata_only" || summary.CommandCatalogReceipts[0].ExecutableCommands != 11 || summary.CommandCatalogReceipts[0].ModelCallableCommands != 1 || summary.CommandCatalogReceipts[0].FollowupTool != "skill" {
 		t.Fatalf("CommandCatalogReceipts = %+v", summary.CommandCatalogReceipts)
 	}
-	if len(summary.ShellCommandReceipts) != 1 || summary.ShellCommandReceipts[0].CommandClass != "background" || !summary.ShellCommandReceipts[0].BackgroundRecommended {
+	if len(summary.ShellCommandReceipts) != 1 || summary.ShellCommandReceipts[0].CommandClass != "background" || summary.ShellCommandReceipts[0].CommandIntent != "background" || summary.ShellCommandReceipts[0].IntentSource != "explicit" || summary.ShellCommandReceipts[0].ExecutionPolicy != "foreground_shell" || !summary.ShellCommandReceipts[0].BackgroundRecommended {
 		t.Fatalf("ShellCommandReceipts = %+v", summary.ShellCommandReceipts)
 	}
 	if len(summary.ToolSearchReceipts) != 1 || summary.ToolSearchReceipts[0].ExecutionPolicy != "metadata_only" {
@@ -1828,7 +1837,7 @@ func assertCompletionOutcome(t *testing.T, rec learning.OutcomeRecord) {
 	if len(rec.CommandCatalogReceipts) != 1 || rec.CommandCatalogReceipts[0].ExecutionPolicy != "metadata_only" || rec.CommandCatalogReceipts[0].ExecutableCommands != 11 || rec.CommandCatalogReceipts[0].ModelCallableCommands != 1 || rec.CommandCatalogReceipts[0].FollowupTool != "skill" {
 		t.Fatalf("CommandCatalogReceipts = %+v", rec.CommandCatalogReceipts)
 	}
-	if len(rec.ShellCommandReceipts) != 1 || rec.ShellCommandReceipts[0].CommandClass != "focused_verify" || rec.ShellCommandReceipts[0].TimeoutMS != 1000 {
+	if len(rec.ShellCommandReceipts) != 1 || rec.ShellCommandReceipts[0].CommandClass != "focused_verify" || rec.ShellCommandReceipts[0].CommandIntent != "focused_verify" || rec.ShellCommandReceipts[0].IntentSource != "explicit" || rec.ShellCommandReceipts[0].ExecutionPolicy != "foreground_shell" || rec.ShellCommandReceipts[0].TimeoutMS != 1000 {
 		t.Fatalf("ShellCommandReceipts = %+v", rec.ShellCommandReceipts)
 	}
 	if len(rec.ToolSearchReceipts) != 1 || rec.ToolSearchReceipts[0].ExecutionPolicy != "metadata_only" {
