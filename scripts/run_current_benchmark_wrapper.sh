@@ -1228,6 +1228,15 @@ v8_mix_bf001_missing_behavior_or_regression() {
   return 1
 }
 
+v8_js_bug001_missing_behavior_or_regression() {
+  is_v8_js_bug001_express_task || return 1
+  local changed
+  changed="$(benchmark_changed_files_all)"
+  grep -Eq '^lib/application\.js$' <<<"$changed" || return 0
+  changed_files_include_test_or_fixture || return 0
+  return 1
+}
+
 ts_bf001_reported_tasks_fixture_mutation() {
   is_ts_bf001_vitest_task || return 1
   benchmark_changed_files_all | grep -Eq '^test/cli/fixtures/reported-tasks/.*\.ts$'
@@ -1598,6 +1607,10 @@ write_passed_verification_task_specific_failure() {
     write_result false true "incomplete_patch" "$recovery_attempted" false "$prefix, but V8-MIX-BF-001 lacks the required name-reference behavior diff plus focused test/fixture coverage"
     return 0
   fi
+  if v8_js_bug001_missing_behavior_or_regression; then
+    write_result false true "incomplete_patch" "$recovery_attempted" false "$prefix, but V8-JS-BUG-001 lacks the required mounted-app behavior diff plus focused regression coverage"
+    return 0
+  fi
   if v8_py_bf001_missing_behavior_or_regression; then
     write_result false true "incomplete_patch" "$recovery_attempted" false "$prefix, but V8-PY-BF-001 lacks the required Flask context behavior diff plus focused tests/test_basic.py regression"
     return 0
@@ -1652,6 +1665,10 @@ task_specific_completion_failure_reason() {
   fi
   if v8_mix_bf001_missing_behavior_or_regression; then
     echo "V8-MIX-BF-001 lacks the required name-reference behavior diff plus focused test/fixture coverage."
+    return 0
+  fi
+  if v8_js_bug001_missing_behavior_or_regression; then
+    echo "V8-JS-BUG-001 lacks the required mounted-app behavior diff plus focused regression coverage."
     return 0
   fi
   if v8_py_bf001_missing_behavior_or_regression; then
