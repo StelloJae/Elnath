@@ -1480,6 +1480,7 @@ func completionCorrectionAttemptDetailsToLearning(src []completionCorrectionAtte
 			FailureFamily:       detail.FailureFamily,
 			VerificationCommand: detail.VerificationCommand,
 			CompletionWarning:   detail.CompletionWarning,
+			ChangedFiles:        append([]string(nil), detail.ChangedFiles...),
 			OutOfScopeFiles:     append([]string(nil), detail.OutOfScopeFiles...),
 		})
 	}

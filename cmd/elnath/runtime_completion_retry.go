@@ -58,6 +58,7 @@ func (rt *executionRuntime) runSmallerScopeCompletionRetry(
 	summary completionContractSummary,
 	attempt int,
 ) (*orchestrator.WorkflowResult, completionContractSummary) {
+	beforeFiles := rt.completionChangedFilesSnapshot(ctx, input)
 	retryInput := input
 	retryInput.Messages = result.Messages
 	retryInput.Message = completionRetryPrompt(summary)
@@ -67,6 +68,8 @@ func (rt *executionRuntime) runSmallerScopeCompletionRetry(
 		retryInput.Config.ReasoningEffortMode = "manual"
 	}
 	retryResult, err := wf.Run(ctx, retryInput)
+	afterFiles := rt.completionChangedFilesSnapshot(ctx, input)
+	retryChangedFiles := completionChangedFilesDelta(beforeFiles, afterFiles)
 	if err != nil {
 		rt.app.Logger.Warn("completion correction retry failed",
 			"decision", summary.RetryDecision,
@@ -76,6 +79,7 @@ func (rt *executionRuntime) runSmallerScopeCompletionRetry(
 		return result, completionCorrectionFailedSummary(summary, "workflow_error", attempt)
 	}
 	retrySummary := withProviderCapabilities(summarizeCompletionContract(completionRetryRoutingContext(summary), retryInput.Config, retryResult), rt.provider)
+	retrySummary = withCompletionRetryChangedFiles(retrySummary, retryChangedFiles)
 	retrySummary.CorrectionAttempted = true
 	retrySummary.CorrectionAttempts = attempt
 	retrySummary.CorrectionMaxAttempts = summary.CorrectionMaxAttempts
@@ -108,6 +112,7 @@ func (rt *executionRuntime) runSmallerScopeCompletionRetry(
 		Status:            retrySummary.CorrectionStatus,
 		FailureFamily:     retrySummary.CorrectionFailureFamily,
 		CompletionWarning: retrySummary.CompletionWarning,
+		ChangedFiles:      append([]string(nil), retryChangedFiles...),
 		OutOfScopeFiles:   append([]string(nil), retrySummary.OutOfScopeChangedFiles...),
 	})
 	return retryResult, retrySummary

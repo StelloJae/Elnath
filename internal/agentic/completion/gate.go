@@ -76,6 +76,7 @@ type CorrectionAttemptReceipt struct {
 	FailureFamily       string   `json:"failure_family,omitempty"`
 	VerificationCommand string   `json:"verification_command,omitempty"`
 	CompletionWarning   string   `json:"completion_warning,omitempty"`
+	ChangedFiles        []string `json:"changed_files,omitempty"`
 	OutOfScopeFiles     []string `json:"out_of_scope_files,omitempty"`
 }
 
