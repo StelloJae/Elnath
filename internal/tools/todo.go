@@ -155,6 +155,9 @@ func (t *TodoWriteTool) Execute(_ context.Context, params json.RawMessage) (*Res
 			ActiveForm: activeForm,
 		})
 	}
+	if counts["in_progress"] > 1 {
+		return ErrorResult("todo_write: at most one in_progress todo is allowed"), nil
+	}
 
 	allCompleted := len(todos) > 0 && counts["completed"] == len(todos)
 	nudgeNeeded := allCompleted && len(todos) >= 3 && !hasVerificationTodo(todos)

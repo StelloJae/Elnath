@@ -247,6 +247,13 @@ func TestExplainControlSurfacesJSON(t *testing.T) {
 	if !strings.Contains(codeIntelligence.notes, "hover") {
 		t.Fatalf("code_intelligence notes = %q, want hover capability", codeIntelligence.notes)
 	}
+	scratchpad, ok := byName["scratchpad"]
+	if !ok {
+		t.Fatalf("missing control surface scratchpad in %+v", byName)
+	}
+	if !strings.Contains(scratchpad.notes, "single in_progress") {
+		t.Fatalf("scratchpad notes = %q, want single in_progress guard", scratchpad.notes)
+	}
 	if len(out.RemainingGaps) == 0 {
 		t.Fatal("remaining_gaps empty, want honest non-complete boundary")
 	}
