@@ -47,10 +47,22 @@ Known completed structural slices:
 
 - Milestone A: supervisor scope-drift guard
 - Milestone B: verification ownership classifier
+- Milestone C: shell mutation and diff supervisor
+- Milestone D: command execution policy parity
+- Milestone E: tool and prompt guidance parity
+- Milestone F: provider, model, and reasoning effort robustness
+- Milestone G: callable control-surface reporting and receipts
+- Follow-up: shell/process command intent receipts
+- Follow-up: process timeout receipts and timeout policy explanation
+- Follow-up: bounded `process_wait`
+- Follow-up: bounded `user_question_wait`
+- Follow-up: refreshed control-surface gap wording after wait tools
 
 Do not redo these unless new evidence shows a regression.
 
-Expected active branch may be `codex/supervisor-scope-drift-guard`, but always confirm branch and dirty files first.
+Recent merged PRs include #207, #208, #209, #210, #211, #212, and #213. Always confirm branch, HEAD, origin/main, and dirty files first before trusting this note.
+
+Expected implementation work should start from a clean branch or clean worktree. Preserve unrelated dirty files in `/Users/stello/elnath`.
 
 Existing unrelated dirty files may be present. Preserve them and keep them out of commits unless intentionally adopted into the current milestone.
 
@@ -101,64 +113,25 @@ Prefer blockers that reduce wasted autonomous loops:
 
 ## Immediate next likely milestone
 
-Milestone C is likely next, unless fresh evidence says otherwise.
+The old Milestone C/G checklist is complete. Do not restart it.
 
-Milestone C: shell mutation and diff supervisor.
+The next autonomous step should be chosen from fresh code evidence. Current best candidates:
 
-Goal:
+1. closeout/decision artifact after PR #207-#213, then a tiny current-only control smoke only if needed to validate receipt behavior in benchmark environment;
+2. code-intelligence/LSP explicit design and a small `code_symbols` improvement if source-navigation quality is now the highest blocker;
+3. UI-level user answer collection design if interactive wait/resume is now the highest blocker.
 
-- scope guard must not only detect `edit_file` and `write_file`
-- shell commands, `apply_patch`, formatter commands, and generated edits must be classified by changed-file diff when possible
-- out-of-scope shell mutation must fail closed
+Do not widen into full v8, baseline, Codex comparison, or Claude comparison from this document alone.
 
-Expected research before implementation:
+## Remaining milestone candidates
 
-- Elnath tool execution and completion retry paths
-- Claude Code BashTool/query loop handling
-- Hermes long-running command and timeout policy references
-- current Git/diff helper patterns in Elnath
+These are product boundaries or future structural work, not proof that the earlier milestones failed:
 
-Expected behavior:
-
-- capture changed files around correction attempts where safe
-- compare changed files with correction scope
-- classify shell mutation drift as `scope_drift` or a narrower family
-- record scope verdict in receipt/outcome
-- do not grant retry success for unrelated shell changes
-
-## Later milestone candidates
-
-Milestone D: command execution policy parity
-
-- command class metadata
-- timeout/background/foreground policy
-- stale/long-running command observation
-- abort/cancel behavior
-- receipt-backed timeout classification
-
-Milestone E: tool and prompt guidance parity
-
-- Elnath-native guidance for read/search/edit/bash/process tools
-- clear focused-verification-first guidance
-- clear broad failure is not edit permission
-- clear scope lock stop conditions
-
-Milestone F: provider, model, and reasoning effort robustness
-
-- OpenAI Responses-compatible providers first-class
-- user-selectable provider/model/base_url/api_key
-- manual effort levels when supported
-- auto-effort routing observable and overrideable
-- fallback when provider does not support effort
-
-Milestone G: callable control surface completion
-
-- ToolSearch/deferred tool loading
-- SKILL.md compatibility
-- slash-command registry
-- task/cron/plan/worktree callable surfaces
-- Todo/task scratchpad
-- long-running monitor surface
+- UI-level answer collection: runtime request/list/wait/answer receipts exist, but desktop/app-level blocking UX remains outside the current runtime.
+- Streaming line-watch monitor: bounded `process_wait` exists; richer streaming watch remains deferred.
+- Code intelligence: `code_symbols` exists; full LSP lifecycle remains deferred.
+- Registry introspection polish: control-surface manifest and ToolSearch metadata exist; full runtime registry introspection can still improve.
+- Benchmark-readiness validation: use only small current-only control smoke first, not full v8 or comparison lanes.
 
 ## Hard prohibitions
 
