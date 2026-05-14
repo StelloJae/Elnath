@@ -288,6 +288,8 @@ func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testi
 					ProcessID:       4,
 					Status:          "completed",
 					Terminal:        true,
+					TimedOut:        true,
+					TimeoutMS:       50,
 					Found:           true,
 					TailBytes:       4000,
 					StdoutRawBytes:  5,
@@ -406,7 +408,7 @@ func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testi
 		t.Fatalf("delegation control receipt missing fields: receipt=%v summary=%v", controlToolReceipts[1], summary)
 	}
 	processReceipt, ok := controlToolReceipts[2].(map[string]any)
-	if !ok || processReceipt["tool"] != "process_monitor" || processReceipt["command_intent"] != "focused_verify" || processReceipt["intent_source"] != "explicit" || processReceipt["process_id"] != float64(4) || processReceipt["tail_bytes"] != float64(4000) || processReceipt["stdout_raw_bytes"] != float64(5) || processReceipt["stderr_truncated"] != true || processReceipt["cwd"] != "/tmp/work" {
+	if !ok || processReceipt["tool"] != "process_monitor" || processReceipt["command_intent"] != "focused_verify" || processReceipt["intent_source"] != "explicit" || processReceipt["timed_out"] != true || processReceipt["timeout_ms"] != float64(50) || processReceipt["process_id"] != float64(4) || processReceipt["tail_bytes"] != float64(4000) || processReceipt["stdout_raw_bytes"] != float64(5) || processReceipt["stderr_truncated"] != true || processReceipt["cwd"] != "/tmp/work" {
 		t.Fatalf("process control receipt missing fields: receipt=%v summary=%v", controlToolReceipts[2], summary)
 	}
 	askReceipt, ok := controlToolReceipts[3].(map[string]any)

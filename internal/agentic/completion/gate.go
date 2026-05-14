@@ -204,6 +204,7 @@ type ControlToolReceipt struct {
 	Status                  string   `json:"status,omitempty"`
 	PreviousStatus          string   `json:"previous_status,omitempty"`
 	Terminal                bool     `json:"terminal,omitempty"`
+	TimedOut                bool     `json:"timed_out,omitempty"`
 	ExitCode                *int     `json:"exit_code,omitempty"`
 	Found                   bool     `json:"found,omitempty"`
 	TimeoutMS               int      `json:"timeout_ms,omitempty"`

@@ -1671,6 +1671,7 @@ func completionControlToolReceiptsToLearning(src []completionControlToolReceipt)
 			Status:                  receipt.Status,
 			PreviousStatus:          receipt.PreviousStatus,
 			Terminal:                receipt.Terminal,
+			TimedOut:                receipt.TimedOut,
 			ExitCode:                receipt.ExitCode,
 			Found:                   receipt.Found,
 			TimeoutMS:               receipt.TimeoutMS,
