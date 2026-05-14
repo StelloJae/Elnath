@@ -358,6 +358,25 @@ func assertLogContains(t *testing.T, logs string, want ...string) {
 	}
 }
 
+func assertFailureReceipt(t *testing.T, task *Task, failureClass string, shouldRetire bool, retirementReason, nextAction string) {
+	t.Helper()
+	if task.Completion == nil {
+		t.Fatal("completion receipt is nil")
+	}
+	if task.Completion.FailureClass != failureClass {
+		t.Fatalf("failure_class = %q, want %q", task.Completion.FailureClass, failureClass)
+	}
+	if task.Completion.ShouldRetireSession != shouldRetire {
+		t.Fatalf("should_retire_session = %v, want %v", task.Completion.ShouldRetireSession, shouldRetire)
+	}
+	if task.Completion.SessionRetirementReason != retirementReason {
+		t.Fatalf("session_retirement_reason = %q, want %q", task.Completion.SessionRetirementReason, retirementReason)
+	}
+	if task.Completion.NextAction != nextAction {
+		t.Fatalf("next_action = %q, want %q", task.Completion.NextAction, nextAction)
+	}
+}
+
 // --- tests ---
 
 // TestDaemonSubmitAndStatus verifies the end-to-end path:
@@ -1896,6 +1915,7 @@ func TestDaemonInactivityTimeout(t *testing.T) {
 	if task.TimeoutClass != TimeoutClassIdle {
 		t.Fatalf("timeout class = %q, want %q", task.TimeoutClass, TimeoutClassIdle)
 	}
+	assertFailureReceipt(t, task, "task_timeout_idle", true, "post_tool_quiet_timeout", "start_new_session_or_operator_review")
 }
 
 func TestDaemonCancelRunningTask(t *testing.T) {
@@ -1953,6 +1973,7 @@ func TestDaemonCancelRunningTask(t *testing.T) {
 	if task.TimeoutClass != TimeoutClassNone {
 		t.Fatalf("timeout class = %q, want none for manual cancellation", task.TimeoutClass)
 	}
+	assertFailureReceipt(t, task, "task_canceled", false, "", "operator_cancelled")
 }
 
 // TestDaemonWallClockTimeout verifies that a task exceeding the wall-clock
@@ -1997,6 +2018,85 @@ func TestDaemonWallClockTimeout(t *testing.T) {
 	if task.TimeoutClass != TimeoutClassActiveButKilled {
 		t.Fatalf("timeout class = %q, want %q", task.TimeoutClass, TimeoutClassActiveButKilled)
 	}
+	assertFailureReceipt(t, task, "task_timeout_active", true, "wall_clock_timeout", "start_new_session_or_operator_review")
+}
+
+func TestDaemonProviderAuthFailureRecordsRetirementReceipt(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+
+	authRunner := func(context.Context, string, event.Sink) (TaskResult, error) {
+		return TaskResult{}, errors.New("provider error: invalid_grant refresh token expired")
+	}
+
+	socketPath := shortDaemonSocketPath("elnath-auth-retire")
+	startDaemon(t, q, socketPath, authRunner, 1)
+
+	resp := sendIPC(t, socketPath, IPCRequest{
+		Command: "submit",
+		Payload: mustMarshalString(t, "auth failure"),
+	})
+	if !resp.OK {
+		t.Fatalf("submit: %s", resp.Err)
+	}
+
+	task := pollTaskStatus(t, q, extractTaskID(t, resp), StatusFailed, 5*time.Second)
+	assertFailureReceipt(t, task, "provider_auth", true, "provider_auth_refresh_failed", "reauthenticate_provider")
+}
+
+func TestDaemonProviderRateLimitDoesNotRetireSession(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+
+	rateRunner := func(context.Context, string, event.Sink) (TaskResult, error) {
+		return TaskResult{}, errors.New("provider error: rate limit exceeded")
+	}
+
+	socketPath := shortDaemonSocketPath("elnath-rate-limit")
+	startDaemon(t, q, socketPath, rateRunner, 1)
+
+	resp := sendIPC(t, socketPath, IPCRequest{
+		Command: "submit",
+		Payload: mustMarshalString(t, "rate limit"),
+	})
+	if !resp.OK {
+		t.Fatalf("submit: %s", resp.Err)
+	}
+
+	task := pollTaskStatus(t, q, extractTaskID(t, resp), StatusFailed, 5*time.Second)
+	assertFailureReceipt(t, task, "provider_rate_limit", false, "", "retry_later")
+}
+
+func TestDaemonWorkerPanicRecordsRetirementReceipt(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+
+	panicRunner := func(context.Context, string, event.Sink) (TaskResult, error) {
+		panic("boom")
+	}
+
+	socketPath := shortDaemonSocketPath("elnath-worker-panic")
+	startDaemon(t, q, socketPath, panicRunner, 1)
+
+	resp := sendIPC(t, socketPath, IPCRequest{
+		Command: "submit",
+		Payload: mustMarshalString(t, "panic"),
+	})
+	if !resp.OK {
+		t.Fatalf("submit: %s", resp.Err)
+	}
+
+	task := pollTaskStatus(t, q, extractTaskID(t, resp), StatusFailed, 5*time.Second)
+	assertFailureReceipt(t, task, "worker_panic", true, "worker_panic", "start_new_session_or_operator_review")
 }
 
 // --- helpers ---
