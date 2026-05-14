@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/stello/elnath/internal/agent/errorclass"
 	"github.com/stello/elnath/internal/event"
 	"github.com/stello/elnath/internal/fault"
 	"github.com/stello/elnath/internal/identity"
@@ -925,6 +926,9 @@ const (
 	failureClassProviderAuth      = "provider_auth"
 	failureClassProviderRateLimit = "provider_rate_limit"
 	failureClassProviderTimeout   = "provider_timeout"
+	failureClassProviderError     = "provider_error"
+	failureClassContextWindow     = "context_window"
+	failureClassModelNotFound     = "model_not_found"
 	failureClassRuntimeIO         = "runtime_io"
 	failureClassToolRuntime       = "tool_runtime"
 
@@ -939,6 +943,8 @@ const (
 	nextActionOperatorCancelled      = "operator_cancelled"
 	nextActionReauthenticateProvider = "reauthenticate_provider"
 	nextActionRetryLater             = "retry_later"
+	nextActionCompactContext         = "compact_context_before_retry"
+	nextActionSelectSupportedModel   = "select_supported_model"
 	nextActionStartNewSession        = "start_new_session_or_operator_review"
 )
 
@@ -969,14 +975,28 @@ func taskFailureClass(err error, timeoutClass TimeoutClass) string {
 	switch {
 	case strings.Contains(msg, "recovered worker panic"):
 		return failureClassWorkerPanic
-	case containsAny(msg, "invalid_grant", "expired token", "refresh token", "oauth", "unauthorized", "authentication", "api key", "api_key"):
-		return failureClassProviderAuth
-	case strings.Contains(msg, "rate limit") || strings.Contains(msg, "429"):
-		return failureClassProviderRateLimit
-	case containsAny(msg, "request timeout", "provider timeout", "llm timeout"):
-		return failureClassProviderTimeout
 	case containsAny(msg, "broken pipe", "connection reset", "connection refused", "eof"):
 		return failureClassRuntimeIO
+	default:
+		return taskFailureClassFromProviderError(err)
+	}
+}
+
+func taskFailureClassFromProviderError(err error) string {
+	classified := errorclass.Classify(err, errorclass.Context{Provider: "daemon"})
+	switch classified.Category {
+	case errorclass.Auth, errorclass.AuthPermanent, errorclass.Billing:
+		return failureClassProviderAuth
+	case errorclass.RateLimit, errorclass.Overloaded:
+		return failureClassProviderRateLimit
+	case errorclass.Timeout, errorclass.ServerError:
+		return failureClassProviderTimeout
+	case errorclass.ContextOverflow, errorclass.PayloadTooLarge:
+		return failureClassContextWindow
+	case errorclass.ModelNotFound:
+		return failureClassModelNotFound
+	case errorclass.FormatError:
+		return failureClassProviderError
 	default:
 		return failureClassToolRuntime
 	}
@@ -1009,6 +1029,10 @@ func taskFailureNextAction(class string) string {
 		return nextActionReauthenticateProvider
 	case failureClassProviderRateLimit:
 		return nextActionRetryLater
+	case failureClassContextWindow:
+		return nextActionCompactContext
+	case failureClassModelNotFound:
+		return nextActionSelectSupportedModel
 	case failureClassTaskCanceled:
 		return nextActionOperatorCancelled
 	default:

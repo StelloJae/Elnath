@@ -59,6 +59,11 @@ func TestClassify_Auth401(t *testing.T) {
 	assertClassification(t, got, Auth, Recovery{ShouldRotateCred: true})
 }
 
+func TestClassify_AuthRefreshTokenFailure(t *testing.T) {
+	got := Classify(errors.New("provider error: invalid_grant refresh token expired"), Context{Provider: "responses"})
+	assertClassification(t, got, Auth, Recovery{ShouldRotateCred: true})
+}
+
 func TestClassify_AuthPermanent403(t *testing.T) {
 	got := Classify(errors.New("403 account suspended"), Context{StatusCode: 403})
 	assertClassification(t, got, AuthPermanent, Recovery{ShouldFallback: true})

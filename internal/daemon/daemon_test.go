@@ -2133,6 +2133,58 @@ func TestDaemonProviderRateLimitDoesNotRetireSession(t *testing.T) {
 	assertFailureReceipt(t, task, "provider_rate_limit", false, "", "retry_later")
 }
 
+func TestDaemonContextWindowFailureUsesProviderClassifier(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+
+	contextRunner := func(context.Context, string, event.Sink) (TaskResult, error) {
+		return TaskResult{}, errors.New("context_length_exceeded")
+	}
+
+	socketPath := shortDaemonSocketPath("elnath-context-window")
+	startDaemon(t, q, socketPath, contextRunner, 1)
+
+	resp := sendIPC(t, socketPath, IPCRequest{
+		Command: "submit",
+		Payload: mustMarshalString(t, "context overflow"),
+	})
+	if !resp.OK {
+		t.Fatalf("submit: %s", resp.Err)
+	}
+
+	task := pollTaskStatus(t, q, extractTaskID(t, resp), StatusFailed, 5*time.Second)
+	assertFailureReceipt(t, task, "context_window", false, "", "compact_context_before_retry")
+}
+
+func TestDaemonModelNotFoundFailureUsesProviderClassifier(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+
+	modelRunner := func(context.Context, string, event.Sink) (TaskResult, error) {
+		return TaskResult{}, errors.New("model does not exist")
+	}
+
+	socketPath := shortDaemonSocketPath("elnath-model-missing")
+	startDaemon(t, q, socketPath, modelRunner, 1)
+
+	resp := sendIPC(t, socketPath, IPCRequest{
+		Command: "submit",
+		Payload: mustMarshalString(t, "bad model"),
+	})
+	if !resp.OK {
+		t.Fatalf("submit: %s", resp.Err)
+	}
+
+	task := pollTaskStatus(t, q, extractTaskID(t, resp), StatusFailed, 5*time.Second)
+	assertFailureReceipt(t, task, "model_not_found", false, "", "select_supported_model")
+}
+
 func TestDaemonWorkerPanicRecordsRetirementReceipt(t *testing.T) {
 	db := openTestDB(t)
 	q, err := NewQueue(db)

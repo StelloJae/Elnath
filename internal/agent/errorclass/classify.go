@@ -7,7 +7,7 @@ import (
 )
 
 var (
-	unauthorizedRE      = regexp.MustCompile(`(?i)unauthorized|invalid.*api[ _-]?key`)
+	unauthorizedRE      = regexp.MustCompile(`(?i)unauthorized|invalid.*api[ _-]?key|invalid_grant|refresh token|expired token|oauth`)
 	authPermanentRE     = regexp.MustCompile(`(?i)\b(?:disabled|suspended|banned)\b`)
 	billingTransientRE  = regexp.MustCompile(`(?i)try again|retry`)
 	rawRateLimitCodeRE  = regexp.MustCompile(`\b429\b`)
