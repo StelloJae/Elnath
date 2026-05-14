@@ -330,6 +330,7 @@ type timeoutPolicyView struct {
 	ProviderRequestTimeouts []providerTimeoutPolicyView  `json:"provider_request_timeouts"`
 	Daemon                  daemonTimeoutPolicyView      `json:"daemon"`
 	SelfHealing             selfHealingTimeoutPolicyView `json:"self_healing"`
+	Process                 processTimeoutPolicyView     `json:"process"`
 	Telegram                telegramTimeoutPolicyView    `json:"telegram"`
 }
 
@@ -359,6 +360,16 @@ type selfHealingTimeoutPolicyView struct {
 
 type telegramTimeoutPolicyView struct {
 	PollTimeoutSeconds int `json:"poll_timeout_seconds"`
+}
+
+type processTimeoutPolicyView struct {
+	DefaultTimeoutMS    int      `json:"default_timeout_ms"`
+	MaxTimeoutMS        int      `json:"max_timeout_ms"`
+	KillGraceMS         int      `json:"kill_grace_ms"`
+	DefaultTailBytes    int      `json:"default_tail_bytes"`
+	MaxTailBytes        int      `json:"max_tail_bytes"`
+	MonitorFollowupTool string   `json:"monitor_followup_tool"`
+	ReceiptFields       []string `json:"receipt_fields"`
 }
 
 func explainTimeouts(cfg *config.Config, args []string) error {
@@ -400,6 +411,15 @@ func explainTimeouts(cfg *config.Config, args []string) error {
 		view.SelfHealing.CompletionRetrySupportedMax,
 		strings.Join(view.SelfHealing.CompletionRetryDecisions, ","),
 	)
+	fmt.Fprintf(os.Stdout, "  Process tools: default_timeout=%dms max_timeout=%dms kill_grace=%dms tail=%d/%d followup=%s receipt_fields=%s\n",
+		view.Process.DefaultTimeoutMS,
+		view.Process.MaxTimeoutMS,
+		view.Process.KillGraceMS,
+		view.Process.DefaultTailBytes,
+		view.Process.MaxTailBytes,
+		view.Process.MonitorFollowupTool,
+		strings.Join(view.Process.ReceiptFields, ","),
+	)
 	fmt.Fprintf(os.Stdout, "  Telegram: poll_timeout=%ds\n", view.Telegram.PollTimeoutSeconds)
 	return nil
 }
@@ -412,6 +432,7 @@ func timeoutPolicyViewForConfig(cfg *config.Config) timeoutPolicyView {
 	if workspaceRetention == "" {
 		workspaceRetention = "immediate"
 	}
+	processPolicy := basetools.ProcessExecutionPolicySnapshot()
 	return timeoutPolicyView{
 		ProviderRequestTimeouts: []providerTimeoutPolicyView{
 			{Provider: "anthropic", ConfigKey: "anthropic.timeout_seconds", TimeoutSeconds: cfg.Anthropic.Timeout},
@@ -437,6 +458,15 @@ func timeoutPolicyViewForConfig(cfg *config.Config) timeoutPolicyView {
 			},
 			VerificationRetryRequiresStandaloneCommand: true,
 			VerificationRetryInfersCommandFromProse:    false,
+		},
+		Process: processTimeoutPolicyView{
+			DefaultTimeoutMS:    processPolicy.DefaultTimeoutMS,
+			MaxTimeoutMS:        processPolicy.MaxTimeoutMS,
+			KillGraceMS:         processPolicy.KillGraceMS,
+			DefaultTailBytes:    processPolicy.DefaultTailBytes,
+			MaxTailBytes:        processPolicy.MaxTailBytes,
+			MonitorFollowupTool: processPolicy.MonitorFollowupTool,
+			ReceiptFields:       append([]string(nil), processPolicy.ReceiptFields...),
 		},
 		Telegram: telegramTimeoutPolicyView{
 			PollTimeoutSeconds: cfg.Telegram.PollTimeoutSeconds,

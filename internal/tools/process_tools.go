@@ -37,6 +37,39 @@ type ProcessManager struct {
 	closed    bool
 }
 
+type ProcessExecutionPolicy struct {
+	DefaultTimeoutMS    int
+	MaxTimeoutMS        int
+	KillGraceMS         int
+	DefaultTailBytes    int
+	MaxTailBytes        int
+	MonitorFollowupTool string
+	ReceiptFields       []string
+}
+
+func ProcessExecutionPolicySnapshot() ProcessExecutionPolicy {
+	return ProcessExecutionPolicy{
+		DefaultTimeoutMS:    int(processDefaultTimeout / time.Millisecond),
+		MaxTimeoutMS:        int(processMaxTimeout / time.Millisecond),
+		KillGraceMS:         int(processKillGrace / time.Millisecond),
+		DefaultTailBytes:    processDefaultTail,
+		MaxTailBytes:        processMaxTail,
+		MonitorFollowupTool: ProcessMonitorToolName,
+		ReceiptFields: []string{
+			"status",
+			"terminal",
+			"timed_out",
+			"timeout_ms",
+			"followup_tool",
+			"command_intent",
+			"intent_source",
+			"tail_bytes",
+			"stdout_raw_bytes",
+			"stderr_raw_bytes",
+		},
+	}
+}
+
 func NewProcessManager(guard *PathGuard) *ProcessManager {
 	return &ProcessManager{
 		guard:     guard,

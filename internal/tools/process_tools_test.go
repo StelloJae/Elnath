@@ -268,6 +268,32 @@ func TestProcessToolsReportTimeoutMonitorReceipt(t *testing.T) {
 	}
 }
 
+func TestProcessExecutionPolicySnapshot(t *testing.T) {
+	policy := ProcessExecutionPolicySnapshot()
+	if policy.DefaultTimeoutMS != 600000 || policy.MaxTimeoutMS != 3600000 || policy.KillGraceMS != 2000 {
+		t.Fatalf("timeout policy = %+v, want process default/max/kill-grace milliseconds", policy)
+	}
+	if policy.DefaultTailBytes != processDefaultTail || policy.MaxTailBytes != processMaxTail {
+		t.Fatalf("tail policy = %+v, want default/max tail bytes", policy)
+	}
+	wantFields := []string{"status", "terminal", "timed_out", "timeout_ms", "followup_tool", "command_intent", "intent_source"}
+	for _, field := range wantFields {
+		found := false
+		for _, got := range policy.ReceiptFields {
+			if got == field {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("receipt_fields = %v, missing %q", policy.ReceiptFields, field)
+		}
+	}
+	if policy.MonitorFollowupTool != ProcessMonitorToolName {
+		t.Fatalf("monitor_followup_tool = %q, want %q", policy.MonitorFollowupTool, ProcessMonitorToolName)
+	}
+}
+
 func TestProcessStartRejectsInvalidCommandIntent(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("process group cleanup not implemented on windows")

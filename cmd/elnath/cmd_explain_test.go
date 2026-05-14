@@ -76,6 +76,15 @@ func TestCmdExplainTimeoutsJSON(t *testing.T) {
 			VerificationRetryRequiresStandaloneCommand bool     `json:"verification_retry_requires_standalone_command"`
 			VerificationRetryInfersCommandFromProse    bool     `json:"verification_retry_infers_command_from_prose"`
 		} `json:"self_healing"`
+		Process struct {
+			DefaultTimeoutMS    int      `json:"default_timeout_ms"`
+			MaxTimeoutMS        int      `json:"max_timeout_ms"`
+			KillGraceMS         int      `json:"kill_grace_ms"`
+			DefaultTailBytes    int      `json:"default_tail_bytes"`
+			MaxTailBytes        int      `json:"max_tail_bytes"`
+			MonitorFollowupTool string   `json:"monitor_followup_tool"`
+			ReceiptFields       []string `json:"receipt_fields"`
+		} `json:"process"`
 		Telegram struct {
 			PollTimeoutSeconds int `json:"poll_timeout_seconds"`
 		} `json:"telegram"`
@@ -110,6 +119,24 @@ func TestCmdExplainTimeoutsJSON(t *testing.T) {
 	if !out.SelfHealing.VerificationRetryRequiresStandaloneCommand || out.SelfHealing.VerificationRetryInfersCommandFromProse {
 		t.Fatalf("self_healing verification retry policy = %+v, want standalone-only without prose inference", out.SelfHealing)
 	}
+	if out.Process.DefaultTimeoutMS != 600000 || out.Process.MaxTimeoutMS != 3600000 || out.Process.KillGraceMS != 2000 {
+		t.Fatalf("process timeout policy = %+v, want default/max/kill-grace milliseconds", out.Process)
+	}
+	if out.Process.DefaultTailBytes != 4000 || out.Process.MaxTailBytes != 20000 || out.Process.MonitorFollowupTool != basetools.ProcessMonitorToolName {
+		t.Fatalf("process tail/followup policy = %+v", out.Process)
+	}
+	for _, want := range []string{"status", "terminal", "timed_out", "timeout_ms", "followup_tool", "command_intent", "intent_source"} {
+		found := false
+		for _, got := range out.Process.ReceiptFields {
+			if got == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("process receipt_fields = %v, missing %q", out.Process.ReceiptFields, want)
+		}
+	}
 	if out.Telegram.PollTimeoutSeconds != 11 {
 		t.Fatalf("telegram poll timeout = %d, want 11", out.Telegram.PollTimeoutSeconds)
 	}
@@ -132,6 +159,8 @@ func TestCmdExplainTimeoutsTextShowsCorrectionPolicy(t *testing.T) {
 		"supported_max=2",
 		"decisions=retry_smaller_scope,run_verification",
 		"verification_retry=standalone_command_only",
+		"Process tools: default_timeout=600000ms max_timeout=3600000ms kill_grace=2000ms tail=4000/20000",
+		"receipt_fields=status,terminal,timed_out,timeout_ms,followup_tool,command_intent,intent_source",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("stdout missing %q:\n%s", want, stdout)
