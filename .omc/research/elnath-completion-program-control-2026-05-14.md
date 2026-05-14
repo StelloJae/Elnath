@@ -64,10 +64,15 @@ Known completed structural slices:
 - Follow-up: bounded `process_wait watch_text` marker waits
 - Follow-up: registry-backed top-level CLI help and control-surface status refresh
 - Follow-up: command-specific `--help` dispatch repair
+- Follow-up: subcommand help coverage guard
+- Follow-up: code-intelligence definitions, references, hover, and diagnostics
+- Follow-up: todo active-form guard and active-work-state discipline
+- Follow-up: runtime `/status` registry and control-surface coverage
+- Local follow-up: pending user-question answer commands in pending-question views
 
 Do not redo these unless new evidence shows a regression.
 
-Recent merged PRs include #207 through #220. Always confirm branch, HEAD, origin/main, and dirty files first before trusting this note.
+Recent merged PRs include #207 through #224. Always confirm branch, HEAD, origin/main, and dirty files first before trusting this note.
 
 Expected implementation work should start from a clean branch or clean worktree. Preserve unrelated dirty files in `/Users/stello/elnath`.
 
@@ -121,13 +126,14 @@ Prefer blockers that reduce wasted autonomous loops:
 ## Immediate next likely milestone
 
 The old Milestone C/G checklist is complete. Do not restart it.
+The post-PR207-through-PR224 control-surface sequence is also complete unless
+fresh code evidence proves a regression.
 
 The next autonomous step should be chosen from fresh code evidence. Current best candidates:
 
-1. closeout/decision artifact after PR #207-#218, then a tiny current-only control smoke only if needed to validate receipt behavior in benchmark environment;
-2. command/control-surface discoverability drift repair if registry-backed status can prevent repeated stale-lane loops;
-3. code-intelligence/LSP explicit design and a small `code_symbols` improvement if source-navigation quality is now the highest blocker;
-4. UI-level user answer collection design if interactive wait/resume is now the highest blocker.
+1. final control-boundary refresh after PR #224 and the local pending-answer handoff milestone;
+2. tiny current-only control smoke only if needed to validate receipt behavior in benchmark environment;
+3. one more runtime-only boundary improvement if fresh code evidence shows a clear gap.
 
 Do not widen into full v8, baseline, Codex comparison, or Claude comparison from this document alone.
 
@@ -135,10 +141,10 @@ Do not widen into full v8, baseline, Codex comparison, or Claude comparison from
 
 These are product boundaries or future structural work, not proof that the earlier milestones failed:
 
-- UI-level answer collection: runtime request/list/wait/answer receipts exist, but desktop/app-level blocking UX remains outside the current runtime.
-- Streaming line-watch monitor: bounded `process_wait` and literal `watch_text` marker waits exist; richer async streaming watch remains deferred.
-- Code intelligence: `code_symbols` exists; full LSP lifecycle remains deferred.
-- Registry introspection polish: control-surface manifest and ToolSearch metadata exist; full runtime registry introspection can still improve.
+- UI-level answer collection: runtime request/list/wait/answer receipts and pending-list answer commands exist, but desktop/app-level modal UX remains outside the current runtime.
+- Streaming line-watch monitor: bounded `process_wait` and literal `watch_text` marker waits exist; richer async streaming notification remains deferred.
+- Code intelligence: `code_symbols` supports document/workspace symbols, definitions, references, hover, and Go diagnostics; full multi-language LSP lifecycle remains deferred.
+- Registry introspection polish: control-surface manifest, ToolSearch metadata, and runtime `/status` coverage exist; deeper registry diagnostics can still improve.
 - Benchmark-readiness validation: use only small current-only control smoke first, not full v8 or comparison lanes.
 
 ## Hard prohibitions
