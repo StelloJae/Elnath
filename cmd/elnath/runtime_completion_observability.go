@@ -134,6 +134,9 @@ type completionCommandCatalogReceipt struct {
 type completionShellCommandReceipt struct {
 	Tool                  string `json:"tool"`
 	Action                string `json:"action"`
+	ExecutionPolicy       string `json:"execution_policy,omitempty"`
+	CommandIntent         string `json:"command_intent,omitempty"`
+	IntentSource          string `json:"intent_source,omitempty"`
 	CommandClass          string `json:"command_class,omitempty"`
 	Status                string `json:"status,omitempty"`
 	Classification        string `json:"classification,omitempty"`
@@ -556,6 +559,7 @@ func commandCatalogReceiptFromOutput(output string) (completionCommandCatalogRec
 
 type completionShellCommandUse struct {
 	Command    string
+	Intent     string
 	TimeoutMS  int
 	WorkingDir string
 }
@@ -593,6 +597,7 @@ func observedShellCommandReceipts(messages []llm.Message) []completionShellComma
 func shellCommandUseFromInput(input json.RawMessage) (completionShellCommandUse, bool) {
 	var payload struct {
 		Command    string `json:"command"`
+		Intent     string `json:"intent"`
 		TimeoutMS  int    `json:"timeout_ms"`
 		WorkingDir string `json:"working_dir"`
 	}
@@ -605,6 +610,7 @@ func shellCommandUseFromInput(input json.RawMessage) (completionShellCommandUse,
 	}
 	return completionShellCommandUse{
 		Command:    command,
+		Intent:     strings.TrimSpace(payload.Intent),
 		TimeoutMS:  payload.TimeoutMS,
 		WorkingDir: strings.TrimSpace(payload.WorkingDir),
 	}, true
@@ -612,16 +618,29 @@ func shellCommandUseFromInput(input json.RawMessage) (completionShellCommandUse,
 
 func shellCommandReceiptFromResult(use completionShellCommandUse, result llm.ToolResultBlock) completionShellCommandReceipt {
 	fields := bashResultHeaderFields(result.Content)
+	timeoutMS := use.TimeoutMS
+	if timeoutMS <= 0 {
+		timeoutMS = parseBashResultInt(fields["timeout_ms"])
+	}
+	commandIntent := strings.TrimSpace(fields["command_intent"])
+	intentSource := strings.TrimSpace(fields["intent_source"])
+	if commandIntent == "" && use.Intent != "" {
+		commandIntent = use.Intent
+		intentSource = "explicit"
+	}
 	return completionShellCommandReceipt{
 		Tool:                  "bash",
 		Action:                "run",
+		ExecutionPolicy:       strings.TrimSpace(fields["execution_policy"]),
+		CommandIntent:         commandIntent,
+		IntentSource:          intentSource,
 		CommandClass:          classifyShellCommand(use.Command),
 		Status:                fields["status"],
 		Classification:        fields["classification"],
 		TimedOut:              parseBashResultBool(fields["timed_out"]),
 		Canceled:              parseBashResultBool(fields["canceled"]),
 		IsError:               result.IsError,
-		TimeoutMS:             use.TimeoutMS,
+		TimeoutMS:             timeoutMS,
 		WorkingDirSet:         use.WorkingDir != "",
 		CommandLen:            len(use.Command),
 		BackgroundRecommended: shellCommandBackgroundRecommended(use.Command),
@@ -651,6 +670,14 @@ func bashResultHeaderFields(output string) map[string]string {
 func parseBashResultBool(raw string) bool {
 	parsed, err := strconv.ParseBool(strings.TrimSpace(raw))
 	return err == nil && parsed
+}
+
+func parseBashResultInt(raw string) int {
+	parsed, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		return 0
+	}
+	return parsed
 }
 
 func classifyShellCommand(command string) string {

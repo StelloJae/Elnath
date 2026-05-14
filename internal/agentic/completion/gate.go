@@ -150,6 +150,9 @@ type CommandCatalogReceipt struct {
 type ShellCommandReceipt struct {
 	Tool                  string `json:"tool"`
 	Action                string `json:"action"`
+	ExecutionPolicy       string `json:"execution_policy,omitempty"`
+	CommandIntent         string `json:"command_intent,omitempty"`
+	IntentSource          string `json:"intent_source,omitempty"`
 	CommandClass          string `json:"command_class,omitempty"`
 	Status                string `json:"status,omitempty"`
 	Classification        string `json:"classification,omitempty"`

@@ -1599,6 +1599,9 @@ func completionShellCommandReceiptsToLearning(src []completionShellCommandReceip
 		out = append(out, learning.ShellCommandReceipt{
 			Tool:                  receipt.Tool,
 			Action:                receipt.Action,
+			ExecutionPolicy:       receipt.ExecutionPolicy,
+			CommandIntent:         receipt.CommandIntent,
+			IntentSource:          receipt.IntentSource,
 			CommandClass:          receipt.CommandClass,
 			Status:                receipt.Status,
 			Classification:        receipt.Classification,
