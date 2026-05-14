@@ -550,6 +550,40 @@ func TestManagerLoadLatestSession_PrefersMostRecentTranscript(t *testing.T) {
 	}
 }
 
+func TestManagerLoadLatestSession_SkipsRetiredSession(t *testing.T) {
+	sessA, dir := newTestSession(t)
+	sessB, err := agent.NewSession(dir)
+	if err != nil {
+		t.Fatalf("NewSession B: %v", err)
+	}
+	if err := sessA.AppendMessage(llm.NewUserMessage("older active session")); err != nil {
+		t.Fatalf("AppendMessage A: %v", err)
+	}
+	if err := sessB.AppendMessage(llm.NewUserMessage("newer retired session")); err != nil {
+		t.Fatalf("AppendMessage B: %v", err)
+	}
+	if err := sessB.RecordRetirement("task_timeout_idle", "post_tool_quiet_timeout", "start_new_session_or_operator_review"); err != nil {
+		t.Fatalf("RecordRetirement B: %v", err)
+	}
+
+	now := time.Now().UTC()
+	if err := os.Chtimes(filepath.Join(dir, "sessions", sessA.ID+".jsonl"), now.Add(-time.Hour), now.Add(-time.Hour)); err != nil {
+		t.Fatalf("Chtimes A: %v", err)
+	}
+	if err := os.Chtimes(filepath.Join(dir, "sessions", sessB.ID+".jsonl"), now, now); err != nil {
+		t.Fatalf("Chtimes B: %v", err)
+	}
+
+	mgr := NewManager(nil, dir)
+	latest, err := mgr.LoadLatestSession()
+	if err != nil {
+		t.Fatalf("LoadLatestSession: %v", err)
+	}
+	if latest.ID != sessA.ID {
+		t.Fatalf("latest session = %q, want active older %q", latest.ID, sessA.ID)
+	}
+}
+
 func TestManagerLoadLatestSession_IgnoresStoreOnlyNewerCandidates(t *testing.T) {
 	sess, dir := newTestSession(t)
 	if err := sess.AppendMessage(llm.NewUserMessage("resumable transcript")); err != nil {
@@ -744,6 +778,27 @@ func TestManagerLoadSessionForPrincipal_DifferentUserRejected(t *testing.T) {
 	_, err = mgr.LoadSessionForPrincipal(sess.ID, identity.Principal{UserID: "user-2", ProjectID: "proj-1", Surface: "cli"})
 	if err == nil {
 		t.Fatal("LoadSessionForPrincipal(different user) error = nil, want error")
+	}
+}
+
+func TestManagerLoadSessionForPrincipal_RetiredSessionRejected(t *testing.T) {
+	dir := t.TempDir()
+	principal := identity.Principal{UserID: "user-1", ProjectID: "proj-1", Surface: "telegram"}
+	sess, err := agent.NewSession(dir, principal)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if err := sess.RecordRetirement("provider_auth", "provider_auth_refresh_failed", "reauthenticate_provider"); err != nil {
+		t.Fatalf("RecordRetirement: %v", err)
+	}
+
+	mgr := NewManager(nil, dir)
+	_, err = mgr.LoadSessionForPrincipal(sess.ID, principal)
+	if err == nil {
+		t.Fatal("LoadSessionForPrincipal(retired) error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "provider_auth_refresh_failed") || !strings.Contains(err.Error(), "reauthenticate_provider") {
+		t.Fatalf("LoadSessionForPrincipal(retired) error = %q", err.Error())
 	}
 }
 

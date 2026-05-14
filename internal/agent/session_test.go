@@ -446,6 +446,48 @@ func TestLoadSessionSkipsResumeLines(t *testing.T) {
 	}
 }
 
+func TestRecordRetirementAndLoadStatus(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewSession(dir, identity.Principal{UserID: "12345", ProjectID: "elnath", Surface: "telegram"})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if err := s.AppendMessage(llm.NewUserMessage("hello before retirement")); err != nil {
+		t.Fatalf("AppendMessage user: %v", err)
+	}
+	if err := s.RecordRetirement("provider_auth", "provider_auth_refresh_failed", "reauthenticate_provider"); err != nil {
+		t.Fatalf("RecordRetirement: %v", err)
+	}
+	if err := s.AppendMessage(llm.NewAssistantMessage("retired sessions can still be inspected")); err != nil {
+		t.Fatalf("AppendMessage assistant: %v", err)
+	}
+
+	status, err := LoadSessionRetirementStatus(dir, s.ID)
+	if err != nil {
+		t.Fatalf("LoadSessionRetirementStatus: %v", err)
+	}
+	if status == nil {
+		t.Fatal("retirement status = nil, want status")
+	}
+	if status.FailureClass != "provider_auth" || status.Reason != "provider_auth_refresh_failed" || status.NextAction != "reauthenticate_provider" {
+		t.Fatalf("retirement status = %+v", status)
+	}
+
+	loaded, err := LoadSession(dir, s.ID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if !loaded.Retired() {
+		t.Fatal("loaded session Retired() = false, want true")
+	}
+	if len(loaded.Messages) != 2 {
+		t.Fatalf("loaded messages = %d, want 2", len(loaded.Messages))
+	}
+	if got := sessionMessageLineCount(t, filepath.Join(dir, "sessions", s.ID+".jsonl")); got != 3 {
+		t.Fatalf("session file non-header lines = %d, want 3 including retirement metadata", got)
+	}
+}
+
 func TestSessionNewPersistsPrincipal(t *testing.T) {
 	dir := t.TempDir()
 	want := identity.Principal{UserID: "stello", ProjectID: "elnath", Surface: "cli"}

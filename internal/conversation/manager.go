@@ -180,10 +180,25 @@ func (m *Manager) LoadSessionForPrincipal(sessionID string, principal identity.P
 	if err != nil {
 		return nil, err
 	}
-	if principal.IsZero() || sessionPrincipalAllowed(s.Principal, principal) {
-		return s, nil
+	if !principal.IsZero() && !sessionPrincipalAllowed(s.Principal, principal) {
+		return nil, fmt.Errorf("conversation: session %s is not resumable for principal %s/%s", sessionID, principal.UserID, principal.ProjectID)
 	}
-	return nil, fmt.Errorf("conversation: session %s is not resumable for principal %s/%s", sessionID, principal.UserID, principal.ProjectID)
+	if s.Retired() {
+		return nil, sessionRetiredError(sessionID, s.Retirement)
+	}
+	return s, nil
+}
+
+// RecordSessionRetirement marks a session as unsafe for silent automatic reuse.
+func (m *Manager) RecordSessionRetirement(sessionID, failureClass, reason, nextAction string) error {
+	s, err := m.LoadSession(sessionID)
+	if err != nil {
+		return err
+	}
+	if err := s.RecordRetirement(failureClass, reason, nextAction); err != nil {
+		return fmt.Errorf("conversation: retire session %s: %w", sessionID, err)
+	}
+	return nil
 }
 
 // SessionIndex returns resumable session metadata sorted by most recently updated.
@@ -250,6 +265,17 @@ func (m *Manager) loadLatestMatchingSession(sessions []SessionMeta, match func(S
 		}
 		s, err := m.LoadSession(info.ID)
 		if err == nil {
+			if s.Retired() {
+				lastErr = sessionRetiredError(info.ID, s.Retirement)
+				if m.logger != nil {
+					m.logger.Warn("skipping retired latest session",
+						"session_id", info.ID,
+						"reason", s.Retirement.Reason,
+						"failure_class", s.Retirement.FailureClass,
+					)
+				}
+				continue
+			}
 			m.logger.Info("resuming latest session", "session_id", info.ID)
 			return s, nil, true
 		}
@@ -265,6 +291,20 @@ func (m *Manager) loadLatestMatchingSession(sessions []SessionMeta, match func(S
 		return nil, fmt.Errorf("conversation: load latest session: %w", lastErr), true
 	}
 	return nil, nil, false
+}
+
+func sessionRetiredError(sessionID string, status *agent.SessionRetirementStatus) error {
+	if status == nil {
+		return fmt.Errorf("conversation: session %s is retired", sessionID)
+	}
+	reason := status.Reason
+	if reason == "" {
+		reason = "runtime_retired_session"
+	}
+	if status.NextAction != "" {
+		return fmt.Errorf("conversation: session %s is retired (%s); next_action=%s", sessionID, reason, status.NextAction)
+	}
+	return fmt.Errorf("conversation: session %s is retired (%s)", sessionID, reason)
 }
 
 // ResolveCompressionBudget picks the token budget for auto-compression based

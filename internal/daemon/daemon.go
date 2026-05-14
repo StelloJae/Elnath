@@ -71,6 +71,24 @@ type ProgressObserver interface {
 	OnProgress(taskID int64, progress string)
 }
 
+type SessionRetirementRequest struct {
+	SessionID               string
+	FailureClass            string
+	ShouldRetireSession     bool
+	SessionRetirementReason string
+	NextAction              string
+}
+
+type SessionRetirer interface {
+	RetireSession(ctx context.Context, req SessionRetirementRequest) error
+}
+
+type SessionRetirerFunc func(ctx context.Context, req SessionRetirementRequest) error
+
+func (fn SessionRetirerFunc) RetireSession(ctx context.Context, req SessionRetirementRequest) error {
+	return fn(ctx, req)
+}
+
 type Scheduler interface {
 	Run(ctx context.Context) error
 }
@@ -113,6 +131,7 @@ type Daemon struct {
 	completionGate    CompletionGate
 	submitSignal      SubmitSignalBridge
 	scheduler         Scheduler
+	sessionRetirer    SessionRetirer
 	faultInjector     fault.Injector
 	faultScenario     *fault.Scenario
 	faultGuard        fault.GuardConfig
@@ -232,6 +251,10 @@ func (d *Daemon) WithSubmitSignalBridge(bridge SubmitSignalBridge) {
 
 func (d *Daemon) WithScheduler(s Scheduler) {
 	d.scheduler = s
+}
+
+func (d *Daemon) WithSessionRetirer(retirer SessionRetirer) {
+	d.sessionRetirer = retirer
 }
 
 func (d *Daemon) WithFallbackPrincipal(principal identity.Principal) {
@@ -562,7 +585,8 @@ func (d *Daemon) worker(ctx context.Context, id int) {
 				"principal_surface", principal.Surface,
 				"error", err,
 			)
-			if markErr := d.queue.MarkFailedWithMetadata(ctx, task.ID, err.Error(), taskFailureMetadata(err)); markErr != nil {
+			failureMeta := taskFailureMetadata(err)
+			if markErr := d.queue.MarkFailedWithMetadata(ctx, task.ID, err.Error(), failureMeta); markErr != nil {
 				d.logger.Error("worker: mark failed", "task_id", task.ID, "error", markErr)
 			} else if envelopeRun != nil {
 				if envelopeErr := envelopeRun.Fail(ctx); envelopeErr != nil {
@@ -574,6 +598,7 @@ func (d *Daemon) worker(ctx context.Context, id int) {
 					)
 				}
 			}
+			d.retireSessionAfterFailure(ctx, task, failureMeta)
 			d.deliver(ctx, task.ID)
 			continue
 		}
@@ -617,6 +642,29 @@ func (d *Daemon) worker(ctx context.Context, id int) {
 			}
 		}
 		d.deliver(ctx, task.ID)
+	}
+}
+
+func (d *Daemon) retireSessionAfterFailure(ctx context.Context, task *Task, meta TaskFailureMetadata) {
+	if d.sessionRetirer == nil || task == nil || !meta.ShouldRetireSession || strings.TrimSpace(task.SessionID) == "" {
+		return
+	}
+	req := SessionRetirementRequest{
+		SessionID:               task.SessionID,
+		FailureClass:            meta.FailureClass,
+		ShouldRetireSession:     meta.ShouldRetireSession,
+		SessionRetirementReason: meta.SessionRetirementReason,
+		NextAction:              meta.NextAction,
+	}
+	if err := d.sessionRetirer.RetireSession(ctx, req); err != nil {
+		d.logger.Warn("worker: session retirement record failed",
+			"task_id", task.ID,
+			"session_id", task.SessionID,
+			"failure_class", meta.FailureClass,
+			"reason", meta.SessionRetirementReason,
+			"degraded_observability", true,
+			"error", err,
+		)
 	}
 }
 

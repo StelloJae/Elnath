@@ -96,6 +96,13 @@ type recordingSubmitSignalBridge struct {
 	calls   int
 }
 
+type recordingSessionRetirer struct {
+	mu    sync.Mutex
+	reqs  []SessionRetirementRequest
+	err   error
+	calls int
+}
+
 type safeLogBuffer struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
@@ -176,6 +183,20 @@ func (b *recordingSubmitSignalBridge) snapshot() (payload string, taskID int64, 
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.payload, b.taskID, b.existed, b.calls
+}
+
+func (r *recordingSessionRetirer) RetireSession(_ context.Context, req SessionRetirementRequest) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.reqs = append(r.reqs, req)
+	r.calls++
+	return r.err
+}
+
+func (r *recordingSessionRetirer) snapshot() []SessionRetirementRequest {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]SessionRetirementRequest(nil), r.reqs...)
 }
 
 func (e *recordingTaskEnvelope) Start(_ context.Context, task Task) (TaskEnvelopeRun, error) {
@@ -2045,6 +2066,45 @@ func TestDaemonProviderAuthFailureRecordsRetirementReceipt(t *testing.T) {
 
 	task := pollTaskStatus(t, q, extractTaskID(t, resp), StatusFailed, 5*time.Second)
 	assertFailureReceipt(t, task, "provider_auth", true, "provider_auth_refresh_failed", "reauthenticate_provider")
+}
+
+func TestDaemonRetiresSessionAfterRetirableFailure(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+
+	authRunner := func(context.Context, string, event.Sink) (TaskResult, error) {
+		return TaskResult{}, errors.New("provider error: invalid_grant refresh token expired")
+	}
+	retirer := &recordingSessionRetirer{}
+	socketPath := shortDaemonSocketPath("elnath-retire-callback")
+	d := New(q, socketPath, 1, authRunner, nil)
+	d.WithSessionRetirer(retirer)
+	startDaemonInstance(t, d, socketPath)
+
+	payload := EncodeTaskPayload(TaskPayload{
+		Prompt:    "auth failure",
+		SessionID: "sess-retire",
+	})
+	resp := sendIPC(t, socketPath, IPCRequest{
+		Command: "submit",
+		Payload: mustMarshalString(t, payload),
+	})
+	if !resp.OK {
+		t.Fatalf("submit: %s", resp.Err)
+	}
+
+	pollTaskStatus(t, q, extractTaskID(t, resp), StatusFailed, 5*time.Second)
+	reqs := retirer.snapshot()
+	if len(reqs) != 1 {
+		t.Fatalf("retirement requests = %d, want 1", len(reqs))
+	}
+	req := reqs[0]
+	if req.SessionID != "sess-retire" || req.FailureClass != "provider_auth" || !req.ShouldRetireSession || req.SessionRetirementReason != "provider_auth_refresh_failed" || req.NextAction != "reauthenticate_provider" {
+		t.Fatalf("retirement request = %+v", req)
+	}
 }
 
 func TestDaemonProviderRateLimitDoesNotRetireSession(t *testing.T) {
