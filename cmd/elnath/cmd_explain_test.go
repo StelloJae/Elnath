@@ -247,6 +247,9 @@ func TestExplainControlSurfacesJSON(t *testing.T) {
 	if !strings.Contains(codeIntelligence.notes, "hover") {
 		t.Fatalf("code_intelligence notes = %q, want hover capability", codeIntelligence.notes)
 	}
+	if !strings.Contains(codeIntelligence.notes, "diagnostics") {
+		t.Fatalf("code_intelligence notes = %q, want diagnostics capability", codeIntelligence.notes)
+	}
 	scratchpad, ok := byName["scratchpad"]
 	if !ok {
 		t.Fatalf("missing control surface scratchpad in %+v", byName)

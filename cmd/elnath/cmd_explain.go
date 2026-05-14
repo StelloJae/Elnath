@@ -309,7 +309,7 @@ func controlSurfaceManifest() []controlSurfaceManifestEntry {
 			Status:        "partial",
 			Tools:         []string{"code_symbols"},
 			ReceiptBacked: true,
-			Notes:         "Go-native symbols, definitions, references, and hover signatures; full LSP lifecycle is deferred",
+			Notes:         "Go-native symbols, definitions, references, hover signatures, and syntax diagnostics; full LSP lifecycle is deferred",
 		},
 	}
 }
