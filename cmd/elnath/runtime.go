@@ -498,6 +498,7 @@ func buildExecutionRuntime(
 	reg.Register(agent.NewExitPlanModeTool(planModeController))
 	reg.Register(agent.NewAskUserQuestionTool())
 	reg.Register(learning.NewUserQuestionListTool(outcomeStore))
+	reg.Register(learning.NewUserQuestionWaitTool(outcomeStore))
 	taskQueue, err := daemon.NewQueueNoRecover(db.Main)
 	if err != nil {
 		return nil, fmt.Errorf("open task queue tools: %w", err)

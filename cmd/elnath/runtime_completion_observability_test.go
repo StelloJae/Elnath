@@ -986,6 +986,29 @@ func TestCompletionContractSummaryRecordsUserQuestionListReceipt(t *testing.T) {
 	}
 }
 
+func TestCompletionContractSummaryRecordsUserQuestionWaitReceipt(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			{Role: "assistant", Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "wait-1", Name: "user_question_wait", Input: json.RawMessage(`{"session_id":"sess-123","request_id":"req-123","wait_ms":500}`)},
+			}},
+			llm.NewToolResultMessage("wait-1", `{"status":"answered","request_id":"req-123","session_id":"sess-123","task_id":8,"wait_ms":500,"wait_elapsed_ms":25,"wait_timed_out":false,"receipt":{"tool":"user_question_wait","action":"wait","read_only":true,"execution_policy":"user_input_wait","request_id":"req-123","session_id":"sess-123","status":"answered","task_id":8,"wait_ms":500,"wait_elapsed_ms":25,"wait_timed_out":false,"followup_tool":"task_monitor"}}`, false),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(nil, orchestrator.WorkflowConfig{}, result)
+	if len(summary.ControlToolReceipts) != 1 {
+		t.Fatalf("ControlToolReceipts = %#v, want one user_question_wait receipt", summary.ControlToolReceipts)
+	}
+	receipt := summary.ControlToolReceipts[0]
+	if receipt.Tool != "user_question_wait" || receipt.Action != "wait" || !receipt.ReadOnly || receipt.ExecutionPolicy != "user_input_wait" {
+		t.Fatalf("receipt = %+v, want wait receipt", receipt)
+	}
+	if receipt.RequestID != "req-123" || receipt.SessionID != "sess-123" || receipt.Status != "answered" || receipt.TaskID != 8 || receipt.WaitMS != 500 || receipt.WaitElapsedMS != 25 || receipt.WaitTimedOut || receipt.FollowupTool != "task_monitor" {
+		t.Fatalf("receipt metadata = %+v", receipt)
+	}
+}
+
 func TestCompletionContractSummaryDoesNotRetryWhenUserInputRequired(t *testing.T) {
 	result := &orchestrator.WorkflowResult{
 		Messages: []llm.Message{

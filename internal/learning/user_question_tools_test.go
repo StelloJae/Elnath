@@ -66,3 +66,145 @@ func TestUserQuestionListToolMetadataAndErrors(t *testing.T) {
 		t.Fatalf("result = %+v, want unavailable error", result)
 	}
 }
+
+func TestUserQuestionWaitToolReturnsAnsweredWhenAnswerArrives(t *testing.T) {
+	store := NewOutcomeStore(filepath.Join(t.TempDir(), "outcomes.jsonl"))
+	if err := store.Append(OutcomeRecord{
+		ProjectID: "elnath",
+		Intent:    "complex_task",
+		Workflow:  "single",
+		Timestamp: time.Date(2026, 5, 13, 7, 0, 0, 0, time.UTC),
+		ControlToolReceipts: []ControlToolReceipt{{
+			Tool:      "ask_user_question",
+			Action:    "request",
+			RequestID: "req-1",
+			SessionID: "sess-1",
+			Question:  "Which branch?",
+		}},
+	}); err != nil {
+		t.Fatalf("Append ask: %v", err)
+	}
+	go func() {
+		time.Sleep(25 * time.Millisecond)
+		_ = store.Append(OutcomeRecord{
+			ProjectID: "elnath",
+			Intent:    "user_input_answer",
+			Workflow:  "task_answer",
+			Timestamp: time.Date(2026, 5, 13, 7, 0, 1, 0, time.UTC),
+			ControlToolReceipts: []ControlToolReceipt{{
+				Tool:         "user_question_answer",
+				Action:       "answer",
+				RequestID:    "req-1",
+				SessionID:    "sess-1",
+				TaskID:       42,
+				FollowupTool: "task_monitor",
+			}},
+		})
+	}()
+
+	result, err := NewUserQuestionWaitTool(store).Execute(context.Background(), json.RawMessage(`{"session_id":"sess-1","request_id":"req-1","wait_ms":500}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute returned error result: %s", result.Output)
+	}
+	var output userQuestionWaitToolOutput
+	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if output.Status != "answered" || output.TaskID != 42 || output.WaitTimedOut {
+		t.Fatalf("output = %+v, want answered task 42 without wait timeout", output)
+	}
+	if output.Receipt.Tool != UserQuestionWaitToolName || output.Receipt.Action != "wait" || !output.Receipt.ReadOnly || output.Receipt.ExecutionPolicy != "user_input_wait" {
+		t.Fatalf("receipt = %+v, want user_question_wait receipt", output.Receipt)
+	}
+	if output.Receipt.WaitMS != 500 || output.Receipt.WaitTimedOut || output.Receipt.FollowupTool != "task_monitor" || output.Receipt.TaskID != 42 {
+		t.Fatalf("receipt wait/followup = %+v", output.Receipt)
+	}
+}
+
+func TestUserQuestionWaitToolReportsPendingOnWaitTimeout(t *testing.T) {
+	store := NewOutcomeStore(filepath.Join(t.TempDir(), "outcomes.jsonl"))
+	if err := store.Append(OutcomeRecord{
+		ProjectID: "elnath",
+		Intent:    "complex_task",
+		Workflow:  "single",
+		Timestamp: time.Date(2026, 5, 13, 7, 0, 0, 0, time.UTC),
+		ControlToolReceipts: []ControlToolReceipt{{
+			Tool:      "ask_user_question",
+			Action:    "request",
+			RequestID: "req-1",
+			SessionID: "sess-1",
+			Question:  "Which branch?",
+		}},
+	}); err != nil {
+		t.Fatalf("Append ask: %v", err)
+	}
+
+	result, err := NewUserQuestionWaitTool(store).Execute(context.Background(), json.RawMessage(`{"session_id":"sess-1","request_id":"req-1","wait_ms":10}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute returned error result: %s", result.Output)
+	}
+	var output userQuestionWaitToolOutput
+	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if output.Status != "pending" || !output.WaitTimedOut || output.TaskID != 0 {
+		t.Fatalf("output = %+v, want pending wait timeout", output)
+	}
+	if output.Receipt.Status != "pending" || !output.Receipt.WaitTimedOut || output.Receipt.FollowupTool != UserQuestionWaitToolName {
+		t.Fatalf("receipt = %+v, want pending wait followup", output.Receipt)
+	}
+}
+
+func TestUserQuestionWaitToolReturnsNotFound(t *testing.T) {
+	store := NewOutcomeStore(filepath.Join(t.TempDir(), "outcomes.jsonl"))
+	result, err := NewUserQuestionWaitTool(store).Execute(context.Background(), json.RawMessage(`{"session_id":"sess-1","request_id":"req-missing","wait_ms":500}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute returned error result: %s", result.Output)
+	}
+	var output userQuestionWaitToolOutput
+	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if output.Status != "not_found" || output.WaitTimedOut {
+		t.Fatalf("output = %+v, want immediate not_found", output)
+	}
+	if output.Receipt.Status != "not_found" || output.Receipt.WaitTimedOut {
+		t.Fatalf("receipt = %+v, want not_found without wait timeout", output.Receipt)
+	}
+}
+
+func TestUserQuestionWaitToolMetadataAndErrors(t *testing.T) {
+	tool := NewUserQuestionWaitTool(nil)
+	if !tool.IsConcurrencySafe(nil) || !tool.Reversible() {
+		t.Fatal("user_question_wait should be read-only and reversible")
+	}
+	if got := tool.Scope(nil); got.Persistent || got.Network || len(got.ReadPaths) != 0 || len(got.WritePaths) != 0 {
+		t.Fatalf("Scope() = %+v, want empty scope", got)
+	}
+	if !tool.DeferInitialToolSchema() {
+		t.Fatal("user_question_wait should defer initial schema")
+	}
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"session_id":"sess-1","request_id":"req-1"}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if !result.IsError || !strings.Contains(result.Output, "outcome store unavailable") {
+		t.Fatalf("result = %+v, want unavailable error", result)
+	}
+	result, err = NewUserQuestionWaitTool(NewOutcomeStore(filepath.Join(t.TempDir(), "outcomes.jsonl"))).Execute(context.Background(), json.RawMessage(`{"session_id":"sess-1"}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if !result.IsError || !strings.Contains(result.Output, "request_id is required") {
+		t.Fatalf("result = %+v, want request_id required", result)
+	}
+}

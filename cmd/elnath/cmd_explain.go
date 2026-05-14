@@ -250,9 +250,9 @@ func controlSurfaceManifest() []controlSurfaceManifestEntry {
 		{
 			Name:          "user_input",
 			Status:        "partial",
-			Tools:         []string{"ask_user_question", "user_question_list", "user_question_answer"},
+			Tools:         []string{"ask_user_question", "user_question_list", "user_question_wait", "user_question_answer"},
 			ReceiptBacked: true,
-			Notes:         "structured question receipts, pending lookup, strict answer enqueue, and CLI answer surface",
+			Notes:         "structured question receipts, pending lookup/wait, strict answer enqueue, and CLI answer surface",
 		},
 		{
 			Name:          "schedule",

@@ -818,6 +818,7 @@ var completionControlToolReceiptNames = map[string]struct{}{
 	"runtime_command":          {},
 	"ask_user_question":        {},
 	"user_question_list":       {},
+	"user_question_wait":       {},
 }
 
 func observedControlToolReceipts(messages []llm.Message) []completionControlToolReceipt {
