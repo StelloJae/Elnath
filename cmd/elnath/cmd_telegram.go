@@ -17,7 +17,7 @@ import (
 )
 
 func cmdTelegram(ctx context.Context, args []string) error {
-	if len(args) == 0 {
+	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
 		fmt.Print(`Usage: elnath telegram <subcommand>
 
 Subcommands:

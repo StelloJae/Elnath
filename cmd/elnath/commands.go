@@ -209,7 +209,7 @@ func printCommandHelp(name string) error {
 
 func commandUsesInlineHelp(name string) bool {
 	switch name {
-	case "agentic", "chaos", "debug", "explain", "lessons", "portability", "provider", "research", "task", "telegram":
+	case "agentic", "chaos", "debug", "eval", "explain", "lessons", "portability", "profile", "provider", "research", "skill", "task", "telegram":
 		return true
 	default:
 		return false

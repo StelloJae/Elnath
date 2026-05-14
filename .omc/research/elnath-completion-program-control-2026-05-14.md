@@ -62,10 +62,12 @@ Known completed structural slices:
 - Follow-up: user-answer character bounds in receipts
 - Follow-up: `ask_user_question` answer handoff commands and follow-up hint
 - Follow-up: bounded `process_wait watch_text` marker waits
+- Follow-up: registry-backed top-level CLI help and control-surface status refresh
+- Follow-up: command-specific `--help` dispatch repair
 
 Do not redo these unless new evidence shows a regression.
 
-Recent merged PRs include #207 through #218. Always confirm branch, HEAD, origin/main, and dirty files first before trusting this note.
+Recent merged PRs include #207 through #220. Always confirm branch, HEAD, origin/main, and dirty files first before trusting this note.
 
 Expected implementation work should start from a clean branch or clean worktree. Preserve unrelated dirty files in `/Users/stello/elnath`.
 
