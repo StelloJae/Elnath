@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"runtime"
 	"strings"
 	"testing"
@@ -83,6 +84,9 @@ type processWaitTestOutput struct {
 	WaitMS        int    `json:"wait_ms"`
 	WaitElapsedMS int    `json:"wait_elapsed_ms"`
 	WaitTimedOut  bool   `json:"wait_timed_out"`
+	WatchText     string `json:"watch_text"`
+	WatchMatched  bool   `json:"watch_matched"`
+	WatchStream   string `json:"watch_stream"`
 	Receipt       struct {
 		Tool            string `json:"tool"`
 		Action          string `json:"action"`
@@ -102,6 +106,9 @@ type processWaitTestOutput struct {
 		WaitMS          int    `json:"wait_ms"`
 		WaitElapsedMS   int    `json:"wait_elapsed_ms"`
 		WaitTimedOut    bool   `json:"wait_timed_out"`
+		WatchText       string `json:"watch_text"`
+		WatchMatched    bool   `json:"watch_matched"`
+		WatchStream     string `json:"watch_stream"`
 		FollowupTool    string `json:"followup_tool"`
 	} `json:"receipt"`
 }
@@ -394,6 +401,55 @@ func TestProcessWaitReportsRunningWhenWaitExpires(t *testing.T) {
 	}
 }
 
+func TestProcessWaitReturnsWhenWatchTextAppears(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process group cleanup not implemented on windows")
+	}
+	mgr := NewProcessManager(NewPathGuard(t.TempDir(), nil))
+	t.Cleanup(func() { _ = mgr.Close(context.Background()) })
+
+	start := executeProcessStart(t, NewProcessStartTool(mgr), map[string]any{
+		"command":    "sleep 0.05; printf 'READY\\n'; sleep 10",
+		"timeout_ms": 10000,
+		"intent":     "background",
+	})
+	raw, err := json.Marshal(map[string]any{
+		"process_id": start.ProcessID,
+		"wait_ms":    1000,
+		"max_chars":  1000,
+		"watch_text": "READY",
+	})
+	if err != nil {
+		t.Fatalf("marshal wait: %v", err)
+	}
+	res, err := NewProcessWaitTool(mgr).Execute(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("Execute returned error: %s", res.Output)
+	}
+	var wait processWaitTestOutput
+	if err := json.Unmarshal([]byte(res.Output), &wait); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, res.Output)
+	}
+	if !wait.Found || wait.Terminal || wait.WaitTimedOut || !wait.WatchMatched || wait.WatchStream != "stdout" {
+		t.Fatalf("wait = %+v, want running process with stdout watch match and no wait timeout", wait)
+	}
+	if wait.WatchText != "READY" || wait.Receipt.WatchText != "READY" || !wait.Receipt.WatchMatched || wait.Receipt.WatchStream != "stdout" {
+		t.Fatalf("watch receipt = output:%+v receipt:%+v", wait, wait.Receipt)
+	}
+	if wait.Receipt.FollowupTool != ProcessWaitToolName {
+		t.Fatalf("followup = %q, want %q for running watch match", wait.Receipt.FollowupTool, ProcessWaitToolName)
+	}
+	if stop, err := NewProcessStopTool(mgr).Execute(context.Background(), json.RawMessage(fmt.Sprintf(`{"process_id":%d,"reason":"cleanup"}`, start.ProcessID))); err != nil || stop.IsError {
+		if err != nil {
+			t.Fatalf("cleanup stop error = %v", err)
+		}
+		t.Fatalf("cleanup stop returned error: %s", stop.Output)
+	}
+}
+
 func TestProcessExecutionPolicySnapshot(t *testing.T) {
 	policy := ProcessExecutionPolicySnapshot()
 	if policy.DefaultTimeoutMS != 600000 || policy.MaxTimeoutMS != 3600000 || policy.KillGraceMS != 2000 {
@@ -405,7 +461,7 @@ func TestProcessExecutionPolicySnapshot(t *testing.T) {
 	if policy.DefaultTailBytes != processDefaultTail || policy.MaxTailBytes != processMaxTail {
 		t.Fatalf("tail policy = %+v, want default/max tail bytes", policy)
 	}
-	wantFields := []string{"status", "terminal", "timed_out", "timeout_ms", "followup_tool", "command_intent", "intent_source", "wait_ms", "wait_elapsed_ms", "wait_timed_out"}
+	wantFields := []string{"status", "terminal", "timed_out", "timeout_ms", "followup_tool", "command_intent", "intent_source", "wait_ms", "wait_elapsed_ms", "wait_timed_out", "watch_text", "watch_matched", "watch_stream"}
 	for _, field := range wantFields {
 		found := false
 		for _, got := range policy.ReceiptFields {

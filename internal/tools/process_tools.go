@@ -28,6 +28,7 @@ const (
 	processMaxTail        = 20000
 	processOutputCap      = bashOutputCapPerStream
 	processPreviewRunes   = 240
+	processMaxWatchRunes  = 200
 )
 
 type ProcessManager struct {
@@ -78,6 +79,9 @@ func ProcessExecutionPolicySnapshot() ProcessExecutionPolicy {
 			"wait_ms",
 			"wait_elapsed_ms",
 			"wait_timed_out",
+			"watch_text",
+			"watch_matched",
+			"watch_stream",
 		},
 	}
 }
@@ -639,7 +643,7 @@ func NewProcessWaitTool(manager *ProcessManager) *ProcessWaitTool {
 func (t *ProcessWaitTool) Name() string { return ProcessWaitToolName }
 
 func (t *ProcessWaitTool) Description() string {
-	return "Wait briefly for a session-local background process started by process_start, bounded by wait_ms, without sleep polling."
+	return "Wait briefly for a session-local background process started by process_start, bounded by wait_ms, without sleep polling. Optionally return early when watch_text appears in stdout or stderr."
 }
 
 func (t *ProcessWaitTool) Schema() json.RawMessage {
@@ -647,6 +651,7 @@ func (t *ProcessWaitTool) Schema() json.RawMessage {
 		"process_id": Int("Process id returned by process_start."),
 		"wait_ms":    Int("Maximum time to wait in milliseconds. Defaults to 1000 and caps at 60000."),
 		"max_chars":  Int("Maximum trailing characters per stream. Defaults to 4000 and caps at 20000."),
+		"watch_text": String("Optional literal substring to wait for in stdout or stderr. Caps at 200 runes."),
 	}, []string{"process_id"})
 }
 
@@ -657,9 +662,10 @@ func (t *ProcessWaitTool) ShouldCancelSiblingsOnError() bool      { return false
 func (t *ProcessWaitTool) DeferInitialToolSchema() bool           { return true }
 
 type processWaitInput struct {
-	ProcessID int64 `json:"process_id"`
-	WaitMS    int   `json:"wait_ms"`
-	MaxChars  int   `json:"max_chars"`
+	ProcessID int64  `json:"process_id"`
+	WaitMS    int    `json:"wait_ms"`
+	MaxChars  int    `json:"max_chars"`
+	WatchText string `json:"watch_text"`
 }
 
 type processWaitOutput struct {
@@ -667,6 +673,9 @@ type processWaitOutput struct {
 	WaitMS        int            `json:"wait_ms"`
 	WaitElapsedMS int            `json:"wait_elapsed_ms"`
 	WaitTimedOut  bool           `json:"wait_timed_out"`
+	WatchText     string         `json:"watch_text,omitempty"`
+	WatchMatched  bool           `json:"watch_matched,omitempty"`
+	WatchStream   string         `json:"watch_stream,omitempty"`
 	Receipt       processReceipt `json:"receipt"`
 }
 
@@ -682,6 +691,10 @@ func (t *ProcessWaitTool) Execute(ctx context.Context, params json.RawMessage) (
 	}
 	wait := normalizeProcessWait(input.WaitMS)
 	limit := normalizeProcessTail(input.MaxChars)
+	watchText, err := normalizeProcessWatchText(input.WatchText)
+	if err != nil {
+		return ErrorResult(err.Error()), nil
+	}
 	started := time.Now()
 	proc, found := t.manager.get(input.ProcessID)
 	if !found {
@@ -690,6 +703,7 @@ func (t *ProcessWaitTool) Execute(ctx context.Context, params json.RawMessage) (
 			processSnapshot: processSnapshot{ProcessID: input.ProcessID, Found: false},
 			WaitMS:          int(wait / time.Millisecond),
 			WaitElapsedMS:   elapsedMS,
+			WatchText:       watchText,
 			Receipt: processReceipt{
 				Tool:            ProcessWaitToolName,
 				Action:          "wait",
@@ -701,6 +715,7 @@ func (t *ProcessWaitTool) Execute(ctx context.Context, params json.RawMessage) (
 				TailBytes:       limit,
 				WaitMS:          int(wait / time.Millisecond),
 				WaitElapsedMS:   elapsedMS,
+				WatchText:       watchText,
 			},
 		}
 		raw, err := json.Marshal(out)
@@ -709,7 +724,7 @@ func (t *ProcessWaitTool) Execute(ctx context.Context, params json.RawMessage) (
 		}
 		return SuccessResult(string(raw)), nil
 	}
-	snap, elapsed, waitTimedOut, err := waitForProcessSnapshot(ctx, proc, wait, limit)
+	snap, elapsed, waitTimedOut, watch, err := waitForProcessSnapshot(ctx, proc, wait, limit, watchText)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("process_wait: %v", err)), nil
 	}
@@ -720,6 +735,9 @@ func (t *ProcessWaitTool) Execute(ctx context.Context, params json.RawMessage) (
 		WaitMS:          waitMS,
 		WaitElapsedMS:   elapsedMS,
 		WaitTimedOut:    waitTimedOut,
+		WatchText:       watch.Text,
+		WatchMatched:    watch.Matched,
+		WatchStream:     watch.Stream,
 		Receipt: processReceipt{
 			Tool:            ProcessWaitToolName,
 			Action:          "wait",
@@ -744,6 +762,9 @@ func (t *ProcessWaitTool) Execute(ctx context.Context, params json.RawMessage) (
 			WaitMS:          waitMS,
 			WaitElapsedMS:   elapsedMS,
 			WaitTimedOut:    waitTimedOut,
+			WatchText:       watch.Text,
+			WatchMatched:    watch.Matched,
+			WatchStream:     watch.Stream,
 			FollowupTool:    processFollowupTool(ProcessWaitToolName, true, snap.Terminal),
 		},
 	}
@@ -924,6 +945,9 @@ type processReceipt struct {
 	WaitMS          int    `json:"wait_ms,omitempty"`
 	WaitElapsedMS   int    `json:"wait_elapsed_ms,omitempty"`
 	WaitTimedOut    bool   `json:"wait_timed_out,omitempty"`
+	WatchText       string `json:"watch_text,omitempty"`
+	WatchMatched    bool   `json:"watch_matched,omitempty"`
+	WatchStream     string `json:"watch_stream,omitempty"`
 }
 
 func processFollowupTool(tool string, found bool, terminal bool) string {
@@ -978,17 +1002,38 @@ func normalizeProcessTail(maxChars int) int {
 	return maxChars
 }
 
-func waitForProcessSnapshot(ctx context.Context, proc *managedProcess, wait time.Duration, maxChars int) (processSnapshot, time.Duration, bool, error) {
+func normalizeProcessWatchText(text string) (string, error) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "", nil
+	}
+	if len([]rune(text)) > processMaxWatchRunes {
+		return "", fmt.Errorf("process_wait: watch_text exceeds %d runes", processMaxWatchRunes)
+	}
+	return text, nil
+}
+
+type processWatchResult struct {
+	Text    string
+	Matched bool
+	Stream  string
+}
+
+func waitForProcessSnapshot(ctx context.Context, proc *managedProcess, wait time.Duration, maxChars int, watchText string) (processSnapshot, time.Duration, bool, processWatchResult, error) {
 	started := time.Now()
 	snap := proc.snapshot(maxChars)
+	if watch := processSnapshotWatchMatch(snap, watchText); watch.Matched {
+		return snap, time.Since(started), false, watch, nil
+	}
 	if snap.Terminal {
-		return snap, time.Since(started), false, nil
+		return snap, time.Since(started), false, processWatchResult{Text: watchText}, nil
 	}
 	deadline := started.Add(wait)
 	for {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			return proc.snapshot(maxChars), time.Since(started), true, nil
+			snap = proc.snapshot(maxChars)
+			return snap, time.Since(started), true, processSnapshotWatchMatch(snap, watchText), nil
 		}
 		sleepFor := 25 * time.Millisecond
 		if remaining < sleepFor {
@@ -1003,14 +1048,34 @@ func waitForProcessSnapshot(ctx context.Context, proc *managedProcess, wait time
 				default:
 				}
 			}
-			return processSnapshot{}, time.Since(started), false, ctx.Err()
+			return processSnapshot{}, time.Since(started), false, processWatchResult{Text: watchText}, ctx.Err()
 		case <-timer.C:
 		}
 		snap = proc.snapshot(maxChars)
+		if watch := processSnapshotWatchMatch(snap, watchText); watch.Matched {
+			return snap, time.Since(started), false, watch, nil
+		}
 		if snap.Terminal {
-			return snap, time.Since(started), false, nil
+			return snap, time.Since(started), false, processWatchResult{Text: watchText}, nil
 		}
 	}
+}
+
+func processSnapshotWatchMatch(snap processSnapshot, watchText string) processWatchResult {
+	watch := processWatchResult{Text: watchText}
+	if watchText == "" {
+		return watch
+	}
+	if strings.Contains(snap.StdoutTail, watchText) {
+		watch.Matched = true
+		watch.Stream = "stdout"
+		return watch
+	}
+	if strings.Contains(snap.StderrTail, watchText) {
+		watch.Matched = true
+		watch.Stream = "stderr"
+	}
+	return watch
 }
 
 func truncateProcessText(s string, max int) string {

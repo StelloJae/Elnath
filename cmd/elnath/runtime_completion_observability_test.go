@@ -1051,6 +1051,10 @@ func TestCompletionContractSummaryRecordsProcessToolReceipts(t *testing.T) {
 			}},
 			llm.NewToolResultMessage("process-2", `{"process_id":4,"status":"completed","command_intent":"focused_verify","intent_source":"explicit","receipt":{"tool":"process_monitor","action":"monitor","read_only":true,"persistent":false,"execution_policy":"session_process_observation","command_intent":"focused_verify","intent_source":"explicit","process_id":4,"status":"completed","terminal":true,"exit_code":0,"found":true,"tail_bytes":4000,"stdout_raw_bytes":5,"stderr_raw_bytes":4,"stdout_truncated":false,"stderr_truncated":true,"cwd":"/tmp/work"}}`, false),
 			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "process-wait", Name: "process_wait", Input: json.RawMessage(`{"process_id":4,"watch_text":"READY"}`)},
+			}},
+			llm.NewToolResultMessage("process-wait", `{"process_id":4,"status":"running","command_intent":"focused_verify","intent_source":"explicit","watch_text":"READY","watch_matched":true,"watch_stream":"stdout","receipt":{"tool":"process_wait","action":"wait","read_only":true,"persistent":false,"execution_policy":"session_process_wait","command_intent":"focused_verify","intent_source":"explicit","process_id":4,"status":"running","found":true,"wait_ms":1000,"wait_elapsed_ms":50,"wait_timed_out":false,"watch_text":"READY","watch_matched":true,"watch_stream":"stdout","followup_tool":"process_wait"}}`, false),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
 				llm.ToolUseBlock{ID: "process-3", Name: "process_stop", Input: json.RawMessage(`{"process_id":4}`)},
 			}},
 			llm.NewToolResultMessage("process-3", `{"process_id":4,"status":"stopped","command_intent":"focused_verify","intent_source":"explicit","receipt":{"tool":"process_stop","action":"stop","read_only":false,"persistent":true,"execution_policy":"session_process_stop","command_intent":"focused_verify","intent_source":"explicit","process_id":4,"status":"stopped","terminal":true,"found":true,"stop_signal":"SIGTERM","cwd":"/tmp/work","followup_tool":"process_monitor"}}`, false),
@@ -1059,8 +1063,8 @@ func TestCompletionContractSummaryRecordsProcessToolReceipts(t *testing.T) {
 	}
 	summary := summarizeCompletionContract(nil, orchestrator.WorkflowConfig{}, result)
 
-	if len(summary.ControlToolReceipts) != 3 {
-		t.Fatalf("ControlToolReceipts = %#v, want three process receipts", summary.ControlToolReceipts)
+	if len(summary.ControlToolReceipts) != 4 {
+		t.Fatalf("ControlToolReceipts = %#v, want four process receipts", summary.ControlToolReceipts)
 	}
 	start := summary.ControlToolReceipts[0]
 	if start.Tool != "process_start" || start.Action != "start" || start.CommandIntent != "focused_verify" || start.IntentSource != "explicit" || start.ProcessID != 4 || start.TimeoutMS != 600000 || start.CWD != "/tmp/work" || start.FollowupTool != "process_monitor" {
@@ -1073,7 +1077,11 @@ func TestCompletionContractSummaryRecordsProcessToolReceipts(t *testing.T) {
 	if monitor.ExitCode == nil || *monitor.ExitCode != 0 || monitor.StdoutRawBytes != 5 || monitor.StderrRawBytes != 4 || !monitor.StderrTruncated {
 		t.Fatalf("monitor receipt output metadata = %+v", monitor)
 	}
-	stop := summary.ControlToolReceipts[2]
+	wait := summary.ControlToolReceipts[2]
+	if wait.Tool != "process_wait" || wait.Action != "wait" || wait.WatchText != "READY" || !wait.WatchMatched || wait.WatchStream != "stdout" || wait.WaitMS != 1000 || wait.WaitElapsedMS != 50 || wait.WaitTimedOut {
+		t.Fatalf("wait receipt = %+v", wait)
+	}
+	stop := summary.ControlToolReceipts[3]
 	if stop.Tool != "process_stop" || stop.Action != "stop" || stop.CommandIntent != "focused_verify" || stop.IntentSource != "explicit" || stop.ProcessID != 4 || stop.StopSignal != "SIGTERM" || !stop.Terminal || !stop.Found || stop.FollowupTool != "process_monitor" {
 		t.Fatalf("stop receipt = %+v", stop)
 	}
@@ -1236,16 +1244,18 @@ func TestProcessControlReceiptsConvertToLearningAndAgentic(t *testing.T) {
 		Found:           true,
 		WaitMS:          25,
 		WaitElapsedMS:   25,
-		WaitTimedOut:    true,
+		WatchText:       "READY",
+		WatchMatched:    true,
+		WatchStream:     "stdout",
 		FollowupTool:    "process_wait",
 	}}
 
 	learningReceipts := completionControlToolReceiptsToLearning(src)
-	if len(learningReceipts) != 4 || learningReceipts[0].ProcessID != 4 || learningReceipts[0].CommandIntent != "focused_verify" || learningReceipts[0].IntentSource != "explicit" || learningReceipts[0].TimeoutMS != 600000 || learningReceipts[0].FollowupTool != "process_monitor" || learningReceipts[1].CommandIntent != "focused_verify" || !learningReceipts[1].TimedOut || learningReceipts[1].TimeoutMS != 50 || learningReceipts[1].TailBytes != 4000 || learningReceipts[1].StdoutRawBytes != 5 || !learningReceipts[1].StderrTruncated || learningReceipts[2].CommandIntent != "focused_verify" || learningReceipts[2].StopSignal != "SIGTERM" || learningReceipts[2].FollowupTool != "process_monitor" || learningReceipts[3].Tool != "process_wait" || learningReceipts[3].WaitMS != 25 || learningReceipts[3].WaitElapsedMS != 25 || !learningReceipts[3].WaitTimedOut || learningReceipts[3].FollowupTool != "process_wait" {
+	if len(learningReceipts) != 4 || learningReceipts[0].ProcessID != 4 || learningReceipts[0].CommandIntent != "focused_verify" || learningReceipts[0].IntentSource != "explicit" || learningReceipts[0].TimeoutMS != 600000 || learningReceipts[0].FollowupTool != "process_monitor" || learningReceipts[1].CommandIntent != "focused_verify" || !learningReceipts[1].TimedOut || learningReceipts[1].TimeoutMS != 50 || learningReceipts[1].TailBytes != 4000 || learningReceipts[1].StdoutRawBytes != 5 || !learningReceipts[1].StderrTruncated || learningReceipts[2].CommandIntent != "focused_verify" || learningReceipts[2].StopSignal != "SIGTERM" || learningReceipts[2].FollowupTool != "process_monitor" || learningReceipts[3].Tool != "process_wait" || learningReceipts[3].WaitMS != 25 || learningReceipts[3].WaitElapsedMS != 25 || learningReceipts[3].WatchText != "READY" || !learningReceipts[3].WatchMatched || learningReceipts[3].WatchStream != "stdout" || learningReceipts[3].FollowupTool != "process_wait" {
 		t.Fatalf("learning receipts = %+v", learningReceipts)
 	}
 	agenticReceipts := completionControlToolReceiptsToAgentic(src)
-	if len(agenticReceipts) != 4 || agenticReceipts[0].ProcessID != 4 || agenticReceipts[0].CommandIntent != "focused_verify" || agenticReceipts[0].IntentSource != "explicit" || agenticReceipts[0].CWD != "/tmp/work" || agenticReceipts[0].FollowupTool != "process_monitor" || agenticReceipts[1].CommandIntent != "focused_verify" || !agenticReceipts[1].TimedOut || agenticReceipts[1].TimeoutMS != 50 || agenticReceipts[1].TailBytes != 4000 || agenticReceipts[1].StderrRawBytes != 4 || agenticReceipts[2].CommandIntent != "focused_verify" || agenticReceipts[2].StopSignal != "SIGTERM" || agenticReceipts[2].FollowupTool != "process_monitor" || agenticReceipts[3].Tool != "process_wait" || agenticReceipts[3].WaitMS != 25 || agenticReceipts[3].WaitElapsedMS != 25 || !agenticReceipts[3].WaitTimedOut || agenticReceipts[3].FollowupTool != "process_wait" {
+	if len(agenticReceipts) != 4 || agenticReceipts[0].ProcessID != 4 || agenticReceipts[0].CommandIntent != "focused_verify" || agenticReceipts[0].IntentSource != "explicit" || agenticReceipts[0].CWD != "/tmp/work" || agenticReceipts[0].FollowupTool != "process_monitor" || agenticReceipts[1].CommandIntent != "focused_verify" || !agenticReceipts[1].TimedOut || agenticReceipts[1].TimeoutMS != 50 || agenticReceipts[1].TailBytes != 4000 || agenticReceipts[1].StderrRawBytes != 4 || agenticReceipts[2].CommandIntent != "focused_verify" || agenticReceipts[2].StopSignal != "SIGTERM" || agenticReceipts[2].FollowupTool != "process_monitor" || agenticReceipts[3].Tool != "process_wait" || agenticReceipts[3].WaitMS != 25 || agenticReceipts[3].WaitElapsedMS != 25 || agenticReceipts[3].WatchText != "READY" || !agenticReceipts[3].WatchMatched || agenticReceipts[3].WatchStream != "stdout" || agenticReceipts[3].FollowupTool != "process_wait" {
 		t.Fatalf("agentic receipts = %+v", agenticReceipts)
 	}
 }
