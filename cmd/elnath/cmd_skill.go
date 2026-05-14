@@ -42,6 +42,9 @@ func cmdSkill(ctx context.Context, args []string) error {
 	}
 
 	switch args[0] {
+	case "help", "-h", "--help":
+		fmt.Println(skillUsage())
+		return nil
 	case "list":
 		return cmdSkillList(ctx, args[1:])
 	case "show":
@@ -57,6 +60,18 @@ func cmdSkill(ctx context.Context, args []string) error {
 	default:
 		return fmt.Errorf("unknown skill subcommand: %q (try: list, show, create, delete, edit, stats)", args[0])
 	}
+}
+
+func skillUsage() string {
+	return `Usage: elnath skill <subcommand>
+
+Subcommands:
+  list [--json] [--all] [--compatible]  List installed skills
+  show <name>                           Show a skill definition
+  create <name>                         Create a new skill
+  delete <name>                         Delete a skill
+  edit <name>                           Open a skill in $EDITOR
+  stats                                 Show skill registry stats`
 }
 
 func cmdSkillList(_ context.Context, args []string) error {

@@ -221,6 +221,39 @@ func TestExecuteCommand_CommandSpecificHelp(t *testing.T) {
 	}
 }
 
+func TestExecuteCommand_SubcommandHelpCoverage(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+		want    []string
+	}{
+		{name: "eval", command: "eval", want: []string{"Usage: elnath eval <subcommand>", "validate <corpus.json>", "run-current <plan.json>"}},
+		{name: "skill", command: "skill", want: []string{"Usage: elnath skill <subcommand>", "list [--json]", "create <name>"}},
+		{name: "profile", command: "profile", want: []string{"Usage: elnath profile <subcommand>", "list", "show <name>"}},
+		{name: "telegram", command: "telegram", want: []string{"Usage: elnath telegram <subcommand>", "shell"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stdout, stderr := captureOutput(t, func() {
+				if err := executeCommand(context.Background(), tt.command, []string{"--help"}); err != nil {
+					t.Fatalf("executeCommand(%s --help) error = %v", tt.command, err)
+				}
+			})
+			if stderr != "" {
+				t.Fatalf("stderr = %q, want empty", stderr)
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(stdout, want) {
+					t.Fatalf("stdout missing %q:\n%s", want, stdout)
+				}
+			}
+			if strings.Contains(stdout, "Run `elnath <command> --help`") {
+				t.Fatalf("stdout fell back to top-level help:\n%s", stdout)
+			}
+		})
+	}
+}
+
 // TestPrintCommandHelp_DaemonMatchesDispatcher guards against help-text drift.
 // cmdDaemon accepts start/submit/status/stop/install; the extended help must
 // not advertise subcommands the dispatcher rejects (like "task submit",

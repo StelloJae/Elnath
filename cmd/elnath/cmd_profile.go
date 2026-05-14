@@ -17,6 +17,9 @@ func cmdProfile(ctx context.Context, args []string) error {
 	}
 
 	switch args[0] {
+	case "help", "-h", "--help":
+		fmt.Println(profileUsage())
+		return nil
 	case "list":
 		return cmdProfileList(ctx, args[1:])
 	case "show":
@@ -24,6 +27,14 @@ func cmdProfile(ctx context.Context, args []string) error {
 	default:
 		return fmt.Errorf("unknown profile subcommand: %q (try: list, show)", args[0])
 	}
+}
+
+func profileUsage() string {
+	return `Usage: elnath profile <subcommand>
+
+Subcommands:
+  list              List runtime profiles
+  show <name>       Show one runtime profile`
 }
 
 func cmdProfileList(_ context.Context, _ []string) error {

@@ -31,6 +31,8 @@ Merged structural PRs now include:
 - PR #216: user-answer character bounds in receipts
 - PR #217: `ask_user_question` answer handoff commands and follow-up hint
 - PR #218: bounded `process_wait watch_text` marker waits
+- PR #219: registry-backed top-level CLI help and control-surface status refresh
+- PR #220: command-specific `--help` dispatch repair
 
 Do not restart old Milestone C/G work unless fresh evidence proves a regression.
 
