@@ -78,6 +78,7 @@ func commandSpecs() []commandSpec {
 		{Name: "skill", Runner: cmdSkill, Description: "Manage Elnath skills.", Category: "skills"},
 		{Name: "profile", Runner: cmdProfile, Description: "Inspect runtime profile information.", Category: "runtime"},
 		{Name: "provider", Runner: cmdProvider, Description: "Inspect configured LLM provider capability.", Category: "provider", ArgumentHint: "status|candidates|check <provider> [--json]"},
+		{Name: "proxy", Runner: cmdProxy, Description: "Run a local OpenAI-compatible provider proxy.", Category: "provider", ArgumentHint: "status|providers|start [--json]"},
 		{Name: "explain", Runner: cmdExplain, Description: "Explain project or runtime state.", Category: "knowledge"},
 		{Name: "debug", Runner: cmdDebug, Description: "Run debugging helpers.", Category: "debugging"},
 		// Hidden internal exec mode for the v41 / B3b-4-S0 Linux
@@ -209,7 +210,7 @@ func printCommandHelp(name string) error {
 
 func commandUsesInlineHelp(name string) bool {
 	switch name {
-	case "agentic", "chaos", "debug", "eval", "explain", "lessons", "portability", "profile", "provider", "research", "skill", "task", "telegram":
+	case "agentic", "chaos", "debug", "eval", "explain", "lessons", "portability", "profile", "provider", "proxy", "research", "skill", "task", "telegram":
 		return true
 	default:
 		return false
