@@ -12,8 +12,9 @@ import (
 )
 
 const (
-	UserQuestionListToolName = "user_question_list"
-	UserQuestionWaitToolName = "user_question_wait"
+	UserQuestionListToolName   = "user_question_list"
+	UserQuestionWaitToolName   = "user_question_wait"
+	UserQuestionCancelToolName = "user_question_cancel"
 
 	userQuestionWaitDefaultMS = 30000
 	userQuestionWaitMaxMS     = 300000
@@ -176,6 +177,7 @@ type userQuestionWaitToolReceipt struct {
 	RequestID       string `json:"request_id"`
 	SessionID       string `json:"session_id"`
 	Status          string `json:"status"`
+	Reason          string `json:"reason,omitempty"`
 	TaskID          int64  `json:"task_id,omitempty"`
 	QuestionChars   int    `json:"question_chars,omitempty"`
 	AnswerChars     int    `json:"answer_chars,omitempty"`
@@ -188,6 +190,7 @@ type userQuestionWaitToolReceipt struct {
 type userQuestionWaitState struct {
 	Found         bool
 	Status        string
+	Reason        string
 	RequestID     string
 	SessionID     string
 	QuestionChars int
@@ -226,6 +229,8 @@ func (t *UserQuestionWaitTool) Execute(ctx context.Context, params json.RawMessa
 		case !state.Found:
 			return t.userQuestionWaitResult(state, requestID, sessionID, waitMS, elapsedMS, false)
 		case state.Status == "answered":
+			return t.userQuestionWaitResult(state, requestID, sessionID, waitMS, elapsedMS, false)
+		case state.Status == "cancelled":
 			return t.userQuestionWaitResult(state, requestID, sessionID, waitMS, elapsedMS, false)
 		case elapsedMS >= waitMS:
 			return t.userQuestionWaitResult(state, requestID, sessionID, waitMS, elapsedMS, true)
@@ -267,6 +272,9 @@ func (t *UserQuestionWaitTool) userQuestionWaitResult(state userQuestionWaitStat
 	if status == "pending" && waitTimedOut {
 		followup = UserQuestionWaitToolName
 	}
+	if status == "cancelled" && followup == "" {
+		followup = UserQuestionListToolName
+	}
 	output := userQuestionWaitToolOutput{
 		Status:        status,
 		RequestID:     requestID,
@@ -285,6 +293,7 @@ func (t *UserQuestionWaitTool) userQuestionWaitResult(state userQuestionWaitStat
 			RequestID:       requestID,
 			SessionID:       sessionID,
 			Status:          status,
+			Reason:          state.Reason,
 			TaskID:          state.TaskID,
 			QuestionChars:   state.QuestionChars,
 			AnswerChars:     state.AnswerChars,
@@ -338,6 +347,24 @@ func findUserQuestionWaitState(records []OutcomeRecord, sessionID, requestID str
 					TaskID:        receipt.TaskID,
 					FollowupTool:  followup,
 				}
+			case receipt.Tool == UserQuestionCancelToolName && receipt.Action == "cancel":
+				questionChars := receipt.QuestionChars
+				if questionChars == 0 {
+					questionChars = state.QuestionChars
+				}
+				followup := strings.TrimSpace(receipt.FollowupTool)
+				if followup == "" {
+					followup = UserQuestionListToolName
+				}
+				state = userQuestionWaitState{
+					Found:         true,
+					Status:        "cancelled",
+					Reason:        strings.TrimSpace(receipt.Reason),
+					RequestID:     requestID,
+					SessionID:     sessionID,
+					QuestionChars: questionChars,
+					FollowupTool:  followup,
+				}
 			}
 		}
 	}
@@ -352,4 +379,126 @@ func normalizeUserQuestionWaitMS(waitMS int) int {
 		return userQuestionWaitMaxMS
 	}
 	return waitMS
+}
+
+type UserQuestionCancelTool struct {
+	store *OutcomeStore
+}
+
+func NewUserQuestionCancelTool(store *OutcomeStore) *UserQuestionCancelTool {
+	return &UserQuestionCancelTool{store: store}
+}
+
+func (t *UserQuestionCancelTool) Name() string { return UserQuestionCancelToolName }
+
+func (t *UserQuestionCancelTool) Description() string {
+	return "Cancel a pending user-input request and record a durable cancellation receipt"
+}
+
+func (t *UserQuestionCancelTool) Schema() json.RawMessage {
+	return tools.Object(map[string]tools.Property{
+		"session_id": tools.String("Session id from the ask_user_question receipt."),
+		"request_id": tools.String("Request id from the ask_user_question receipt."),
+		"reason":     tools.String("Optional privacy-safe cancellation reason."),
+	}, []string{"session_id", "request_id"})
+}
+
+func (t *UserQuestionCancelTool) IsConcurrencySafe(json.RawMessage) bool { return false }
+
+func (t *UserQuestionCancelTool) Reversible() bool { return false }
+
+func (t *UserQuestionCancelTool) Scope(json.RawMessage) tools.ToolScope {
+	return tools.ToolScope{Persistent: true}
+}
+
+func (t *UserQuestionCancelTool) ShouldCancelSiblingsOnError() bool { return false }
+
+func (t *UserQuestionCancelTool) DeferInitialToolSchema() bool { return true }
+
+type userQuestionCancelToolInput struct {
+	SessionID string `json:"session_id"`
+	RequestID string `json:"request_id"`
+	Reason    string `json:"reason"`
+}
+
+type userQuestionCancelToolOutput struct {
+	Type          string             `json:"type"`
+	Status        string             `json:"status"`
+	RequestID     string             `json:"request_id"`
+	SessionID     string             `json:"session_id"`
+	Reason        string             `json:"reason,omitempty"`
+	QuestionChars int                `json:"question_chars,omitempty"`
+	Receipt       ControlToolReceipt `json:"receipt"`
+}
+
+func (t *UserQuestionCancelTool) Execute(_ context.Context, params json.RawMessage) (*tools.Result, error) {
+	if t == nil || t.store == nil {
+		return tools.ErrorResult("user_question_cancel: outcome store unavailable"), nil
+	}
+	var input userQuestionCancelToolInput
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &input); err != nil {
+			return tools.ErrorResult(fmt.Sprintf("invalid params: %v", err)), nil
+		}
+	}
+	sessionID := strings.TrimSpace(input.SessionID)
+	if sessionID == "" {
+		return tools.ErrorResult("user_question_cancel: session_id is required"), nil
+	}
+	requestID := strings.TrimSpace(input.RequestID)
+	if requestID == "" {
+		return tools.ErrorResult("user_question_cancel: request_id is required"), nil
+	}
+	reason := strings.TrimSpace(input.Reason)
+	if reason == "" {
+		reason = "cancelled by operator"
+	}
+	records, err := t.store.Recent(0)
+	if err != nil {
+		return tools.ErrorResult(fmt.Sprintf("user_question_cancel: %v", err)), nil
+	}
+	question, ok := FindPendingUserQuestion(records, sessionID, requestID)
+	if !ok {
+		return tools.ErrorResult("user_question_cancel: request_id is not pending for session_id"), nil
+	}
+	receipt := ControlToolReceipt{
+		Tool:            UserQuestionCancelToolName,
+		Action:          "cancel",
+		ReadOnly:        false,
+		Persistent:      true,
+		ExecutionPolicy: "user_input_cancel",
+		FollowupTool:    UserQuestionListToolName,
+		RequestID:       requestID,
+		SessionID:       sessionID,
+		Status:          "cancelled",
+		Reason:          reason,
+		Terminal:        true,
+		Found:           true,
+		QuestionChars:   question.QuestionChars,
+	}
+	if err := t.store.Append(OutcomeRecord{
+		ProjectID:           "elnath",
+		Intent:              "user_input_cancel",
+		Workflow:            "user_question_cancel",
+		FinishReason:        "stop",
+		Success:             true,
+		SessionID:           sessionID,
+		ControlToolReceipts: []ControlToolReceipt{receipt},
+	}); err != nil {
+		return tools.ErrorResult(fmt.Sprintf("user_question_cancel: %v", err)), nil
+	}
+	output := userQuestionCancelToolOutput{
+		Type:          "user_input_request_cancelled",
+		Status:        "cancelled",
+		RequestID:     requestID,
+		SessionID:     sessionID,
+		Reason:        reason,
+		QuestionChars: question.QuestionChars,
+		Receipt:       receipt,
+	}
+	raw, err := json.Marshal(output)
+	if err != nil {
+		return tools.ErrorResult(fmt.Sprintf("user_question_cancel: marshal output: %v", err)), nil
+	}
+	return tools.SuccessResult(string(raw)), nil
 }

@@ -416,7 +416,7 @@ func toolSearchRoutingMetadataForName(name string) toolSearchRoutingMetadata {
 		return toolSearchRoutingMetadata{Category: "command", Surface: "runtime"}
 	case "enter_plan_mode", "exit_plan_mode":
 		return toolSearchRoutingMetadata{Category: "plan", Surface: "runtime"}
-	case "ask_user_question", "user_question_list", "user_question_wait", "user_question_answer":
+	case "ask_user_question", "user_question_list", "user_question_wait", "user_question_answer", "user_question_cancel":
 		return toolSearchRoutingMetadata{Category: "user_input", Surface: "runtime"}
 	default:
 		return toolSearchRoutingMetadata{Category: "other", Surface: "registry"}

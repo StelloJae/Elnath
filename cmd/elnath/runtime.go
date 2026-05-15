@@ -501,6 +501,7 @@ func buildExecutionRuntime(
 	reg.Register(agent.NewAskUserQuestionTool())
 	reg.Register(learning.NewUserQuestionListTool(outcomeStore))
 	reg.Register(learning.NewUserQuestionWaitTool(outcomeStore))
+	reg.Register(learning.NewUserQuestionCancelTool(outcomeStore))
 	taskQueue, err := daemon.NewQueueNoRecover(db.Main)
 	if err != nil {
 		return nil, fmt.Errorf("open task queue tools: %w", err)
@@ -1673,6 +1674,7 @@ func completionControlToolReceiptsToLearning(src []completionControlToolReceipt)
 			DecisionID:              receipt.DecisionID,
 			DecisionStatus:          receipt.DecisionStatus,
 			Status:                  receipt.Status,
+			Reason:                  receipt.Reason,
 			PreviousStatus:          receipt.PreviousStatus,
 			Terminal:                receipt.Terminal,
 			TimedOut:                receipt.TimedOut,

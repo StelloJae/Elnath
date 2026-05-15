@@ -35,6 +35,8 @@ func cmdTask(ctx context.Context, args []string) error {
 		return cmdTaskStop(ctx, args[1:])
 	case "answer":
 		return cmdTaskAnswer(ctx, args[1:])
+	case "cancel-question":
+		return cmdTaskCancelQuestion(ctx, args[1:])
 	case "resume":
 		return cmdTaskResume(ctx, args[1:])
 	default:
@@ -52,6 +54,7 @@ Subcommands:
   output <id>        Read bounded task output
   stop <id>          Stop a pending task
   answer             Answer a pending user-input request and enqueue resume
+  cancel-question    Cancel a pending user-input request
   resume <id>        Resume the session created by a task`
 }
 
@@ -177,6 +180,16 @@ func cmdTaskAnswer(ctx context.Context, args []string) error {
 	}
 	outcomeStore := learning.NewOutcomeStore(filepath.Join(cfg.DataDir, "outcomes.jsonl"))
 	return cmdTaskAnswerWithQueue(ctx, queue, outcomeStore, args)
+}
+
+func cmdTaskCancelQuestion(ctx context.Context, args []string) error {
+	cfg, db, err := openTaskDB()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	outcomeStore := learning.NewOutcomeStore(filepath.Join(cfg.DataDir, "outcomes.jsonl"))
+	return cmdTaskCancelQuestionWithStore(ctx, outcomeStore, args)
 }
 
 func cmdTaskMonitorWithQueue(ctx context.Context, queue *daemon.Queue, args []string) error {
@@ -438,6 +451,58 @@ func recordTaskAnswerOutcome(outcomeStore *learning.OutcomeStore, view taskAnswe
 	})
 }
 
+func cmdTaskCancelQuestionWithStore(ctx context.Context, outcomeStore *learning.OutcomeStore, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: elnath task cancel-question --session ID --request ID [--reason TEXT] [--json]")
+	}
+	params := map[string]any{}
+	jsonOut := false
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--json":
+			jsonOut = true
+		case "--session":
+			value, next, err := parseStringFlag(args, i, "--session")
+			if err != nil {
+				return err
+			}
+			params["session_id"] = value
+			i = next
+		case "--request", "--request-id":
+			value, next, err := parseStringFlag(args, i, args[i])
+			if err != nil {
+				return err
+			}
+			params["request_id"] = value
+			i = next
+		case "--reason":
+			value, next, err := parseStringFlag(args, i, "--reason")
+			if err != nil {
+				return err
+			}
+			params["reason"] = value
+			i = next
+		default:
+			return fmt.Errorf("unknown task cancel-question flag: %s", args[i])
+		}
+	}
+
+	output, err := executeTaskTool(ctx, learning.NewUserQuestionCancelTool(outcomeStore), params)
+	if err != nil {
+		return err
+	}
+	var view taskCancelQuestionCLIOutput
+	if err := json.Unmarshal([]byte(output), &view); err != nil {
+		return fmt.Errorf("task cancel-question: parse output: %w", err)
+	}
+	if jsonOut {
+		fmt.Println(output)
+		return nil
+	}
+	printTaskCancelQuestion(view)
+	return nil
+}
+
 func cmdTaskResume(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: elnath task resume <id>")
@@ -563,6 +628,14 @@ type taskAnswerCLIOutput struct {
 	Receipt     learning.ControlToolReceipt `json:"receipt"`
 }
 
+type taskCancelQuestionCLIOutput struct {
+	Status    string                      `json:"status"`
+	RequestID string                      `json:"request_id"`
+	SessionID string                      `json:"session_id"`
+	Reason    string                      `json:"reason"`
+	Receipt   learning.ControlToolReceipt `json:"receipt"`
+}
+
 func printTaskMonitor(view taskMonitorCLIOutput) {
 	fmt.Printf("ID:           %d\n", view.TaskID)
 	fmt.Printf("Status:       %s\n", view.Status)
@@ -623,6 +696,16 @@ func printTaskAnswer(view taskAnswerCLIOutput) {
 	}
 	fmt.Printf("Answer chars:  %d\n", view.AnswerChars)
 	fmt.Printf("Next:          elnath task monitor %d\n", view.TaskID)
+}
+
+func printTaskCancelQuestion(view taskCancelQuestionCLIOutput) {
+	fmt.Printf("Question cancelled: %s\n", view.RequestID)
+	fmt.Printf("Status:             %s\n", view.Status)
+	fmt.Printf("Session:            %s\n", view.SessionID)
+	if view.Reason != "" {
+		fmt.Printf("Reason:             %s\n", view.Reason)
+	}
+	fmt.Println("Next:               elnath explain pending-questions")
 }
 
 func parseTaskID(raw string) (int64, error) {

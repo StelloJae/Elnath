@@ -87,6 +87,33 @@ func TestPendingUserQuestionsCarriesStructuredChoices(t *testing.T) {
 	}
 }
 
+func TestPendingUserQuestionsDropsCancelledQuestion(t *testing.T) {
+	now := time.Date(2026, 5, 13, 7, 0, 0, 0, time.UTC)
+	records := []OutcomeRecord{{
+		Timestamp: now,
+		ControlToolReceipts: []ControlToolReceipt{{
+			Tool:      "ask_user_question",
+			Action:    "request",
+			RequestID: "req-cancel",
+			SessionID: "sess-1",
+			Question:  "Which branch?",
+		}},
+	}, {
+		Timestamp: now.Add(time.Minute),
+		ControlToolReceipts: []ControlToolReceipt{{
+			Tool:      UserQuestionCancelToolName,
+			Action:    "cancel",
+			RequestID: "req-cancel",
+			SessionID: "sess-1",
+			Status:    "cancelled",
+		}},
+	}}
+
+	if pending := PendingUserQuestions(records, "sess-1", 10); len(pending) != 0 {
+		t.Fatalf("pending = %+v, want cancelled question removed", pending)
+	}
+}
+
 func TestPendingUserQuestionsFiltersSessionAndLimit(t *testing.T) {
 	now := time.Date(2026, 5, 13, 7, 0, 0, 0, time.UTC)
 	records := []OutcomeRecord{{

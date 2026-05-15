@@ -258,6 +258,7 @@ func completionControlToolReceiptsToAgentic(src []completionControlToolReceipt) 
 			DecisionID:              receipt.DecisionID,
 			DecisionStatus:          receipt.DecisionStatus,
 			Status:                  receipt.Status,
+			Reason:                  receipt.Reason,
 			PreviousStatus:          receipt.PreviousStatus,
 			Terminal:                receipt.Terminal,
 			TimedOut:                receipt.TimedOut,

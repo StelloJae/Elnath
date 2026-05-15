@@ -59,6 +59,8 @@ func PendingUserQuestions(records []OutcomeRecord, sessionID string, limit int) 
 				pending[requestID] = withUserQuestionHandoff(pending[requestID])
 			case receipt.Tool == "user_question_answer" && receipt.Action == "answer":
 				delete(pending, requestID)
+			case receipt.Tool == UserQuestionCancelToolName && receipt.Action == "cancel":
+				delete(pending, requestID)
 			}
 		}
 	}
