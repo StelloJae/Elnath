@@ -214,6 +214,44 @@ func TestUserQuestionWaitToolReturnsCanceled(t *testing.T) {
 	}
 }
 
+func TestUserQuestionWaitToolReturnsTimedOutQuestion(t *testing.T) {
+	store := NewOutcomeStore(filepath.Join(t.TempDir(), "outcomes.jsonl"))
+	if err := store.Append(OutcomeRecord{
+		ProjectID: "elnath",
+		Intent:    "complex_task",
+		Workflow:  "single",
+		Timestamp: time.Now().Add(-2 * time.Second),
+		ControlToolReceipts: []ControlToolReceipt{{
+			Tool:           "ask_user_question",
+			Action:         "request",
+			RequestID:      "req-1",
+			SessionID:      "sess-1",
+			Question:       "Still needed?",
+			TimeoutSeconds: 1,
+		}},
+	}); err != nil {
+		t.Fatalf("Append ask: %v", err)
+	}
+
+	result, err := NewUserQuestionWaitTool(store).Execute(context.Background(), json.RawMessage(`{"session_id":"sess-1","request_id":"req-1","wait_ms":500}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute returned error result: %s", result.Output)
+	}
+	var output userQuestionWaitToolOutput
+	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if output.Status != "timed_out" || output.WaitTimedOut {
+		t.Fatalf("output = %+v, want request timed_out without wait timeout", output)
+	}
+	if output.Receipt.Status != "timed_out" || output.Receipt.Reason == "" || output.Receipt.FollowupTool != UserQuestionListToolName {
+		t.Fatalf("receipt = %+v, want timed_out with reason and list followup", output.Receipt)
+	}
+}
+
 func TestUserQuestionCancelToolCancelsPendingQuestion(t *testing.T) {
 	store := NewOutcomeStore(filepath.Join(t.TempDir(), "outcomes.jsonl"))
 	if err := store.Append(OutcomeRecord{

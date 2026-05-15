@@ -188,15 +188,17 @@ type userQuestionWaitToolReceipt struct {
 }
 
 type userQuestionWaitState struct {
-	Found         bool
-	Status        string
-	Reason        string
-	RequestID     string
-	SessionID     string
-	QuestionChars int
-	AnswerChars   int
-	TaskID        int64
-	FollowupTool  string
+	Found          bool
+	Status         string
+	Reason         string
+	RequestID      string
+	SessionID      string
+	QuestionChars  int
+	AnswerChars    int
+	TimeoutSeconds int
+	AskedAt        time.Time
+	TaskID         int64
+	FollowupTool   string
 }
 
 func (t *UserQuestionWaitTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
@@ -232,6 +234,8 @@ func (t *UserQuestionWaitTool) Execute(ctx context.Context, params json.RawMessa
 			return t.userQuestionWaitResult(state, requestID, sessionID, waitMS, elapsedMS, false)
 		case state.Status == "cancelled":
 			return t.userQuestionWaitResult(state, requestID, sessionID, waitMS, elapsedMS, false)
+		case state.Status == "timed_out":
+			return t.userQuestionWaitResult(state, requestID, sessionID, waitMS, elapsedMS, false)
 		case elapsedMS >= waitMS:
 			return t.userQuestionWaitResult(state, requestID, sessionID, waitMS, elapsedMS, true)
 		}
@@ -260,7 +264,7 @@ func (t *UserQuestionWaitTool) userQuestionWaitState(sessionID, requestID string
 	if err != nil {
 		return userQuestionWaitState{}, err
 	}
-	return findUserQuestionWaitState(records, sessionID, requestID), nil
+	return findUserQuestionWaitStateAt(records, sessionID, requestID, time.Now().UTC()), nil
 }
 
 func (t *UserQuestionWaitTool) userQuestionWaitResult(state userQuestionWaitState, requestID, sessionID string, waitMS, elapsedMS int, waitTimedOut bool) (*tools.Result, error) {
@@ -272,7 +276,7 @@ func (t *UserQuestionWaitTool) userQuestionWaitResult(state userQuestionWaitStat
 	if status == "pending" && waitTimedOut {
 		followup = UserQuestionWaitToolName
 	}
-	if status == "cancelled" && followup == "" {
+	if (status == "cancelled" || status == "timed_out") && followup == "" {
 		followup = UserQuestionListToolName
 	}
 	output := userQuestionWaitToolOutput{
@@ -311,6 +315,10 @@ func (t *UserQuestionWaitTool) userQuestionWaitResult(state userQuestionWaitStat
 }
 
 func findUserQuestionWaitState(records []OutcomeRecord, sessionID, requestID string) userQuestionWaitState {
+	return findUserQuestionWaitStateAt(records, sessionID, requestID, time.Now().UTC())
+}
+
+func findUserQuestionWaitStateAt(records []OutcomeRecord, sessionID, requestID string, now time.Time) userQuestionWaitState {
 	sessionID = strings.TrimSpace(sessionID)
 	requestID = strings.TrimSpace(requestID)
 	ordered := append([]OutcomeRecord(nil), records...)
@@ -326,11 +334,18 @@ func findUserQuestionWaitState(records []OutcomeRecord, sessionID, requestID str
 			switch {
 			case receipt.Tool == "ask_user_question" && receipt.Action == "request":
 				state = userQuestionWaitState{
-					Found:         true,
-					Status:        "pending",
-					RequestID:     requestID,
-					SessionID:     sessionID,
-					QuestionChars: receipt.QuestionChars,
+					Found:          true,
+					Status:         "pending",
+					RequestID:      requestID,
+					SessionID:      sessionID,
+					QuestionChars:  receipt.QuestionChars,
+					TimeoutSeconds: receipt.TimeoutSeconds,
+					AskedAt:        record.Timestamp,
+				}
+				if userQuestionTimedOut(record.Timestamp, receipt.TimeoutSeconds, now) {
+					state.Status = "timed_out"
+					state.Reason = "question timeout expired"
+					state.FollowupTool = UserQuestionListToolName
 				}
 			case receipt.Tool == "user_question_answer" && receipt.Action == "answer":
 				followup := strings.TrimSpace(receipt.FollowupTool)

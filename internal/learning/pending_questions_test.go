@@ -114,6 +114,25 @@ func TestPendingUserQuestionsDropsCancelledQuestion(t *testing.T) {
 	}
 }
 
+func TestPendingUserQuestionsDropsTimedOutQuestion(t *testing.T) {
+	now := time.Date(2026, 5, 13, 7, 0, 0, 0, time.UTC)
+	records := []OutcomeRecord{{
+		Timestamp: now,
+		ControlToolReceipts: []ControlToolReceipt{{
+			Tool:           "ask_user_question",
+			Action:         "request",
+			RequestID:      "req-timeout",
+			SessionID:      "sess-1",
+			Question:       "Still needed?",
+			TimeoutSeconds: 10,
+		}},
+	}}
+
+	if pending := PendingUserQuestionsAt(records, "sess-1", 10, now.Add(11*time.Second)); len(pending) != 0 {
+		t.Fatalf("pending = %+v, want timed-out question removed", pending)
+	}
+}
+
 func TestPendingUserQuestionsFiltersSessionAndLimit(t *testing.T) {
 	now := time.Date(2026, 5, 13, 7, 0, 0, 0, time.UTC)
 	records := []OutcomeRecord{{

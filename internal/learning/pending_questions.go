@@ -22,6 +22,10 @@ type PendingUserQuestion struct {
 }
 
 func PendingUserQuestions(records []OutcomeRecord, sessionID string, limit int) []PendingUserQuestion {
+	return PendingUserQuestionsAt(records, sessionID, limit, time.Now().UTC())
+}
+
+func PendingUserQuestionsAt(records []OutcomeRecord, sessionID string, limit int, now time.Time) []PendingUserQuestion {
 	sessionID = strings.TrimSpace(sessionID)
 	ordered := append([]OutcomeRecord(nil), records...)
 	sort.SliceStable(ordered, func(i, j int) bool {
@@ -72,12 +76,25 @@ func PendingUserQuestions(records []OutcomeRecord, sessionID string, limit int) 
 		if !ok {
 			continue
 		}
+		if userQuestionTimedOut(question.AskedAt, question.TimeoutSeconds, now) {
+			continue
+		}
 		out = append(out, question)
 		if limit > 0 && len(out) >= limit {
 			break
 		}
 	}
 	return out
+}
+
+func userQuestionTimedOut(askedAt time.Time, timeoutSeconds int, now time.Time) bool {
+	if timeoutSeconds <= 0 || askedAt.IsZero() {
+		return false
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	return !now.Before(askedAt.Add(time.Duration(timeoutSeconds) * time.Second))
 }
 
 func cleanPendingQuestionOptions(options []string) []string {
