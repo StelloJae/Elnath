@@ -10,6 +10,7 @@ import (
 
 	"github.com/stello/elnath/internal/config"
 	"github.com/stello/elnath/internal/llm"
+	"github.com/stello/elnath/internal/providerproxy"
 )
 
 type doctorStatus string
@@ -94,6 +95,7 @@ func buildDoctorReport() doctorReport {
 		pathDoctorCheck("data_dir", cfg.DataDir),
 		pathDoctorCheck("wiki_dir", cfg.WikiDir),
 		providerDoctorCheck(cfg),
+		providerProxyDoctorCheck(cfg),
 		timeoutDoctorCheck(cfg),
 		daemonSocketDoctorCheck(cfg.Daemon.SocketPath),
 		databaseFilesDoctorCheck(cfg.DataDir),
@@ -187,6 +189,41 @@ func providerDoctorCheck(cfg *config.Config) doctorCheck {
 		Status:  doctorStatusPass,
 		Summary: fmt.Sprintf("%s model=%s", caps.Name, model),
 		Detail:  fmt.Sprintf("reasoning_effort=%s timeout=%ds", caps.ReasoningEffort, caps.RequestTimeoutSeconds),
+	}
+}
+
+func providerProxyDoctorCheck(cfg *config.Config) doctorCheck {
+	adapter, err := providerproxy.OpenAIResponsesAdapterFromConfig(cfg)
+	if err != nil {
+		return doctorCheck{
+			Name:    "provider_proxy",
+			Status:  doctorStatusFail,
+			Summary: "Provider proxy adapter could not be built.",
+			Detail:  err.Error(),
+		}
+	}
+	status := adapter.Status(context.Background())
+	detail := fmt.Sprintf("provider=%s base_url=%s allowed_paths=%s",
+		status.Provider,
+		status.BaseURL,
+		strings.Join(status.AllowedPaths, ","),
+	)
+	if !status.Ready {
+		if status.AuthFailure != "" {
+			detail += " auth_failure=" + status.AuthFailure
+		}
+		return doctorCheck{
+			Name:    "provider_proxy",
+			Status:  doctorStatusWarn,
+			Summary: "Local OpenAI-compatible proxy is not ready.",
+			Detail:  detail,
+		}
+	}
+	return doctorCheck{
+		Name:    "provider_proxy",
+		Status:  doctorStatusPass,
+		Summary: "Local OpenAI-compatible proxy provider is ready.",
+		Detail:  detail,
 	}
 }
 

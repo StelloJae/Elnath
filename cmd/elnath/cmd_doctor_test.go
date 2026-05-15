@@ -61,7 +61,7 @@ func TestCmdDoctorJSONReportsLocalReadiness(t *testing.T) {
 	for _, check := range got.Checks {
 		checks[check.Name] = check
 	}
-	for _, name := range []string{"config", "provider", "data_dir", "wiki_dir", "daemon_socket", "timeouts"} {
+	for _, name := range []string{"config", "provider", "provider_proxy", "data_dir", "wiki_dir", "daemon_socket", "timeouts"} {
 		if _, ok := checks[name]; !ok {
 			t.Fatalf("doctor JSON missing check %q; got %+v", name, got.Checks)
 		}
@@ -71,6 +71,9 @@ func TestCmdDoctorJSONReportsLocalReadiness(t *testing.T) {
 	}
 	if checks["provider"].Status != doctorStatusPass {
 		t.Fatalf("provider status = %q, want pass", checks["provider"].Status)
+	}
+	if checks["provider_proxy"].Status != doctorStatusPass {
+		t.Fatalf("provider_proxy status = %q, want pass", checks["provider_proxy"].Status)
 	}
 	if checks["daemon_socket"].Status != doctorStatusWarn {
 		t.Fatalf("daemon_socket status = %q, want warn", checks["daemon_socket"].Status)
