@@ -205,6 +205,8 @@ type UserQuestionAnswerValidation struct {
 	Found         bool
 	Question      string
 	QuestionChars int
+	Options       []string
+	AllowFreeText bool
 }
 
 func (t *UserQuestionAnswerTool) Name() string { return UserQuestionAnswerToolName }
@@ -296,6 +298,9 @@ func (t *UserQuestionAnswerTool) Execute(ctx context.Context, params json.RawMes
 				questionChars = validation.QuestionChars
 			}
 		}
+		if !validation.AllowFreeText && len(validation.Options) > 0 && !userQuestionAnswerMatchesOption(answer, validation.Options) {
+			return tools.ErrorResult("user_question_answer: answer must match one of the pending question options"), nil
+		}
 	}
 	surface := strings.TrimSpace(input.Surface)
 	if surface == "" {
@@ -342,6 +347,16 @@ func (t *UserQuestionAnswerTool) Execute(ctx context.Context, params json.RawMes
 		return tools.ErrorResult(fmt.Sprintf("user_question_answer: marshal output: %v", err)), nil
 	}
 	return tools.SuccessResult(string(raw)), nil
+}
+
+func userQuestionAnswerMatchesOption(answer string, options []string) bool {
+	answer = strings.TrimSpace(answer)
+	for _, option := range options {
+		if answer == strings.TrimSpace(option) {
+			return true
+		}
+	}
+	return false
 }
 
 func buildUserQuestionAnswerPrompt(requestID, question, answer string) string {

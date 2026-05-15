@@ -144,11 +144,26 @@ func explainPendingQuestions(outcomeStore *learning.OutcomeStore, args []string)
 			item.AskedAt.UTC().Format("2006-01-02 15:04:05 UTC"),
 			item.Question,
 		)
+		if len(item.Options) > 0 {
+			fmt.Fprintf(os.Stdout, "    options: %s\n", quotedPendingQuestionOptions(item.Options))
+		}
 		if item.AnswerCommand != "" {
 			fmt.Fprintf(os.Stdout, "    answer: %s\n", item.AnswerCommand)
 		}
 	}
 	return nil
+}
+
+func quotedPendingQuestionOptions(options []string) string {
+	quoted := make([]string, 0, len(options))
+	for _, option := range options {
+		option = strings.TrimSpace(option)
+		if option == "" {
+			continue
+		}
+		quoted = append(quoted, fmt.Sprintf("%q", option))
+	}
+	return strings.Join(quoted, ", ")
 }
 
 type controlSurfacePolicyView struct {

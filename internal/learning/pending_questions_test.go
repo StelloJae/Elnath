@@ -19,7 +19,9 @@ func TestPendingUserQuestionsListsUnansweredLatestFirst(t *testing.T) {
 				SessionID:      "sess-1",
 				Question:       "Which branch?",
 				QuestionChars:  13,
+				Options:        []string{"main", "new branch"},
 				OptionCount:    2,
+				AllowFreeText:  false,
 				TimeoutSeconds: 120,
 			}},
 		},
@@ -53,6 +55,35 @@ func TestPendingUserQuestionsListsUnansweredLatestFirst(t *testing.T) {
 	}
 	if got := pending[0]; !got.Answerable || got.AnswerCommand != "elnath task answer --session 'sess-1' --request 'req-2' --answer 'ANSWER_TEXT'" || got.PendingCommand != "elnath explain pending-questions --session 'sess-1'" {
 		t.Fatalf("pending[0] handoff = %+v, want answerable CLI commands", got)
+	}
+}
+
+func TestPendingUserQuestionsCarriesStructuredChoices(t *testing.T) {
+	now := time.Date(2026, 5, 13, 7, 0, 0, 0, time.UTC)
+	records := []OutcomeRecord{{
+		Timestamp: now,
+		ControlToolReceipts: []ControlToolReceipt{{
+			Tool:          "ask_user_question",
+			Action:        "request",
+			RequestID:     "req-choices",
+			SessionID:     "sess-1",
+			Question:      "Which branch?",
+			Options:       []string{"main", "new branch"},
+			OptionCount:   2,
+			AllowFreeText: false,
+		}},
+	}}
+
+	pending := PendingUserQuestions(records, "sess-1", 10)
+	if len(pending) != 1 {
+		t.Fatalf("pending count = %d, want 1: %+v", len(pending), pending)
+	}
+	got := pending[0]
+	if got.AllowFreeText {
+		t.Fatalf("AllowFreeText = true, want false")
+	}
+	if len(got.Options) != 2 || got.Options[0] != "main" || got.Options[1] != "new branch" || got.OptionCount != 2 {
+		t.Fatalf("options = %#v count=%d, want main/new branch count=2", got.Options, got.OptionCount)
 	}
 }
 

@@ -65,18 +65,19 @@ type askUserQuestionToolOutput struct {
 }
 
 type askUserQuestionReceipt struct {
-	Tool            string `json:"tool"`
-	Action          string `json:"action"`
-	ReadOnly        bool   `json:"read_only"`
-	ExecutionPolicy string `json:"execution_policy"`
-	Question        string `json:"question,omitempty"`
-	QuestionChars   int    `json:"question_chars"`
-	OptionCount     int    `json:"option_count"`
-	AllowFreeText   bool   `json:"allow_free_text"`
-	TimeoutSeconds  int    `json:"timeout_seconds"`
-	RequestID       string `json:"request_id"`
-	SessionID       string `json:"session_id,omitempty"`
-	FollowupTool    string `json:"followup_tool,omitempty"`
+	Tool            string   `json:"tool"`
+	Action          string   `json:"action"`
+	ReadOnly        bool     `json:"read_only"`
+	ExecutionPolicy string   `json:"execution_policy"`
+	Question        string   `json:"question,omitempty"`
+	QuestionChars   int      `json:"question_chars"`
+	Options         []string `json:"options,omitempty"`
+	OptionCount     int      `json:"option_count"`
+	AllowFreeText   bool     `json:"allow_free_text"`
+	TimeoutSeconds  int      `json:"timeout_seconds"`
+	RequestID       string   `json:"request_id"`
+	SessionID       string   `json:"session_id,omitempty"`
+	FollowupTool    string   `json:"followup_tool,omitempty"`
 }
 
 func (t *AskUserQuestionTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
@@ -116,6 +117,7 @@ func (t *AskUserQuestionTool) Execute(ctx context.Context, params json.RawMessag
 		ExecutionPolicy: "user_input_request",
 		Question:        question,
 		QuestionChars:   len([]rune(question)),
+		Options:         append([]string(nil), output.Options...),
 		OptionCount:     len(output.Options),
 		AllowFreeText:   output.AllowFreeText,
 		TimeoutSeconds:  output.TimeoutSeconds,
@@ -135,11 +137,16 @@ func (t *AskUserQuestionTool) Execute(ctx context.Context, params json.RawMessag
 
 func cleanUserQuestionOptions(options []string) []string {
 	out := make([]string, 0, len(options))
+	seen := make(map[string]struct{}, len(options))
 	for _, option := range options {
 		option = strings.TrimSpace(option)
 		if option == "" {
 			continue
 		}
+		if _, ok := seen[option]; ok {
+			continue
+		}
+		seen[option] = struct{}{}
 		out = append(out, option)
 	}
 	return out

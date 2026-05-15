@@ -257,6 +257,8 @@ func (v pendingUserQuestionValidator) ValidateUserQuestionAnswer(_ context.Conte
 		Found:         true,
 		Question:      question.Question,
 		QuestionChars: question.QuestionChars,
+		Options:       append([]string(nil), question.Options...),
+		AllowFreeText: question.AllowFreeText,
 	}, nil
 }
 
@@ -1728,6 +1730,7 @@ func completionControlToolReceiptsToLearning(src []completionControlToolReceipt)
 			Question:                receipt.Question,
 			QuestionChars:           receipt.QuestionChars,
 			AnswerChars:             receipt.AnswerChars,
+			Options:                 append([]string(nil), receipt.Options...),
 			OptionCount:             receipt.OptionCount,
 			AllowFreeText:           receipt.AllowFreeText,
 			TimeoutSeconds:          receipt.TimeoutSeconds,

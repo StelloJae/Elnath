@@ -11,7 +11,9 @@ type PendingUserQuestion struct {
 	SessionID      string    `json:"session_id,omitempty"`
 	Question       string    `json:"question,omitempty"`
 	QuestionChars  int       `json:"question_chars,omitempty"`
+	Options        []string  `json:"options,omitempty"`
 	OptionCount    int       `json:"option_count,omitempty"`
+	AllowFreeText  bool      `json:"allow_free_text,omitempty"`
 	TimeoutSeconds int       `json:"timeout_seconds,omitempty"`
 	AskedAt        time.Time `json:"asked_at"`
 	Answerable     bool      `json:"answerable"`
@@ -48,7 +50,9 @@ func PendingUserQuestions(records []OutcomeRecord, sessionID string, limit int) 
 					SessionID:      receiptSessionID,
 					Question:       strings.TrimSpace(receipt.Question),
 					QuestionChars:  receipt.QuestionChars,
+					Options:        cleanPendingQuestionOptions(receipt.Options),
 					OptionCount:    receipt.OptionCount,
+					AllowFreeText:  receipt.AllowFreeText,
 					TimeoutSeconds: receipt.TimeoutSeconds,
 					AskedAt:        record.Timestamp,
 				}
@@ -70,6 +74,23 @@ func PendingUserQuestions(records []OutcomeRecord, sessionID string, limit int) 
 		if limit > 0 && len(out) >= limit {
 			break
 		}
+	}
+	return out
+}
+
+func cleanPendingQuestionOptions(options []string) []string {
+	out := make([]string, 0, len(options))
+	seen := make(map[string]struct{}, len(options))
+	for _, option := range options {
+		option = strings.TrimSpace(option)
+		if option == "" {
+			continue
+		}
+		if _, ok := seen[option]; ok {
+			continue
+		}
+		seen[option] = struct{}{}
+		out = append(out, option)
 	}
 	return out
 }
