@@ -230,10 +230,13 @@ func (rt *executionRuntime) switchProviderForSession(providerName string) (provi
 	return providerSelectionCheckView{
 		RequestedProvider:              config.NormalizeProviderName(providerName),
 		PreviousProvider:               previous,
+		RequestedProviderConfigured:    true,
+		Ready:                          true,
 		Provider:                       caps.Name,
 		Model:                          model,
 		ProviderEffort:                 caps.ReasoningEffort,
 		ProviderEffortNote:             caps.ReasoningEffortFallback,
+		EffortCompatibility:            caps.ReasoningEffort,
 		AutoEffortCompatible:           autoEffortCompatible(caps.ReasoningEffort),
 		RequestTimeoutSeconds:          caps.RequestTimeoutSeconds,
 		WouldSwitch:                    false,

@@ -327,11 +327,13 @@ func TestProviderCommandStatusJSON(t *testing.T) {
 	var got struct {
 		Provider              string `json:"provider"`
 		Model                 string `json:"model"`
+		Ready                 bool   `json:"ready"`
 		ReasoningEffort       string `json:"reasoning_effort"`
 		ReasoningEffortMode   string `json:"reasoning_effort_mode"`
 		ConfiguredEffort      string `json:"configured_effort"`
 		ProviderEffort        string `json:"provider_effort"`
 		ProviderEffortNote    string `json:"provider_effort_note,omitempty"`
+		EffortCompatibility   string `json:"effort_compatibility"`
 		AutoEffortCompatible  bool   `json:"auto_effort_compatible"`
 		RequestTimeoutSeconds int    `json:"request_timeout_seconds"`
 		ConfiguredProviders   []struct {
@@ -339,6 +341,10 @@ func TestProviderCommandStatusJSON(t *testing.T) {
 			Model                 string `json:"model"`
 			BaseURL               string `json:"base_url,omitempty"`
 			ReasoningEffort       string `json:"reasoning_effort,omitempty"`
+			EffortCompatibility   string `json:"effort_compatibility,omitempty"`
+			Ready                 bool   `json:"ready"`
+			AuthConfigured        bool   `json:"auth_configured"`
+			TimeoutStatus         string `json:"timeout_status"`
 			RequestTimeoutSeconds int    `json:"request_timeout_seconds"`
 		} `json:"configured_providers"`
 	}
@@ -348,8 +354,14 @@ func TestProviderCommandStatusJSON(t *testing.T) {
 	if got.Provider != "openai" || got.Model != "gpt-5.5" {
 		t.Fatalf("provider/model = %q/%q, want openai/gpt-5.5", got.Provider, got.Model)
 	}
+	if !got.Ready {
+		t.Fatalf("provider status ready = false, want true")
+	}
 	if got.ProviderEffort != llm.ReasoningEffortIgnored || got.AutoEffortCompatible {
 		t.Fatalf("provider effort = %q compatible=%v, want ignored/false", got.ProviderEffort, got.AutoEffortCompatible)
+	}
+	if got.EffortCompatibility != llm.ReasoningEffortIgnored {
+		t.Fatalf("effort compatibility = %q, want ignored", got.EffortCompatibility)
 	}
 	if got.ReasoningEffortMode != "auto" || got.ConfiguredEffort != "medium" {
 		t.Fatalf("reasoning config = mode %q effort %q", got.ReasoningEffortMode, got.ConfiguredEffort)
@@ -361,6 +373,10 @@ func TestProviderCommandStatusJSON(t *testing.T) {
 		Model                 string
 		BaseURL               string
 		ReasoningEffort       string
+		EffortCompatibility   string
+		Ready                 bool
+		AuthConfigured        bool
+		TimeoutStatus         string
 		RequestTimeoutSeconds int
 	}{}
 	for _, candidate := range got.ConfiguredProviders {
@@ -368,11 +384,19 @@ func TestProviderCommandStatusJSON(t *testing.T) {
 			Model                 string
 			BaseURL               string
 			ReasoningEffort       string
+			EffortCompatibility   string
+			Ready                 bool
+			AuthConfigured        bool
+			TimeoutStatus         string
 			RequestTimeoutSeconds int
 		}{
 			Model:                 candidate.Model,
 			BaseURL:               candidate.BaseURL,
 			ReasoningEffort:       candidate.ReasoningEffort,
+			EffortCompatibility:   candidate.EffortCompatibility,
+			Ready:                 candidate.Ready,
+			AuthConfigured:        candidate.AuthConfigured,
+			TimeoutStatus:         candidate.TimeoutStatus,
 			RequestTimeoutSeconds: candidate.RequestTimeoutSeconds,
 		}
 	}
@@ -381,6 +405,9 @@ func TestProviderCommandStatusJSON(t *testing.T) {
 	}
 	if got := seen["openai-responses"]; got.Model != "kimi-k2" || got.BaseURL != "https://api.moonshot.ai/v1" || got.ReasoningEffort != "high" || got.RequestTimeoutSeconds != 77 {
 		t.Fatalf("configured openai-responses = %+v, want moonshot/kimi/high/77", got)
+	}
+	if got := seen["openai-responses"]; !got.Ready || !got.AuthConfigured || got.TimeoutStatus != "ok" || got.EffortCompatibility != llm.ReasoningEffortNativeWithUnsupportedRetry {
+		t.Fatalf("openai-responses readiness = %+v, want ready/native-with-retry", got)
 	}
 }
 
@@ -423,6 +450,44 @@ func TestProviderCommandStatusJSONNoSelfHealOmitsReflectionBoundary(t *testing.T
 	}
 	if !containsString(got.ProviderSwitchBoundaries, "compression_budget_startup_bound") {
 		t.Fatalf("provider switch boundaries = %+v, missing compression boundary", got.ProviderSwitchBoundaries)
+	}
+}
+
+func TestProviderCommandStatusJSONReportsMissingProvider(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+	cfgPath := filepath.Join(dir, "config.yaml")
+	cfgData := "data_dir: " + filepath.Join(dir, "data") + "\n" +
+		"wiki_dir: " + filepath.Join(dir, "wiki") + "\n" +
+		"permission:\n  mode: default\n"
+	if err := os.WriteFile(cfgPath, []byte(cfgData), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	t.Setenv("ELNATH_PROVIDER", "")
+	t.Setenv("ELNATH_OPENAI_API_KEY", "")
+	t.Setenv("ELNATH_OPENAI_RESPONSES_API_KEY", "")
+	t.Setenv("ELNATH_ANTHROPIC_API_KEY", "")
+	withArgs(t, []string{"elnath", "--config", cfgPath})
+	resetLoadLocaleCache()
+
+	stdout, stderr := captureOutput(t, func() {
+		err := executeCommand(context.Background(), "provider", []string{"status", "--json"})
+		if err == nil {
+			t.Fatalf("executeCommand(provider status --json) error = nil, want missing provider error")
+		}
+	})
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+	var got providerStatusView
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatalf("provider status json: %v\n%s", err, stdout)
+	}
+	if got.Ready || got.FailureFamily != "auth_required" {
+		t.Fatalf("provider status = %+v, want auth_required not-ready", got)
+	}
+	if len(got.Issues) == 0 || !strings.Contains(strings.Join(got.Issues, " "), "ELNATH_OPENAI_RESPONSES_API_KEY") {
+		t.Fatalf("issues = %+v, want env key guidance", got.Issues)
 	}
 }
 
@@ -513,6 +578,12 @@ func TestProviderCommandCheckJSON(t *testing.T) {
 	if got.RequestedProvider != "openai-responses" || got.Provider != "openai-responses" {
 		t.Fatalf("provider check = %+v, want openai-responses", got)
 	}
+	if !got.Ready || !got.RequestedProviderConfigured {
+		t.Fatalf("provider check readiness = %+v, want ready configured", got)
+	}
+	if got.EffortCompatibility != llm.ReasoningEffortNativeWithUnsupportedRetry {
+		t.Fatalf("effort compatibility = %q, want native-with-unsupported-retry", got.EffortCompatibility)
+	}
 	if got.Model != "kimi-k2" || got.RequestTimeoutSeconds != 77 {
 		t.Fatalf("provider check = %+v, want kimi-k2 timeout 77", got)
 	}
@@ -520,6 +591,52 @@ func TestProviderCommandCheckJSON(t *testing.T) {
 		t.Fatalf("provider check switch fields = would_switch:%t runtime_available:%t, want false/false", got.WouldSwitch, got.RuntimeProviderSwitchAvailable)
 	}
 	if strings.Contains(stdout, "test-key") {
+		t.Fatalf("stdout leaked credential: %q", stdout)
+	}
+}
+
+func TestProviderCommandCheckJSONReportsUnconfiguredRequestedProvider(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	cfgData := "data_dir: " + filepath.Join(dir, "data") + "\n" +
+		"wiki_dir: " + filepath.Join(dir, "wiki") + "\n" +
+		"anthropic:\n" +
+		"  api_key: anthropic-key\n" +
+		"  model: claude-sonnet-4-6\n" +
+		"  timeout_seconds: 90\n"
+	if err := os.WriteFile(cfgPath, []byte(cfgData), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	t.Setenv("ELNATH_PROVIDER", "")
+	t.Setenv("ELNATH_OPENAI_API_KEY", "")
+	t.Setenv("ELNATH_OPENAI_RESPONSES_API_KEY", "")
+	t.Setenv("ELNATH_ANTHROPIC_API_KEY", "")
+	withArgs(t, []string{"elnath", "--config", cfgPath})
+	resetLoadLocaleCache()
+
+	stdout, stderr := captureOutput(t, func() {
+		err := executeCommand(context.Background(), "provider", []string{"check", "openai_responses", "--json"})
+		if err == nil {
+			t.Fatalf("executeCommand(provider check --json) error = nil, want unconfigured provider error")
+		}
+	})
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+	var got providerSelectionCheckView
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatalf("provider check json: %v\n%s", err, stdout)
+	}
+	if got.RequestedProvider != "openai-responses" || got.Ready || got.RequestedProviderConfigured {
+		t.Fatalf("provider check = %+v, want openai-responses not ready/unconfigured", got)
+	}
+	if got.FailureFamily != "auth_required" {
+		t.Fatalf("failure family = %q, want auth_required", got.FailureFamily)
+	}
+	if len(got.Issues) == 0 || !strings.Contains(strings.Join(got.Issues, " "), "openai_responses.api_key") {
+		t.Fatalf("issues = %+v, want api key guidance", got.Issues)
+	}
+	if strings.Contains(stdout, "anthropic-key") {
 		t.Fatalf("stdout leaked credential: %q", stdout)
 	}
 }
