@@ -41,6 +41,7 @@ type Session struct {
 	path          string
 	Principal     identity.Principal // immutable after construction.
 	Messages      []llm.Message
+	Retirement    *SessionRetirementStatus
 	appliedHashes map[string]struct{}
 	mu            sync.Mutex
 	persister     SessionPersister // optional secondary persistence
@@ -61,6 +62,24 @@ type SessionResumeEvent struct {
 	Surface   string             `json:"surface"`
 	Principal identity.Principal `json:"principal"`
 	At        time.Time          `json:"at"`
+}
+
+// SessionRetirementEvent records a terminal runtime hint that the session
+// should not be silently reused by automatic resume paths.
+type SessionRetirementEvent struct {
+	Type         string    `json:"type"`
+	FailureClass string    `json:"failure_class,omitempty"`
+	Reason       string    `json:"reason"`
+	NextAction   string    `json:"next_action,omitempty"`
+	At           time.Time `json:"at"`
+}
+
+// SessionRetirementStatus is the latest retirement marker for a session.
+type SessionRetirementStatus struct {
+	FailureClass string
+	Reason       string
+	NextAction   string
+	At           time.Time
 }
 
 // WithPersister sets an optional secondary persistence backend.
@@ -144,6 +163,14 @@ func LoadSession(dataDir, id string) (*Session, error) {
 		if err != nil {
 			return nil, wrapSessionParse(fmt.Errorf("session: inspect line: %w", err), "load inspect line")
 		}
+		if lineType == "retire" {
+			var event SessionRetirementEvent
+			if err := json.Unmarshal(line, &event); err != nil {
+				return nil, wrapSessionParse(fmt.Errorf("session: parse retirement: %w", err), "load parse retirement")
+			}
+			s.Retirement = retirementStatusFromEvent(event)
+			continue
+		}
 		if lineType != "" {
 			continue
 		}
@@ -191,6 +218,12 @@ func LoadSessionResumeEvents(dataDir, id string) ([]SessionResumeEvent, error) {
 	return readSessionResumeEvents(sessionPath(dataDir, id))
 }
 
+// LoadSessionRetirementStatus reads the latest retirement metadata line from a
+// persisted session. A nil status means the session has no retirement marker.
+func LoadSessionRetirementStatus(dataDir, id string) (*SessionRetirementStatus, error) {
+	return readSessionRetirementStatus(sessionPath(dataDir, id))
+}
+
 // RecordResume appends a metadata-only resume event line to the session JSONL.
 func (s *Session) RecordResume(principal identity.Principal) error {
 	s.mu.Lock()
@@ -221,6 +254,46 @@ func (s *Session) RecordResume(principal identity.Principal) error {
 		return fmt.Errorf("session: write resume: %w", err)
 	}
 	return nil
+}
+
+// RecordRetirement appends a metadata-only retirement event line to the session
+// JSONL and updates the in-memory retirement status.
+func (s *Session) RecordRetirement(failureClass, reason, nextAction string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	event := SessionRetirementEvent{
+		Type:         "retire",
+		FailureClass: strings.TrimSpace(failureClass),
+		Reason:       strings.TrimSpace(reason),
+		NextAction:   strings.TrimSpace(nextAction),
+		At:           time.Now().UTC(),
+	}
+	if event.Reason == "" {
+		event.Reason = "runtime_retired_session"
+	}
+	data, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("session: marshal retirement: %w", err)
+	}
+
+	f, err := os.OpenFile(s.path, os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return fmt.Errorf("session: open for retirement append: %w", err)
+	}
+	defer f.Close()
+
+	data = append(data, '\n')
+	if _, err := f.Write(data); err != nil {
+		return fmt.Errorf("session: write retirement: %w", err)
+	}
+	s.Retirement = retirementStatusFromEvent(event)
+	return nil
+}
+
+// Retired reports whether the session carries a runtime retirement marker.
+func (s *Session) Retired() bool {
+	return s != nil && s.Retirement != nil
 }
 
 // AppendMessage appends a single message to the session file (O_APPEND) and
@@ -591,6 +664,55 @@ func readSessionResumeEvents(path string) ([]SessionResumeEvent, error) {
 		return nil, wrapSessionParse(fmt.Errorf("session: scan resumes: %w", err), "resumes scan")
 	}
 	return resumes, nil
+}
+
+func readSessionRetirementStatus(path string) (*SessionRetirementStatus, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("session: open retirement status: %w", err)
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	if !scanner.Scan() {
+		if err := scanner.Err(); err != nil {
+			return nil, wrapSessionParse(fmt.Errorf("session: read retirement header: %w", err), "retirement header scan")
+		}
+		return nil, wrapSessionParse(fmt.Errorf("session: empty file"), "retirement empty")
+	}
+
+	var latest *SessionRetirementStatus
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		lineType, err := sessionLineType(line)
+		if err != nil {
+			return nil, wrapSessionParse(fmt.Errorf("session: inspect retirement line: %w", err), "retirement inspect line")
+		}
+		if lineType != "retire" {
+			continue
+		}
+		var event SessionRetirementEvent
+		if err := json.Unmarshal(line, &event); err != nil {
+			return nil, wrapSessionParse(fmt.Errorf("session: parse retirement: %w", err), "retirement parse")
+		}
+		latest = retirementStatusFromEvent(event)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, wrapSessionParse(fmt.Errorf("session: scan retirement: %w", err), "retirement scan")
+	}
+	return latest, nil
+}
+
+func retirementStatusFromEvent(event SessionRetirementEvent) *SessionRetirementStatus {
+	return &SessionRetirementStatus{
+		FailureClass: strings.TrimSpace(event.FailureClass),
+		Reason:       strings.TrimSpace(event.Reason),
+		NextAction:   strings.TrimSpace(event.NextAction),
+		At:           event.At.UTC(),
+	}
 }
 
 func sessionLineType(line []byte) (string, error) {

@@ -124,7 +124,7 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req Request, cb func(Stream
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("openai: http %d: %s", resp.StatusCode, string(body))
+		return NewProviderHTTPError(p.Name(), resp.StatusCode, body)
 	}
 
 	return p.parseSSE(resp.Body, cb)

@@ -7,7 +7,7 @@ import (
 )
 
 var (
-	unauthorizedRE      = regexp.MustCompile(`(?i)unauthorized|invalid.*api[ _-]?key`)
+	unauthorizedRE      = regexp.MustCompile(`(?i)unauthorized|invalid.*api[ _-]?key|invalid_grant|refresh token|expired token|oauth`)
 	authPermanentRE     = regexp.MustCompile(`(?i)\b(?:disabled|suspended|banned)\b`)
 	billingTransientRE  = regexp.MustCompile(`(?i)try again|retry`)
 	rawRateLimitCodeRE  = regexp.MustCompile(`\b429\b`)
@@ -33,6 +33,7 @@ func Classify(err error, ctx Context) ClassifiedError {
 		return *existing
 	}
 
+	ctx = contextWithProviderErrorMetadata(err, ctx)
 	message := strings.TrimSpace(err.Error())
 	category := classifyCategory(message, ctx)
 	if message == "" {
@@ -51,6 +52,25 @@ func Classify(err error, ctx Context) ClassifiedError {
 		Original: err,
 		Message:  message,
 	}
+}
+
+type providerErrorMetadata interface {
+	ProviderName() string
+	HTTPStatusCode() int
+	ProviderErrorCode() string
+}
+
+func contextWithProviderErrorMetadata(err error, ctx Context) Context {
+	var metadata providerErrorMetadata
+	if errors.As(err, &metadata) && metadata != nil {
+		if ctx.Provider == "" {
+			ctx.Provider = metadata.ProviderName()
+		}
+		if ctx.StatusCode == 0 {
+			ctx.StatusCode = metadata.HTTPStatusCode()
+		}
+	}
+	return ctx
 }
 
 func classifyCategory(message string, ctx Context) Category {

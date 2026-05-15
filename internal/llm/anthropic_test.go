@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -367,6 +368,16 @@ func TestAnthropicHTTPErrors(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tc.wantSubstr) {
 				t.Errorf("error = %q, want substring %q", err.Error(), tc.wantSubstr)
+			}
+			var providerErr *ProviderError
+			if !errors.As(err, &providerErr) {
+				t.Fatalf("errors.As ProviderError failed for %v", err)
+			}
+			if providerErr.ProviderName() != "anthropic" {
+				t.Fatalf("ProviderName() = %q, want anthropic", providerErr.ProviderName())
+			}
+			if providerErr.HTTPStatusCode() != tc.statusCode {
+				t.Fatalf("HTTPStatusCode() = %d, want %d", providerErr.HTTPStatusCode(), tc.statusCode)
 			}
 		})
 	}

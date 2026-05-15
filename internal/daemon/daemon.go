@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -13,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/stello/elnath/internal/agent/errorclass"
 	"github.com/stello/elnath/internal/event"
 	"github.com/stello/elnath/internal/fault"
 	"github.com/stello/elnath/internal/identity"
@@ -70,6 +72,24 @@ type ProgressObserver interface {
 	OnProgress(taskID int64, progress string)
 }
 
+type SessionRetirementRequest struct {
+	SessionID               string
+	FailureClass            string
+	ShouldRetireSession     bool
+	SessionRetirementReason string
+	NextAction              string
+}
+
+type SessionRetirer interface {
+	RetireSession(ctx context.Context, req SessionRetirementRequest) error
+}
+
+type SessionRetirerFunc func(ctx context.Context, req SessionRetirementRequest) error
+
+func (fn SessionRetirerFunc) RetireSession(ctx context.Context, req SessionRetirementRequest) error {
+	return fn(ctx, req)
+}
+
 type Scheduler interface {
 	Run(ctx context.Context) error
 }
@@ -112,6 +132,7 @@ type Daemon struct {
 	completionGate    CompletionGate
 	submitSignal      SubmitSignalBridge
 	scheduler         Scheduler
+	sessionRetirer    SessionRetirer
 	faultInjector     fault.Injector
 	faultScenario     *fault.Scenario
 	faultGuard        fault.GuardConfig
@@ -231,6 +252,10 @@ func (d *Daemon) WithSubmitSignalBridge(bridge SubmitSignalBridge) {
 
 func (d *Daemon) WithScheduler(s Scheduler) {
 	d.scheduler = s
+}
+
+func (d *Daemon) WithSessionRetirer(retirer SessionRetirer) {
+	d.sessionRetirer = retirer
 }
 
 func (d *Daemon) WithFallbackPrincipal(principal identity.Principal) {
@@ -561,7 +586,8 @@ func (d *Daemon) worker(ctx context.Context, id int) {
 				"principal_surface", principal.Surface,
 				"error", err,
 			)
-			if markErr := d.queue.MarkFailedWithTimeoutClass(ctx, task.ID, err.Error(), failureTimeoutClass(err)); markErr != nil {
+			failureMeta := taskFailureMetadata(err)
+			if markErr := d.queue.MarkFailedWithMetadata(ctx, task.ID, err.Error(), failureMeta); markErr != nil {
 				d.logger.Error("worker: mark failed", "task_id", task.ID, "error", markErr)
 			} else if envelopeRun != nil {
 				if envelopeErr := envelopeRun.Fail(ctx); envelopeErr != nil {
@@ -573,6 +599,7 @@ func (d *Daemon) worker(ctx context.Context, id int) {
 					)
 				}
 			}
+			d.retireSessionAfterFailure(ctx, task, failureMeta)
 			d.deliver(ctx, task.ID)
 			continue
 		}
@@ -616,6 +643,29 @@ func (d *Daemon) worker(ctx context.Context, id int) {
 			}
 		}
 		d.deliver(ctx, task.ID)
+	}
+}
+
+func (d *Daemon) retireSessionAfterFailure(ctx context.Context, task *Task, meta TaskFailureMetadata) {
+	if d.sessionRetirer == nil || task == nil || !meta.ShouldRetireSession || strings.TrimSpace(task.SessionID) == "" {
+		return
+	}
+	req := SessionRetirementRequest{
+		SessionID:               task.SessionID,
+		FailureClass:            meta.FailureClass,
+		ShouldRetireSession:     meta.ShouldRetireSession,
+		SessionRetirementReason: meta.SessionRetirementReason,
+		NextAction:              meta.NextAction,
+	}
+	if err := d.sessionRetirer.RetireSession(ctx, req); err != nil {
+		d.logger.Warn("worker: session retirement record failed",
+			"task_id", task.ID,
+			"session_id", task.SessionID,
+			"failure_class", meta.FailureClass,
+			"reason", meta.SessionRetirementReason,
+			"degraded_observability", true,
+			"error", err,
+		)
 	}
 }
 
@@ -861,10 +911,142 @@ func (e taskTimeoutError) TimeoutClass() TimeoutClass {
 }
 
 func failureTimeoutClass(err error) TimeoutClass {
-	if timeoutErr, ok := err.(interface{ TimeoutClass() TimeoutClass }); ok {
+	var timeoutErr interface{ TimeoutClass() TimeoutClass }
+	if errors.As(err, &timeoutErr) {
 		return timeoutErr.TimeoutClass()
 	}
 	return TimeoutClassNone
+}
+
+const (
+	failureClassTaskTimeoutIdle   = "task_timeout_idle"
+	failureClassTaskTimeoutActive = "task_timeout_active"
+	failureClassTaskCanceled      = "task_canceled"
+	failureClassWorkerPanic       = "worker_panic"
+	failureClassProviderAuth      = "provider_auth"
+	failureClassProviderRateLimit = "provider_rate_limit"
+	failureClassProviderTimeout   = "provider_timeout"
+	failureClassProviderError     = "provider_error"
+	failureClassContextWindow     = "context_window"
+	failureClassModelNotFound     = "model_not_found"
+	failureClassRuntimeIO         = "runtime_io"
+	failureClassToolRuntime       = "tool_runtime"
+
+	retirementPostToolQuietTimeout = "post_tool_quiet_timeout"
+	retirementWallClockTimeout     = "wall_clock_timeout"
+	retirementWorkerPanic          = "worker_panic"
+	retirementProviderAuth         = "provider_auth_refresh_failed"
+	retirementProviderTimeout      = "provider_timeout"
+	retirementRuntimeIO            = "runtime_io"
+
+	nextActionInspectBeforeRetry     = "inspect_failure_before_retry"
+	nextActionOperatorCancelled      = "operator_cancelled"
+	nextActionReauthenticateProvider = "reauthenticate_provider"
+	nextActionRetryLater             = "retry_later"
+	nextActionCompactContext         = "compact_context_before_retry"
+	nextActionSelectSupportedModel   = "select_supported_model"
+	nextActionStartNewSession        = "start_new_session_or_operator_review"
+)
+
+func taskFailureMetadata(err error) TaskFailureMetadata {
+	timeoutClass := failureTimeoutClass(err)
+	class := taskFailureClass(err, timeoutClass)
+	meta := TaskFailureMetadata{
+		TimeoutClass: timeoutClass,
+		FailureClass: class,
+		NextAction:   taskFailureNextAction(class),
+	}
+	meta.ShouldRetireSession, meta.SessionRetirementReason = taskFailureRetirement(class)
+	return meta
+}
+
+func taskFailureClass(err error, timeoutClass TimeoutClass) string {
+	if timeoutClass == TimeoutClassIdle {
+		return failureClassTaskTimeoutIdle
+	}
+	if timeoutClass == TimeoutClassActiveButKilled {
+		return failureClassTaskTimeoutActive
+	}
+	var cancelErr taskCanceledError
+	if errors.As(err, &cancelErr) {
+		return failureClassTaskCanceled
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "recovered worker panic"):
+		return failureClassWorkerPanic
+	case containsAny(msg, "broken pipe", "connection reset", "connection refused", "eof"):
+		return failureClassRuntimeIO
+	default:
+		return taskFailureClassFromProviderError(err)
+	}
+}
+
+func taskFailureClassFromProviderError(err error) string {
+	classified := errorclass.Classify(err, errorclass.Context{Provider: "daemon"})
+	switch classified.Category {
+	case errorclass.Auth, errorclass.AuthPermanent, errorclass.Billing:
+		return failureClassProviderAuth
+	case errorclass.RateLimit, errorclass.Overloaded:
+		return failureClassProviderRateLimit
+	case errorclass.Timeout, errorclass.ServerError:
+		return failureClassProviderTimeout
+	case errorclass.ContextOverflow, errorclass.PayloadTooLarge:
+		return failureClassContextWindow
+	case errorclass.ModelNotFound:
+		return failureClassModelNotFound
+	case errorclass.FormatError:
+		return failureClassProviderError
+	default:
+		return failureClassToolRuntime
+	}
+}
+
+func taskFailureRetirement(class string) (bool, string) {
+	switch class {
+	case failureClassTaskTimeoutIdle:
+		return true, retirementPostToolQuietTimeout
+	case failureClassTaskTimeoutActive:
+		return true, retirementWallClockTimeout
+	case failureClassWorkerPanic:
+		return true, retirementWorkerPanic
+	case failureClassProviderAuth:
+		return true, retirementProviderAuth
+	case failureClassProviderTimeout:
+		return true, retirementProviderTimeout
+	case failureClassRuntimeIO:
+		return true, retirementRuntimeIO
+	default:
+		return false, ""
+	}
+}
+
+func taskFailureNextAction(class string) string {
+	switch class {
+	case failureClassTaskTimeoutIdle, failureClassTaskTimeoutActive, failureClassWorkerPanic, failureClassProviderTimeout, failureClassRuntimeIO:
+		return nextActionStartNewSession
+	case failureClassProviderAuth:
+		return nextActionReauthenticateProvider
+	case failureClassProviderRateLimit:
+		return nextActionRetryLater
+	case failureClassContextWindow:
+		return nextActionCompactContext
+	case failureClassModelNotFound:
+		return nextActionSelectSupportedModel
+	case failureClassTaskCanceled:
+		return nextActionOperatorCancelled
+	default:
+		return nextActionInspectBeforeRetry
+	}
+}
+
+func containsAny(text string, needles ...string) bool {
+	for _, needle := range needles {
+		if strings.Contains(text, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func (d *Daemon) inactivityWatchdog(ctx context.Context, cancel context.CancelFunc, lastActivity *atomic.Int64, taskID int64, timedOut *atomic.Bool) {

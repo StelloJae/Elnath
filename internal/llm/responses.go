@@ -169,8 +169,8 @@ func (p *ResponsesProvider) streamOnce(ctx context.Context, req ChatRequest, str
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("responses: http %d: %s", resp.StatusCode, string(respBody))
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return NewProviderHTTPError(p.Name(), resp.StatusCode, respBody)
 	}
 
 	scanner := bufio.NewScanner(resp.Body)

@@ -68,13 +68,17 @@ const (
 
 // TaskCompletion is the durable, UI-safe completion contract for a finished task.
 type TaskCompletion struct {
-	TaskID      int64
-	SessionID   string
-	Summary     string
-	Status      TaskStatus
-	CreatedAt   time.Time
-	StartedAt   time.Time
-	CompletedAt time.Time
+	TaskID                  int64
+	SessionID               string
+	Summary                 string
+	Status                  TaskStatus
+	FailureClass            string
+	ShouldRetireSession     bool
+	SessionRetirementReason string
+	NextAction              string
+	CreatedAt               time.Time
+	StartedAt               time.Time
+	CompletedAt             time.Time
 }
 
 func (c TaskCompletion) Duration() time.Duration {
@@ -109,6 +113,16 @@ type TimeoutMetrics struct {
 	IdleRecoveries            int
 	ActiveButKilledRecoveries int
 	FalseTimeoutRate          float64
+}
+
+// TaskFailureMetadata records terminal failure classification in the
+// completion receipt without widening the queue lifecycle schema.
+type TaskFailureMetadata struct {
+	TimeoutClass            TimeoutClass
+	FailureClass            string
+	ShouldRetireSession     bool
+	SessionRetirementReason string
+	NextAction              string
 }
 
 // Queue manages a SQLite-backed FIFO task queue.
@@ -336,7 +350,7 @@ func (q *Queue) UpdateAnnotation(ctx context.Context, id int64, progress, summar
 
 // MarkDone sets a task to done with the given result.
 func (q *Queue) MarkDone(ctx context.Context, id int64, result, summary string) error {
-	completionJSON, err := q.buildCompletionJSON(ctx, id, StatusDone, summary, result)
+	completionJSON, err := q.buildCompletionJSON(ctx, id, StatusDone, summary, result, TaskFailureMetadata{})
 	if err != nil {
 		return fmt.Errorf("queue: mark done: %w", err)
 	}
@@ -362,13 +376,22 @@ func (q *Queue) MarkFailed(ctx context.Context, id int64, errMsg string) error {
 // MarkFailedWithTimeoutClass sets a task to failed and records a timeout
 // classification when the failure came from daemon timeout enforcement.
 func (q *Queue) MarkFailedWithTimeoutClass(ctx context.Context, id int64, errMsg string, timeoutClass TimeoutClass) error {
-	completionJSON, err := q.buildCompletionJSON(ctx, id, StatusFailed, "", errMsg)
+	return q.MarkFailedWithMetadata(ctx, id, errMsg, TaskFailureMetadata{TimeoutClass: timeoutClass})
+}
+
+// MarkFailedWithMetadata sets a task to failed and records terminal failure
+// metadata in the durable completion receipt.
+func (q *Queue) MarkFailedWithMetadata(ctx context.Context, id int64, errMsg string, meta TaskFailureMetadata) error {
+	meta.FailureClass = strings.TrimSpace(meta.FailureClass)
+	meta.SessionRetirementReason = strings.TrimSpace(meta.SessionRetirementReason)
+	meta.NextAction = strings.TrimSpace(meta.NextAction)
+	completionJSON, err := q.buildCompletionJSON(ctx, id, StatusFailed, "", errMsg, meta)
 	if err != nil {
 		return fmt.Errorf("queue: mark failed: %w", err)
 	}
 	res, err := q.db.ExecContext(ctx, `
 		UPDATE task_queue SET status = ?, progress = ?, summary = ?, result = ?, completion = ?, updated_at = ?, completed_at = ?, timeout_class = ? WHERE id = ? AND status = ?`,
-		string(StatusFailed), "failed", completionSummary(StatusFailed, "", errMsg), errMsg, completionJSON, time.Now().UnixMilli(), time.Now().UnixMilli(), string(timeoutClass), id, string(StatusRunning),
+		string(StatusFailed), "failed", completionSummary(StatusFailed, "", errMsg), errMsg, completionJSON, time.Now().UnixMilli(), time.Now().UnixMilli(), string(meta.TimeoutClass), id, string(StatusRunning),
 	)
 	if err != nil {
 		return fmt.Errorf("queue: mark failed: %w", err)
@@ -455,16 +478,20 @@ func (q *Queue) Get(ctx context.Context, id int64) (*Task, error) {
 }
 
 type taskCompletionRecord struct {
-	TaskID      int64      `json:"task_id"`
-	SessionID   string     `json:"session_id,omitempty"`
-	Summary     string     `json:"summary"`
-	Status      TaskStatus `json:"status"`
-	CreatedAt   int64      `json:"created_at"`
-	StartedAt   int64      `json:"started_at"`
-	CompletedAt int64      `json:"completed_at"`
+	TaskID                  int64      `json:"task_id"`
+	SessionID               string     `json:"session_id,omitempty"`
+	Summary                 string     `json:"summary"`
+	Status                  TaskStatus `json:"status"`
+	FailureClass            string     `json:"failure_class,omitempty"`
+	ShouldRetireSession     bool       `json:"should_retire_session,omitempty"`
+	SessionRetirementReason string     `json:"session_retirement_reason,omitempty"`
+	NextAction              string     `json:"next_action,omitempty"`
+	CreatedAt               int64      `json:"created_at"`
+	StartedAt               int64      `json:"started_at"`
+	CompletedAt             int64      `json:"completed_at"`
 }
 
-func (q *Queue) buildCompletionJSON(ctx context.Context, id int64, status TaskStatus, summary, fallback string) (string, error) {
+func (q *Queue) buildCompletionJSON(ctx context.Context, id int64, status TaskStatus, summary, fallback string, meta TaskFailureMetadata) (string, error) {
 	task, err := q.Get(ctx, id)
 	if err != nil {
 		return "", err
@@ -478,6 +505,12 @@ func (q *Queue) buildCompletionJSON(ctx context.Context, id int64, status TaskSt
 		CreatedAt:   task.CreatedAt.UnixMilli(),
 		StartedAt:   task.StartedAt.UnixMilli(),
 		CompletedAt: time.Now().UnixMilli(),
+	}
+	if status == StatusFailed {
+		record.FailureClass = meta.FailureClass
+		record.ShouldRetireSession = meta.ShouldRetireSession
+		record.SessionRetirementReason = meta.SessionRetirementReason
+		record.NextAction = meta.NextAction
 	}
 
 	data, err := json.Marshal(record)
@@ -511,13 +544,17 @@ func parseTaskCompletion(raw string) (*TaskCompletion, error) {
 	}
 
 	return &TaskCompletion{
-		TaskID:      record.TaskID,
-		SessionID:   record.SessionID,
-		Summary:     record.Summary,
-		Status:      record.Status,
-		CreatedAt:   time.UnixMilli(record.CreatedAt),
-		StartedAt:   time.UnixMilli(record.StartedAt),
-		CompletedAt: time.UnixMilli(record.CompletedAt),
+		TaskID:                  record.TaskID,
+		SessionID:               record.SessionID,
+		Summary:                 record.Summary,
+		Status:                  record.Status,
+		FailureClass:            record.FailureClass,
+		ShouldRetireSession:     record.ShouldRetireSession,
+		SessionRetirementReason: record.SessionRetirementReason,
+		NextAction:              record.NextAction,
+		CreatedAt:               time.UnixMilli(record.CreatedAt),
+		StartedAt:               time.UnixMilli(record.StartedAt),
+		CompletedAt:             time.UnixMilli(record.CompletedAt),
 	}, nil
 }
 
@@ -525,7 +562,7 @@ func (c *TaskCompletion) View() map[string]interface{} {
 	if c == nil {
 		return nil
 	}
-	return map[string]interface{}{
+	view := map[string]interface{}{
 		"task_id":      c.TaskID,
 		"session_id":   c.SessionID,
 		"summary":      c.Summary,
@@ -534,6 +571,19 @@ func (c *TaskCompletion) View() map[string]interface{} {
 		"started_at":   c.StartedAt.UnixMilli(),
 		"completed_at": c.CompletedAt.UnixMilli(),
 	}
+	if c.FailureClass != "" {
+		view["failure_class"] = c.FailureClass
+	}
+	if c.ShouldRetireSession {
+		view["should_retire_session"] = true
+	}
+	if c.SessionRetirementReason != "" {
+		view["session_retirement_reason"] = c.SessionRetirementReason
+	}
+	if c.NextAction != "" {
+		view["next_action"] = c.NextAction
+	}
+	return view
 }
 
 // CancelPendingTask marks the most recently created pending task as failed
@@ -553,7 +603,10 @@ func (q *Queue) CancelPendingTask(ctx context.Context, reason string) (int64, bo
 		return 0, false, fmt.Errorf("queue: cancel pending: select: %w", err)
 	}
 
-	completionJSON, err := q.buildCompletionJSON(ctx, taskID, StatusFailed, "", reason)
+	completionJSON, err := q.buildCompletionJSON(ctx, taskID, StatusFailed, "", reason, TaskFailureMetadata{
+		FailureClass: failureClassTaskCanceled,
+		NextAction:   nextActionOperatorCancelled,
+	})
 	if err != nil {
 		return 0, false, fmt.Errorf("queue: cancel pending: build completion: %w", err)
 	}
@@ -594,7 +647,10 @@ func (q *Queue) CancelTask(ctx context.Context, id int64, reason string) error {
 		return fmt.Errorf("queue: cancel task: task %d is %s; only pending tasks can be stopped", id, task.Status)
 	}
 
-	completionJSON, err := q.buildCompletionJSON(ctx, id, StatusFailed, "", reason)
+	completionJSON, err := q.buildCompletionJSON(ctx, id, StatusFailed, "", reason, TaskFailureMetadata{
+		FailureClass: failureClassTaskCanceled,
+		NextAction:   nextActionOperatorCancelled,
+	})
 	if err != nil {
 		return fmt.Errorf("queue: cancel task: build completion: %w", err)
 	}

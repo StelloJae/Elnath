@@ -96,6 +96,13 @@ type recordingSubmitSignalBridge struct {
 	calls   int
 }
 
+type recordingSessionRetirer struct {
+	mu    sync.Mutex
+	reqs  []SessionRetirementRequest
+	err   error
+	calls int
+}
+
 type safeLogBuffer struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
@@ -176,6 +183,20 @@ func (b *recordingSubmitSignalBridge) snapshot() (payload string, taskID int64, 
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.payload, b.taskID, b.existed, b.calls
+}
+
+func (r *recordingSessionRetirer) RetireSession(_ context.Context, req SessionRetirementRequest) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.reqs = append(r.reqs, req)
+	r.calls++
+	return r.err
+}
+
+func (r *recordingSessionRetirer) snapshot() []SessionRetirementRequest {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]SessionRetirementRequest(nil), r.reqs...)
 }
 
 func (e *recordingTaskEnvelope) Start(_ context.Context, task Task) (TaskEnvelopeRun, error) {
@@ -355,6 +376,25 @@ func assertLogContains(t *testing.T, logs string, want ...string) {
 		if !strings.Contains(logs, text) {
 			t.Fatalf("log output missing %q:\n%s", text, logs)
 		}
+	}
+}
+
+func assertFailureReceipt(t *testing.T, task *Task, failureClass string, shouldRetire bool, retirementReason, nextAction string) {
+	t.Helper()
+	if task.Completion == nil {
+		t.Fatal("completion receipt is nil")
+	}
+	if task.Completion.FailureClass != failureClass {
+		t.Fatalf("failure_class = %q, want %q", task.Completion.FailureClass, failureClass)
+	}
+	if task.Completion.ShouldRetireSession != shouldRetire {
+		t.Fatalf("should_retire_session = %v, want %v", task.Completion.ShouldRetireSession, shouldRetire)
+	}
+	if task.Completion.SessionRetirementReason != retirementReason {
+		t.Fatalf("session_retirement_reason = %q, want %q", task.Completion.SessionRetirementReason, retirementReason)
+	}
+	if task.Completion.NextAction != nextAction {
+		t.Fatalf("next_action = %q, want %q", task.Completion.NextAction, nextAction)
 	}
 }
 
@@ -1896,6 +1936,7 @@ func TestDaemonInactivityTimeout(t *testing.T) {
 	if task.TimeoutClass != TimeoutClassIdle {
 		t.Fatalf("timeout class = %q, want %q", task.TimeoutClass, TimeoutClassIdle)
 	}
+	assertFailureReceipt(t, task, "task_timeout_idle", true, "post_tool_quiet_timeout", "start_new_session_or_operator_review")
 }
 
 func TestDaemonCancelRunningTask(t *testing.T) {
@@ -1953,6 +1994,7 @@ func TestDaemonCancelRunningTask(t *testing.T) {
 	if task.TimeoutClass != TimeoutClassNone {
 		t.Fatalf("timeout class = %q, want none for manual cancellation", task.TimeoutClass)
 	}
+	assertFailureReceipt(t, task, "task_canceled", false, "", "operator_cancelled")
 }
 
 // TestDaemonWallClockTimeout verifies that a task exceeding the wall-clock
@@ -1997,6 +2039,176 @@ func TestDaemonWallClockTimeout(t *testing.T) {
 	if task.TimeoutClass != TimeoutClassActiveButKilled {
 		t.Fatalf("timeout class = %q, want %q", task.TimeoutClass, TimeoutClassActiveButKilled)
 	}
+	assertFailureReceipt(t, task, "task_timeout_active", true, "wall_clock_timeout", "start_new_session_or_operator_review")
+}
+
+func TestDaemonProviderAuthFailureRecordsRetirementReceipt(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+
+	authRunner := func(context.Context, string, event.Sink) (TaskResult, error) {
+		return TaskResult{}, errors.New("provider error: invalid_grant refresh token expired")
+	}
+
+	socketPath := shortDaemonSocketPath("elnath-auth-retire")
+	startDaemon(t, q, socketPath, authRunner, 1)
+
+	resp := sendIPC(t, socketPath, IPCRequest{
+		Command: "submit",
+		Payload: mustMarshalString(t, "auth failure"),
+	})
+	if !resp.OK {
+		t.Fatalf("submit: %s", resp.Err)
+	}
+
+	task := pollTaskStatus(t, q, extractTaskID(t, resp), StatusFailed, 5*time.Second)
+	assertFailureReceipt(t, task, "provider_auth", true, "provider_auth_refresh_failed", "reauthenticate_provider")
+}
+
+func TestDaemonRetiresSessionAfterRetirableFailure(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+
+	authRunner := func(context.Context, string, event.Sink) (TaskResult, error) {
+		return TaskResult{}, errors.New("provider error: invalid_grant refresh token expired")
+	}
+	retirer := &recordingSessionRetirer{}
+	socketPath := shortDaemonSocketPath("elnath-retire-callback")
+	d := New(q, socketPath, 1, authRunner, nil)
+	d.WithSessionRetirer(retirer)
+	startDaemonInstance(t, d, socketPath)
+
+	payload := EncodeTaskPayload(TaskPayload{
+		Prompt:    "auth failure",
+		SessionID: "sess-retire",
+	})
+	resp := sendIPC(t, socketPath, IPCRequest{
+		Command: "submit",
+		Payload: mustMarshalString(t, payload),
+	})
+	if !resp.OK {
+		t.Fatalf("submit: %s", resp.Err)
+	}
+
+	pollTaskStatus(t, q, extractTaskID(t, resp), StatusFailed, 5*time.Second)
+	reqs := retirer.snapshot()
+	if len(reqs) != 1 {
+		t.Fatalf("retirement requests = %d, want 1", len(reqs))
+	}
+	req := reqs[0]
+	if req.SessionID != "sess-retire" || req.FailureClass != "provider_auth" || !req.ShouldRetireSession || req.SessionRetirementReason != "provider_auth_refresh_failed" || req.NextAction != "reauthenticate_provider" {
+		t.Fatalf("retirement request = %+v", req)
+	}
+}
+
+func TestDaemonProviderRateLimitDoesNotRetireSession(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+
+	rateRunner := func(context.Context, string, event.Sink) (TaskResult, error) {
+		return TaskResult{}, errors.New("provider error: rate limit exceeded")
+	}
+
+	socketPath := shortDaemonSocketPath("elnath-rate-limit")
+	startDaemon(t, q, socketPath, rateRunner, 1)
+
+	resp := sendIPC(t, socketPath, IPCRequest{
+		Command: "submit",
+		Payload: mustMarshalString(t, "rate limit"),
+	})
+	if !resp.OK {
+		t.Fatalf("submit: %s", resp.Err)
+	}
+
+	task := pollTaskStatus(t, q, extractTaskID(t, resp), StatusFailed, 5*time.Second)
+	assertFailureReceipt(t, task, "provider_rate_limit", false, "", "retry_later")
+}
+
+func TestDaemonContextWindowFailureUsesProviderClassifier(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+
+	contextRunner := func(context.Context, string, event.Sink) (TaskResult, error) {
+		return TaskResult{}, errors.New("context_length_exceeded")
+	}
+
+	socketPath := shortDaemonSocketPath("elnath-context-window")
+	startDaemon(t, q, socketPath, contextRunner, 1)
+
+	resp := sendIPC(t, socketPath, IPCRequest{
+		Command: "submit",
+		Payload: mustMarshalString(t, "context overflow"),
+	})
+	if !resp.OK {
+		t.Fatalf("submit: %s", resp.Err)
+	}
+
+	task := pollTaskStatus(t, q, extractTaskID(t, resp), StatusFailed, 5*time.Second)
+	assertFailureReceipt(t, task, "context_window", false, "", "compact_context_before_retry")
+}
+
+func TestDaemonModelNotFoundFailureUsesProviderClassifier(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+
+	modelRunner := func(context.Context, string, event.Sink) (TaskResult, error) {
+		return TaskResult{}, errors.New("model does not exist")
+	}
+
+	socketPath := shortDaemonSocketPath("elnath-model-missing")
+	startDaemon(t, q, socketPath, modelRunner, 1)
+
+	resp := sendIPC(t, socketPath, IPCRequest{
+		Command: "submit",
+		Payload: mustMarshalString(t, "bad model"),
+	})
+	if !resp.OK {
+		t.Fatalf("submit: %s", resp.Err)
+	}
+
+	task := pollTaskStatus(t, q, extractTaskID(t, resp), StatusFailed, 5*time.Second)
+	assertFailureReceipt(t, task, "model_not_found", false, "", "select_supported_model")
+}
+
+func TestDaemonWorkerPanicRecordsRetirementReceipt(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+
+	panicRunner := func(context.Context, string, event.Sink) (TaskResult, error) {
+		panic("boom")
+	}
+
+	socketPath := shortDaemonSocketPath("elnath-worker-panic")
+	startDaemon(t, q, socketPath, panicRunner, 1)
+
+	resp := sendIPC(t, socketPath, IPCRequest{
+		Command: "submit",
+		Payload: mustMarshalString(t, "panic"),
+	})
+	if !resp.OK {
+		t.Fatalf("submit: %s", resp.Err)
+	}
+
+	task := pollTaskStatus(t, q, extractTaskID(t, resp), StatusFailed, 5*time.Second)
+	assertFailureReceipt(t, task, "worker_panic", true, "worker_panic", "start_new_session_or_operator_review")
 }
 
 // --- helpers ---

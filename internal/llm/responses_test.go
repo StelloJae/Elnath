@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -250,6 +251,16 @@ func TestResponsesHTTPError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "401") {
 		t.Errorf("error = %q, want to contain '401'", err.Error())
+	}
+	var providerErr *ProviderError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("errors.As ProviderError failed for %v", err)
+	}
+	if providerErr.ProviderName() != "openai-responses" {
+		t.Fatalf("ProviderName() = %q, want openai-responses", providerErr.ProviderName())
+	}
+	if providerErr.HTTPStatusCode() != http.StatusUnauthorized {
+		t.Fatalf("HTTPStatusCode() = %d, want %d", providerErr.HTTPStatusCode(), http.StatusUnauthorized)
 	}
 }
 

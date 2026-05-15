@@ -192,6 +192,9 @@ func cmdDaemonStart(ctx context.Context) error {
 	d.WithCompletionGate(agenticcompletion.NewGate(agenticStore, agenticCompletionGateConfigMode(cfg),
 		agenticcompletion.WithCompletionContextProvider(rt)))
 	d.WithSubmitSignalBridge(signalBridge)
+	d.WithSessionRetirer(daemon.SessionRetirerFunc(func(ctx context.Context, req daemon.SessionRetirementRequest) error {
+		return rt.mgr.RecordSessionRetirement(req.SessionID, req.FailureClass, req.SessionRetirementReason, req.NextAction)
+	}))
 	d.WithFaultGuardConfig(fault.GuardConfig{Enabled: cfg.FaultInjection.Enabled})
 	d.MarkFaultGuardChecked()
 	d.WithFaultInjection(inj, activeScenario)
