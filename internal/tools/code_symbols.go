@@ -3,6 +3,8 @@ package tools
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"go/ast"
@@ -38,18 +40,19 @@ func NewCodeSymbolsTool(guard *PathGuard) *CodeSymbolsTool {
 func (t *CodeSymbolsTool) Name() string { return CodeSymbolsToolName }
 
 func (t *CodeSymbolsTool) Description() string {
-	return "Inspect Go code symbols and file outlines without starting a language server. Supports document_symbols for one Go file, workspace_symbols across Go files, exact-name definition lookup, Go identifier references, basic Go hover signatures, and Go syntax diagnostics."
+	return "Inspect Go code symbols and file outlines without starting a language server. Supports document_symbols for one Go file, workspace_symbols across Go files, exact-name definition lookup, Go identifier references, basic Go hover signatures, Go syntax diagnostics, and edit-aware Go diagnostic deltas."
 }
 
 func (t *CodeSymbolsTool) Schema() json.RawMessage {
 	return Object(map[string]Property{
-		"operation":   StringEnum("Operation to perform.", "document_symbols", "workspace_symbols", "definition", "references", "hover", "diagnostics"),
-		"file_path":   String("Go file path for document_symbols or diagnostics."),
-		"path":        String("Base directory for workspace_symbols, definition, references, hover, or diagnostics. Defaults to current workspace."),
-		"query":       String("Optional case-insensitive symbol name filter for workspace_symbols; required exact symbol name for definition, references, or hover unless file_path, line, and column identify a Go symbol."),
-		"line":        Int("Optional 1-based line used with file_path and column to derive a Go identifier for definition, references, or hover."),
-		"column":      Int("Optional 1-based column used with file_path and line to derive a Go identifier for definition, references, or hover."),
-		"max_results": Int("Maximum symbols to return. Defaults to 50 and caps at 200."),
+		"operation":          StringEnum("Operation to perform.", "document_symbols", "workspace_symbols", "definition", "references", "hover", "diagnostics", "diagnostics_delta"),
+		"file_path":          String("Go file path for document_symbols, diagnostics, or diagnostics_delta current file."),
+		"baseline_file_path": String("Pre-edit Go file path used by diagnostics_delta."),
+		"path":               String("Base directory for workspace_symbols, definition, references, hover, or diagnostics. Defaults to current workspace."),
+		"query":              String("Optional case-insensitive symbol name filter for workspace_symbols; required exact symbol name for definition, references, or hover unless file_path, line, and column identify a Go symbol."),
+		"line":               Int("Optional 1-based line used with file_path and column to derive a Go identifier for definition, references, or hover."),
+		"column":             Int("Optional 1-based column used with file_path and line to derive a Go identifier for definition, references, or hover."),
+		"max_results":        Int("Maximum symbols or diagnostics to return. Defaults to 50 and caps at 200."),
 	}, []string{"operation"})
 }
 
@@ -63,7 +66,7 @@ func (t *CodeSymbolsTool) Scope(params json.RawMessage) ToolScope {
 		return ConservativeScope()
 	}
 	switch strings.ToLower(strings.TrimSpace(input.Operation)) {
-	case "document_symbols", "workspace_symbols", "definition", "references", "hover", "diagnostics":
+	case "document_symbols", "workspace_symbols", "definition", "references", "hover", "diagnostics", "diagnostics_delta":
 		return ToolScope{ReadPaths: []string{t.guard.WorkDir()}}
 	default:
 		return ConservativeScope()
@@ -75,51 +78,85 @@ func (t *CodeSymbolsTool) ShouldCancelSiblingsOnError() bool { return false }
 func (t *CodeSymbolsTool) DeferInitialToolSchema() bool { return true }
 
 type codeSymbolsInput struct {
-	Operation  string `json:"operation"`
-	FilePath   string `json:"file_path"`
-	Path       string `json:"path"`
-	Query      string `json:"query"`
-	Line       int    `json:"line"`
-	Column     int    `json:"column"`
-	MaxResults int    `json:"max_results"`
+	Operation        string `json:"operation"`
+	FilePath         string `json:"file_path"`
+	BaselineFilePath string `json:"baseline_file_path"`
+	Path             string `json:"path"`
+	Query            string `json:"query"`
+	Line             int    `json:"line"`
+	Column           int    `json:"column"`
+	MaxResults       int    `json:"max_results"`
 }
 
 type codeSymbolsOutput struct {
-	Operation string             `json:"operation"`
-	Status    string             `json:"status"`
-	Language  string             `json:"language"`
-	FilePath  string             `json:"file_path,omitempty"`
-	Path      string             `json:"path,omitempty"`
-	Query     string             `json:"query,omitempty"`
-	Count     int                `json:"count"`
-	Truncated bool               `json:"truncated"`
-	Errors    []codeSymbolError  `json:"errors,omitempty"`
-	Symbols   []codeSymbolItem   `json:"symbols"`
-	Receipt   codeSymbolsReceipt `json:"receipt"`
+	Operation       string                      `json:"operation"`
+	Status          string                      `json:"status"`
+	Language        string                      `json:"language"`
+	FilePath        string                      `json:"file_path,omitempty"`
+	Path            string                      `json:"path,omitempty"`
+	Query           string                      `json:"query,omitempty"`
+	Count           int                         `json:"count"`
+	Truncated       bool                        `json:"truncated"`
+	Errors          []codeSymbolError           `json:"errors,omitempty"`
+	Symbols         []codeSymbolItem            `json:"symbols"`
+	DiagnosticDelta *codeDiagnosticDeltaSummary `json:"diagnostic_delta,omitempty"`
+	Receipt         codeSymbolsReceipt          `json:"receipt"`
 }
 
 type codeSymbolsReceipt struct {
-	Tool            string `json:"tool"`
-	Action          string `json:"action"`
-	ReadOnly        bool   `json:"read_only"`
-	Persistent      bool   `json:"persistent"`
-	ExecutionPolicy string `json:"execution_policy"`
-	Operation       string `json:"operation"`
-	Status          string `json:"status"`
-	Language        string `json:"language"`
-	FilePath        string `json:"file_path,omitempty"`
-	Path            string `json:"path,omitempty"`
-	Query           string `json:"query,omitempty"`
-	Count           int    `json:"count"`
-	Truncated       bool   `json:"truncated"`
-	ErrorCount      int    `json:"error_count"`
+	Tool                    string `json:"tool"`
+	Action                  string `json:"action"`
+	ReadOnly                bool   `json:"read_only"`
+	Persistent              bool   `json:"persistent"`
+	ExecutionPolicy         string `json:"execution_policy"`
+	Operation               string `json:"operation"`
+	Status                  string `json:"status"`
+	Language                string `json:"language"`
+	FilePath                string `json:"file_path,omitempty"`
+	Path                    string `json:"path,omitempty"`
+	Query                   string `json:"query,omitempty"`
+	Count                   int    `json:"count"`
+	Truncated               bool   `json:"truncated"`
+	ErrorCount              int    `json:"error_count"`
+	NewDiagnosticCount      int    `json:"new_diagnostic_count,omitempty"`
+	ExistingDiagnosticCount int    `json:"existing_diagnostic_count,omitempty"`
+	ResolvedDiagnosticCount int    `json:"resolved_diagnostic_count,omitempty"`
 }
 
 type codeSymbolError struct {
-	FilePath string `json:"file_path"`
-	Line     int    `json:"line,omitempty"`
-	Column   int    `json:"column,omitempty"`
-	Error    string `json:"error"`
+	FilePath    string `json:"file_path"`
+	Line        int    `json:"line,omitempty"`
+	Column      int    `json:"column,omitempty"`
+	Error       string `json:"error"`
+	Severity    string `json:"severity,omitempty"`
+	Source      string `json:"source,omitempty"`
+	LineText    string `json:"line_text,omitempty"`
+	Fingerprint string `json:"fingerprint,omitempty"`
+}
+
+type codeDiagnosticDeltaSummary struct {
+	BaselineFilePath string                `json:"baseline_file_path"`
+	FilePath         string                `json:"file_path"`
+	ExistingCount    int                   `json:"existing_count"`
+	NewCount         int                   `json:"new_count"`
+	ResolvedCount    int                   `json:"resolved_count"`
+	Existing         []codeDiagnosticDelta `json:"existing,omitempty"`
+	New              []codeDiagnosticDelta `json:"new,omitempty"`
+	Resolved         []codeDiagnosticDelta `json:"resolved,omitempty"`
+}
+
+type codeDiagnosticDelta struct {
+	Status       string `json:"status"`
+	FilePath     string `json:"file_path"`
+	BeforeLine   int    `json:"before_line,omitempty"`
+	BeforeColumn int    `json:"before_column,omitempty"`
+	AfterLine    int    `json:"after_line,omitempty"`
+	AfterColumn  int    `json:"after_column,omitempty"`
+	Error        string `json:"error"`
+	Severity     string `json:"severity,omitempty"`
+	Source       string `json:"source,omitempty"`
+	LineText     string `json:"line_text,omitempty"`
+	Fingerprint  string `json:"fingerprint,omitempty"`
 }
 
 type codeSymbolItem struct {
@@ -155,8 +192,10 @@ func (t *CodeSymbolsTool) Execute(ctx context.Context, params json.RawMessage) (
 		return t.executeHover(ctx, input)
 	case "diagnostics":
 		return t.executeDiagnostics(ctx, input)
+	case "diagnostics_delta":
+		return t.executeDiagnosticsDelta(ctx, input)
 	default:
-		return ErrorResult("code_symbols: operation must be document_symbols, workspace_symbols, definition, references, hover, or diagnostics"), nil
+		return ErrorResult("code_symbols: operation must be document_symbols, workspace_symbols, definition, references, hover, diagnostics, or diagnostics_delta"), nil
 	}
 }
 
@@ -503,6 +542,65 @@ func (t *CodeSymbolsTool) executeDiagnostics(ctx context.Context, input codeSymb
 	})
 }
 
+func (t *CodeSymbolsTool) executeDiagnosticsDelta(ctx context.Context, input codeSymbolsInput) (*Result, error) {
+	sessionBase, err := SessionWorkDirFromContext(ctx, t.guard)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("code_symbols: session workspace: %v", err)), nil
+	}
+	if strings.TrimSpace(input.BaselineFilePath) == "" {
+		return ErrorResult("code_symbols: baseline_file_path is required for diagnostics_delta"), nil
+	}
+	if strings.TrimSpace(input.FilePath) == "" {
+		return ErrorResult("code_symbols: file_path is required for diagnostics_delta"), nil
+	}
+	baselineAbs, err := resolveFileTarget(t.guard, ctx, input.BaselineFilePath)
+	if err != nil {
+		return ErrorResult("code_symbols: " + err.Error()), nil
+	}
+	currentAbs, err := resolveFileTarget(t.guard, ctx, input.FilePath)
+	if err != nil {
+		return ErrorResult("code_symbols: " + err.Error()), nil
+	}
+	if filepath.Ext(baselineAbs) != ".go" || filepath.Ext(currentAbs) != ".go" {
+		return codeSymbolsJSON(codeSymbolsOutput{
+			Operation: "diagnostics_delta",
+			Status:    "unsupported_language",
+			FilePath:  relPath(sessionBase, currentAbs),
+			Language:  "unsupported",
+		})
+	}
+	maxResults := normalizeCodeSymbolMax(input.MaxResults)
+	baselineSrc, err := os.ReadFile(baselineAbs)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("code_symbols: read baseline_file_path: %v", err)), nil
+	}
+	currentSrc, err := os.ReadFile(currentAbs)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("code_symbols: read file_path: %v", err)), nil
+	}
+	baselineRel := relPath(sessionBase, baselineAbs)
+	currentRel := relPath(sessionBase, currentAbs)
+	baselineDiagnostics := parseGoDiagnosticsFromSource(baselineAbs, sessionBase, baselineSrc)
+	currentDiagnostics := parseGoDiagnosticsFromSource(currentAbs, sessionBase, currentSrc)
+	delta := compareCodeDiagnostics(baselineDiagnostics, currentDiagnostics, baselineSrc, currentSrc, currentRel)
+	trimCodeDiagnosticDelta(&delta, maxResults)
+	status := "diagnostic_delta_clean"
+	if delta.NewCount > 0 {
+		status = "new_diagnostics_found"
+	}
+	delta.BaselineFilePath = baselineRel
+	delta.FilePath = currentRel
+	return codeSymbolsJSON(codeSymbolsOutput{
+		Operation:       "diagnostics_delta",
+		Status:          status,
+		Language:        "go",
+		FilePath:        currentRel,
+		Count:           delta.NewCount,
+		Errors:          codeDiagnosticDeltasToErrors(delta.New),
+		DiagnosticDelta: &delta,
+	})
+}
+
 func (t *CodeSymbolsTool) collectDefinitions(ctx context.Context, sessionBase string, searchBase string, input codeSymbolsInput) (codeSymbolsOutput, error) {
 	query, err := t.resolveCodeSymbolQuery(ctx, sessionBase, input, "definition")
 	if err != nil {
@@ -744,8 +842,12 @@ func parseGoDiagnostics(absPath, basePath string) []codeSymbolError {
 	if err != nil {
 		return []codeSymbolError{{FilePath: relPath(basePath, absPath), Error: err.Error()}}
 	}
+	return parseGoDiagnosticsFromSource(absPath, basePath, src)
+}
+
+func parseGoDiagnosticsFromSource(absPath, basePath string, src []byte) []codeSymbolError {
 	fset := token.NewFileSet()
-	_, err = parser.ParseFile(fset, absPath, src, parser.AllErrors)
+	_, err := parser.ParseFile(fset, absPath, src, parser.AllErrors)
 	if err == nil {
 		return nil
 	}
@@ -754,24 +856,279 @@ func parseGoDiagnostics(absPath, basePath string) []codeSymbolError {
 		parseErr.Sort()
 		out := make([]codeSymbolError, 0, len(parseErr))
 		for _, item := range parseErr {
-			out = append(out, codeSymbolError{
-				FilePath: relPath(basePath, absPath),
-				Line:     item.Pos.Line,
-				Column:   item.Pos.Column,
-				Error:    item.Msg,
-			})
+			out = append(out, newCodeSymbolDiagnostic(relPath(basePath, absPath), item.Pos.Line, item.Pos.Column, item.Msg, src))
 		}
 		return out
 	case *scanner.Error:
-		return []codeSymbolError{{
-			FilePath: relPath(basePath, absPath),
-			Line:     parseErr.Pos.Line,
-			Column:   parseErr.Pos.Column,
-			Error:    parseErr.Msg,
-		}}
+		return []codeSymbolError{newCodeSymbolDiagnostic(relPath(basePath, absPath), parseErr.Pos.Line, parseErr.Pos.Column, parseErr.Msg, src)}
 	default:
 		return []codeSymbolError{{FilePath: relPath(basePath, absPath), Error: err.Error()}}
 	}
+}
+
+func newCodeSymbolDiagnostic(filePath string, line, column int, msg string, src []byte) codeSymbolError {
+	diag := codeSymbolError{
+		FilePath: filePath,
+		Line:     line,
+		Column:   column,
+		Error:    msg,
+		Severity: "error",
+		Source:   "go/parser",
+		LineText: codeSymbolSourceLine(src, line),
+	}
+	diag.Fingerprint = codeSymbolDiagnosticFingerprint(diag)
+	return diag
+}
+
+func compareCodeDiagnostics(baseline, current []codeSymbolError, baselineSrc, currentSrc []byte, currentRel string) codeDiagnosticDeltaSummary {
+	shift := buildCodeLineShift(baselineSrc, currentSrc)
+	shiftedBaseline := make([]codeSymbolError, 0, len(baseline))
+	originalByShiftedKey := make(map[string]codeSymbolError, len(baseline))
+	var delta codeDiagnosticDeltaSummary
+	for _, diag := range baseline {
+		shifted, ok := shiftCodeDiagnostic(diag, shift, currentSrc, currentRel)
+		if !ok {
+			delta.Resolved = append(delta.Resolved, codeDiagnosticDelta{
+				Status:       "resolved",
+				FilePath:     currentRel,
+				BeforeLine:   diag.Line,
+				BeforeColumn: diag.Column,
+				Error:        diag.Error,
+				Severity:     diag.Severity,
+				Source:       diag.Source,
+				LineText:     diag.LineText,
+				Fingerprint:  diag.Fingerprint,
+			})
+			continue
+		}
+		shiftedBaseline = append(shiftedBaseline, shifted)
+		originalByShiftedKey[shifted.Fingerprint] = diag
+	}
+	baselineByKey := make(map[string]codeSymbolError, len(shiftedBaseline))
+	for _, diag := range shiftedBaseline {
+		baselineByKey[diag.Fingerprint] = diag
+	}
+	currentByKey := make(map[string]codeSymbolError, len(current))
+	for _, diag := range current {
+		currentByKey[diag.Fingerprint] = diag
+	}
+
+	for _, diag := range current {
+		if shifted, ok := baselineByKey[diag.Fingerprint]; ok {
+			original := originalByShiftedKey[diag.Fingerprint]
+			delta.Existing = append(delta.Existing, codeDiagnosticDelta{
+				Status:       "existing_shifted",
+				FilePath:     currentRel,
+				BeforeLine:   original.Line,
+				BeforeColumn: original.Column,
+				AfterLine:    shifted.Line,
+				AfterColumn:  shifted.Column,
+				Error:        diag.Error,
+				Severity:     diag.Severity,
+				Source:       diag.Source,
+				LineText:     diag.LineText,
+				Fingerprint:  diag.Fingerprint,
+			})
+			continue
+		}
+		delta.New = append(delta.New, codeDiagnosticDelta{
+			Status:      "new",
+			FilePath:    currentRel,
+			AfterLine:   diag.Line,
+			AfterColumn: diag.Column,
+			Error:       diag.Error,
+			Severity:    diag.Severity,
+			Source:      diag.Source,
+			LineText:    diag.LineText,
+			Fingerprint: diag.Fingerprint,
+		})
+	}
+	for _, diag := range shiftedBaseline {
+		if _, ok := currentByKey[diag.Fingerprint]; ok {
+			continue
+		}
+		original := originalByShiftedKey[diag.Fingerprint]
+		delta.Resolved = append(delta.Resolved, codeDiagnosticDelta{
+			Status:       "resolved",
+			FilePath:     currentRel,
+			BeforeLine:   original.Line,
+			BeforeColumn: original.Column,
+			AfterLine:    diag.Line,
+			AfterColumn:  diag.Column,
+			Error:        original.Error,
+			Severity:     original.Severity,
+			Source:       original.Source,
+			LineText:     original.LineText,
+			Fingerprint:  diag.Fingerprint,
+		})
+	}
+	sortCodeDiagnosticDeltas(delta.Existing)
+	sortCodeDiagnosticDeltas(delta.New)
+	sortCodeDiagnosticDeltas(delta.Resolved)
+	delta.ExistingCount = len(delta.Existing)
+	delta.NewCount = len(delta.New)
+	delta.ResolvedCount = len(delta.Resolved)
+	return delta
+}
+
+func shiftCodeDiagnostic(diag codeSymbolError, shift func(int) (int, bool), currentSrc []byte, currentRel string) (codeSymbolError, bool) {
+	afterLine, ok := shift(diag.Line)
+	if !ok {
+		return codeSymbolError{}, false
+	}
+	shifted := diag
+	shifted.FilePath = currentRel
+	shifted.Line = afterLine
+	shifted.LineText = codeSymbolSourceLine(currentSrc, afterLine)
+	shifted.Fingerprint = codeSymbolDiagnosticFingerprint(shifted)
+	return shifted, true
+}
+
+func buildCodeLineShift(beforeSrc, afterSrc []byte) func(int) (int, bool) {
+	beforeLines := codeSymbolComparableLines(beforeSrc)
+	afterLines := codeSymbolComparableLines(afterSrc)
+	if len(beforeLines) == 0 && len(afterLines) == 0 {
+		return func(line int) (int, bool) { return line, line > 0 }
+	}
+	if strings.Join(beforeLines, "\n") == strings.Join(afterLines, "\n") {
+		return func(line int) (int, bool) {
+			return line, line > 0 && line <= len(afterLines)
+		}
+	}
+	const maxLineShiftCells = 2_000_000
+	if len(beforeLines)*len(afterLines) > maxLineShiftCells {
+		return buildPrefixSuffixLineShift(beforeLines, afterLines)
+	}
+	mapping := lcsLineMapping(beforeLines, afterLines)
+	return func(line int) (int, bool) {
+		if line <= 0 {
+			return 0, false
+		}
+		afterLine, ok := mapping[line]
+		return afterLine, ok
+	}
+}
+
+func lcsLineMapping(beforeLines, afterLines []string) map[int]int {
+	n, m := len(beforeLines), len(afterLines)
+	dp := make([]int, (n+1)*(m+1))
+	idx := func(i, j int) int { return i*(m+1) + j }
+	for i := n - 1; i >= 0; i-- {
+		for j := m - 1; j >= 0; j-- {
+			if beforeLines[i] == afterLines[j] {
+				dp[idx(i, j)] = 1 + dp[idx(i+1, j+1)]
+				continue
+			}
+			if dp[idx(i+1, j)] >= dp[idx(i, j+1)] {
+				dp[idx(i, j)] = dp[idx(i+1, j)]
+			} else {
+				dp[idx(i, j)] = dp[idx(i, j+1)]
+			}
+		}
+	}
+	mapping := make(map[int]int)
+	for i, j := 0, 0; i < n && j < m; {
+		if beforeLines[i] == afterLines[j] {
+			mapping[i+1] = j + 1
+			i++
+			j++
+			continue
+		}
+		if dp[idx(i+1, j)] >= dp[idx(i, j+1)] {
+			i++
+		} else {
+			j++
+		}
+	}
+	return mapping
+}
+
+func buildPrefixSuffixLineShift(beforeLines, afterLines []string) func(int) (int, bool) {
+	prefix := 0
+	for prefix < len(beforeLines) && prefix < len(afterLines) && beforeLines[prefix] == afterLines[prefix] {
+		prefix++
+	}
+	suffix := 0
+	for suffix < len(beforeLines)-prefix && suffix < len(afterLines)-prefix &&
+		beforeLines[len(beforeLines)-1-suffix] == afterLines[len(afterLines)-1-suffix] {
+		suffix++
+	}
+	lineDelta := len(afterLines) - len(beforeLines)
+	return func(line int) (int, bool) {
+		if line <= 0 {
+			return 0, false
+		}
+		if line <= prefix {
+			return line, true
+		}
+		if line > len(beforeLines)-suffix {
+			afterLine := line + lineDelta
+			return afterLine, afterLine > 0 && afterLine <= len(afterLines)
+		}
+		return 0, false
+	}
+}
+
+func codeSymbolComparableLines(src []byte) []string {
+	text := strings.ReplaceAll(string(src), "\r\n", "\n")
+	text = strings.TrimSuffix(text, "\n")
+	if text == "" {
+		return nil
+	}
+	return strings.Split(text, "\n")
+}
+
+func codeDiagnosticDeltasToErrors(deltas []codeDiagnosticDelta) []codeSymbolError {
+	out := make([]codeSymbolError, 0, len(deltas))
+	for _, delta := range deltas {
+		out = append(out, codeSymbolError{
+			FilePath:    delta.FilePath,
+			Line:        delta.AfterLine,
+			Column:      delta.AfterColumn,
+			Error:       delta.Error,
+			Severity:    delta.Severity,
+			Source:      delta.Source,
+			LineText:    delta.LineText,
+			Fingerprint: delta.Fingerprint,
+		})
+	}
+	return out
+}
+
+func trimCodeDiagnosticDelta(delta *codeDiagnosticDeltaSummary, max int) {
+	if len(delta.New) > max {
+		delta.New = delta.New[:max]
+	}
+	if len(delta.Existing) > max {
+		delta.Existing = delta.Existing[:max]
+	}
+	if len(delta.Resolved) > max {
+		delta.Resolved = delta.Resolved[:max]
+	}
+}
+
+func sortCodeDiagnosticDeltas(deltas []codeDiagnosticDelta) {
+	sort.Slice(deltas, func(i, j int) bool {
+		if deltas[i].FilePath != deltas[j].FilePath {
+			return deltas[i].FilePath < deltas[j].FilePath
+		}
+		if deltas[i].AfterLine != deltas[j].AfterLine {
+			return deltas[i].AfterLine < deltas[j].AfterLine
+		}
+		if deltas[i].BeforeLine != deltas[j].BeforeLine {
+			return deltas[i].BeforeLine < deltas[j].BeforeLine
+		}
+		if deltas[i].AfterColumn != deltas[j].AfterColumn {
+			return deltas[i].AfterColumn < deltas[j].AfterColumn
+		}
+		return deltas[i].Error < deltas[j].Error
+	})
+}
+
+func codeSymbolDiagnosticFingerprint(diag codeSymbolError) string {
+	h := sha256.New()
+	fmt.Fprintf(h, "%s\x00%d\x00%d\x00%s\x00%s\x00%s", diag.FilePath, diag.Line, diag.Column, diag.Severity, diag.Source, diag.Error)
+	return hex.EncodeToString(h.Sum(nil))[:16]
 }
 
 func goIdentifierAtPosition(absPath string, line, column int) (string, error) {
@@ -827,6 +1184,11 @@ func codeSymbolsJSON(out codeSymbolsOutput) (*Result, error) {
 		Count:           out.Count,
 		Truncated:       out.Truncated,
 		ErrorCount:      len(out.Errors),
+	}
+	if out.DiagnosticDelta != nil {
+		out.Receipt.NewDiagnosticCount = out.DiagnosticDelta.NewCount
+		out.Receipt.ExistingDiagnosticCount = out.DiagnosticDelta.ExistingCount
+		out.Receipt.ResolvedDiagnosticCount = out.DiagnosticDelta.ResolvedCount
 	}
 	raw, err := json.Marshal(out)
 	if err != nil {

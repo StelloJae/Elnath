@@ -188,6 +188,99 @@ func Broken( {
 	}
 }
 
+func TestCodeSymbolsToolDiagnosticsDeltaTreatsShiftedBaselineAsExisting(t *testing.T) {
+	root := t.TempDir()
+	writeCodeSymbolFile(t, filepath.Join(root, "before.go"), `package demo
+
+func Broken( {
+`)
+	writeCodeSymbolFile(t, filepath.Join(root, "after.go"), `package demo
+
+const Added = 1
+
+func Broken( {
+`)
+	tool := NewCodeSymbolsTool(NewPathGuard(root, nil))
+
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"operation":"diagnostics_delta","baseline_file_path":"before.go","file_path":"after.go"}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("Execute returned error result: %s", res.Output)
+	}
+
+	var out codeSymbolsOutput
+	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, res.Output)
+	}
+	if out.Operation != "diagnostics_delta" || out.Status != "diagnostic_delta_clean" {
+		t.Fatalf("output header = %+v, want clean diagnostics_delta", out)
+	}
+	if out.DiagnosticDelta == nil {
+		t.Fatalf("diagnostic_delta missing from output: %+v", out)
+	}
+	if out.DiagnosticDelta.ExistingCount == 0 || out.DiagnosticDelta.NewCount != 0 || out.DiagnosticDelta.ResolvedCount != 0 {
+		t.Fatalf("diagnostic_delta = %+v, want shifted existing diagnostics and no new diagnostics", out.DiagnosticDelta)
+	}
+	if len(out.DiagnosticDelta.Existing) == 0 || out.DiagnosticDelta.Existing[0].BeforeLine == out.DiagnosticDelta.Existing[0].AfterLine {
+		t.Fatalf("existing delta = %+v, want shifted line mapping", out.DiagnosticDelta.Existing)
+	}
+	if out.Receipt.NewDiagnosticCount != 0 || out.Receipt.ExistingDiagnosticCount == 0 || out.Receipt.ResolvedDiagnosticCount != 0 {
+		t.Fatalf("receipt = %+v, want delta counts", out.Receipt)
+	}
+}
+
+func TestCodeSymbolsToolDiagnosticsDeltaReportsNewAndResolvedDiagnostics(t *testing.T) {
+	root := t.TempDir()
+	writeCodeSymbolFile(t, filepath.Join(root, "valid.go"), `package demo
+
+func Alpha() {}
+`)
+	writeCodeSymbolFile(t, filepath.Join(root, "broken.go"), `package demo
+
+func Broken( {
+`)
+	tool := NewCodeSymbolsTool(NewPathGuard(root, nil))
+
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"operation":"diagnostics_delta","baseline_file_path":"valid.go","file_path":"broken.go"}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("Execute returned error result: %s", res.Output)
+	}
+	var out codeSymbolsOutput
+	out = codeSymbolsOutput{}
+	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, res.Output)
+	}
+	if out.Status != "new_diagnostics_found" || out.DiagnosticDelta == nil || out.DiagnosticDelta.NewCount == 0 {
+		t.Fatalf("output = %+v, want new diagnostics delta", out)
+	}
+	if len(out.Errors) != out.DiagnosticDelta.NewCount || out.Receipt.ErrorCount != out.DiagnosticDelta.NewCount {
+		t.Fatalf("new diagnostic surfacing mismatch: errors=%d receipt=%+v delta=%+v", len(out.Errors), out.Receipt, out.DiagnosticDelta)
+	}
+	if got := out.DiagnosticDelta.New[0]; got.AfterLine == 0 || got.Severity != "error" || got.Source != "go/parser" || got.Fingerprint == "" || !strings.Contains(got.LineText, "Broken") {
+		t.Fatalf("new diagnostic = %+v, want location, source, severity, fingerprint, and line text", got)
+	}
+
+	res, err = tool.Execute(context.Background(), json.RawMessage(`{"operation":"diagnostics_delta","baseline_file_path":"broken.go","file_path":"valid.go"}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("Execute returned error result: %s", res.Output)
+	}
+	out = codeSymbolsOutput{}
+	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, res.Output)
+	}
+	if out.Status != "diagnostic_delta_clean" || out.DiagnosticDelta == nil || out.DiagnosticDelta.ResolvedCount == 0 || out.DiagnosticDelta.NewCount != 0 {
+		t.Fatalf("output = %+v, want resolved diagnostics without new diagnostics", out)
+	}
+}
+
 func TestCodeSymbolsToolWorkspaceSymbolsReportsSymlinkEscape(t *testing.T) {
 	root, sessionDir, ctx := b3b1Setup(t, "sess-code-symbols")
 	outside := t.TempDir()
