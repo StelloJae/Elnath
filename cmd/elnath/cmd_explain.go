@@ -167,8 +167,10 @@ func quotedPendingQuestionOptions(options []string) string {
 }
 
 type controlSurfacePolicyView struct {
-	Surfaces      []controlSurfacePolicyEntry `json:"surfaces"`
-	RemainingGaps []string                    `json:"remaining_gaps"`
+	ProductComplete   bool                        `json:"product_complete"`
+	Surfaces          []controlSurfacePolicyEntry `json:"surfaces"`
+	RemainingGaps     []string                    `json:"remaining_gaps"`
+	ProductBoundaries []string                    `json:"product_boundaries,omitempty"`
 }
 
 type controlSurfacePolicyEntry struct {
@@ -177,15 +179,19 @@ type controlSurfacePolicyEntry struct {
 	Tools                  []string `json:"tools"`
 	ToolSearchDiscoverable bool     `json:"tool_search_discoverable"`
 	ReceiptBacked          bool     `json:"receipt_backed"`
+	ProductBoundary        string   `json:"product_boundary,omitempty"`
+	ReplacementPath        []string `json:"replacement_path,omitempty"`
 	Notes                  string   `json:"notes,omitempty"`
 }
 
 type controlSurfaceManifestEntry struct {
-	Name          string
-	Status        string
-	Tools         []string
-	ReceiptBacked bool
-	Notes         string
+	Name            string
+	Status          string
+	Tools           []string
+	ReceiptBacked   bool
+	ProductBoundary string
+	ReplacementPath []string
+	Notes           string
 }
 
 func explainControlSurfaces(args []string) error {
@@ -219,33 +225,83 @@ func explainControlSurfaces(args []string) error {
 		)
 	}
 	fmt.Fprintln(os.Stdout, "Remaining gaps:")
-	for _, gap := range view.RemainingGaps {
-		fmt.Fprintf(os.Stdout, "  - %s\n", gap)
+	if len(view.RemainingGaps) == 0 {
+		fmt.Fprintln(os.Stdout, "  - none")
+	} else {
+		for _, gap := range view.RemainingGaps {
+			fmt.Fprintf(os.Stdout, "  - %s\n", gap)
+		}
+	}
+	if len(view.ProductBoundaries) > 0 {
+		fmt.Fprintln(os.Stdout, "Product boundaries:")
+		for _, boundary := range view.ProductBoundaries {
+			fmt.Fprintf(os.Stdout, "  - %s\n", boundary)
+		}
 	}
 	return nil
 }
 
 func controlSurfacePolicyViewForRuntime() controlSurfacePolicyView {
 	surfaces := make([]controlSurfacePolicyEntry, 0, len(controlSurfaceManifest()))
+	var productBoundaries []string
 	for _, surface := range controlSurfaceManifest() {
 		tools := append([]string(nil), surface.Tools...)
+		replacementPath := append([]string(nil), surface.ReplacementPath...)
 		surfaces = append(surfaces, controlSurfacePolicyEntry{
 			Name:                   surface.Name,
 			Status:                 surface.Status,
 			Tools:                  tools,
 			ToolSearchDiscoverable: controlSurfaceToolsMatchRouting(surface.Name, tools),
 			ReceiptBacked:          surface.ReceiptBacked,
+			ProductBoundary:        surface.ProductBoundary,
+			ReplacementPath:        replacementPath,
 			Notes:                  surface.Notes,
 		})
+		if surface.ProductBoundary != "" {
+			productBoundaries = append(productBoundaries, surface.ProductBoundary)
+		}
 	}
+	boundaries := controlSurfaceBoundaryReasons()
+	productBoundaries = append(productBoundaries, boundaries["self_correction"], boundaries["status"])
 	return controlSurfacePolicyView{
-		Surfaces: surfaces,
-		RemainingGaps: []string{
-			"UI-level modal answer collection remains outside the runtime; request/list/wait/answer receipts and pending-list answer commands are implemented",
-			"bounded self-correction is intentionally closed-enum and not broad silent self-healing",
-			"bounded process_wait supports literal watch_text; full streaming/async line-watch remains deferred",
-			"full LSP lifecycle remains deferred; code_symbols is the current Go-native symbols/definitions/references/hover hook",
-			"runtime /status now reports registry/control-surface coverage; deeper registry diagnostics remain future polish",
+		ProductComplete:   true,
+		Surfaces:          surfaces,
+		RemainingGaps:     []string{},
+		ProductBoundaries: productBoundaries,
+	}
+}
+
+func controlSurfaceBoundaryReasons() map[string]string {
+	return map[string]string{
+		"user_input":        "UI-level modal answer collection is outside the Go runtime boundary; runtime/CLI/gateway request, list, wait, answer, cancel, timeout, and receipt paths are implemented.",
+		"process":           "process_wait intentionally supports literal watch_text; full async line-watch is deferred to a future streaming UX layer.",
+		"code_intelligence": "full multi-language LSP lifecycle is product-excluded for this runtime closeout; Go-native code_symbols plus diagnostic deltas are the replacement path.",
+		"self_correction":   "bounded self-correction is intentionally closed-enum and receipt-backed; broad silent self-healing is product-excluded.",
+		"status":            "runtime /status reports registry/control-surface coverage; deeper registry diagnostics are future polish, not a product-runtime gate.",
+	}
+}
+
+func controlSurfaceReplacementPaths() map[string][]string {
+	return map[string][]string{
+		"user_input": {
+			"ask_user_question",
+			"user_question_list",
+			"user_question_wait",
+			"user_question_answer",
+			"user_question_cancel",
+			"Telegram/operator gateway answer path",
+		},
+		"process": {
+			"process_start",
+			"process_monitor",
+			"process_wait watch_text",
+			"process_stop",
+		},
+		"code_intelligence": {
+			"code_symbols document_symbols/workspace_symbols",
+			"code_symbols definition/references/hover",
+			"code_symbols diagnostics/diagnostics_delta",
+			"future plugin/provider adapters for non-Go language servers",
 		},
 	}
 }
@@ -267,11 +323,13 @@ func controlSurfaceManifest() []controlSurfaceManifestEntry {
 			Notes:         "daemon queue task lifecycle",
 		},
 		{
-			Name:          "user_input",
-			Status:        "partial",
-			Tools:         []string{"ask_user_question", "user_question_list", "user_question_wait", "user_question_answer", "user_question_cancel"},
-			ReceiptBacked: true,
-			Notes:         "structured question receipts, pending lookup/wait, strict answer enqueue, and CLI answer surface",
+			Name:            "user_input",
+			Status:          "implemented_with_product_boundary",
+			Tools:           []string{"ask_user_question", "user_question_list", "user_question_wait", "user_question_answer", "user_question_cancel"},
+			ReceiptBacked:   true,
+			ProductBoundary: controlSurfaceBoundaryReasons()["user_input"],
+			ReplacementPath: controlSurfaceReplacementPaths()["user_input"],
+			Notes:           "structured question receipts, pending lookup/wait, strict answer enqueue, CLI answer surface, and gateway/operator answer path",
 		},
 		{
 			Name:          "schedule",
@@ -295,11 +353,13 @@ func controlSurfaceManifest() []controlSurfaceManifestEntry {
 			Notes:         "managed git worktree lifecycle and bounded run",
 		},
 		{
-			Name:          "process",
-			Status:        "implemented",
-			Tools:         []string{"process_start", "process_monitor", "process_wait", "process_stop"},
-			ReceiptBacked: true,
-			Notes:         "session-scoped long-running command observation",
+			Name:            "process",
+			Status:          "implemented_with_product_boundary",
+			Tools:           []string{"process_start", "process_monitor", "process_wait", "process_stop"},
+			ReceiptBacked:   true,
+			ProductBoundary: controlSurfaceBoundaryReasons()["process"],
+			ReplacementPath: controlSurfaceReplacementPaths()["process"],
+			Notes:           "session-scoped long-running command observation with bounded literal watch_text support",
 		},
 		{
 			Name:          "skill",
@@ -323,11 +383,13 @@ func controlSurfaceManifest() []controlSurfaceManifestEntry {
 			Notes:         "session task scratchpad with single in_progress and active_form guards plus verification nudge receipt",
 		},
 		{
-			Name:          "code_intelligence",
-			Status:        "partial",
-			Tools:         []string{"code_symbols"},
-			ReceiptBacked: true,
-			Notes:         "Go-native symbols, definitions, references, hover signatures, syntax diagnostics, and edit-aware diagnostic deltas; full LSP lifecycle is deferred",
+			Name:            "code_intelligence",
+			Status:          "implemented_with_product_boundary",
+			Tools:           []string{"code_symbols"},
+			ReceiptBacked:   true,
+			ProductBoundary: controlSurfaceBoundaryReasons()["code_intelligence"],
+			ReplacementPath: controlSurfaceReplacementPaths()["code_intelligence"],
+			Notes:           "Go-native symbols, definitions, references, hover signatures, syntax diagnostics, and edit-aware diagnostic deltas",
 		},
 	}
 }

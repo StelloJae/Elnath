@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -183,15 +182,19 @@ func TestExplainControlSurfacesJSON(t *testing.T) {
 	})
 
 	var out struct {
-		Surfaces []struct {
+		ProductComplete bool `json:"product_complete"`
+		Surfaces        []struct {
 			Name                   string   `json:"name"`
 			Status                 string   `json:"status"`
 			Tools                  []string `json:"tools"`
 			ToolSearchDiscoverable bool     `json:"tool_search_discoverable"`
 			ReceiptBacked          bool     `json:"receipt_backed"`
+			ProductBoundary        string   `json:"product_boundary"`
+			ReplacementPath        []string `json:"replacement_path"`
 			Notes                  string   `json:"notes"`
 		} `json:"surfaces"`
-		RemainingGaps []string `json:"remaining_gaps"`
+		RemainingGaps     []string `json:"remaining_gaps"`
+		ProductBoundaries []string `json:"product_boundaries"`
 	}
 	if err := json.Unmarshal([]byte(stdout), &out); err != nil {
 		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout)
@@ -201,6 +204,8 @@ func TestExplainControlSurfacesJSON(t *testing.T) {
 		toolSearchDiscoverable bool
 		receiptBacked          bool
 		toolCount              int
+		boundary               string
+		replacementCount       int
 		notes                  string
 	}{}
 	for _, surface := range out.Surfaces {
@@ -209,16 +214,23 @@ func TestExplainControlSurfacesJSON(t *testing.T) {
 			toolSearchDiscoverable bool
 			receiptBacked          bool
 			toolCount              int
+			boundary               string
+			replacementCount       int
 			notes                  string
 		}{
 			status:                 surface.Status,
 			toolSearchDiscoverable: surface.ToolSearchDiscoverable,
 			receiptBacked:          surface.ReceiptBacked,
 			toolCount:              len(surface.Tools),
+			boundary:               surface.ProductBoundary,
+			replacementCount:       len(surface.ReplacementPath),
 			notes:                  surface.Notes,
 		}
 	}
-	for _, name := range []string{"discovery", "task", "schedule", "plan", "worktree", "process", "skill", "command", "scratchpad"} {
+	if !out.ProductComplete {
+		t.Fatalf("product_complete = false; out=%+v", out)
+	}
+	for _, name := range []string{"discovery", "task", "schedule", "plan", "worktree", "skill", "command", "scratchpad"} {
 		entry, ok := byName[name]
 		if !ok {
 			t.Fatalf("missing control surface %q in %+v", name, byName)
@@ -231,15 +243,22 @@ func TestExplainControlSurfacesJSON(t *testing.T) {
 	if !ok {
 		t.Fatalf("missing control surface user_input in %+v", byName)
 	}
-	if userInput.status != "partial" || !userInput.toolSearchDiscoverable || !userInput.receiptBacked || userInput.toolCount != 5 {
-		t.Fatalf("user_input surface = %+v, want partial ToolSearch-discoverable receipt-backed with five tools", userInput)
+	if userInput.status != "implemented_with_product_boundary" || !userInput.toolSearchDiscoverable || !userInput.receiptBacked || userInput.toolCount != 5 || userInput.boundary == "" || userInput.replacementCount == 0 {
+		t.Fatalf("user_input surface = %+v, want product-boundary implemented ToolSearch-discoverable receipt-backed with five tools", userInput)
+	}
+	process, ok := byName["process"]
+	if !ok {
+		t.Fatalf("missing control surface process in %+v", byName)
+	}
+	if process.status != "implemented_with_product_boundary" || !process.toolSearchDiscoverable || !process.receiptBacked || process.toolCount != 4 || process.boundary == "" || process.replacementCount == 0 {
+		t.Fatalf("process surface = %+v, want product-boundary implemented process tools", process)
 	}
 	codeIntelligence, ok := byName["code_intelligence"]
 	if !ok {
 		t.Fatalf("missing control surface code_intelligence in %+v", byName)
 	}
-	if codeIntelligence.status != "partial" || !codeIntelligence.toolSearchDiscoverable || !codeIntelligence.receiptBacked || codeIntelligence.toolCount != 1 {
-		t.Fatalf("code_intelligence surface = %+v, want partial ToolSearch-discoverable receipt-backed with one tool", codeIntelligence)
+	if codeIntelligence.status != "implemented_with_product_boundary" || !codeIntelligence.toolSearchDiscoverable || !codeIntelligence.receiptBacked || codeIntelligence.toolCount != 1 || codeIntelligence.boundary == "" || codeIntelligence.replacementCount == 0 {
+		t.Fatalf("code_intelligence surface = %+v, want product-boundary implemented ToolSearch-discoverable receipt-backed with one tool", codeIntelligence)
 	}
 	if !strings.Contains(codeIntelligence.notes, "references") {
 		t.Fatalf("code_intelligence notes = %q, want references capability", codeIntelligence.notes)
@@ -263,9 +282,6 @@ func TestExplainControlSurfacesJSON(t *testing.T) {
 	if !strings.Contains(scratchpad.notes, "active_form") {
 		t.Fatalf("scratchpad notes = %q, want active_form guard", scratchpad.notes)
 	}
-	if len(out.RemainingGaps) == 0 {
-		t.Fatal("remaining_gaps empty, want honest non-complete boundary")
-	}
 	for _, gap := range out.RemainingGaps {
 		if strings.Contains(gap, "surface status is static") {
 			t.Fatalf("remaining gap %q should be replaced after manifest-backed control-surface metadata", gap)
@@ -277,11 +293,11 @@ func TestExplainControlSurfacesJSON(t *testing.T) {
 			t.Fatalf("remaining gap %q is stale after runtime status registry introspection", gap)
 		}
 	}
-	if !slices.Contains(out.RemainingGaps, "bounded process_wait supports literal watch_text; full streaming/async line-watch remains deferred") {
-		t.Fatalf("remaining_gaps = %+v, want process_wait watch_text boundary", out.RemainingGaps)
+	if len(out.RemainingGaps) != 0 {
+		t.Fatalf("remaining_gaps = %+v, want true blockers empty after product boundaries are explicit", out.RemainingGaps)
 	}
-	if !slices.Contains(out.RemainingGaps, "runtime /status now reports registry/control-surface coverage; deeper registry diagnostics remain future polish") {
-		t.Fatalf("remaining_gaps = %+v, want runtime status registry introspection boundary", out.RemainingGaps)
+	if len(out.ProductBoundaries) < 5 {
+		t.Fatalf("product_boundaries = %+v, want explicit boundary list", out.ProductBoundaries)
 	}
 }
 
@@ -313,12 +329,14 @@ func TestExplainControlSurfacesText(t *testing.T) {
 		"Control surfaces:",
 		"discovery: implemented",
 		"task: implemented",
-		"user_input: partial",
+		"user_input: implemented_with_product_boundary",
 		"worktree: implemented",
 		"scratchpad: implemented",
-		"code_intelligence: partial",
+		"code_intelligence: implemented_with_product_boundary",
 		"Remaining gaps:",
-		"pending-list answer commands",
+		"none",
+		"Product boundaries:",
+		"full multi-language LSP lifecycle",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("stdout missing %q:\n%s", want, stdout)
