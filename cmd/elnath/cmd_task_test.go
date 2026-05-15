@@ -46,7 +46,7 @@ func TestCmdTaskUsage(t *testing.T) {
 	if !strings.Contains(stdout, "Usage: elnath task") {
 		t.Fatalf("stdout = %q, want task usage", stdout)
 	}
-	for _, want := range []string{"monitor <id>", "output <id>", "stop <id>", "answer"} {
+	for _, want := range []string{"monitor <id>", "output <id>", "stop <id>", "answer", "cancel-question"} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("stdout = %q, want usage to contain %q", stdout, want)
 		}
@@ -57,6 +57,42 @@ func TestCmdTaskUnknownSubcommand(t *testing.T) {
 	err := cmdTask(context.Background(), []string{"bogus"})
 	if err == nil || !strings.Contains(err.Error(), "unknown task subcommand: bogus") {
 		t.Fatalf("cmdTask(bogus) err = %v, want unknown subcommand", err)
+	}
+}
+
+func TestCmdTaskCancelQuestionWithStoreRecordsOutcome(t *testing.T) {
+	store := learning.NewOutcomeStore(filepath.Join(t.TempDir(), "outcomes.jsonl"))
+	if err := store.Append(learning.OutcomeRecord{
+		Timestamp: time.Date(2026, 5, 13, 7, 0, 0, 0, time.UTC),
+		ControlToolReceipts: []learning.ControlToolReceipt{{
+			Tool:      "ask_user_question",
+			Action:    "request",
+			RequestID: "req-123",
+			SessionID: "sess-123",
+			Question:  "Which branch?",
+		}},
+	}); err != nil {
+		t.Fatalf("Append outcome: %v", err)
+	}
+
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdTaskCancelQuestionWithStore(context.Background(), store, []string{
+			"--session", "sess-123",
+			"--request", "req-123",
+			"--reason", "operator changed direction",
+		}); err != nil {
+			t.Fatalf("cmdTaskCancelQuestionWithStore: %v", err)
+		}
+	})
+	if !strings.Contains(stdout, "Question cancelled") || !strings.Contains(stdout, "req-123") {
+		t.Fatalf("stdout = %q, want cancel summary", stdout)
+	}
+	records, err := store.Recent(0)
+	if err != nil {
+		t.Fatalf("Recent outcomes: %v", err)
+	}
+	if pending := learning.PendingUserQuestions(records, "sess-123", 10); len(pending) != 0 {
+		t.Fatalf("pending = %+v, want CLI cancel receipt to close req-123", pending)
 	}
 }
 
@@ -400,6 +436,41 @@ func TestFormatTimestamp(t *testing.T) {
 	got := formatTimestamp(zeroTime())
 	if got != "-" {
 		t.Errorf("formatTimestamp(zero) = %q, want %q", got, "-")
+	}
+}
+
+func TestCmdTaskAnswerWithQueueRejectsTimedOutRequest(t *testing.T) {
+	ctx := context.Background()
+	queue := newCmdTaskTestQueue(t)
+	store := learning.NewOutcomeStore(filepath.Join(t.TempDir(), "outcomes.jsonl"))
+	if err := store.Append(learning.OutcomeRecord{
+		Timestamp: time.Now().Add(-2 * time.Second),
+		ControlToolReceipts: []learning.ControlToolReceipt{{
+			Tool:           "ask_user_question",
+			Action:         "request",
+			RequestID:      "req-timeout",
+			SessionID:      "sess-123",
+			Question:       "Still needed?",
+			TimeoutSeconds: 1,
+		}},
+	}); err != nil {
+		t.Fatalf("Append outcome: %v", err)
+	}
+
+	err := cmdTaskAnswerWithQueue(ctx, queue, store, []string{
+		"--session", "sess-123",
+		"--request", "req-timeout",
+		"--answer", "Use main.",
+	})
+	if err == nil || !strings.Contains(err.Error(), "request_id is not pending for session_id") {
+		t.Fatalf("cmdTaskAnswerWithQueue err = %v, want timed-out request rejection", err)
+	}
+	tasks, listErr := queue.List(ctx)
+	if listErr != nil {
+		t.Fatalf("List tasks: %v", listErr)
+	}
+	if len(tasks) != 0 {
+		t.Fatalf("tasks = %+v, want no enqueue for timed-out answer", tasks)
 	}
 }
 

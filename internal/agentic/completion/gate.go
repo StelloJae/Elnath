@@ -202,6 +202,7 @@ type ControlToolReceipt struct {
 	DecisionID              int64    `json:"decision_id,omitempty"`
 	DecisionStatus          string   `json:"decision_status,omitempty"`
 	Status                  string   `json:"status,omitempty"`
+	Reason                  string   `json:"reason,omitempty"`
 	PreviousStatus          string   `json:"previous_status,omitempty"`
 	Terminal                bool     `json:"terminal,omitempty"`
 	TimedOut                bool     `json:"timed_out,omitempty"`

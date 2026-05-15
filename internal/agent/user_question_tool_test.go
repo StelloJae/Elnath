@@ -12,7 +12,7 @@ import (
 func TestAskUserQuestionToolReturnsStructuredRequest(t *testing.T) {
 	result, err := NewAskUserQuestionTool().Execute(context.Background(), json.RawMessage(`{
 		"question":"Which branch should I use?",
-		"options":["main","new branch"],
+		"options":[" main ","main","new branch",""],
 		"allow_free_text":false,
 		"timeout_seconds":120
 	}`))
@@ -53,6 +53,9 @@ func TestAskUserQuestionToolReturnsStructuredRequest(t *testing.T) {
 	}
 	if output.Receipt.Question != "Which branch should I use?" || output.Receipt.QuestionChars != len("Which branch should I use?") || output.Receipt.OptionCount != 2 || output.Receipt.AllowFreeText || output.Receipt.TimeoutSeconds != 120 {
 		t.Fatalf("Receipt bounds = %+v", output.Receipt)
+	}
+	if len(output.Receipt.Options) != 2 || output.Receipt.Options[0] != "main" || output.Receipt.Options[1] != "new branch" {
+		t.Fatalf("Receipt options = %#v, want main/new branch", output.Receipt.Options)
 	}
 	if output.Receipt.RequestID != output.RequestID {
 		t.Fatalf("receipt RequestID = %q, want output RequestID %q", output.Receipt.RequestID, output.RequestID)

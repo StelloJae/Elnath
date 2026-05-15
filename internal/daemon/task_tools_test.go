@@ -134,12 +134,14 @@ func TestUserQuestionAnswerToolValidatesPendingRequest(t *testing.T) {
 		Found:         true,
 		Question:      "Which branch?",
 		QuestionChars: len("Which branch?"),
+		Options:       []string{"main", "new branch"},
+		AllowFreeText: false,
 	}}
 
 	result, err := NewUserQuestionAnswerToolWithValidator(queue, validator).Execute(ctx, json.RawMessage(`{
 		"session_id": "sess-123",
 		"request_id": "req-123",
-		"answer": "Use main."
+		"answer": "main"
 	}`))
 	if err != nil {
 		t.Fatalf("Execute error = %v", err)
@@ -165,6 +167,29 @@ func TestUserQuestionAnswerToolValidatesPendingRequest(t *testing.T) {
 	}
 	if !strings.Contains(ParseTaskPayload(task.Payload).Prompt, "Question:\nWhich branch?") {
 		t.Fatalf("payload = %q, want validator question in resume prompt", task.Payload)
+	}
+}
+
+func TestUserQuestionAnswerToolRejectsAnswerOutsideStructuredChoices(t *testing.T) {
+	ctx := context.Background()
+	queue := newTaskToolTestQueue(t)
+	validator := &fakeUserQuestionAnswerValidator{validation: UserQuestionAnswerValidation{
+		Found:         true,
+		Question:      "Which branch?",
+		Options:       []string{"main", "new branch"},
+		AllowFreeText: false,
+	}}
+
+	result, err := NewUserQuestionAnswerToolWithValidator(queue, validator).Execute(ctx, json.RawMessage(`{
+		"session_id": "sess-123",
+		"request_id": "req-123",
+		"answer": "Use main."
+	}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if !result.IsError || !strings.Contains(result.Output, "answer must match one of the pending question options") {
+		t.Fatalf("result = %+v, want structured-choice rejection", result)
 	}
 }
 

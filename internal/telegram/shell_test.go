@@ -267,6 +267,121 @@ func TestShellHandleUpdateApprovalsAndNotifyCompletions(t *testing.T) {
 	}
 }
 
+func TestShellQuestionsCommandShowsPendingUserChoices(t *testing.T) {
+	store := learning.NewOutcomeStore(filepath.Join(t.TempDir(), "outcomes.jsonl"))
+	if err := store.Append(learning.OutcomeRecord{
+		ControlToolReceipts: []learning.ControlToolReceipt{{
+			Tool:          "ask_user_question",
+			Action:        "request",
+			RequestID:     "req-1",
+			SessionID:     "sess-1",
+			Question:      "Which branch?",
+			Options:       []string{"main", "new"},
+			AllowFreeText: false,
+		}},
+	}); err != nil {
+		t.Fatalf("Append outcome: %v", err)
+	}
+	shell, _, _, bot := newTestShellWithOptions(t, nil, WithShellOutcomeStore(store))
+
+	if err := shell.HandleUpdate(context.Background(), Update{
+		ID:      1,
+		Message: Message{ChatID: "chat-1", UserID: "77", MessageID: 11, Text: "/questions"},
+	}); err != nil {
+		t.Fatalf("HandleUpdate: %v", err)
+	}
+
+	if len(bot.sent) != 1 {
+		t.Fatalf("sent messages = %d, want 1", len(bot.sent))
+	}
+	for _, want := range []string{"Pending questions", "req-1", "Which branch?", "main", "new", "/answer sess-1 req-1"} {
+		if !strings.Contains(bot.sent[0].text, want) {
+			t.Fatalf("questions reply = %q, want %q", bot.sent[0].text, want)
+		}
+	}
+}
+
+func TestShellAnswerCommandEnqueuesPendingQuestionAnswer(t *testing.T) {
+	store := learning.NewOutcomeStore(filepath.Join(t.TempDir(), "outcomes.jsonl"))
+	if err := store.Append(learning.OutcomeRecord{
+		ControlToolReceipts: []learning.ControlToolReceipt{{
+			Tool:          "ask_user_question",
+			Action:        "request",
+			RequestID:     "req-1",
+			SessionID:     "sess-1",
+			Question:      "Which branch?",
+			Options:       []string{"main", "new"},
+			AllowFreeText: false,
+		}},
+	}); err != nil {
+		t.Fatalf("Append outcome: %v", err)
+	}
+	shell, queue, _, bot := newTestShellWithOptions(t, nil, WithShellOutcomeStore(store))
+
+	if err := shell.HandleUpdate(context.Background(), Update{
+		ID:      1,
+		Message: Message{ChatID: "chat-1", UserID: "77", MessageID: 11, Text: "/answer sess-1 req-1 main"},
+	}); err != nil {
+		t.Fatalf("HandleUpdate: %v", err)
+	}
+
+	tasks, err := queue.List(context.Background())
+	if err != nil {
+		t.Fatalf("List tasks: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("tasks = %+v, want one answer resume task", tasks)
+	}
+	payload := daemon.ParseTaskPayload(tasks[0].Payload)
+	if payload.SessionID != "sess-1" || payload.Surface != "telegram" {
+		t.Fatalf("payload = %+v, want telegram session answer", payload)
+	}
+	records, err := store.Recent(0)
+	if err != nil {
+		t.Fatalf("Recent outcomes: %v", err)
+	}
+	if pending := learning.PendingUserQuestions(records, "sess-1", 10); len(pending) != 0 {
+		t.Fatalf("pending = %+v, want telegram answer receipt to close question", pending)
+	}
+	if len(bot.sent) != 1 || !strings.Contains(bot.sent[0].text, "Answer queued") {
+		t.Fatalf("reply = %+v, want answer queued", bot.sent)
+	}
+}
+
+func TestShellCancelQuestionCommandClosesPendingQuestion(t *testing.T) {
+	store := learning.NewOutcomeStore(filepath.Join(t.TempDir(), "outcomes.jsonl"))
+	if err := store.Append(learning.OutcomeRecord{
+		ControlToolReceipts: []learning.ControlToolReceipt{{
+			Tool:      "ask_user_question",
+			Action:    "request",
+			RequestID: "req-1",
+			SessionID: "sess-1",
+			Question:  "Still needed?",
+		}},
+	}); err != nil {
+		t.Fatalf("Append outcome: %v", err)
+	}
+	shell, _, _, bot := newTestShellWithOptions(t, nil, WithShellOutcomeStore(store))
+
+	if err := shell.HandleUpdate(context.Background(), Update{
+		ID:      1,
+		Message: Message{ChatID: "chat-1", UserID: "77", MessageID: 11, Text: "/cancel-question sess-1 req-1 no longer needed"},
+	}); err != nil {
+		t.Fatalf("HandleUpdate: %v", err)
+	}
+
+	records, err := store.Recent(0)
+	if err != nil {
+		t.Fatalf("Recent outcomes: %v", err)
+	}
+	if pending := learning.PendingUserQuestions(records, "sess-1", 10); len(pending) != 0 {
+		t.Fatalf("pending = %+v, want telegram cancel receipt to close question", pending)
+	}
+	if len(bot.sent) != 1 || !strings.Contains(bot.sent[0].text, "Question cancelled") {
+		t.Fatalf("reply = %+v, want cancel acknowledgement", bot.sent)
+	}
+}
+
 func TestTelegramApprovals_RenderProvenanceWhenPresent(t *testing.T) {
 	shell, _, approvals, bot := newTestShell(t)
 	if _, err := approvals.CreateWithContext(context.Background(), daemon.ApprovalCreateRequest{

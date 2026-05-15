@@ -231,8 +231,8 @@ func TestExplainControlSurfacesJSON(t *testing.T) {
 	if !ok {
 		t.Fatalf("missing control surface user_input in %+v", byName)
 	}
-	if userInput.status != "partial" || !userInput.toolSearchDiscoverable || !userInput.receiptBacked || userInput.toolCount != 4 {
-		t.Fatalf("user_input surface = %+v, want partial ToolSearch-discoverable receipt-backed with four tools", userInput)
+	if userInput.status != "partial" || !userInput.toolSearchDiscoverable || !userInput.receiptBacked || userInput.toolCount != 5 {
+		t.Fatalf("user_input surface = %+v, want partial ToolSearch-discoverable receipt-backed with five tools", userInput)
 	}
 	codeIntelligence, ok := byName["code_intelligence"]
 	if !ok {
@@ -337,6 +337,7 @@ func TestExplainPendingQuestionsJSON(t *testing.T) {
 			RequestID: "req-1",
 			SessionID: "sess-1",
 			Question:  "Which branch?",
+			Options:   []string{"main", "new branch"},
 		}},
 	}); err != nil {
 		t.Fatalf("Append ask record: %v", err)
@@ -384,6 +385,7 @@ func TestExplainPendingQuestionsTextShowsAnswerCommand(t *testing.T) {
 			RequestID: "req-1",
 			SessionID: "sess-1",
 			Question:  "Which branch?",
+			Options:   []string{"main", "new branch"},
 		}},
 	}); err != nil {
 		t.Fatalf("Append ask record: %v", err)
@@ -396,6 +398,9 @@ func TestExplainPendingQuestionsTextShowsAnswerCommand(t *testing.T) {
 	})
 	if !strings.Contains(stdout, "answer: elnath task answer --session 'sess-1' --request 'req-1' --answer 'ANSWER_TEXT'") {
 		t.Fatalf("stdout missing answer command:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, `options: "main", "new branch"`) {
+		t.Fatalf("stdout missing structured options:\n%s", stdout)
 	}
 }
 

@@ -50,10 +50,10 @@ type ProgressReporter struct {
 	chatID string
 	logger *slog.Logger
 
-	toolCh  chan toolEvent
-	stageCh chan stageEvent
-	done    chan struct{}
-	wg      sync.WaitGroup
+	toolCh    chan toolEvent
+	stageCh   chan stageEvent
+	done      chan struct{}
+	wg        sync.WaitGroup
 	closeOnce sync.Once
 
 	mu    sync.Mutex
@@ -65,9 +65,9 @@ func NewProgressReporter(bot BotClient, chatID string, logger *slog.Logger) *Pro
 		logger = slog.Default()
 	}
 	return &ProgressReporter{
-		bot:    bot,
-		chatID: chatID,
-		logger: logger,
+		bot:     bot,
+		chatID:  chatID,
+		logger:  logger,
 		toolCh:  make(chan toolEvent, 256),
 		stageCh: make(chan stageEvent, 32),
 		done:    make(chan struct{}),
@@ -107,7 +107,7 @@ func (pr *ProgressReporter) loop() {
 	var (
 		lines     []string
 		dirty     bool
-		lastFlush time.Time
+		lastFlush = time.Now()
 		finished  bool
 	)
 

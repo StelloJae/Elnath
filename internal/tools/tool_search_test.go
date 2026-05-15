@@ -197,6 +197,7 @@ func TestToolSearchReportsRoutingMetadata(t *testing.T) {
 	reg.Register(&toolSearchMetadataTool{name: "user_question_answer", description: "Resume from user answer"})
 	reg.Register(&toolSearchMetadataTool{name: "user_question_list", description: "List pending user questions"})
 	reg.Register(&toolSearchMetadataTool{name: "user_question_wait", description: "Wait for pending user answer"})
+	reg.Register(&toolSearchMetadataTool{name: "user_question_cancel", description: "Cancel pending user question"})
 	reg.Register(&toolSearchMetadataTool{name: "schedule_list", description: "List scheduled tasks"})
 	reg.Register(&toolSearchMetadataTool{name: "enter_worktree", description: "Create managed worktree"})
 	reg.Register(&toolSearchMetadataTool{name: "skill", description: "Invoke a skill"})
@@ -205,7 +206,7 @@ func TestToolSearchReportsRoutingMetadata(t *testing.T) {
 	search := NewToolSearchTool(reg)
 	reg.Register(search)
 
-	out := executeToolSearch(t, search, `{"query":"","max_results":10}`)
+	out := executeToolSearch(t, search, `{"query":"","max_results":20}`)
 
 	got := map[string]struct {
 		category string
@@ -225,6 +226,7 @@ func TestToolSearchReportsRoutingMetadata(t *testing.T) {
 		"user_question_answer": {category: "user_input", surface: "runtime"},
 		"user_question_list":   {category: "user_input", surface: "runtime"},
 		"user_question_wait":   {category: "user_input", surface: "runtime"},
+		"user_question_cancel": {category: "user_input", surface: "runtime"},
 		"schedule_list":        {category: "schedule", surface: "scheduler"},
 		"enter_worktree":       {category: "worktree", surface: "worktree"},
 		"skill":                {category: "skill", surface: "skill"},

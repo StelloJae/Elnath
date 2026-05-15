@@ -11,7 +11,9 @@ type PendingUserQuestion struct {
 	SessionID      string    `json:"session_id,omitempty"`
 	Question       string    `json:"question,omitempty"`
 	QuestionChars  int       `json:"question_chars,omitempty"`
+	Options        []string  `json:"options,omitempty"`
 	OptionCount    int       `json:"option_count,omitempty"`
+	AllowFreeText  bool      `json:"allow_free_text,omitempty"`
 	TimeoutSeconds int       `json:"timeout_seconds,omitempty"`
 	AskedAt        time.Time `json:"asked_at"`
 	Answerable     bool      `json:"answerable"`
@@ -20,6 +22,10 @@ type PendingUserQuestion struct {
 }
 
 func PendingUserQuestions(records []OutcomeRecord, sessionID string, limit int) []PendingUserQuestion {
+	return PendingUserQuestionsAt(records, sessionID, limit, time.Now().UTC())
+}
+
+func PendingUserQuestionsAt(records []OutcomeRecord, sessionID string, limit int, now time.Time) []PendingUserQuestion {
 	sessionID = strings.TrimSpace(sessionID)
 	ordered := append([]OutcomeRecord(nil), records...)
 	sort.SliceStable(ordered, func(i, j int) bool {
@@ -48,12 +54,16 @@ func PendingUserQuestions(records []OutcomeRecord, sessionID string, limit int) 
 					SessionID:      receiptSessionID,
 					Question:       strings.TrimSpace(receipt.Question),
 					QuestionChars:  receipt.QuestionChars,
+					Options:        cleanPendingQuestionOptions(receipt.Options),
 					OptionCount:    receipt.OptionCount,
+					AllowFreeText:  receipt.AllowFreeText,
 					TimeoutSeconds: receipt.TimeoutSeconds,
 					AskedAt:        record.Timestamp,
 				}
 				pending[requestID] = withUserQuestionHandoff(pending[requestID])
 			case receipt.Tool == "user_question_answer" && receipt.Action == "answer":
+				delete(pending, requestID)
+			case receipt.Tool == UserQuestionCancelToolName && receipt.Action == "cancel":
 				delete(pending, requestID)
 			}
 		}
@@ -66,10 +76,40 @@ func PendingUserQuestions(records []OutcomeRecord, sessionID string, limit int) 
 		if !ok {
 			continue
 		}
+		if userQuestionTimedOut(question.AskedAt, question.TimeoutSeconds, now) {
+			continue
+		}
 		out = append(out, question)
 		if limit > 0 && len(out) >= limit {
 			break
 		}
+	}
+	return out
+}
+
+func userQuestionTimedOut(askedAt time.Time, timeoutSeconds int, now time.Time) bool {
+	if timeoutSeconds <= 0 || askedAt.IsZero() {
+		return false
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	return !now.Before(askedAt.Add(time.Duration(timeoutSeconds) * time.Second))
+}
+
+func cleanPendingQuestionOptions(options []string) []string {
+	out := make([]string, 0, len(options))
+	seen := make(map[string]struct{}, len(options))
+	for _, option := range options {
+		option = strings.TrimSpace(option)
+		if option == "" {
+			continue
+		}
+		if _, ok := seen[option]; ok {
+			continue
+		}
+		seen[option] = struct{}{}
+		out = append(out, option)
 	}
 	return out
 }

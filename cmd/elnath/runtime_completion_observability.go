@@ -186,6 +186,7 @@ type completionControlToolReceipt struct {
 	DecisionID              int64    `json:"decision_id,omitempty"`
 	DecisionStatus          string   `json:"decision_status,omitempty"`
 	Status                  string   `json:"status,omitempty"`
+	Reason                  string   `json:"reason,omitempty"`
 	PreviousStatus          string   `json:"previous_status,omitempty"`
 	Terminal                bool     `json:"terminal,omitempty"`
 	TimedOut                bool     `json:"timed_out,omitempty"`
@@ -243,6 +244,7 @@ type completionControlToolReceipt struct {
 	Question                string   `json:"question,omitempty"`
 	QuestionChars           int      `json:"question_chars,omitempty"`
 	AnswerChars             int      `json:"answer_chars,omitempty"`
+	Options                 []string `json:"options,omitempty"`
 	OptionCount             int      `json:"option_count,omitempty"`
 	AllowFreeText           bool     `json:"allow_free_text,omitempty"`
 	TimeoutSeconds          int      `json:"timeout_seconds,omitempty"`
@@ -826,6 +828,7 @@ var completionControlToolReceiptNames = map[string]struct{}{
 	"ask_user_question":        {},
 	"user_question_list":       {},
 	"user_question_wait":       {},
+	"user_question_cancel":     {},
 }
 
 func observedControlToolReceipts(messages []llm.Message) []completionControlToolReceipt {
@@ -877,6 +880,7 @@ func controlToolReceiptFromOutput(toolName, output string) (completionControlToo
 	receipt.FollowupTool = strings.TrimSpace(receipt.FollowupTool)
 	receipt.RequestID = strings.TrimSpace(receipt.RequestID)
 	receipt.Status = strings.TrimSpace(receipt.Status)
+	receipt.Reason = strings.TrimSpace(receipt.Reason)
 	receipt.PreviousStatus = strings.TrimSpace(receipt.PreviousStatus)
 	receipt.SessionID = strings.TrimSpace(receipt.SessionID)
 	receipt.CWD = strings.TrimSpace(receipt.CWD)
@@ -896,10 +900,28 @@ func controlToolReceiptFromOutput(toolName, output string) (completionControlToo
 	receipt.CurrentMode = strings.TrimSpace(receipt.CurrentMode)
 	receipt.Command = strings.TrimSpace(receipt.Command)
 	receipt.Question = strings.TrimSpace(receipt.Question)
+	receipt.Options = normalizeCompletionQuestionOptions(receipt.Options)
 	if receipt.Tool != toolName || receipt.Action == "" {
 		return completionControlToolReceipt{}, false
 	}
 	return receipt, true
+}
+
+func normalizeCompletionQuestionOptions(options []string) []string {
+	out := make([]string, 0, len(options))
+	seen := make(map[string]struct{}, len(options))
+	for _, option := range options {
+		option = strings.TrimSpace(option)
+		if option == "" {
+			continue
+		}
+		if _, ok := seen[option]; ok {
+			continue
+		}
+		seen[option] = struct{}{}
+		out = append(out, option)
+	}
+	return out
 }
 
 func observedConditionalSkillMatches(messages []llm.Message) []completionConditionalSkillMatch {

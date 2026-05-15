@@ -108,6 +108,10 @@ func WithLearningStore(store *learning.Store) ShellOption {
 	return func(s *Shell) { s.learningStore = store }
 }
 
+func WithShellOutcomeStore(store *learning.OutcomeStore) ShellOption {
+	return func(s *Shell) { s.outcomeStore = store }
+}
+
 func WithWikiStore(store *wiki.Store) ShellOption {
 	return func(s *Shell) { s.wikiStore = store }
 }
@@ -130,6 +134,7 @@ type Shell struct {
 	skillReg           *skill.Registry
 	skillCreator       *skill.Creator
 	learningStore      *learning.Store
+	outcomeStore       *learning.OutcomeStore
 	wikiStore          *wiki.Store
 }
 
@@ -418,6 +423,12 @@ func (s *Shell) handleCommand(ctx context.Context, text string, principal identi
 		return s.enqueueFollowUp(ctx, text, principal, userMsgID)
 	case "/submit":
 		return s.enqueueNewTask(ctx, text, principal)
+	case "/questions", "/pending-questions":
+		return s.renderPendingQuestions()
+	case "/answer":
+		return s.answerPendingQuestion(ctx, text, principal)
+	case "/cancel-question":
+		return s.cancelPendingQuestion(ctx, text)
 	case "/skill-list":
 		return s.handleSkillList(), nil
 	case "/skill-create":
@@ -518,6 +529,9 @@ func (s *Shell) handleCommand(ctx context.Context, text string, principal identi
 			"• <code>/override &lt;intent&gt; &lt;workflow&gt;</code> — pin routing\n" +
 			"• <code>/override clear</code> — remove routing pin\n" +
 			"• <code>/undo</code> — cancel last pending task\n" +
+			"• <code>/questions</code> — pending user questions\n" +
+			"• <code>/answer &lt;sid&gt; &lt;rid&gt; &lt;text&gt;</code> — answer pending question\n" +
+			"• <code>/cancel-question &lt;sid&gt; &lt;rid&gt; [reason]</code> — cancel pending question\n" +
 			"• <code>/skill-list</code> — registered skills\n" +
 			"• <code>/skill-create</code> — create draft skill\n" +
 			"• <code>/followup &lt;sid&gt; &lt;msg&gt;</code> — follow-up\n" +
@@ -605,6 +619,178 @@ func (s *Shell) handleSkillCreate(name string) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("Created draft skill /%s. Edit the wiki entry to finish it.", name), nil
+}
+
+func (s *Shell) renderPendingQuestions() (string, error) {
+	if s.outcomeStore == nil {
+		return "Pending questions are unavailable in this shell.", nil
+	}
+	records, err := s.outcomeStore.Recent(0)
+	if err != nil {
+		return "", err
+	}
+	pending := learning.PendingUserQuestions(records, "", 10)
+	if len(pending) == 0 {
+		return "No pending user questions.", nil
+	}
+	lines := []string{"❓ <b>Pending questions</b>"}
+	for _, q := range pending {
+		lines = append(lines, fmt.Sprintf("• <code>%s</code> session=<code>%s</code>", escapeHTML(q.RequestID), escapeHTML(q.SessionID)))
+		if q.Question != "" {
+			lines = append(lines, "  "+escapeHTML(q.Question))
+		}
+		if len(q.Options) > 0 {
+			choices := make([]string, 0, len(q.Options))
+			for _, opt := range q.Options {
+				choices = append(choices, "<code>"+escapeHTML(opt)+"</code>")
+			}
+			lines = append(lines, "  choices: "+strings.Join(choices, ", "))
+		}
+		lines = append(lines, fmt.Sprintf("  answer: <code>/answer %s %s ANSWER_TEXT</code>", escapeHTML(q.SessionID), escapeHTML(q.RequestID)))
+		lines = append(lines, fmt.Sprintf("  cancel: <code>/cancel-question %s %s REASON</code>", escapeHTML(q.SessionID), escapeHTML(q.RequestID)))
+	}
+	return strings.Join(lines, "\n"), nil
+}
+
+func (s *Shell) answerPendingQuestion(ctx context.Context, raw string, principal identity.Principal) (string, error) {
+	if s.outcomeStore == nil {
+		return "Question answers are unavailable in this shell.", nil
+	}
+	parts := strings.SplitN(raw, " ", 4)
+	if len(parts) < 4 || strings.TrimSpace(parts[1]) == "" || strings.TrimSpace(parts[2]) == "" || strings.TrimSpace(parts[3]) == "" {
+		return "", fmt.Errorf("usage: /answer <session_id> <request_id> <answer>")
+	}
+	sessionID := strings.TrimSpace(parts[1])
+	requestID := strings.TrimSpace(parts[2])
+	answer := strings.TrimSpace(parts[3])
+	params := map[string]any{
+		"session_id":      sessionID,
+		"request_id":      requestID,
+		"answer":          answer,
+		"surface":         "telegram",
+		"idempotency_key": identity.KeyFor(principal, "user-question-answer:"+sessionID+":"+requestID+":"+answer),
+	}
+	rawParams, err := json.Marshal(params)
+	if err != nil {
+		return "", err
+	}
+	result, err := daemon.NewUserQuestionAnswerToolWithValidator(s.queue, telegramPendingQuestionValidator{store: s.outcomeStore}).Execute(ctx, rawParams)
+	if err != nil {
+		return "", err
+	}
+	if result == nil {
+		return "", fmt.Errorf("telegram answer: empty tool result")
+	}
+	if result.IsError {
+		return "", fmt.Errorf("%s", result.Output)
+	}
+	var output telegramQuestionAnswerOutput
+	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
+		return "", fmt.Errorf("telegram answer: parse output: %w", err)
+	}
+	if err := s.recordQuestionAnswerOutcome(principal, output); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("✅ Answer queued for <code>%s</code> as task <code>#%d</code> (%d chars).", escapeHTML(requestID), output.TaskID, output.AnswerChars), nil
+}
+
+func (s *Shell) cancelPendingQuestion(ctx context.Context, raw string) (string, error) {
+	if s.outcomeStore == nil {
+		return "Question cancellation is unavailable in this shell.", nil
+	}
+	parts := strings.SplitN(raw, " ", 4)
+	if len(parts) < 3 || strings.TrimSpace(parts[1]) == "" || strings.TrimSpace(parts[2]) == "" {
+		return "", fmt.Errorf("usage: /cancel-question <session_id> <request_id> [reason]")
+	}
+	reason := "telegram operator cancelled question"
+	if len(parts) == 4 && strings.TrimSpace(parts[3]) != "" {
+		reason = strings.TrimSpace(parts[3])
+	}
+	params := map[string]any{
+		"session_id": strings.TrimSpace(parts[1]),
+		"request_id": strings.TrimSpace(parts[2]),
+		"reason":     reason,
+	}
+	rawParams, err := json.Marshal(params)
+	if err != nil {
+		return "", err
+	}
+	result, err := learning.NewUserQuestionCancelTool(s.outcomeStore).Execute(ctx, rawParams)
+	if err != nil {
+		return "", err
+	}
+	if result == nil {
+		return "", fmt.Errorf("telegram cancel-question: empty tool result")
+	}
+	if result.IsError {
+		return "", fmt.Errorf("%s", result.Output)
+	}
+	var output telegramQuestionCancelOutput
+	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
+		return "", fmt.Errorf("telegram cancel-question: parse output: %w", err)
+	}
+	return fmt.Sprintf("✅ Question cancelled: <code>%s</code>.", escapeHTML(output.RequestID)), nil
+}
+
+type telegramPendingQuestionValidator struct {
+	store *learning.OutcomeStore
+}
+
+func (v telegramPendingQuestionValidator) ValidateUserQuestionAnswer(_ context.Context, sessionID, requestID string) (daemon.UserQuestionAnswerValidation, error) {
+	if v.store == nil {
+		return daemon.UserQuestionAnswerValidation{}, fmt.Errorf("outcome store unavailable")
+	}
+	records, err := v.store.Recent(0)
+	if err != nil {
+		return daemon.UserQuestionAnswerValidation{}, err
+	}
+	question, ok := learning.FindPendingUserQuestion(records, sessionID, requestID)
+	if !ok {
+		return daemon.UserQuestionAnswerValidation{}, nil
+	}
+	return daemon.UserQuestionAnswerValidation{
+		Found:         true,
+		Question:      question.Question,
+		QuestionChars: question.QuestionChars,
+		Options:       append([]string(nil), question.Options...),
+		AllowFreeText: question.AllowFreeText,
+	}, nil
+}
+
+type telegramQuestionAnswerOutput struct {
+	TaskID      int64                       `json:"task_id"`
+	Status      string                      `json:"status"`
+	RequestID   string                      `json:"request_id"`
+	SessionID   string                      `json:"session_id"`
+	AnswerChars int                         `json:"answer_chars"`
+	Receipt     learning.ControlToolReceipt `json:"receipt"`
+}
+
+type telegramQuestionCancelOutput struct {
+	Status    string                      `json:"status"`
+	RequestID string                      `json:"request_id"`
+	SessionID string                      `json:"session_id"`
+	Reason    string                      `json:"reason"`
+	Receipt   learning.ControlToolReceipt `json:"receipt"`
+}
+
+func (s *Shell) recordQuestionAnswerOutcome(principal identity.Principal, output telegramQuestionAnswerOutput) error {
+	if s.outcomeStore == nil {
+		return fmt.Errorf("telegram answer: outcome store unavailable")
+	}
+	projectID := strings.TrimSpace(principal.ProjectID)
+	if projectID == "" {
+		projectID = "elnath"
+	}
+	return s.outcomeStore.Append(learning.OutcomeRecord{
+		ProjectID:           projectID,
+		Intent:              "user_input_answer",
+		Workflow:            "telegram_answer",
+		FinishReason:        "stop",
+		Success:             true,
+		SessionID:           output.SessionID,
+		ControlToolReceipts: []learning.ControlToolReceipt{output.Receipt},
+	})
 }
 
 func (s *Shell) renderStatus(ctx context.Context) (string, error) {

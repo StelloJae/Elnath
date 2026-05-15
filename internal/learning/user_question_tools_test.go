@@ -162,6 +162,141 @@ func TestUserQuestionWaitToolReportsPendingOnWaitTimeout(t *testing.T) {
 	}
 }
 
+func TestUserQuestionWaitToolReturnsCanceled(t *testing.T) {
+	store := NewOutcomeStore(filepath.Join(t.TempDir(), "outcomes.jsonl"))
+	if err := store.Append(OutcomeRecord{
+		ProjectID: "elnath",
+		Intent:    "complex_task",
+		Workflow:  "single",
+		Timestamp: time.Date(2026, 5, 13, 7, 0, 0, 0, time.UTC),
+		ControlToolReceipts: []ControlToolReceipt{{
+			Tool:      "ask_user_question",
+			Action:    "request",
+			RequestID: "req-1",
+			SessionID: "sess-1",
+			Question:  "Which branch?",
+		}},
+	}); err != nil {
+		t.Fatalf("Append ask: %v", err)
+	}
+	if err := store.Append(OutcomeRecord{
+		ProjectID: "elnath",
+		Intent:    "user_input_cancel",
+		Workflow:  "task_cancel_question",
+		Timestamp: time.Date(2026, 5, 13, 7, 0, 1, 0, time.UTC),
+		ControlToolReceipts: []ControlToolReceipt{{
+			Tool:      UserQuestionCancelToolName,
+			Action:    "cancel",
+			RequestID: "req-1",
+			SessionID: "sess-1",
+			Status:    "cancelled",
+		}},
+	}); err != nil {
+		t.Fatalf("Append cancel: %v", err)
+	}
+
+	result, err := NewUserQuestionWaitTool(store).Execute(context.Background(), json.RawMessage(`{"session_id":"sess-1","request_id":"req-1","wait_ms":500}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute returned error result: %s", result.Output)
+	}
+	var output userQuestionWaitToolOutput
+	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if output.Status != "cancelled" || output.WaitTimedOut {
+		t.Fatalf("output = %+v, want cancelled without wait timeout", output)
+	}
+	if output.Receipt.Status != "cancelled" || output.Receipt.FollowupTool != UserQuestionListToolName {
+		t.Fatalf("receipt = %+v, want cancelled with list followup", output.Receipt)
+	}
+}
+
+func TestUserQuestionWaitToolReturnsTimedOutQuestion(t *testing.T) {
+	store := NewOutcomeStore(filepath.Join(t.TempDir(), "outcomes.jsonl"))
+	if err := store.Append(OutcomeRecord{
+		ProjectID: "elnath",
+		Intent:    "complex_task",
+		Workflow:  "single",
+		Timestamp: time.Now().Add(-2 * time.Second),
+		ControlToolReceipts: []ControlToolReceipt{{
+			Tool:           "ask_user_question",
+			Action:         "request",
+			RequestID:      "req-1",
+			SessionID:      "sess-1",
+			Question:       "Still needed?",
+			TimeoutSeconds: 1,
+		}},
+	}); err != nil {
+		t.Fatalf("Append ask: %v", err)
+	}
+
+	result, err := NewUserQuestionWaitTool(store).Execute(context.Background(), json.RawMessage(`{"session_id":"sess-1","request_id":"req-1","wait_ms":500}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute returned error result: %s", result.Output)
+	}
+	var output userQuestionWaitToolOutput
+	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if output.Status != "timed_out" || output.WaitTimedOut {
+		t.Fatalf("output = %+v, want request timed_out without wait timeout", output)
+	}
+	if output.Receipt.Status != "timed_out" || output.Receipt.Reason == "" || output.Receipt.FollowupTool != UserQuestionListToolName {
+		t.Fatalf("receipt = %+v, want timed_out with reason and list followup", output.Receipt)
+	}
+}
+
+func TestUserQuestionCancelToolCancelsPendingQuestion(t *testing.T) {
+	store := NewOutcomeStore(filepath.Join(t.TempDir(), "outcomes.jsonl"))
+	if err := store.Append(OutcomeRecord{
+		ProjectID: "elnath",
+		Intent:    "complex_task",
+		Workflow:  "single",
+		Timestamp: time.Date(2026, 5, 13, 7, 0, 0, 0, time.UTC),
+		ControlToolReceipts: []ControlToolReceipt{{
+			Tool:          "ask_user_question",
+			Action:        "request",
+			RequestID:     "req-1",
+			SessionID:     "sess-1",
+			Question:      "Which branch?",
+			QuestionChars: 13,
+		}},
+	}); err != nil {
+		t.Fatalf("Append ask: %v", err)
+	}
+
+	result, err := NewUserQuestionCancelTool(store).Execute(context.Background(), json.RawMessage(`{"session_id":"sess-1","request_id":"req-1","reason":"operator changed direction"}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute returned error result: %s", result.Output)
+	}
+	var output userQuestionCancelToolOutput
+	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if output.Status != "cancelled" || output.RequestID != "req-1" || output.SessionID != "sess-1" || output.QuestionChars != 13 {
+		t.Fatalf("output = %+v, want cancelled req-1", output)
+	}
+	if output.Receipt.Tool != UserQuestionCancelToolName || output.Receipt.Action != "cancel" || output.Receipt.ReadOnly || !output.Receipt.Persistent || output.Receipt.Status != "cancelled" || output.Receipt.Reason != "operator changed direction" {
+		t.Fatalf("receipt = %+v, want persistent cancel receipt", output.Receipt)
+	}
+	records, err := store.Recent(0)
+	if err != nil {
+		t.Fatalf("Recent outcomes: %v", err)
+	}
+	if pending := PendingUserQuestions(records, "sess-1", 10); len(pending) != 0 {
+		t.Fatalf("pending = %+v, want cancel receipt to close req-1", pending)
+	}
+}
+
 func TestUserQuestionWaitToolReturnsNotFound(t *testing.T) {
 	store := NewOutcomeStore(filepath.Join(t.TempDir(), "outcomes.jsonl"))
 	result, err := NewUserQuestionWaitTool(store).Execute(context.Background(), json.RawMessage(`{"session_id":"sess-1","request_id":"req-missing","wait_ms":500}`))

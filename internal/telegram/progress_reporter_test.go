@@ -98,8 +98,8 @@ func TestProgressReporterBatchesTools(t *testing.T) {
 	pr.ReportTool("read_file", "main.go")
 	pr.ReportTool("edit_file", "config.go")
 
-	// Wait for the flush (first event triggers immediate flush since lastFlush is zero).
-	time.Sleep(500 * time.Millisecond)
+	// Wait for the debounce flush so quickly queued tools can batch together.
+	time.Sleep(progressEditInterval + 100*time.Millisecond)
 
 	pr.Finish()
 	pr.Wait()
@@ -133,7 +133,7 @@ func TestProgressReporterDedup(t *testing.T) {
 	pr.ReportTool("bash", "make test")
 	pr.ReportTool("bash", "make test")
 
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(progressEditInterval + 100*time.Millisecond)
 
 	pr.Finish()
 	pr.Wait()
@@ -157,7 +157,7 @@ func TestProgressReporterStage(t *testing.T) {
 
 	pr.ReportStage("code")
 
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(progressEditInterval + 100*time.Millisecond)
 
 	pr.Finish()
 	pr.Wait()
@@ -181,7 +181,7 @@ func TestProgressReporterEditsExisting(t *testing.T) {
 
 	// First tool — triggers initial send.
 	pr.ReportTool("bash", "echo hello")
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(progressEditInterval + 100*time.Millisecond)
 
 	sends := bot.getSends()
 	if len(sends) == 0 {
@@ -192,7 +192,7 @@ func TestProgressReporterEditsExisting(t *testing.T) {
 	// Need to wait past the throttle interval so the edit actually fires.
 	time.Sleep(progressEditInterval)
 	pr.ReportTool("read_file", "readme.md")
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(progressEditInterval + 100*time.Millisecond)
 
 	pr.Finish()
 	pr.Wait()

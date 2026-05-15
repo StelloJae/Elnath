@@ -206,6 +206,7 @@ type ControlToolReceipt struct {
 	DecisionID              int64    `json:"decision_id,omitempty"`
 	DecisionStatus          string   `json:"decision_status,omitempty"`
 	Status                  string   `json:"status,omitempty"`
+	Reason                  string   `json:"reason,omitempty"`
 	PreviousStatus          string   `json:"previous_status,omitempty"`
 	Terminal                bool     `json:"terminal,omitempty"`
 	TimedOut                bool     `json:"timed_out,omitempty"`
@@ -263,6 +264,7 @@ type ControlToolReceipt struct {
 	Question                string   `json:"question,omitempty"`
 	QuestionChars           int      `json:"question_chars,omitempty"`
 	AnswerChars             int      `json:"answer_chars,omitempty"`
+	Options                 []string `json:"options,omitempty"`
 	OptionCount             int      `json:"option_count,omitempty"`
 	AllowFreeText           bool     `json:"allow_free_text,omitempty"`
 	TimeoutSeconds          int      `json:"timeout_seconds,omitempty"`

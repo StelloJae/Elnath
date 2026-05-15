@@ -350,6 +350,7 @@ func cmdDaemonStart(ctx context.Context) error {
 			telegram.WithTaskTracker(tgSink),
 			telegram.WithWorkDir(workDir),
 			telegram.WithLearningStore(rt.learningStore),
+			telegram.WithShellOutcomeStore(rt.outcomeStore),
 			telegram.WithWikiStore(rt.wikiStore),
 		)
 		if shellErr != nil {

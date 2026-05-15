@@ -257,6 +257,8 @@ func (v pendingUserQuestionValidator) ValidateUserQuestionAnswer(_ context.Conte
 		Found:         true,
 		Question:      question.Question,
 		QuestionChars: question.QuestionChars,
+		Options:       append([]string(nil), question.Options...),
+		AllowFreeText: question.AllowFreeText,
 	}, nil
 }
 
@@ -499,6 +501,7 @@ func buildExecutionRuntime(
 	reg.Register(agent.NewAskUserQuestionTool())
 	reg.Register(learning.NewUserQuestionListTool(outcomeStore))
 	reg.Register(learning.NewUserQuestionWaitTool(outcomeStore))
+	reg.Register(learning.NewUserQuestionCancelTool(outcomeStore))
 	taskQueue, err := daemon.NewQueueNoRecover(db.Main)
 	if err != nil {
 		return nil, fmt.Errorf("open task queue tools: %w", err)
@@ -1671,6 +1674,7 @@ func completionControlToolReceiptsToLearning(src []completionControlToolReceipt)
 			DecisionID:              receipt.DecisionID,
 			DecisionStatus:          receipt.DecisionStatus,
 			Status:                  receipt.Status,
+			Reason:                  receipt.Reason,
 			PreviousStatus:          receipt.PreviousStatus,
 			Terminal:                receipt.Terminal,
 			TimedOut:                receipt.TimedOut,
@@ -1728,6 +1732,7 @@ func completionControlToolReceiptsToLearning(src []completionControlToolReceipt)
 			Question:                receipt.Question,
 			QuestionChars:           receipt.QuestionChars,
 			AnswerChars:             receipt.AnswerChars,
+			Options:                 append([]string(nil), receipt.Options...),
 			OptionCount:             receipt.OptionCount,
 			AllowFreeText:           receipt.AllowFreeText,
 			TimeoutSeconds:          receipt.TimeoutSeconds,

@@ -11,6 +11,7 @@ import (
 	"github.com/stello/elnath/internal/config"
 	"github.com/stello/elnath/internal/core"
 	"github.com/stello/elnath/internal/daemon"
+	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/skill"
 	"github.com/stello/elnath/internal/telegram"
 	"github.com/stello/elnath/internal/wiki"
@@ -99,6 +100,7 @@ func cmdTelegramShell(ctx context.Context) error {
 		telegram.WithWorkDir(cwd),
 		telegram.WithChatSessionBinder(binder),
 		telegram.WithSkillCreator(skillCreator),
+		telegram.WithShellOutcomeStore(learning.NewOutcomeStore(filepath.Join(cfg.DataDir, "outcomes.jsonl"))),
 	)
 	if err != nil {
 		return err

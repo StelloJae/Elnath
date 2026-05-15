@@ -67,6 +67,24 @@ func TestExecutionRuntimeRegistersAskUserQuestionTool(t *testing.T) {
 	}
 }
 
+func TestExecutionRuntimeRegistersUserQuestionCancelTool(t *testing.T) {
+	rt := newTestExecutionRuntime(t, &countingProvider{})
+
+	tool, ok := rt.reg.Get("user_question_cancel")
+	if !ok {
+		t.Fatal("user_question_cancel tool missing")
+	}
+	if tool.IsConcurrencySafe(nil) || tool.Reversible() {
+		t.Fatal("user_question_cancel should be mutating and non-reversible")
+	}
+	if got := tool.Scope(nil); !got.Persistent || got.Network || len(got.ReadPaths) != 0 || len(got.WritePaths) != 0 {
+		t.Fatalf("user_question_cancel Scope() = %+v, want persistent-only scope", got)
+	}
+	if !tools.ShouldDeferToolSchema(tool) {
+		t.Fatal("user_question_cancel should defer initial schema")
+	}
+}
+
 func TestExecutionRuntimeRegistersProcessTools(t *testing.T) {
 	rt := newTestExecutionRuntime(t, &countingProvider{})
 
