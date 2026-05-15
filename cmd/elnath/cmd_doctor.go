@@ -22,10 +22,11 @@ const (
 )
 
 type doctorCheck struct {
-	Name    string       `json:"name"`
-	Status  doctorStatus `json:"status"`
-	Summary string       `json:"summary"`
-	Detail  string       `json:"detail,omitempty"`
+	Name        string       `json:"name"`
+	Status      doctorStatus `json:"status"`
+	Summary     string       `json:"summary"`
+	Detail      string       `json:"detail,omitempty"`
+	Remediation []string     `json:"remediation,omitempty"`
 }
 
 type doctorReport struct {
@@ -92,11 +93,13 @@ func buildDoctorReport() doctorReport {
 			Summary: "Config loaded and validated.",
 			Detail:  cfgPath,
 		},
+		configFilePermissionsDoctorCheck(cfgPath, cfg),
 		pathDoctorCheck("data_dir", cfg.DataDir),
 		pathDoctorCheck("wiki_dir", cfg.WikiDir),
 		providerDoctorCheck(cfg),
 		providerProxyDoctorCheck(cfg),
 		timeoutDoctorCheck(cfg),
+		telegramIntegrationDoctorCheck(cfg.Telegram),
 		daemonSocketDoctorCheck(cfg.Daemon.SocketPath),
 		databaseFilesDoctorCheck(cfg.DataDir),
 	}
@@ -129,7 +132,68 @@ func printDoctorReport(report doctorReport) {
 		if check.Detail != "" {
 			fmt.Fprintf(os.Stdout, "        %s\n", check.Detail)
 		}
+		for _, remediation := range check.Remediation {
+			fmt.Fprintf(os.Stdout, "        fix: %s\n", remediation)
+		}
 	}
+}
+
+func configFilePermissionsDoctorCheck(path string, cfg *config.Config) doctorCheck {
+	if strings.TrimSpace(path) == "" {
+		return doctorCheck{
+			Name:    "config_file_permissions",
+			Status:  doctorStatusWarn,
+			Summary: "Config path is not known; file permissions could not be checked.",
+		}
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return doctorCheck{
+			Name:    "config_file_permissions",
+			Status:  doctorStatusWarn,
+			Summary: "Config file permissions could not be checked.",
+			Detail:  err.Error(),
+		}
+	}
+	if !configContainsSecrets(cfg) {
+		return doctorCheck{
+			Name:    "config_file_permissions",
+			Status:  doctorStatusPass,
+			Summary: "Config file contains no configured secrets.",
+			Detail:  path,
+		}
+	}
+	mode := info.Mode().Perm()
+	if mode&0o077 != 0 {
+		return doctorCheck{
+			Name:    "config_file_permissions",
+			Status:  doctorStatusWarn,
+			Summary: "Config file contains secrets and is readable beyond the owner.",
+			Detail:  fmt.Sprintf("%s mode=%#o", path, mode),
+			Remediation: []string{
+				"run chmod 600 " + path,
+				"prefer environment variables or a private config file for API keys",
+			},
+		}
+	}
+	return doctorCheck{
+		Name:    "config_file_permissions",
+		Status:  doctorStatusPass,
+		Summary: "Secret-bearing config file is owner-only.",
+		Detail:  fmt.Sprintf("%s mode=%#o", path, mode),
+	}
+}
+
+func configContainsSecrets(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	return strings.TrimSpace(cfg.Anthropic.APIKey) != "" ||
+		strings.TrimSpace(cfg.OpenAI.APIKey) != "" ||
+		strings.TrimSpace(cfg.OpenAIResponses.APIKey) != "" ||
+		strings.TrimSpace(cfg.Ollama.APIKey) != "" ||
+		strings.TrimSpace(cfg.Telegram.BotToken) != "" ||
+		strings.TrimSpace(cfg.LLMExtraction.APIKey) != ""
 }
 
 func pathDoctorCheck(name string, path string) doctorCheck {
@@ -267,6 +331,41 @@ func timeoutDoctorCheck(cfg *config.Config) doctorCheck {
 			cfg.Daemon.WallClockTimeout,
 			cfg.SelfHealing.TimeoutSeconds,
 		),
+	}
+}
+
+func telegramIntegrationDoctorCheck(cfg config.TelegramConfig) doctorCheck {
+	if !cfg.Enabled {
+		return doctorCheck{
+			Name:    "telegram_integration",
+			Status:  doctorStatusPass,
+			Summary: "Telegram integration is disabled.",
+		}
+	}
+	var missing []string
+	if strings.TrimSpace(cfg.BotToken) == "" {
+		missing = append(missing, "telegram.bot_token")
+	}
+	if strings.TrimSpace(cfg.ChatID) == "" {
+		missing = append(missing, "telegram.chat_id")
+	}
+	if len(missing) > 0 {
+		return doctorCheck{
+			Name:    "telegram_integration",
+			Status:  doctorStatusWarn,
+			Summary: "Telegram integration is enabled but incomplete.",
+			Detail:  strings.Join(missing, ", "),
+			Remediation: []string{
+				"set the missing Telegram fields or disable telegram.enabled",
+				"keep bot tokens in environment/private config; doctor output does not print token values",
+			},
+		}
+	}
+	return doctorCheck{
+		Name:    "telegram_integration",
+		Status:  doctorStatusPass,
+		Summary: "Telegram integration is configured.",
+		Detail:  "chat_id configured",
 	}
 }
 

@@ -80,6 +80,111 @@ func TestCmdDoctorJSONReportsLocalReadiness(t *testing.T) {
 	}
 }
 
+func TestCmdDoctorWarnsOnWorldReadableSecretConfig(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	cfgData := "data_dir: " + filepath.Join(dir, "data") + "\n" +
+		"wiki_dir: " + filepath.Join(dir, "wiki") + "\n" +
+		"provider: openai_responses\n" +
+		"openai_responses:\n" +
+		"  api_key: test-key\n" +
+		"  model: gpt-5.5\n" +
+		"  timeout_seconds: 45\n"
+	if err := os.WriteFile(cfgPath, []byte(cfgData), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	withArgs(t, []string{"elnath", "--config", cfgPath})
+	resetLoadLocaleCache()
+
+	stdout, stderr := captureOutput(t, func() {
+		if err := executeCommand(context.Background(), "doctor", []string{"--json"}); err != nil {
+			t.Fatalf("executeCommand(doctor --json): %v", err)
+		}
+	})
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+	checks := decodeDoctorChecks(t, stdout)
+	check := checks["config_file_permissions"]
+	if check.Status != doctorStatusWarn {
+		t.Fatalf("config_file_permissions = %+v, want warn", check)
+	}
+	if len(check.Remediation) == 0 || !strings.Contains(strings.Join(check.Remediation, " "), "chmod 600") {
+		t.Fatalf("remediation = %+v, want chmod guidance", check.Remediation)
+	}
+	if strings.Contains(stdout, "test-key") {
+		t.Fatalf("stdout leaked credential: %q", stdout)
+	}
+}
+
+func TestCmdDoctorPassesPrivateSecretConfig(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	cfgData := "data_dir: " + filepath.Join(dir, "data") + "\n" +
+		"wiki_dir: " + filepath.Join(dir, "wiki") + "\n" +
+		"provider: openai_responses\n" +
+		"openai_responses:\n" +
+		"  api_key: test-key\n" +
+		"  model: gpt-5.5\n" +
+		"  timeout_seconds: 45\n"
+	if err := os.WriteFile(cfgPath, []byte(cfgData), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	withArgs(t, []string{"elnath", "--config", cfgPath})
+	resetLoadLocaleCache()
+
+	stdout, stderr := captureOutput(t, func() {
+		if err := executeCommand(context.Background(), "doctor", []string{"--json"}); err != nil {
+			t.Fatalf("executeCommand(doctor --json): %v", err)
+		}
+	})
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+	checks := decodeDoctorChecks(t, stdout)
+	if checks["config_file_permissions"].Status != doctorStatusPass {
+		t.Fatalf("config_file_permissions = %+v, want pass", checks["config_file_permissions"])
+	}
+}
+
+func TestCmdDoctorReportsEnabledTelegramConfigured(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	cfgData := "data_dir: " + filepath.Join(dir, "data") + "\n" +
+		"wiki_dir: " + filepath.Join(dir, "wiki") + "\n" +
+		"provider: openai_responses\n" +
+		"openai_responses:\n" +
+		"  api_key: test-key\n" +
+		"  model: gpt-5.5\n" +
+		"  timeout_seconds: 45\n" +
+		"telegram:\n" +
+		"  enabled: true\n" +
+		"  bot_token: telegram-secret\n" +
+		"  chat_id: '12345'\n"
+	if err := os.WriteFile(cfgPath, []byte(cfgData), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	withArgs(t, []string{"elnath", "--config", cfgPath})
+	resetLoadLocaleCache()
+
+	stdout, stderr := captureOutput(t, func() {
+		if err := executeCommand(context.Background(), "doctor", []string{"--json"}); err != nil {
+			t.Fatalf("executeCommand(doctor --json): %v", err)
+		}
+	})
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+	checks := decodeDoctorChecks(t, stdout)
+	check := checks["telegram_integration"]
+	if check.Status != doctorStatusPass {
+		t.Fatalf("telegram_integration = %+v, want pass", check)
+	}
+	if strings.Contains(stdout, "telegram-secret") {
+		t.Fatalf("stdout leaked telegram token: %q", stdout)
+	}
+}
+
 func TestCmdDoctorReturnsErrorOnInvalidConfig(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.yaml")
@@ -125,4 +230,17 @@ func TestCmdDoctorUsage(t *testing.T) {
 	if !strings.Contains(stdout, "Usage: elnath doctor") {
 		t.Fatalf("stdout = %q, want doctor usage", stdout)
 	}
+}
+
+func decodeDoctorChecks(t *testing.T, stdout string) map[string]doctorCheck {
+	t.Helper()
+	var report doctorReport
+	if err := json.Unmarshal([]byte(stdout), &report); err != nil {
+		t.Fatalf("stdout is not doctor JSON: %v\n%s", err, stdout)
+	}
+	checks := map[string]doctorCheck{}
+	for _, check := range report.Checks {
+		checks[check.Name] = check
+	}
+	return checks
 }
