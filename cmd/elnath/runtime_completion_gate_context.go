@@ -55,6 +55,7 @@ func (rt *executionRuntime) CompletionContext(_ context.Context, _ daemon.Task, 
 		ShellCommandReceipts:     completionShellCommandReceiptsToAgentic(summary.ShellCommandReceipts),
 		ToolSearchReceipts:       completionToolSearchReceiptsToAgentic(summary.ToolSearchReceipts),
 		ControlToolReceipts:      completionControlToolReceiptsToAgentic(summary.ControlToolReceipts),
+		DiagnosticDeltaReceipts:  completionDiagnosticDeltaReceiptsToAgentic(summary.DiagnosticDeltaReceipts),
 		ConditionalSkillMatches:  completionSkillMatchesToAgentic(summary.ConditionalSkillMatches),
 		CorrectionAttempted:      summary.CorrectionAttempted,
 		CorrectionAttempts:       summary.CorrectionAttempts,
@@ -225,6 +226,34 @@ func completionToolSearchReceiptsToAgentic(src []completionToolSearchReceipt) []
 			MaxResults:         receipt.MaxResults,
 			AllowNamesCount:    receipt.AllowNamesCount,
 			Query:              receipt.Query,
+		})
+	}
+	return out
+}
+
+func completionDiagnosticDeltaReceiptsToAgentic(src []completionDiagnosticDeltaReceipt) []agenticcompletion.DiagnosticDeltaReceipt {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]agenticcompletion.DiagnosticDeltaReceipt, 0, len(src))
+	for _, receipt := range src {
+		out = append(out, agenticcompletion.DiagnosticDeltaReceipt{
+			Tool:                    receipt.Tool,
+			Action:                  receipt.Action,
+			ReadOnly:                receipt.ReadOnly,
+			ExecutionPolicy:         receipt.ExecutionPolicy,
+			Operation:               receipt.Operation,
+			Status:                  receipt.Status,
+			Language:                receipt.Language,
+			FilePath:                receipt.FilePath,
+			Path:                    receipt.Path,
+			Query:                   receipt.Query,
+			Count:                   receipt.Count,
+			Truncated:               receipt.Truncated,
+			ErrorCount:              receipt.ErrorCount,
+			NewDiagnosticCount:      receipt.NewDiagnosticCount,
+			ExistingDiagnosticCount: receipt.ExistingDiagnosticCount,
+			ResolvedDiagnosticCount: receipt.ResolvedDiagnosticCount,
 		})
 	}
 	return out

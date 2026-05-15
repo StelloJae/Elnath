@@ -51,6 +51,7 @@ type CompletionContext struct {
 	ShellCommandReceipts     []ShellCommandReceipt
 	ToolSearchReceipts       []ToolSearchReceipt
 	ControlToolReceipts      []ControlToolReceipt
+	DiagnosticDeltaReceipts  []DiagnosticDeltaReceipt
 	ConditionalSkillMatches  []ConditionalSkillMatch
 	CorrectionAttempted      bool
 	CorrectionAttempts       int
@@ -178,6 +179,25 @@ type ToolSearchReceipt struct {
 	MaxResults         int    `json:"max_results"`
 	AllowNamesCount    int    `json:"allow_names_count"`
 	Query              string `json:"query"`
+}
+
+type DiagnosticDeltaReceipt struct {
+	Tool                    string `json:"tool"`
+	Action                  string `json:"action"`
+	ReadOnly                bool   `json:"read_only"`
+	ExecutionPolicy         string `json:"execution_policy,omitempty"`
+	Operation               string `json:"operation"`
+	Status                  string `json:"status"`
+	Language                string `json:"language,omitempty"`
+	FilePath                string `json:"file_path,omitempty"`
+	Path                    string `json:"path,omitempty"`
+	Query                   string `json:"query,omitempty"`
+	Count                   int    `json:"count"`
+	Truncated               bool   `json:"truncated,omitempty"`
+	ErrorCount              int    `json:"error_count"`
+	NewDiagnosticCount      int    `json:"new_diagnostic_count,omitempty"`
+	ExistingDiagnosticCount int    `json:"existing_diagnostic_count,omitempty"`
+	ResolvedDiagnosticCount int    `json:"resolved_diagnostic_count,omitempty"`
 }
 
 type ControlToolReceipt struct {
@@ -500,6 +520,9 @@ func encodeReceiptSummary(summary map[string]int, completionContext CompletionCo
 	}
 	if len(completionContext.ControlToolReceipts) > 0 {
 		payload["control_tool_receipts"] = completionContext.ControlToolReceipts
+	}
+	if len(completionContext.DiagnosticDeltaReceipts) > 0 {
+		payload["diagnostic_delta_receipts"] = completionContext.DiagnosticDeltaReceipts
 	}
 	if len(completionContext.ConditionalSkillMatches) > 0 {
 		payload["conditional_skill_matches"] = completionContext.ConditionalSkillMatches

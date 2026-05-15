@@ -55,6 +55,7 @@ type OutcomeRecord struct {
 	ShellCommandReceipts     []ShellCommandReceipt      `json:"shell_command_receipts,omitempty"`
 	ToolSearchReceipts       []ToolSearchReceipt        `json:"tool_search_receipts,omitempty"`
 	ControlToolReceipts      []ControlToolReceipt       `json:"control_tool_receipts,omitempty"`
+	DiagnosticDeltaReceipts  []DiagnosticDeltaReceipt   `json:"diagnostic_delta_receipts,omitempty"`
 	ConditionalSkillMatches  []ConditionalSkillMatch    `json:"conditional_skill_matches,omitempty"`
 	CorrectionAttempted      bool                       `json:"correction_attempted,omitempty"`
 	CorrectionAttempts       int                        `json:"correction_attempts,omitempty"`
@@ -182,6 +183,25 @@ type ToolSearchReceipt struct {
 	MaxResults         int    `json:"max_results"`
 	AllowNamesCount    int    `json:"allow_names_count"`
 	Query              string `json:"query"`
+}
+
+type DiagnosticDeltaReceipt struct {
+	Tool                    string `json:"tool"`
+	Action                  string `json:"action"`
+	ReadOnly                bool   `json:"read_only"`
+	ExecutionPolicy         string `json:"execution_policy,omitempty"`
+	Operation               string `json:"operation"`
+	Status                  string `json:"status"`
+	Language                string `json:"language,omitempty"`
+	FilePath                string `json:"file_path,omitempty"`
+	Path                    string `json:"path,omitempty"`
+	Query                   string `json:"query,omitempty"`
+	Count                   int    `json:"count"`
+	Truncated               bool   `json:"truncated,omitempty"`
+	ErrorCount              int    `json:"error_count"`
+	NewDiagnosticCount      int    `json:"new_diagnostic_count,omitempty"`
+	ExistingDiagnosticCount int    `json:"existing_diagnostic_count,omitempty"`
+	ResolvedDiagnosticCount int    `json:"resolved_diagnostic_count,omitempty"`
 }
 
 type ControlToolReceipt struct {

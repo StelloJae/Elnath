@@ -36,6 +36,7 @@ type completionContractSummary struct {
 	ShellCommandReceipts     []completionShellCommandReceipt
 	ToolSearchReceipts       []completionToolSearchReceipt
 	ControlToolReceipts      []completionControlToolReceipt
+	DiagnosticDeltaReceipts  []completionDiagnosticDeltaReceipt
 	CorrectionAttempted      bool
 	CorrectionAttempts       int
 	CorrectionMaxAttempts    int
@@ -162,6 +163,25 @@ type completionToolSearchReceipt struct {
 	MaxResults         int    `json:"max_results"`
 	AllowNamesCount    int    `json:"allow_names_count"`
 	Query              string `json:"query"`
+}
+
+type completionDiagnosticDeltaReceipt struct {
+	Tool                    string `json:"tool"`
+	Action                  string `json:"action"`
+	ReadOnly                bool   `json:"read_only"`
+	ExecutionPolicy         string `json:"execution_policy,omitempty"`
+	Operation               string `json:"operation"`
+	Status                  string `json:"status"`
+	Language                string `json:"language,omitempty"`
+	FilePath                string `json:"file_path,omitempty"`
+	Path                    string `json:"path,omitempty"`
+	Query                   string `json:"query,omitempty"`
+	Count                   int    `json:"count"`
+	Truncated               bool   `json:"truncated,omitempty"`
+	ErrorCount              int    `json:"error_count"`
+	NewDiagnosticCount      int    `json:"new_diagnostic_count,omitempty"`
+	ExistingDiagnosticCount int    `json:"existing_diagnostic_count,omitempty"`
+	ResolvedDiagnosticCount int    `json:"resolved_diagnostic_count,omitempty"`
 }
 
 type completionControlToolReceipt struct {
@@ -305,6 +325,7 @@ func summarizeCompletionContract(routeCtx *orchestrator.RoutingContext, cfg orch
 	summary.ShellCommandReceipts = observedShellCommandReceipts(result.Messages)
 	summary.ToolSearchReceipts = observedToolSearchReceipts(result.Messages)
 	summary.ControlToolReceipts = observedControlToolReceipts(result.Messages)
+	summary.DiagnosticDeltaReceipts = observedDiagnosticDeltaReceipts(result.Messages)
 	summary.UserInputRequired = controlToolReceiptsContain(summary.ControlToolReceipts, "ask_user_question", "request")
 
 	verificationCommand, verificationFailed := observedVerificationCommandStatus(result.Messages)
@@ -344,6 +365,9 @@ func summarizeCompletionContract(routeCtx *orchestrator.RoutingContext, cfg orch
 	}
 	if summary.CompletionWarning == "" && editIntent && strings.EqualFold(strings.TrimSpace(result.FinishReason), "budget_exceeded") {
 		summary.CompletionWarning = "budget_exceeded_after_edit_intent"
+	}
+	if summary.CompletionWarning == "" && diagnosticDeltaReceiptsContainNewDiagnostics(summary.DiagnosticDeltaReceipts) {
+		summary.CompletionWarning = "new_diagnostics_found"
 	}
 	if len(summary.OutOfScopeChangedFiles) > 0 {
 		summary.CompletionWarning = "scope_drift"
@@ -524,6 +548,79 @@ func toolSearchReceiptFromOutput(output string) (completionToolSearchReceipt, bo
 		return completionToolSearchReceipt{}, false
 	}
 	return parsed.Receipt, true
+}
+
+func observedDiagnosticDeltaReceipts(messages []llm.Message) []completionDiagnosticDeltaReceipt {
+	toolNamesByID := make(map[string]string)
+	var receipts []completionDiagnosticDeltaReceipt
+	for _, msg := range messages {
+		for _, block := range msg.Content {
+			switch b := block.(type) {
+			case llm.ToolUseBlock:
+				if b.ID != "" {
+					toolNamesByID[b.ID] = b.Name
+				}
+			case llm.ToolResultBlock:
+				if b.IsError || toolNamesByID[b.ToolUseID] != "code_symbols" {
+					continue
+				}
+				receipt, ok := diagnosticDeltaReceiptFromOutput(b.Content)
+				if ok {
+					receipts = append(receipts, receipt)
+				}
+			}
+		}
+	}
+	if len(receipts) == 0 {
+		return nil
+	}
+	return receipts
+}
+
+func diagnosticDeltaReceiptFromOutput(output string) (completionDiagnosticDeltaReceipt, bool) {
+	var parsed struct {
+		Operation string                           `json:"operation"`
+		Status    string                           `json:"status"`
+		Receipt   completionDiagnosticDeltaReceipt `json:"receipt"`
+	}
+	if err := json.Unmarshal([]byte(output), &parsed); err != nil {
+		return completionDiagnosticDeltaReceipt{}, false
+	}
+	receipt := parsed.Receipt
+	receipt.Tool = strings.TrimSpace(receipt.Tool)
+	receipt.Action = strings.TrimSpace(receipt.Action)
+	receipt.ExecutionPolicy = strings.TrimSpace(receipt.ExecutionPolicy)
+	receipt.Operation = strings.TrimSpace(receipt.Operation)
+	receipt.Status = strings.TrimSpace(receipt.Status)
+	receipt.Language = strings.TrimSpace(receipt.Language)
+	receipt.FilePath = strings.TrimSpace(receipt.FilePath)
+	receipt.Path = strings.TrimSpace(receipt.Path)
+	receipt.Query = strings.TrimSpace(receipt.Query)
+	if receipt.Tool == "" {
+		receipt.Tool = "code_symbols"
+	}
+	if receipt.Action == "" {
+		receipt.Action = strings.TrimSpace(parsed.Operation)
+	}
+	if receipt.Operation == "" {
+		receipt.Operation = strings.TrimSpace(parsed.Operation)
+	}
+	if receipt.Status == "" {
+		receipt.Status = strings.TrimSpace(parsed.Status)
+	}
+	if receipt.Tool != "code_symbols" || receipt.Operation != "diagnostics_delta" {
+		return completionDiagnosticDeltaReceipt{}, false
+	}
+	return receipt, true
+}
+
+func diagnosticDeltaReceiptsContainNewDiagnostics(receipts []completionDiagnosticDeltaReceipt) bool {
+	for _, receipt := range receipts {
+		if receipt.Status == "new_diagnostics_found" || receipt.NewDiagnosticCount > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func observedCommandCatalogReceipts(messages []llm.Message) []completionCommandCatalogReceipt {
@@ -1014,6 +1111,9 @@ func completionRetryPlan(summary completionContractSummary) (string, string) {
 		return completionRetryDecisionRetrySmallerScope, summary.CompletionWarning
 	}
 	if summary.CompletionWarning == "budget_exceeded_after_edit_intent" {
+		return completionRetryDecisionRetrySmallerScope, summary.CompletionWarning
+	}
+	if summary.CompletionWarning == "new_diagnostics_found" {
 		return completionRetryDecisionRetrySmallerScope, summary.CompletionWarning
 	}
 	if summary.VerificationObserved != nil && !*summary.VerificationObserved {
