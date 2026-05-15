@@ -316,6 +316,8 @@ func completionRetryReasonGuidance(summary completionContractSummary) string {
 		return "- Previous attempt intended to edit but left no accepted mutation.\n- Do not spend the whole retry re-reading broad context.\n- Make the smallest concrete file edit that satisfies the task before the final answer.\n- If editing is impossible, state the exact blocker instead of claiming completion."
 	case "budget_exceeded_after_edit_intent":
 		return "- Previous attempt reached budget after edit intent.\n- Resume from the already identified seam; do not restart broad investigation.\n- Complete the smallest concrete patch and run the configured verification before claiming completion."
+	case "new_diagnostics_found":
+		return "- Previous attempt introduced new code diagnostics.\n- Inspect the diagnostic delta, patch only the introduced issue, and avoid unrelated rewrites.\n- Rerun the focused diagnostic or verification before claiming completion."
 	case "verification_command_failed":
 		return "- Previous verification failed.\n- Inspect the failure, patch only the smallest root cause, and rerun the same verification command."
 	case "unsupported_verification_success_claim":

@@ -301,6 +301,19 @@ func TestOutcomeRecordCompletionObservabilityJSONCompatibility(t *testing.T) {
 	}}
 	rec.RetryDecision = "retry_smaller_scope"
 	rec.RetryReason = "final_response_reports_incomplete"
+	rec.DiagnosticDeltaReceipts = []DiagnosticDeltaReceipt{{
+		Tool:               "code_symbols",
+		Action:             "diagnostics_delta",
+		ReadOnly:           true,
+		ExecutionPolicy:    "code_symbols_observation",
+		Operation:          "diagnostics_delta",
+		Status:             "new_diagnostics_found",
+		Language:           "go",
+		FilePath:           "internal/parser/parser.go",
+		Count:              1,
+		ErrorCount:         1,
+		NewDiagnosticCount: 1,
+	}}
 
 	encoded, err := json.Marshal(rec)
 	if err != nil {
@@ -329,6 +342,8 @@ func TestOutcomeRecordCompletionObservabilityJSONCompatibility(t *testing.T) {
 		`"followup_tool":"skill"`,
 		`"tool_search_receipts":[{"tool":"tool_search","action":"search"`,
 		`"control_tool_receipts":[{"tool":"task_create","action":"create"`,
+		`"diagnostic_delta_receipts":[{"tool":"code_symbols","action":"diagnostics_delta"`,
+		`"new_diagnostic_count":1`,
 		`"followup_tool":"task_monitor"`,
 		`"tool":"agentic_delegate_enqueue","action":"enqueue"`,
 		`"followup_tool":"agentic_delegate_status"`,

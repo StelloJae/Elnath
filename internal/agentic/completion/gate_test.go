@@ -306,6 +306,19 @@ func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testi
 					AllowFreeText:   false,
 					TimeoutSeconds:  120,
 				}},
+				DiagnosticDeltaReceipts: []DiagnosticDeltaReceipt{{
+					Tool:               "code_symbols",
+					Action:             "diagnostics_delta",
+					ReadOnly:           true,
+					ExecutionPolicy:    "code_symbols_observation",
+					Operation:          "diagnostics_delta",
+					Status:             "new_diagnostics_found",
+					Language:           "go",
+					FilePath:           "internal/parser/parser.go",
+					Count:              1,
+					ErrorCount:         1,
+					NewDiagnosticCount: 1,
+				}},
 				CorrectionAttempts:    1,
 				CorrectionMaxAttempts: 1,
 				CorrectionAttemptDetails: []CorrectionAttemptReceipt{{
@@ -414,6 +427,14 @@ func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testi
 	askReceipt, ok := controlToolReceipts[3].(map[string]any)
 	if !ok || askReceipt["tool"] != "ask_user_question" || askReceipt["question_chars"] != float64(13) || askReceipt["option_count"] != float64(2) || askReceipt["timeout_seconds"] != float64(120) {
 		t.Fatalf("ask_user_question control receipt missing fields: receipt=%v summary=%v", controlToolReceipts[3], summary)
+	}
+	diagnosticDeltaReceipts, ok := summary["diagnostic_delta_receipts"].([]any)
+	if !ok || len(diagnosticDeltaReceipts) != 1 {
+		t.Fatalf("diagnostic_delta_receipts missing: summary=%v", summary)
+	}
+	diagnosticDeltaReceipt, ok := diagnosticDeltaReceipts[0].(map[string]any)
+	if !ok || diagnosticDeltaReceipt["tool"] != "code_symbols" || diagnosticDeltaReceipt["operation"] != "diagnostics_delta" || diagnosticDeltaReceipt["new_diagnostic_count"] != float64(1) {
+		t.Fatalf("diagnostic_delta_receipt missing fields: receipt=%v summary=%v", diagnosticDeltaReceipts[0], summary)
 	}
 	if summary["correction_attempts"] != float64(1) || summary["correction_max_attempts"] != float64(1) {
 		t.Fatalf("correction budget fields missing: summary=%v", summary)
