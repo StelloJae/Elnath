@@ -70,6 +70,37 @@ func (s *Store) GetStandingGoal(ctx context.Context, id int64) (*StandingGoal, e
 	return &goal, nil
 }
 
+func (s *Store) ListStandingGoals(ctx context.Context, limit int) ([]StandingGoal, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, title, description, status, priority, autonomy_level, risk_budget, created_at, updated_at
+		FROM standing_goals
+		ORDER BY updated_at DESC, id DESC
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []StandingGoal
+	for rows.Next() {
+		var goal StandingGoal
+		var createdAt, updatedAt int64
+		if err := rows.Scan(&goal.ID, &goal.Title, &goal.Description, &goal.Status, &goal.Priority, &goal.AutonomyLevel, &goal.RiskBudget, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+		goal.CreatedAt = millisTime(createdAt)
+		goal.UpdatedAt = millisTime(updatedAt)
+		out = append(out, goal)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (s *Store) CreateSignalWatcher(ctx context.Context, watcher SignalWatcher) (*SignalWatcher, error) {
 	now := nowTime()
 	if watcher.CreatedAt.IsZero() {

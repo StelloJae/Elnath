@@ -166,6 +166,29 @@ type agenticGoalInfo struct {
 	Priority int    `json:"priority"`
 }
 
+type agenticGoalDetailInfo struct {
+	ID            int64  `json:"id"`
+	Title         string `json:"title"`
+	Description   string `json:"description,omitempty"`
+	Status        string `json:"status"`
+	Priority      int    `json:"priority"`
+	AutonomyLevel string `json:"autonomy_level"`
+	RiskBudget    string `json:"risk_budget,omitempty"`
+	CreatedAt     string `json:"created_at"`
+	UpdatedAt     string `json:"updated_at"`
+}
+
+type agenticGoalsView struct {
+	AutonomyEnabled bool                    `json:"autonomy_enabled"`
+	Limit           int                     `json:"limit"`
+	Goals           []agenticGoalDetailInfo `json:"goals"`
+}
+
+type agenticGoalCreateView struct {
+	AutonomyEnabled bool                  `json:"autonomy_enabled"`
+	Goal            agenticGoalDetailInfo `json:"goal"`
+}
+
 type agenticSignalInfo struct {
 	ID        int64  `json:"id"`
 	Source    string `json:"source"`
@@ -303,6 +326,8 @@ Subcommands:
   status [--json]                         Read-only control-plane summary
   activate --once [--limit n] [--json]    Advance due followups and new signals once
   activations [--limit n] [--json]         Read-only activation history
+  goals [--limit n] [--json]               List standing goals
+  goal create [flags]                      Create a standing goal
   task <id> [--json]                      Read-only task status
   task --queue-task-id <id> [--json]      Resolve agentic task from daemon queue task
   lineage <task-id> [--json]              Read-only task lineage
@@ -321,6 +346,9 @@ Enqueue flags:
 	}
 	if args[0] == "activate" {
 		return cmdAgenticActivate(ctx, args[1:])
+	}
+	if args[0] == "goal" {
+		return cmdAgenticGoal(ctx, args[1:])
 	}
 	cli, closeFn, err := openAgenticCLI()
 	if err != nil {
@@ -352,6 +380,20 @@ Enqueue flags:
 			return printJSON(view)
 		}
 		fmt.Print(renderAgenticActivations(view))
+		return nil
+	case "goals":
+		limit, jsonOut, err := parseAgenticListArgs(args[1:], "elnath agentic goals [--limit n] [--json]")
+		if err != nil {
+			return err
+		}
+		view, err := cli.goals(ctx, limit)
+		if err != nil {
+			return err
+		}
+		if jsonOut {
+			return printJSON(view)
+		}
+		fmt.Print(renderAgenticGoals(view))
 		return nil
 	case "task":
 		id, jsonOut, err := cli.resolveTaskID(ctx, args[1:])
@@ -421,6 +463,14 @@ type agenticActivateArgs struct {
 	Once  bool
 	Limit int
 	JSON  bool
+}
+
+type agenticGoalCreateArgs struct {
+	Title       string
+	Description string
+	Priority    int
+	RiskBudget  string
+	JSON        bool
 }
 
 func cmdAgenticActivate(ctx context.Context, args []string) error {
@@ -527,6 +577,101 @@ func newAgenticActivationService(cfg *config.Config, store *agentic.Store, queue
 			RequestedCompletionGate: auto.CompletionGate,
 		},
 	)), nil
+}
+
+func cmdAgenticGoal(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: elnath agentic goal create --title <text> [--description <text>] [--priority n] [--risk-budget <text>] [--json]")
+	}
+	switch args[0] {
+	case "create":
+		return cmdAgenticGoalCreate(ctx, args[1:])
+	default:
+		return fmt.Errorf("unknown agentic goal subcommand: %s", args[0])
+	}
+}
+
+func cmdAgenticGoalCreate(ctx context.Context, args []string) error {
+	parsed, err := parseAgenticGoalCreateArgs(args)
+	if err != nil {
+		return err
+	}
+	_, store, closeFn, err := openAgenticWritableStore("agentic goal create")
+	if err != nil {
+		return err
+	}
+	defer closeFn()
+	goal, err := store.CreateStandingGoal(ctx, agentic.StandingGoal{
+		Title:         parsed.Title,
+		Description:   parsed.Description,
+		Status:        agentic.GoalStatusActive,
+		Priority:      parsed.Priority,
+		AutonomyLevel: agentic.AutonomyLevelObserve,
+		RiskBudget:    parsed.RiskBudget,
+	})
+	if err != nil {
+		return fmt.Errorf("agentic goal create: %w", err)
+	}
+	view := agenticGoalCreateView{
+		AutonomyEnabled: false,
+		Goal:            goalDetailInfo(*goal),
+	}
+	if parsed.JSON {
+		return printJSON(view)
+	}
+	fmt.Print(renderAgenticGoalCreated(&view))
+	return nil
+}
+
+func parseAgenticGoalCreateArgs(args []string) (agenticGoalCreateArgs, error) {
+	parsed := agenticGoalCreateArgs{
+		Priority:   0,
+		RiskBudget: agentic.RiskLevelLow,
+	}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "--json":
+			parsed.JSON = true
+		case "--title":
+			i++
+			if i >= len(args) {
+				return parsed, fmt.Errorf("usage: elnath agentic goal create --title <text> [--description <text>] [--priority n] [--risk-budget <text>] [--json]")
+			}
+			parsed.Title = strings.TrimSpace(args[i])
+		case "--description":
+			i++
+			if i >= len(args) {
+				return parsed, fmt.Errorf("usage: elnath agentic goal create --title <text> [--description <text>] [--priority n] [--risk-budget <text>] [--json]")
+			}
+			parsed.Description = strings.TrimSpace(args[i])
+		case "--priority":
+			i++
+			if i >= len(args) {
+				return parsed, fmt.Errorf("usage: elnath agentic goal create --title <text> [--description <text>] [--priority n] [--risk-budget <text>] [--json]")
+			}
+			priority, err := strconv.Atoi(args[i])
+			if err != nil {
+				return parsed, fmt.Errorf("invalid goal priority %q", args[i])
+			}
+			parsed.Priority = priority
+		case "--risk-budget":
+			i++
+			if i >= len(args) {
+				return parsed, fmt.Errorf("usage: elnath agentic goal create --title <text> [--description <text>] [--priority n] [--risk-budget <text>] [--json]")
+			}
+			parsed.RiskBudget = strings.TrimSpace(args[i])
+		default:
+			return parsed, fmt.Errorf("unknown goal create flag: %s", arg)
+		}
+	}
+	if parsed.Title == "" {
+		return parsed, fmt.Errorf("usage: elnath agentic goal create --title <text> [--description <text>] [--priority n] [--risk-budget <text>] [--json]")
+	}
+	if parsed.RiskBudget == "" {
+		parsed.RiskBudget = agentic.RiskLevelLow
+	}
+	return parsed, nil
 }
 
 func cmdAgenticEnqueue(ctx context.Context, args []string) error {
@@ -654,6 +799,26 @@ func openAgenticCLI() (*agenticCLI, func(), error) {
 	return &agenticCLI{db: db, store: agentic.NewStore(db), now: time.Now()}, func() { _ = db.Close() }, nil
 }
 
+func openAgenticWritableStore(action string) (*core.DB, *agentic.Store, func(), error) {
+	cfgPath := extractConfigFlag(os.Args)
+	if cfgPath == "" {
+		cfgPath = config.DefaultConfigPath()
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return nil, nil, func() {}, fmt.Errorf("%s: load config: %w", action, err)
+	}
+	db, err := core.OpenDB(cfg.DataDir)
+	if err != nil {
+		return nil, nil, func() {}, fmt.Errorf("%s: open db: %w", action, err)
+	}
+	if err := agentic.InitSchema(db.Main); err != nil {
+		_ = db.Close()
+		return nil, nil, func() {}, fmt.Errorf("%s: init schema: %w", action, err)
+	}
+	return db, agentic.NewStore(db.Main), func() { _ = db.Close() }, nil
+}
+
 func openAgenticReadOnlyDB(dataDir string) (*sql.DB, error) {
 	mainPath := filepath.Join(dataDir, "elnath.db")
 	dsn := (&url.URL{Scheme: "file", Path: mainPath}).String() + "?mode=ro"
@@ -752,7 +917,7 @@ func (c *agenticCLI) status(ctx context.Context) (*agenticStatusView, error) {
 		"goals":            {"standing_goals", "status", false},
 		"signals":          {"goal_signals", "status", false},
 		"tasks":            {"agentic_tasks", "status", false},
-		"approvals":        {"approval_requests", "decision", false},
+		"approvals":        {"approval_requests", "decision", true},
 		"receipts":         {"tool_action_receipts", "status", false},
 		"completion_gates": {"completion_gates", "status", true},
 		"enqueue":          {"task_enqueue_decisions", "status", true},
@@ -820,6 +985,22 @@ func (c *agenticCLI) activations(ctx context.Context, limit int) (*agenticActiva
 		AutonomyEnabled: false,
 		Limit:           limit,
 		Runs:            out,
+	}, nil
+}
+
+func (c *agenticCLI) goals(ctx context.Context, limit int) (*agenticGoalsView, error) {
+	goals, err := c.store.ListStandingGoals(ctx, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]agenticGoalDetailInfo, 0, len(goals))
+	for _, goal := range goals {
+		out = append(out, goalDetailInfo(goal))
+	}
+	return &agenticGoalsView{
+		AutonomyEnabled: false,
+		Limit:           limit,
+		Goals:           out,
 	}, nil
 }
 
@@ -1099,6 +1280,20 @@ func enqueueInfo(decision agentic.TaskEnqueueDecision) *agenticEnqueueInfo {
 	}
 }
 
+func goalDetailInfo(goal agentic.StandingGoal) agenticGoalDetailInfo {
+	return agenticGoalDetailInfo{
+		ID:            goal.ID,
+		Title:         goal.Title,
+		Description:   goal.Description,
+		Status:        goal.Status,
+		Priority:      goal.Priority,
+		AutonomyLevel: goal.AutonomyLevel,
+		RiskBudget:    goal.RiskBudget,
+		CreatedAt:     goal.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:     goal.UpdatedAt.Format(time.RFC3339),
+	}
+}
+
 func taskInfo(task agentic.AgenticTask) agenticTaskInfo {
 	info := agenticTaskInfo{
 		ID:                 task.ID,
@@ -1177,8 +1372,14 @@ func (c *agenticCLI) attention(ctx context.Context) ([]agenticAttentionItem, err
 		}
 		return rows.Err()
 	}
-	if err := addRows("approval", `SELECT id, COALESCE(task_id, 0), decision, reason FROM approval_requests WHERE decision = 'pending' ORDER BY id LIMIT 10`); err != nil {
+	approvalExists, err := c.tableExists(ctx, "approval_requests")
+	if err != nil {
 		return nil, err
+	}
+	if approvalExists {
+		if err := addRows("approval", `SELECT id, COALESCE(task_id, 0), decision, reason FROM approval_requests WHERE decision = 'pending' ORDER BY id LIMIT 10`); err != nil {
+			return nil, err
+		}
 	}
 	if err := addRows("receipt", `SELECT id, task_id, status, '' FROM tool_action_receipts WHERE status IN (?, ?) ORDER BY id LIMIT 10`, agentic.ReceiptStatusDenied, agentic.ReceiptStatusFailed); err != nil {
 		return nil, err
@@ -1426,6 +1627,36 @@ func renderAgenticActivations(view *agenticActivationsView) string {
 			fmt.Fprintf(&b, "    reason: %s\n", run.Reason)
 		}
 	}
+	return b.String()
+}
+
+func renderAgenticGoals(view *agenticGoalsView) string {
+	var b strings.Builder
+	fmt.Fprintln(&b, "Agentic Standing Goals")
+	fmt.Fprintf(&b, "  autonomy_enabled: %t\n", view.AutonomyEnabled)
+	fmt.Fprintf(&b, "  limit: %d\n", view.Limit)
+	if len(view.Goals) == 0 {
+		fmt.Fprintln(&b, "  goals: none")
+		return b.String()
+	}
+	fmt.Fprintln(&b, "  goals:")
+	for _, goal := range view.Goals {
+		fmt.Fprintf(&b, "  - #%d %s status=%s priority=%d autonomy=%s risk=%s updated_at=%s\n", goal.ID, goal.Title, goal.Status, goal.Priority, goal.AutonomyLevel, noneIfEmpty(goal.RiskBudget), goal.UpdatedAt)
+		if goal.Description != "" {
+			fmt.Fprintf(&b, "    description: %s\n", bounded(goal.Description, 160))
+		}
+	}
+	return b.String()
+}
+
+func renderAgenticGoalCreated(view *agenticGoalCreateView) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Created agentic goal #%d\n", view.Goal.ID)
+	fmt.Fprintf(&b, "  title: %s\n", view.Goal.Title)
+	fmt.Fprintf(&b, "  status: %s\n", view.Goal.Status)
+	fmt.Fprintf(&b, "  priority: %d\n", view.Goal.Priority)
+	fmt.Fprintf(&b, "  autonomy: %s\n", view.Goal.AutonomyLevel)
+	fmt.Fprintf(&b, "  risk_budget: %s\n", noneIfEmpty(view.Goal.RiskBudget))
 	return b.String()
 }
 

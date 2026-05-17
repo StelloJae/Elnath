@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/daemon"
@@ -473,6 +474,32 @@ func TestAgenticStore_InsertReadStandingGoal(t *testing.T) {
 	}
 	if got.Title != goal.Title || got.Status != GoalStatusActive || got.Priority != 7 || got.CreatedAt.IsZero() || got.UpdatedAt.IsZero() {
 		t.Fatalf("unexpected goal: %+v", got)
+	}
+}
+
+func TestAgenticStore_ListStandingGoalsOrdersByUpdatedAt(t *testing.T) {
+	ctx := context.Background()
+	_, store := newTestStore(t)
+	base := time.Unix(1714478400, 0)
+	for _, goal := range []StandingGoal{
+		{Title: "older goal", Status: GoalStatusActive, Priority: 1, AutonomyLevel: AutonomyLevelObserve, RiskBudget: "low", CreatedAt: base, UpdatedAt: base},
+		{Title: "newest goal", Status: GoalStatusActive, Priority: 3, AutonomyLevel: AutonomyLevelObserve, RiskBudget: "low", CreatedAt: base, UpdatedAt: base.Add(2 * time.Hour)},
+		{Title: "middle goal", Status: GoalStatusActive, Priority: 2, AutonomyLevel: AutonomyLevelObserve, RiskBudget: "low", CreatedAt: base, UpdatedAt: base.Add(time.Hour)},
+	} {
+		if _, err := store.CreateStandingGoal(ctx, goal); err != nil {
+			t.Fatalf("CreateStandingGoal(%q): %v", goal.Title, err)
+		}
+	}
+
+	got, err := store.ListStandingGoals(ctx, 2)
+	if err != nil {
+		t.Fatalf("ListStandingGoals: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len(goals) = %d, want 2", len(got))
+	}
+	if got[0].Title != "newest goal" || got[1].Title != "middle goal" {
+		t.Fatalf("goal order = %q, %q; want newest, middle", got[0].Title, got[1].Title)
 	}
 }
 

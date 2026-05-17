@@ -292,6 +292,8 @@ SUBCOMMANDS
   status [--json]                         Show control-plane counts and attention items
   activate --once [--limit n] [--json]    Advance due followups and new signals once
   activations [--limit n] [--json]         Show activation run history
+  goals [--limit n] [--json]               List standing goals
+  goal create [flags]                      Create a standing goal
   task <id> [--json]                      Show one agentic task summary
   task --queue-task-id <id> [--json]      Resolve an agentic task from a daemon queue task
   lineage <task-id> [--json]              Show task lineage across ledgers
@@ -300,6 +302,8 @@ EXAMPLES
   $ elnath agentic status
   $ elnath agentic activate --once --json
   $ elnath agentic activations
+  $ elnath agentic goals --json
+  $ elnath agentic goal create --title "Dogfood activation"
   $ elnath agentic task 42
   $ elnath agentic lineage 42 --json`,
 		"cmd.portability.help": `USAGE
@@ -527,6 +531,8 @@ SEE ALSO
   status [--json]                         control-plane 카운트와 주의 항목 표시
   activate --once [--limit n] [--json]    due followup과 새 signal을 한 번 전진
   activations [--limit n] [--json]         activation run history 표시
+  goals [--limit n] [--json]               standing goal 목록 표시
+  goal create [플래그]                     standing goal 생성
   task <id> [--json]                      agentic task 요약 표시
   task --queue-task-id <id> [--json]      daemon queue task에서 agentic task 조회
   lineage <task-id> [--json]              ledger lineage 표시`,
