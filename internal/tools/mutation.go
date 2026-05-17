@@ -66,8 +66,14 @@ func MutationDisplayPath(ctx context.Context, guard *PathGuard, abs string, fall
 	return cleanMutationPath(fallback)
 }
 
-func AnnotateGoMutationDiagnostics(mutation *FileMutation, absPath string, basePath string, before []byte, beforeExists bool, after []byte, afterExists bool) {
-	if mutation == nil || filepath.Ext(absPath) != ".go" {
+func AnnotateMutationDiagnostics(mutation *FileMutation, absPath string, basePath string, before []byte, beforeExists bool, after []byte, afterExists bool) {
+	if mutation == nil {
+		return
+	}
+	language := mutationDiagnosticLanguage(absPath)
+	if filepath.Ext(absPath) != ".go" {
+		mutation.DiagnosticLanguage = language
+		mutation.DiagnosticStatus = "diagnostics_not_configured"
 		return
 	}
 	if strings.TrimSpace(basePath) == "" {
@@ -83,7 +89,7 @@ func AnnotateGoMutationDiagnostics(mutation *FileMutation, absPath string, baseP
 	}
 	currentRel := relPath(basePath, absPath)
 	delta := compareCodeDiagnostics(baselineDiagnostics, currentDiagnostics, before, after, currentRel)
-	mutation.DiagnosticLanguage = "go"
+	mutation.DiagnosticLanguage = language
 	mutation.DiagnosticStatus = "diagnostic_delta_clean"
 	if delta.NewCount > 0 {
 		mutation.DiagnosticStatus = "new_diagnostics_found"
@@ -92,6 +98,33 @@ func AnnotateGoMutationDiagnostics(mutation *FileMutation, absPath string, baseP
 	mutation.ExistingDiagnosticCount = delta.ExistingCount
 	mutation.ResolvedDiagnosticCount = delta.ResolvedCount
 	mutation.NewDiagnostics = fileMutationDiagnosticsFromDelta(delta.New, 3)
+}
+
+func AnnotateGoMutationDiagnostics(mutation *FileMutation, absPath string, basePath string, before []byte, beforeExists bool, after []byte, afterExists bool) {
+	AnnotateMutationDiagnostics(mutation, absPath, basePath, before, beforeExists, after, afterExists)
+}
+
+func mutationDiagnosticLanguage(absPath string) string {
+	switch strings.ToLower(filepath.Ext(absPath)) {
+	case ".go":
+		return "go"
+	case ".py", ".pyw":
+		return "python"
+	case ".js", ".jsx", ".mjs", ".cjs":
+		return "javascript"
+	case ".ts", ".tsx":
+		return "typescript"
+	case ".json":
+		return "json"
+	case ".yaml", ".yml":
+		return "yaml"
+	case ".md", ".mdx":
+		return "markdown"
+	case ".sh", ".bash", ".zsh":
+		return "shell"
+	default:
+		return "unknown"
+	}
 }
 
 func fileMutationDiagnosticsFromDelta(diagnostics []codeDiagnosticDelta, limit int) []FileMutationDiagnostic {
