@@ -12,6 +12,7 @@ import (
 	"github.com/mattn/go-isatty"
 	"github.com/stello/elnath/internal/agent"
 	"github.com/stello/elnath/internal/config"
+	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/core"
 	"github.com/stello/elnath/internal/identity"
 	"github.com/stello/elnath/internal/llm"
@@ -145,6 +146,8 @@ func cmdRun(ctx context.Context, args []string) error {
 		os.Args = append(os.Args, "--session", sid)
 	}
 
+	explicitTaskResumeHandoff := taskResumeHandoffContextRequested(os.Args)
+
 	// Create or resume session.
 	var sess *agent.Session
 	var messages []llm.Message
@@ -154,7 +157,11 @@ func cmdRun(ctx context.Context, args []string) error {
 			return fmt.Errorf("resolve --session: %w", resolveErr)
 		}
 		sid = resolved
-		sess, err = rt.mgr.LoadSessionForPrincipal(sid, principal)
+		if explicitTaskResumeHandoff {
+			sess, err = rt.mgr.LoadSessionForPrincipalWithOptions(sid, principal, conversation.LoadSessionOptions{AllowRetired: true})
+		} else {
+			sess, err = rt.mgr.LoadSessionForPrincipal(sid, principal)
+		}
 		if err != nil {
 			return fmt.Errorf("resume session %s: %w", sid, err)
 		}

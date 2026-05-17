@@ -62,6 +62,13 @@ type SessionMeta struct {
 	MsgCount  int
 }
 
+// LoadSessionOptions controls explicit session resume behavior.
+type LoadSessionOptions struct {
+	// AllowRetired is reserved for explicit operator-driven handoff paths that
+	// already surface the retirement reason and next action in prompt context.
+	AllowRetired bool
+}
+
 // NewManager creates a Manager with the given database and data directory.
 // Dependencies (classifier, context window, history store) are optional and
 // can be set via the With* methods after construction.
@@ -176,6 +183,12 @@ func (m *Manager) LoadSession(sessionID string) (*agent.Session, error) {
 
 // LoadSessionForPrincipal loads a known session ID and enforces strict ownership.
 func (m *Manager) LoadSessionForPrincipal(sessionID string, principal identity.Principal) (*agent.Session, error) {
+	return m.LoadSessionForPrincipalWithOptions(sessionID, principal, LoadSessionOptions{})
+}
+
+// LoadSessionForPrincipalWithOptions loads a known session ID and enforces
+// strict ownership, with narrow overrides for explicit operator handoff flows.
+func (m *Manager) LoadSessionForPrincipalWithOptions(sessionID string, principal identity.Principal, opts LoadSessionOptions) (*agent.Session, error) {
 	s, err := m.LoadSession(sessionID)
 	if err != nil {
 		return nil, err
@@ -183,7 +196,7 @@ func (m *Manager) LoadSessionForPrincipal(sessionID string, principal identity.P
 	if !principal.IsZero() && !sessionPrincipalAllowed(s.Principal, principal) {
 		return nil, fmt.Errorf("conversation: session %s is not resumable for principal %s/%s", sessionID, principal.UserID, principal.ProjectID)
 	}
-	if s.Retired() {
+	if s.Retired() && !opts.AllowRetired {
 		return nil, sessionRetiredError(sessionID, s.Retirement)
 	}
 	return s, nil

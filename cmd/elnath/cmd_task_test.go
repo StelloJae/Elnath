@@ -589,6 +589,26 @@ func TestConsumeTaskResumeHandoffContextOnlyOnce(t *testing.T) {
 	}
 }
 
+func TestTaskResumeHandoffContextRequested(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{name: "none", args: []string{"elnath", "run"}, want: false},
+		{name: "task resume context", args: []string{"elnath", "run", "--task-resume-handoff-context", "42"}, want: true},
+		{name: "continue task", args: []string{"elnath", "run", "--continue-task", "42"}, want: true},
+		{name: "bare flag", args: []string{"elnath", "run", "--task-resume-handoff-context"}, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := taskResumeHandoffContextRequested(tt.args); got != tt.want {
+				t.Fatalf("taskResumeHandoffContextRequested(%v) = %t, want %t", tt.args, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCmdTaskResumeMissingArgs(t *testing.T) {
 	err := cmdTaskResume(context.Background(), nil)
 	if err == nil || !strings.Contains(err.Error(), "usage:") {

@@ -802,6 +802,27 @@ func TestManagerLoadSessionForPrincipal_RetiredSessionRejected(t *testing.T) {
 	}
 }
 
+func TestManagerLoadSessionForPrincipalWithOptions_AllowsRetiredSession(t *testing.T) {
+	dir := t.TempDir()
+	principal := identity.Principal{UserID: "user-1", ProjectID: "proj-1", Surface: "telegram"}
+	sess, err := agent.NewSession(dir, principal)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if err := sess.RecordRetirement("provider_auth", "provider_auth_refresh_failed", "reauthenticate_provider"); err != nil {
+		t.Fatalf("RecordRetirement: %v", err)
+	}
+
+	mgr := NewManager(nil, dir)
+	loaded, err := mgr.LoadSessionForPrincipalWithOptions(sess.ID, principal, LoadSessionOptions{AllowRetired: true})
+	if err != nil {
+		t.Fatalf("LoadSessionForPrincipalWithOptions(AllowRetired): %v", err)
+	}
+	if loaded.ID != sess.ID || !loaded.Retired() {
+		t.Fatalf("loaded = %+v, want retired session %s", loaded, sess.ID)
+	}
+}
+
 // TestManagerLoadSessionForPrincipal_CanonicalDriftAllowed guards the F3 root-
 // cause fix. Canonical user IDs are derived from USER@HOSTNAME and can drift
 // across network/VPN/daemon-restart boundaries even for the same user on the
