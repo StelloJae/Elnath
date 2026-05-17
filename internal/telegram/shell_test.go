@@ -294,10 +294,90 @@ func TestShellQuestionsCommandShowsPendingUserChoices(t *testing.T) {
 	if len(bot.sent) != 1 {
 		t.Fatalf("sent messages = %d, want 1", len(bot.sent))
 	}
-	for _, want := range []string{"Pending questions", "req-1", "Which branch?", "main", "new", "/answer sess-1 req-1"} {
+	for _, want := range []string{
+		"Pending questions",
+		"req-1",
+		"Which branch?",
+		"main",
+		"new",
+		"/answer sess-1 req-1 main",
+		"/answer sess-1 req-1 new",
+		"/cancel-question sess-1 req-1",
+	} {
 		if !strings.Contains(bot.sent[0].text, want) {
 			t.Fatalf("questions reply = %q, want %q", bot.sent[0].text, want)
 		}
+	}
+}
+
+func TestShellQuestionsCommandShowsFreeTextTimeoutAndCancel(t *testing.T) {
+	store := learning.NewOutcomeStore(filepath.Join(t.TempDir(), "outcomes.jsonl"))
+	if err := store.Append(learning.OutcomeRecord{
+		ControlToolReceipts: []learning.ControlToolReceipt{{
+			Tool:           "ask_user_question",
+			Action:         "request",
+			RequestID:      "req-2",
+			SessionID:      "sess-2",
+			Question:       "What should I do next?",
+			AllowFreeText:  true,
+			TimeoutSeconds: 90,
+		}},
+	}); err != nil {
+		t.Fatalf("Append outcome: %v", err)
+	}
+	shell, _, _, bot := newTestShellWithOptions(t, nil, WithShellOutcomeStore(store))
+
+	if err := shell.HandleUpdate(context.Background(), Update{
+		ID:      1,
+		Message: Message{ChatID: "chat-1", UserID: "77", MessageID: 11, Text: "/questions"},
+	}); err != nil {
+		t.Fatalf("HandleUpdate: %v", err)
+	}
+
+	if len(bot.sent) != 1 {
+		t.Fatalf("sent messages = %d, want 1", len(bot.sent))
+	}
+	for _, want := range []string{
+		"free text",
+		"/answer sess-2 req-2 ANSWER_TEXT",
+		"timeout: 90s",
+		"/cancel-question sess-2 req-2",
+	} {
+		if !strings.Contains(bot.sent[0].text, want) {
+			t.Fatalf("questions reply = %q, want %q", bot.sent[0].text, want)
+		}
+	}
+}
+
+func TestShellQuestionsCommandDoesNotRenderAnswerForUnboundQuestion(t *testing.T) {
+	store := learning.NewOutcomeStore(filepath.Join(t.TempDir(), "outcomes.jsonl"))
+	if err := store.Append(learning.OutcomeRecord{
+		ControlToolReceipts: []learning.ControlToolReceipt{{
+			Tool:      "ask_user_question",
+			Action:    "request",
+			RequestID: "req-unbound",
+			Question:  "Need a session?",
+		}},
+	}); err != nil {
+		t.Fatalf("Append outcome: %v", err)
+	}
+	shell, _, _, bot := newTestShellWithOptions(t, nil, WithShellOutcomeStore(store))
+
+	if err := shell.HandleUpdate(context.Background(), Update{
+		ID:      1,
+		Message: Message{ChatID: "chat-1", UserID: "77", MessageID: 11, Text: "/questions"},
+	}); err != nil {
+		t.Fatalf("HandleUpdate: %v", err)
+	}
+
+	if len(bot.sent) != 1 {
+		t.Fatalf("sent messages = %d, want 1", len(bot.sent))
+	}
+	if !strings.Contains(bot.sent[0].text, "not answerable") {
+		t.Fatalf("questions reply = %q, want not-answerable notice", bot.sent[0].text)
+	}
+	if strings.Contains(bot.sent[0].text, "/answer ") || strings.Contains(bot.sent[0].text, "/cancel-question ") {
+		t.Fatalf("questions reply = %q, should not expose answer/cancel commands without session binding", bot.sent[0].text)
 	}
 }
 
