@@ -86,6 +86,9 @@ func TestService_RunOnceProcessesFollowupsAndTriagesSignalsWithoutEnqueue(t *tes
 	if run.FollowupProcessed != 1 || run.FollowupCreated != 1 || run.SignalProcessed != 1 || run.EnqueuePerformed {
 		t.Fatalf("activation run = %+v", run)
 	}
+	if len(run.ProposedTaskIDs) != 1 || run.ProposedTaskIDs[0] != child.ID {
+		t.Fatalf("activation run proposed task ids = %+v, want child %d", run.ProposedTaskIDs, child.ID)
+	}
 }
 
 func TestService_RunOnceDefaultsLimit(t *testing.T) {

@@ -143,7 +143,7 @@ func TestAgenticSchema_RoadmapColumnsExist(t *testing.T) {
 		},
 		"activation_runs": {
 			"id", "execution_policy", "limit_n", "followup_processed", "followup_created", "followup_skipped", "followup_failed",
-			"signal_processed", "signal_created", "signal_linked", "signal_failed", "enqueue_performed", "status", "reason", "created_at",
+			"signal_processed", "signal_created", "signal_linked", "signal_failed", "enqueue_performed", "proposed_task_ids_json", "status", "reason", "created_at",
 		},
 	}
 
@@ -172,12 +172,13 @@ func TestActivationRunStore_CreateGetList(t *testing.T) {
 		SignalCreated:     2,
 		SignalLinked:      1,
 		EnqueuePerformed:  false,
+		ProposedTaskIDs:   []int64{101, 102},
 		Status:            ActivationRunStatusSucceeded,
 	})
 	if err != nil {
 		t.Fatalf("CreateActivationRun: %v", err)
 	}
-	if created.ID == 0 || created.Limit != 7 || created.FollowupProcessed != 2 || created.SignalLinked != 1 || created.EnqueuePerformed {
+	if created.ID == 0 || created.Limit != 7 || created.FollowupProcessed != 2 || created.SignalLinked != 1 || created.EnqueuePerformed || len(created.ProposedTaskIDs) != 2 {
 		t.Fatalf("created activation run = %+v", created)
 	}
 	got, err := store.GetActivationRun(ctx, created.ID)
@@ -187,12 +188,46 @@ func TestActivationRunStore_CreateGetList(t *testing.T) {
 	if got.Status != ActivationRunStatusSucceeded || got.ExecutionPolicy != "propose_only" {
 		t.Fatalf("activation run = %+v", got)
 	}
+	if len(got.ProposedTaskIDs) != 2 || got.ProposedTaskIDs[0] != 101 || got.ProposedTaskIDs[1] != 102 {
+		t.Fatalf("activation run proposed task ids = %+v", got.ProposedTaskIDs)
+	}
 	runs, err := store.ListActivationRuns(ctx, 10)
 	if err != nil {
 		t.Fatalf("ListActivationRuns: %v", err)
 	}
 	if len(runs) != 1 || runs[0].ID != created.ID {
 		t.Fatalf("activation runs = %+v, want created run", runs)
+	}
+}
+
+func TestActivationRunsMigrationAddsProposedTaskIDsColumn(t *testing.T) {
+	db := openTestDB(t)
+	if _, err := db.Exec(`
+		CREATE TABLE activation_runs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			execution_policy TEXT NOT NULL,
+			limit_n INTEGER NOT NULL,
+			followup_processed INTEGER NOT NULL DEFAULT 0,
+			followup_created INTEGER NOT NULL DEFAULT 0,
+			followup_skipped INTEGER NOT NULL DEFAULT 0,
+			followup_failed INTEGER NOT NULL DEFAULT 0,
+			signal_processed INTEGER NOT NULL DEFAULT 0,
+			signal_created INTEGER NOT NULL DEFAULT 0,
+			signal_linked INTEGER NOT NULL DEFAULT 0,
+			signal_failed INTEGER NOT NULL DEFAULT 0,
+			enqueue_performed INTEGER NOT NULL DEFAULT 0,
+			status TEXT NOT NULL,
+			reason TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL
+		)
+	`); err != nil {
+		t.Fatalf("create old activation_runs: %v", err)
+	}
+	if err := InitSchema(db); err != nil {
+		t.Fatalf("InitSchema: %v", err)
+	}
+	if !tableColumns(t, db, "activation_runs")["proposed_task_ids_json"] {
+		t.Fatalf("activation_runs missing proposed_task_ids_json after migration")
 	}
 }
 

@@ -78,6 +78,7 @@ type agenticActivationRunSummary struct {
 	EnqueuePerformed bool                    `json:"enqueue_performed"`
 	Status           string                  `json:"status"`
 	Reason           string                  `json:"reason,omitempty"`
+	ProposedTaskIDs  []int64                 `json:"proposed_task_ids,omitempty"`
 	Followups        agenticActivationCounts `json:"followups"`
 	Signals          agenticActivationCounts `json:"signals"`
 	CreatedAt        string                  `json:"created_at"`
@@ -1203,6 +1204,7 @@ func activationRunSummary(run agentic.ActivationRun) agenticActivationRunSummary
 		EnqueuePerformed: run.EnqueuePerformed,
 		Status:           run.Status,
 		Reason:           bounded(run.Reason, 120),
+		ProposedTaskIDs:  append([]int64(nil), run.ProposedTaskIDs...),
 		Followups: agenticActivationCounts{
 			Processed: run.FollowupProcessed,
 			Created:   run.FollowupCreated,
@@ -1250,7 +1252,11 @@ func renderAgenticActivations(view *agenticActivationsView) string {
 	}
 	fmt.Fprintln(&b, "  runs:")
 	for _, run := range view.Runs {
-		fmt.Fprintf(&b, "  - #%d %s policy=%s followups=%d/%d signals=%d/%d enqueue=%t created_at=%s\n", run.ID, run.Status, run.ExecutionPolicy, run.Followups.Created, run.Followups.Processed, run.Signals.Created+run.Signals.Linked, run.Signals.Processed, run.EnqueuePerformed, run.CreatedAt)
+		taskIDs := ""
+		if len(run.ProposedTaskIDs) > 0 {
+			taskIDs = " proposed_task_ids=" + joinInt64s(run.ProposedTaskIDs)
+		}
+		fmt.Fprintf(&b, "  - #%d %s policy=%s followups=%d/%d signals=%d/%d enqueue=%t%s created_at=%s\n", run.ID, run.Status, run.ExecutionPolicy, run.Followups.Created, run.Followups.Processed, run.Signals.Created+run.Signals.Linked, run.Signals.Processed, run.EnqueuePerformed, taskIDs, run.CreatedAt)
 		if run.Reason != "" {
 			fmt.Fprintf(&b, "    reason: %s\n", run.Reason)
 		}

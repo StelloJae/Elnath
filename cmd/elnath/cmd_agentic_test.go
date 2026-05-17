@@ -639,6 +639,7 @@ func TestAgenticActivations_ReadOnlyHistory(t *testing.T) {
 		"Agentic Activations",
 		"policy=propose_only",
 		"enqueue=false",
+		"proposed_task_ids=",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("activations output = %q, want %q", stdout, want)
@@ -667,6 +668,9 @@ func TestAgenticActivations_JSONOutputStable(t *testing.T) {
 	}
 	if view.Runs[0].ExecutionPolicy != "propose_only" || view.Runs[0].Status != agentic.ActivationRunStatusSucceeded {
 		t.Fatalf("activation run summary = %+v", view.Runs[0])
+	}
+	if len(view.Runs[0].ProposedTaskIDs) != 1 {
+		t.Fatalf("activation run proposed task ids = %+v, want one", view.Runs[0].ProposedTaskIDs)
 	}
 }
 

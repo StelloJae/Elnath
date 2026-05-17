@@ -230,6 +230,7 @@ type ActivationRun struct {
 	SignalLinked      int
 	SignalFailed      int
 	EnqueuePerformed  bool
+	ProposedTaskIDs   []int64
 	Status            string
 	Reason            string
 	CreatedAt         time.Time

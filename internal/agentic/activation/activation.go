@@ -101,6 +101,7 @@ func (s *Service) record(ctx context.Context, result Result, runErr error) (Resu
 		SignalLinked:      result.Signals.Linked,
 		SignalFailed:      result.Signals.Failed,
 		EnqueuePerformed:  result.EnqueuePerformed,
+		ProposedTaskIDs:   result.ProposedTaskIDs,
 		Status:            result.Status,
 		Reason:            result.Reason,
 	})

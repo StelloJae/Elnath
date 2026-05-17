@@ -199,6 +199,7 @@ func InitSchema(db *sql.DB) error {
 			signal_linked INTEGER NOT NULL DEFAULT 0,
 			signal_failed INTEGER NOT NULL DEFAULT 0,
 			enqueue_performed INTEGER NOT NULL DEFAULT 0,
+			proposed_task_ids_json TEXT NOT NULL DEFAULT '[]',
 			status TEXT NOT NULL,
 			reason TEXT NOT NULL DEFAULT '',
 			created_at INTEGER NOT NULL
@@ -265,6 +266,31 @@ func InitSchema(db *sql.DB) error {
 	}
 	if err := ensureTaskEnqueueDecisionIndexes(db); err != nil {
 		return err
+	}
+	if err := ensureActivationRunColumns(db); err != nil {
+		return err
+	}
+	return nil
+}
+
+func ensureActivationRunColumns(db *sql.DB) error {
+	columns := []struct {
+		name string
+		def  string
+	}{
+		{"proposed_task_ids_json", "TEXT NOT NULL DEFAULT '[]'"},
+	}
+	for _, column := range columns {
+		exists, err := columnExists(db, "activation_runs", column.name)
+		if err != nil {
+			return fmt.Errorf("agentic: inspect activation_runs.%s: %w", column.name, err)
+		}
+		if exists {
+			continue
+		}
+		if _, err := db.Exec(fmt.Sprintf("ALTER TABLE activation_runs ADD COLUMN %s %s", column.name, column.def)); err != nil {
+			return fmt.Errorf("agentic: add activation_runs.%s: %w", column.name, err)
+		}
 	}
 	return nil
 }
