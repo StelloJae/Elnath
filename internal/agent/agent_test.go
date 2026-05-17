@@ -812,6 +812,41 @@ func TestExecuteToolsEmitsToolExecutionProgressPhases(t *testing.T) {
 	}
 }
 
+func TestExtractToolPreviewIncludesProcessContext(t *testing.T) {
+	tests := []struct {
+		name     string
+		toolName string
+		input    string
+		want     string
+	}{
+		{
+			name:     "monitor",
+			toolName: "process_monitor",
+			input:    `{"process_id":4}`,
+			want:     "process_id=4",
+		},
+		{
+			name:     "wait",
+			toolName: "process_wait",
+			input:    `{"process_id":4,"wait_ms":250,"watch_text":"READY"}`,
+			want:     "process_id=4 wait_ms=250 watch=READY",
+		},
+		{
+			name:     "stop",
+			toolName: "process_stop",
+			input:    `{"process_id":4}`,
+			want:     "process_id=4",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := extractToolPreview(tt.toolName, tt.input); got != tt.want {
+				t.Fatalf("preview = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestBuildToolDefsSearchFirstFallsBackWithoutToolSearch(t *testing.T) {
 	reg := tools.NewRegistry()
 	reg.Register(&mockTool{
