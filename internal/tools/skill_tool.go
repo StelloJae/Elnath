@@ -23,12 +23,12 @@ func NewSkillTool(creator any, registry any) *SkillTool {
 func (t *SkillTool) Name() string { return "create_skill" }
 
 func (t *SkillTool) Description() string {
-	return "Create, list, delete, or propose a safe improvement for a wiki-native skill"
+	return "Create, list, delete, propose, or apply a safe improvement for a wiki-native skill"
 }
 
 func (t *SkillTool) Schema() json.RawMessage {
 	return Object(map[string]Property{
-		"action":         StringEnum("Action to perform.", "create", "list", "delete", "propose_improvement"),
+		"action":         StringEnum("Action to perform.", "create", "list", "delete", "propose_improvement", "apply_improvement"),
 		"name":           String("Skill name (lowercase, hyphens)."),
 		"description":    String("Short description of what the skill does."),
 		"trigger":        String("Optional trigger text, e.g. /deploy-check <env>."),
@@ -40,6 +40,8 @@ func (t *SkillTool) Schema() json.RawMessage {
 		"suggested_change": String(
 			"Suggested skill change for action=propose_improvement. Writes a review artifact, not the skill file.",
 		),
+		"proposal_path": String("Proposal artifact path for action=apply_improvement."),
+		"approved":      Bool("Must be true for action=apply_improvement."),
 	}, []string{"action"})
 }
 
@@ -71,6 +73,17 @@ func (t *SkillTool) Scope(params json.RawMessage) ToolScope {
 		}
 		return ToolScope{WritePaths: []string{proposalDir}, Persistent: true}
 	}
+	if action == "apply_improvement" {
+		scope := ToolScope{Persistent: true}
+		if proposalPath := strings.TrimSpace(input.ProposalPath); proposalPath != "" {
+			scope.ReadPaths = append(scope.ReadPaths, filepath.Clean(proposalPath))
+		}
+		if wikiDir != "" {
+			scope.ReadPaths = append(scope.ReadPaths, wikiDir)
+			scope.WritePaths = append(scope.WritePaths, wikiDir)
+		}
+		return scope
+	}
 	if wikiDir == "" {
 		return ToolScope{Persistent: true}
 	}
@@ -88,6 +101,8 @@ type skillToolInput struct {
 	Reason          string   `json:"reason"`
 	Evidence        []string `json:"evidence"`
 	SuggestedChange string   `json:"suggested_change"`
+	ProposalPath    string   `json:"proposal_path"`
+	Approved        bool     `json:"approved"`
 }
 
 func (t *SkillTool) Execute(_ context.Context, params json.RawMessage) (*Result, error) {
@@ -105,6 +120,8 @@ func (t *SkillTool) Execute(_ context.Context, params json.RawMessage) (*Result,
 		return t.executeDelete(input)
 	case "propose_improvement":
 		return t.executeProposeImprovement(input)
+	case "apply_improvement":
+		return t.executeApplyImprovement(input)
 	default:
 		return ErrorResult(fmt.Sprintf("unknown action: %q", input.Action)), nil
 	}
@@ -211,6 +228,42 @@ func (t *SkillTool) executeProposeImprovement(input skillToolInput) (*Result, er
 		return ErrorResult(fmt.Sprintf("create_skill: %v", err)), nil
 	}
 	return SuccessResult(fmt.Sprintf("Proposed improvement for /%s: %s", strings.TrimSpace(input.Name), path)), nil
+}
+
+func (t *SkillTool) executeApplyImprovement(input skillToolInput) (*Result, error) {
+	if !input.Approved {
+		return ErrorResult("approved must be true to apply a skill improvement proposal"), nil
+	}
+	if strings.TrimSpace(input.ProposalPath) == "" {
+		return ErrorResult("proposal_path must not be empty"), nil
+	}
+	if t == nil || t.creator == nil {
+		return ErrorResult("skill creator is not configured"), nil
+	}
+	name, err := t.applySkillImprovement(input)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("create_skill: %v", err)), nil
+	}
+	return SuccessResult(fmt.Sprintf("Applied improvement to /%s", name)), nil
+}
+
+func (t *SkillTool) applySkillImprovement(input skillToolInput) (string, error) {
+	method := reflect.ValueOf(t.creator).MethodByName("ApplyImprovementProposal")
+	if !method.IsValid() {
+		return "", fmt.Errorf("skill creator does not implement ApplyImprovementProposal")
+	}
+	if method.Type().NumIn() != 1 || method.Type().NumOut() != 2 {
+		return "", fmt.Errorf("skill creator ApplyImprovementProposal signature mismatch")
+	}
+	results := method.Call([]reflect.Value{reflect.ValueOf(strings.TrimSpace(input.ProposalPath))})
+	if err := reflectedError(results[1]); err != nil {
+		return "", err
+	}
+	name := reflectStringField(results[0], "Name")
+	if name == "" {
+		return "", fmt.Errorf("skill creator ApplyImprovementProposal returned invalid skill")
+	}
+	return name, nil
 }
 
 func (t *SkillTool) proposeSkillImprovement(input skillToolInput) (string, error) {

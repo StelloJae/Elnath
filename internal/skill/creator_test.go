@@ -1,7 +1,9 @@
 package skill
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stello/elnath/internal/wiki"
 )
@@ -147,5 +149,56 @@ func TestCreatorPromoteWithHotReload(t *testing.T) {
 	}
 	if _, ok := reg.Get("promoted-skill"); !ok {
 		t.Fatal("registry missing promoted skill after Promote()")
+	}
+}
+
+func TestCreatorApplyImprovementProposal(t *testing.T) {
+	t.Parallel()
+
+	store, err := wiki.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	tracker := NewTracker(t.TempDir())
+	reg := NewRegistry()
+	creator := NewCreator(store, tracker, reg)
+	if _, err := creator.Create(CreateParams{
+		Name:   "review-pr",
+		Prompt: "Review pull requests.",
+		Status: "active",
+		Source: "user",
+	}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	proposalPath, err := tracker.WriteImprovementProposal(ImprovementProposal{
+		SkillName:       "review-pr",
+		SessionID:       "sess-1",
+		Reason:          "User corrected ordering.",
+		SuggestedChange: "Start with findings before summary.",
+		CreatedAt:       time.Date(2026, 5, 17, 4, 5, 6, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("WriteImprovementProposal() error = %v", err)
+	}
+
+	sk, err := creator.ApplyImprovementProposal(proposalPath)
+	if err != nil {
+		t.Fatalf("ApplyImprovementProposal() error = %v", err)
+	}
+	if sk == nil || !strings.Contains(sk.Prompt, "Start with findings before summary.") {
+		t.Fatalf("updated skill = %+v, want suggested change in prompt", sk)
+	}
+	page, err := store.Read("skills/review-pr.md")
+	if err != nil {
+		t.Fatalf("Read(updated skill) error = %v", err)
+	}
+	if !strings.Contains(page.Content, "Applied improvement proposal: 20260517T040506Z-review-pr.md") {
+		t.Fatalf("page content = %q, want applied proposal marker", page.Content)
+	}
+	if page.Extra["last_improvement_proposal"] != "20260517T040506Z-review-pr.md" {
+		t.Fatalf("last_improvement_proposal = %v", page.Extra["last_improvement_proposal"])
+	}
+	if _, ok := reg.Get("review-pr"); !ok {
+		t.Fatal("registry missing updated skill after ApplyImprovementProposal")
 	}
 }

@@ -193,6 +193,74 @@ func TestSkillToolProposeImprovementWritesReviewArtifact(t *testing.T) {
 	}
 }
 
+func TestSkillToolApplyImprovementRequiresApproval(t *testing.T) {
+	t.Parallel()
+
+	tool, _ := newTestSkillTool(t)
+	result, err := tool.Execute(context.Background(), marshalSkillToolParams(t, map[string]any{
+		"action":        "apply_improvement",
+		"proposal_path": "/tmp/proposal.md",
+	}))
+	if err != nil {
+		t.Fatalf("Execute(apply_improvement) error = %v", err)
+	}
+	if !result.IsError || !strings.Contains(result.Output, "approved must be true") {
+		t.Fatalf("result = %+v, want approval error", result)
+	}
+}
+
+func TestSkillToolApplyImprovementUpdatesSkill(t *testing.T) {
+	t.Parallel()
+
+	store, err := wiki.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	trackerDir := t.TempDir()
+	tracker := skill.NewTracker(trackerDir)
+	registry := skill.NewRegistry()
+	creator := skill.NewCreator(store, tracker, registry)
+	tool := tools.NewSkillTool(creator, registry)
+	if _, err := creator.Create(skill.CreateParams{
+		Name:   "review-pr",
+		Prompt: "Review pull requests.",
+		Status: "active",
+		Source: "user",
+	}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	proposalPath, err := tracker.WriteImprovementProposal(skill.ImprovementProposal{
+		SkillName:       "review-pr",
+		Reason:          "User corrected output order.",
+		SuggestedChange: "Start with findings before summary.",
+	})
+	if err != nil {
+		t.Fatalf("WriteImprovementProposal() error = %v", err)
+	}
+
+	result, err := tool.Execute(context.Background(), marshalSkillToolParams(t, map[string]any{
+		"action":        "apply_improvement",
+		"proposal_path": proposalPath,
+		"approved":      true,
+	}))
+	if err != nil {
+		t.Fatalf("Execute(apply_improvement) error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute(apply_improvement) returned error result: %s", result.Output)
+	}
+	if !strings.Contains(result.Output, "Applied improvement to /review-pr") {
+		t.Fatalf("output = %q, want applied confirmation", result.Output)
+	}
+	page, err := store.Read("skills/review-pr.md")
+	if err != nil {
+		t.Fatalf("Read(updated skill) error = %v", err)
+	}
+	if !strings.Contains(page.Content, "Start with findings before summary.") {
+		t.Fatalf("page content = %q, want suggested change", page.Content)
+	}
+}
+
 func TestSkillToolScope(t *testing.T) {
 	t.Parallel()
 
@@ -217,6 +285,11 @@ func TestSkillToolScope(t *testing.T) {
 	proposeScope := tool.Scope(marshalSkillToolParams(t, map[string]any{"action": "propose_improvement", "name": "scoped"}))
 	if want := (tools.ToolScope{WritePaths: []string{proposalDir}, Persistent: true}); !reflect.DeepEqual(proposeScope, want) {
 		t.Fatalf("Scope(propose_improvement) = %+v, want %+v", proposeScope, want)
+	}
+	proposalPath := filepath.Join(proposalDir, "proposal.md")
+	applyScope := tool.Scope(marshalSkillToolParams(t, map[string]any{"action": "apply_improvement", "proposal_path": proposalPath}))
+	if want := (tools.ToolScope{ReadPaths: []string{proposalPath, wikiDir}, WritePaths: []string{wikiDir}, Persistent: true}); !reflect.DeepEqual(applyScope, want) {
+		t.Fatalf("Scope(apply_improvement) = %+v, want %+v", applyScope, want)
 	}
 	if !tool.DeferInitialToolSchema() {
 		t.Fatal("create_skill should be deferred in search-first mode")

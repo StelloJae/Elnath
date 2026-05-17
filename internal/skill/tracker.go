@@ -203,6 +203,34 @@ func (t *Tracker) WriteImprovementProposal(proposal ImprovementProposal) (string
 	return path, nil
 }
 
+func (t *Tracker) ReadImprovementProposal(path string) (ImprovementProposal, error) {
+	if t == nil {
+		return ImprovementProposal{}, fmt.Errorf("skill tracker is not configured")
+	}
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ImprovementProposal{}, fmt.Errorf("skill improvement proposal path must not be empty")
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(t.proposalDir, path)
+	}
+	cleanDir := filepath.Clean(t.proposalDir)
+	cleanPath := filepath.Clean(path)
+	rel, err := filepath.Rel(cleanDir, cleanPath)
+	if err != nil || rel == "." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || rel == ".." {
+		return ImprovementProposal{}, fmt.Errorf("skill improvement proposal must be under %s", cleanDir)
+	}
+	raw, err := os.ReadFile(cleanPath)
+	if err != nil {
+		return ImprovementProposal{}, fmt.Errorf("read skill improvement proposal: %w", err)
+	}
+	proposal, err := parseImprovementProposalMarkdown(string(raw))
+	if err != nil {
+		return ImprovementProposal{}, err
+	}
+	return proposal, nil
+}
+
 func normalizeSkillVerificationResult(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case SkillVerificationPassed:
@@ -281,6 +309,85 @@ func formatImprovementProposal(proposal ImprovementProposal) string {
 	b.WriteString(strings.TrimSpace(proposal.SuggestedChange))
 	b.WriteString("\n")
 	return b.String()
+}
+
+func parseImprovementProposalMarkdown(text string) (ImprovementProposal, error) {
+	proposal := ImprovementProposal{
+		SkillName:       frontmatterValue(text, "skill"),
+		SessionID:       frontmatterValue(text, "session_id"),
+		Reason:          markdownSection(text, "## Reason"),
+		SuggestedChange: markdownSection(text, "## Suggested Change"),
+	}
+	if created := frontmatterValue(text, "created_at"); created != "" {
+		if parsed, err := time.Parse(time.RFC3339, created); err == nil {
+			proposal.CreatedAt = parsed
+		}
+	}
+	if err := ValidateSkillName(proposal.SkillName); err != nil {
+		return ImprovementProposal{}, err
+	}
+	if strings.TrimSpace(proposal.Reason) == "" {
+		return ImprovementProposal{}, fmt.Errorf("skill improvement proposal reason must not be empty")
+	}
+	if strings.TrimSpace(proposal.SuggestedChange) == "" {
+		return ImprovementProposal{}, fmt.Errorf("skill improvement proposal suggested change must not be empty")
+	}
+	proposal.Evidence = markdownListSection(text, "## Evidence")
+	return proposal, nil
+}
+
+func frontmatterValue(text, key string) string {
+	lines := strings.Split(text, "\n")
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {
+		return ""
+	}
+	prefix := key + ":"
+	for _, line := range lines[1:] {
+		line = strings.TrimSpace(line)
+		if line == "---" {
+			break
+		}
+		if strings.HasPrefix(line, prefix) {
+			return strings.Trim(strings.TrimSpace(strings.TrimPrefix(line, prefix)), "\"'")
+		}
+	}
+	return ""
+}
+
+func markdownSection(text, header string) string {
+	lines := strings.Split(text, "\n")
+	var out []string
+	inSection := false
+	for _, line := range lines {
+		if strings.TrimSpace(line) == header {
+			inSection = true
+			continue
+		}
+		if inSection && strings.HasPrefix(strings.TrimSpace(line), "## ") {
+			break
+		}
+		if inSection {
+			out = append(out, line)
+		}
+	}
+	return strings.TrimSpace(strings.Join(out, "\n"))
+}
+
+func markdownListSection(text, header string) []string {
+	section := markdownSection(text, header)
+	if section == "" {
+		return nil
+	}
+	var out []string
+	for _, line := range strings.Split(section, "\n") {
+		line = strings.TrimSpace(line)
+		line = strings.TrimPrefix(line, "- ")
+		line = strings.TrimSpace(line)
+		if line != "" {
+			out = append(out, line)
+		}
+	}
+	return out
 }
 
 func appendJSONL[T any](path string, record T) error {
