@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/stello/elnath/internal/tools"
 )
@@ -14,10 +15,20 @@ const CatalogToolName = "skill_catalog"
 
 type CatalogTool struct {
 	registry *Registry
+	tracker  *Tracker
 }
 
-func NewCatalogTool(registry *Registry) *CatalogTool {
-	return &CatalogTool{registry: registry}
+func NewCatalogTool(registry *Registry, trackers ...*Tracker) *CatalogTool {
+	return &CatalogTool{registry: registry, tracker: firstCatalogTracker(trackers)}
+}
+
+func firstCatalogTracker(trackers []*Tracker) *Tracker {
+	for _, tracker := range trackers {
+		if tracker != nil {
+			return tracker
+		}
+	}
+	return nil
 }
 
 func (t *CatalogTool) Name() string { return CatalogToolName }
@@ -28,7 +39,7 @@ func (t *CatalogTool) Description() string {
 
 func (t *CatalogTool) Schema() json.RawMessage {
 	return tools.Object(map[string]tools.Property{
-		"action":         tools.StringEnum("Catalog action.", "list", "show", "recommend", "match_paths"),
+		"action":         tools.StringEnum("Catalog action.", "list", "show", "recommend", "match_paths", "usage"),
 		"skill":          tools.String("Skill name for action=show."),
 		"query":          tools.String("Intent or task query for action=recommend."),
 		"paths":          tools.Array("File paths for action=match_paths.", "string"),
@@ -86,9 +97,11 @@ type catalogToolReceipt struct {
 	Action             string   `json:"action"`
 	ReadOnly           bool     `json:"read_only"`
 	RegistryAvailable  bool     `json:"registry_available"`
+	TrackerAvailable   bool     `json:"tracker_available,omitempty"`
 	TotalSkills        int      `json:"total_skills"`
 	ReturnedSkills     int      `json:"returned_skills,omitempty"`
 	ReturnedMatches    int      `json:"returned_matches,omitempty"`
+	ReturnedUsage      int      `json:"returned_usage,omitempty"`
 	TrustFilterApplied bool     `json:"trust_filter_applied"`
 	AllowTrustLevels   []string `json:"allow_trust_levels,omitempty"`
 	MaxResults         int      `json:"max_results,omitempty"`
@@ -150,8 +163,17 @@ func (t *CatalogTool) Execute(_ context.Context, params json.RawMessage) (*tools
 			"action":  "match_paths",
 			"matches": matches,
 		}, 0, len(matches), filter))
+	case "usage":
+		usage, usageErr := t.usageEntries(filter)
+		if usageErr != nil {
+			return tools.ErrorResult(usageErr.Error()), nil
+		}
+		return marshalSkillCatalogOutput(t.withUsageReceipt(input, map[string]any{
+			"action": "usage",
+			"usage":  usage,
+		}, len(usage), filter))
 	default:
-		return tools.ErrorResult(fmt.Sprintf("skill_catalog: unsupported action %q; supported actions are list, show, recommend, and match_paths", input.Action)), nil
+		return tools.ErrorResult(fmt.Sprintf("skill_catalog: unsupported action %q; supported actions are list, show, recommend, match_paths, and usage", input.Action)), nil
 	}
 }
 
@@ -166,6 +188,7 @@ func (t *CatalogTool) receipt(input catalogToolInput, action string, returnedSki
 		Action:             action,
 		ReadOnly:           true,
 		RegistryAvailable:  t != nil && t.registry != nil,
+		TrackerAvailable:   t != nil && t.tracker != nil,
 		TotalSkills:        t.totalSkills(),
 		ReturnedSkills:     returnedSkills,
 		ReturnedMatches:    returnedMatches,
@@ -184,6 +207,13 @@ func (t *CatalogTool) receipt(input catalogToolInput, action string, returnedSki
 		receipt.CWDSet = strings.TrimSpace(input.CWD) != ""
 	}
 	return receipt
+}
+
+func (t *CatalogTool) withUsageReceipt(input catalogToolInput, output map[string]any, returnedUsage int, filter skillTrustFilter) map[string]any {
+	receipt := t.receipt(input, "usage", 0, 0, filter)
+	receipt.ReturnedUsage = returnedUsage
+	output["receipt"] = receipt
+	return output
 }
 
 func (t *CatalogTool) totalSkills() int {
@@ -237,6 +267,69 @@ func (t *CatalogTool) recommendedSkillEntries(query string, maxResults int, filt
 		matches = matches[:maxResults]
 	}
 	return matches
+}
+
+type catalogUsageEntry struct {
+	SkillName   string `json:"skill_name"`
+	Invocations int    `json:"invocations"`
+	Successes   int    `json:"successes"`
+	Failures    int    `json:"failures"`
+	LastUsedAt  string `json:"last_used_at,omitempty"`
+	Source      string `json:"source,omitempty"`
+	TrustLevel  string `json:"trust_level,omitempty"`
+	External    bool   `json:"external"`
+}
+
+func (t *CatalogTool) usageEntries(filter skillTrustFilter) ([]catalogUsageEntry, error) {
+	if t == nil || t.tracker == nil {
+		return nil, fmt.Errorf("skill_catalog: skill usage tracker is not configured")
+	}
+	summaries, err := t.tracker.UsageSummaries()
+	if err != nil {
+		return nil, fmt.Errorf("skill_catalog usage: %w", err)
+	}
+	var entries []catalogUsageEntry
+	for _, sk := range t.registrySkillsForUsage(summaries) {
+		if !filter.allowsSkill(sk) {
+			continue
+		}
+		summary, ok := summaries[sk.Name]
+		if !ok || summary.Invocations == 0 {
+			continue
+		}
+		entry := catalogUsageEntry{
+			SkillName:   sk.Name,
+			Invocations: summary.Invocations,
+			Successes:   summary.Successes,
+			Failures:    summary.Failures,
+			Source:      sk.Source,
+			TrustLevel:  sk.TrustLevel(),
+			External:    sk.External(),
+		}
+		if !summary.LastUsedAt.IsZero() {
+			entry.LastUsedAt = summary.LastUsedAt.UTC().Format(time.RFC3339)
+		}
+		entries = append(entries, entry)
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].Invocations != entries[j].Invocations {
+			return entries[i].Invocations > entries[j].Invocations
+		}
+		return entries[i].SkillName < entries[j].SkillName
+	})
+	return entries, nil
+}
+
+func (t *CatalogTool) registrySkillsForUsage(summaries map[string]UsageSummary) []*Skill {
+	if t != nil && t.registry != nil {
+		return t.registry.List()
+	}
+	out := make([]*Skill, 0, len(summaries))
+	for name := range summaries {
+		out = append(out, &Skill{Name: name})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 func firstSkillCatalogEntries(skills []*Skill, maxResults int, filter skillTrustFilter) []catalogSkillEntry {

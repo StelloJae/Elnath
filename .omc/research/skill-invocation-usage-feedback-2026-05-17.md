@@ -86,8 +86,29 @@ invalid call shape.
 
 - `internal/skill/invocation_tool.go`
 - `internal/skill/invocation_tool_test.go`
+- `internal/skill/catalog_tool.go`
+- `internal/skill/catalog_tool_test.go`
+- `internal/skill/tracker.go`
 - `cmd/elnath/runtime.go`
 - `.omc/research/skill-invocation-usage-feedback-2026-05-17.md`
+
+## Second Slice: Model-Visible Usage Summaries
+
+After model-callable skill execution started recording usage, the next issue
+was visibility: the model could record usage but could not inspect it through a
+skill-native read-only tool.
+
+Added:
+
+- `Tracker.UsageSummaries()`
+- `skill_catalog` action `usage`
+- usage entries with invocation, success, failure, last-used, source,
+  trust-level, and external metadata
+- read-only usage receipt with `tracker_available` and `returned_usage`
+- runtime wiring that passes the existing skill tracker into `skill_catalog`
+
+This gives Elnath a small Hermes-style skill feedback loop without adding
+automatic pruning or broad curator behavior.
 
 ## Verification
 
@@ -106,7 +127,13 @@ Broader proportional verification:
 - `go test ./internal/skill -count=1`
 - Result: PASS
 
+- `go test ./internal/skill -run 'TestCatalogToolReportsUsageStats|TestCatalogToolUsageRequiresTracker' -count=1`
+- Result: PASS
+
 - `go test ./cmd/elnath -run 'TestCommandRegistryIncludesSkill|TestCmdSkillCreateDeleteEditAndStats|TestCommandCatalogToolShowsRuntimeControlArgumentHints' -count=1`
+- Result: PASS
+
+- `go test ./cmd/elnath -count=1`
 - Result: PASS
 
 - `git diff --check`
@@ -132,6 +159,9 @@ Allowed:
 - successful skill tool output reports whether usage was recorded;
 - runtime wiring passes the existing skill tracker into the model-callable skill
   tool.
+- `skill_catalog` can expose read-only skill usage summaries when a tracker is
+  configured;
+- usage summaries include success/failure counts for skill feedback.
 
 Not claimed:
 
@@ -144,7 +174,8 @@ Not claimed:
 
 Continue with the skill feedback lane before opening a PR:
 
-- expose richer success/failure usage summaries, or
-- add explicit skill guard/explainability for external/local-compatible skills.
+- add explicit skill guard/explainability for external/local-compatible skills,
+  or
+- document skill curator exclusions before any automatic skill lifecycle work.
 
 Do not resume benchmark-first work.
