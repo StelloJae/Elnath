@@ -1443,6 +1443,50 @@ Updated next candidates:
    convergence gap map artifact;
 3. open one draft PR for this coherent UX batch only after sequencing is clear.
 
+## Operator-UX-Batch PR-Readiness Update
+
+Date: 2026-05-17 KST
+
+Local branch:
+
+- `codex/user-input-operator-ux`
+
+Head:
+
+- `119807a docs(research): record operator ux batch readiness`
+
+Artifact:
+
+- `.omc/research/operator-ux-batch-pr-readiness-2026-05-17.md`
+
+Batch scope:
+
+- Telegram pending-question numeric fallback and inline buttons;
+- terminal `elnath task answer --choice N`;
+- CLI handoff lifecycle state recording;
+- plain text task progress rendering;
+- Telegram `/handoff` recap and state recording.
+
+Verification:
+
+- `go test ./cmd/elnath ./internal/telegram ./internal/daemon ./internal/learning ./internal/agent -count=1`
+  passed.
+- `go vet ./...` passed.
+- `git diff --check origin/main..HEAD` passed.
+- Post-PR254 rebase verification also passed:
+  - `go test ./cmd/elnath ./internal/telegram ./internal/daemon ./internal/learning ./internal/agent -count=1`
+  - `go vet ./...`
+  - `git diff --check origin/main..HEAD`
+
+Sequencing with PR #254:
+
+- PR #254 merged as `0f432eb9555e37e0b16dad1350ac05bf09232d34`.
+- Production files did not overlap this UX batch.
+- `.omc/research/elnath-convergence-gap-map-2026-05-17.md` overlapped as an
+  artifact and was reconciled during the rebase.
+- Do not create another tiny PR; this branch is now one coherent PR-sized
+  local batch.
+
 ## Claim Boundary
 
 Allowed after this gap map:
@@ -1466,6 +1510,7 @@ Allowed after this gap map:
   milestone on `codex/user-input-operator-ux`.
 - Telegram handoff recap/state now has a local, tested gateway milestone on
   `codex/user-input-operator-ux`.
+- The operator UX branch is locally verified as one coherent PR-sized batch.
 - The next highest-leverage product/runtime candidates are approval
   continuation closeout, remaining user-input/operator UX, session
   handoff/recap, and progress/alive-status polish.
@@ -1486,9 +1531,9 @@ Commands run:
 - `test -f /Users/stello/elnath/.omc/research/elnath-convergence-gap-map-2026-05-17.md`
   passed.
 - `wc -l /Users/stello/elnath/.omc/research/elnath-convergence-gap-map-2026-05-17.md`
-  returned `1497`.
-- `rg -n "Post-Telegram-Handoff|telegram-handoff-command|/handoff <task_id>|Telegram handoff recap|Claim Boundary" /Users/stello/elnath/.omc/research/elnath-convergence-gap-map-2026-05-17.md /Users/stello/elnath/.omc/research/telegram-handoff-command-2026-05-17.md`
-  found the Telegram handoff update, artifact link, command syntax, gateway
-  handoff claim, and claim boundary.
-- `git diff --check -- internal/telegram/shell.go internal/telegram/shell_test.go cmd/elnath/cmd_daemon.go cmd/elnath/cmd_telegram.go .omc/research/telegram-handoff-command-2026-05-17.md .omc/research/elnath-convergence-gap-map-2026-05-17.md`
+  returned `1539`.
+- `rg -n "Operator-UX-Batch|operator-ux-batch|119807a|0f432eb|go vet|PR #254|Claim Boundary" /Users/stello/elnath/.omc/research/elnath-convergence-gap-map-2026-05-17.md /Users/stello/elnath/.omc/research/operator-ux-batch-pr-readiness-2026-05-17.md`
+  found the operator UX batch update, readiness artifact link, current head
+  commit, PR #254 merge sequencing, `go vet` evidence, and claim boundary.
+- `git diff --check -- .omc/research/operator-ux-batch-pr-readiness-2026-05-17.md .omc/research/elnath-convergence-gap-map-2026-05-17.md`
   passed.
