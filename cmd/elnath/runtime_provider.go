@@ -12,7 +12,7 @@ import (
 	"github.com/stello/elnath/internal/llm"
 )
 
-const providerCommandUsage = "Usage: /provider [status [--json]|candidates [--json]|check <provider> [--json]|use <provider> [--json]|help]"
+const providerCommandUsage = "Usage: /provider [status [--json]|route [--json]|candidates [--json]|check <provider> [--json]|use <provider> [--json]|help]"
 
 func (rt *executionRuntime) tryProviderCommand(
 	sess *agent.Session,
@@ -62,6 +62,8 @@ func (rt *executionRuntime) applyProviderCommand(args []string) string {
 		return rt.currentProviderJSONMessage()
 	case "current", "status":
 		return rt.applyProviderStatusCommand(args[1:])
+	case "route":
+		return rt.applyProviderRouteCommand(args[1:])
 	case "candidates":
 		return rt.applyProviderCandidatesCommand(args[1:])
 	case "check":
@@ -79,6 +81,20 @@ func (rt *executionRuntime) applyProviderStatusCommand(args []string) string {
 	}
 	if len(args) == 1 && strings.ToLower(strings.TrimSpace(args[0])) == "--json" {
 		return rt.currentProviderJSONMessage()
+	}
+	return invalidProviderArgument(args)
+}
+
+func (rt *executionRuntime) applyProviderRouteCommand(args []string) string {
+	if len(args) == 0 {
+		return formatProviderRoute(rt.currentProviderRouteView())
+	}
+	if len(args) == 1 && strings.ToLower(strings.TrimSpace(args[0])) == "--json" {
+		raw, err := json.MarshalIndent(rt.currentProviderRouteView(), "", "  ")
+		if err != nil {
+			return fmt.Sprintf("provider route: marshal JSON: %v", err)
+		}
+		return string(raw)
 	}
 	return invalidProviderArgument(args)
 }
@@ -283,6 +299,10 @@ func (rt *executionRuntime) currentProviderJSONMessage() string {
 		return fmt.Sprintf("provider status: marshal JSON: %v", err)
 	}
 	return string(raw)
+}
+
+func (rt *executionRuntime) currentProviderRouteView() providerRouteView {
+	return providerRouteViewFromStatus(rt.currentProviderStatusView(), "active_provider_from_running_session")
 }
 
 func (rt *executionRuntime) currentProviderStatusView() providerStatusView {

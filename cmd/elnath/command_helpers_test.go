@@ -453,6 +453,71 @@ func TestProviderCommandStatusJSONNoSelfHealOmitsReflectionBoundary(t *testing.T
 	}
 }
 
+func TestProviderCommandRouteJSONExplainsActiveRoute(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	cfgData := "data_dir: " + filepath.Join(dir, "data") + "\n" +
+		"wiki_dir: " + filepath.Join(dir, "wiki") + "\n" +
+		"provider: openai_responses\n" +
+		"openai_responses:\n" +
+		"  api_key: responses-key\n" +
+		"  base_url: https://api.moonshot.ai/v1\n" +
+		"  model: kimi-k2\n" +
+		"  reasoning_effort: high\n" +
+		"  timeout_seconds: 77\n" +
+		"anthropic:\n" +
+		"  api_key: anthropic-key\n" +
+		"  model: claude-sonnet-4-6\n" +
+		"  timeout_seconds: 90\n" +
+		"reasoning:\n" +
+		"  effort_mode: auto\n" +
+		"  effort: medium\n" +
+		"permission:\n  mode: default\n"
+	if err := os.WriteFile(cfgPath, []byte(cfgData), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	t.Setenv("ELNATH_PROVIDER", "")
+	t.Setenv("ELNATH_OPENAI_API_KEY", "")
+	t.Setenv("ELNATH_OPENAI_RESPONSES_API_KEY", "")
+	t.Setenv("ELNATH_ANTHROPIC_API_KEY", "")
+	withArgs(t, []string{"elnath", "--config", cfgPath})
+	resetLoadLocaleCache()
+
+	stdout, stderr := captureOutput(t, func() {
+		if err := executeCommand(context.Background(), "provider", []string{"route", "--json"}); err != nil {
+			t.Fatalf("executeCommand(provider route --json): %v", err)
+		}
+	})
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+	var got providerRouteView
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatalf("provider route json: %v\n%s", err, stdout)
+	}
+	if got.ActiveProvider != "openai-responses" || got.ActiveModel != "kimi-k2" {
+		t.Fatalf("provider route = %+v, want openai-responses/kimi-k2", got)
+	}
+	if got.SelectionReason != "active_provider_built_from_current_config" {
+		t.Fatalf("selection reason = %q", got.SelectionReason)
+	}
+	if got.ReasoningEffortMode != "auto" || got.ConfiguredEffort != "medium" || got.ProviderEffort != llm.ReasoningEffortNativeWithUnsupportedRetry {
+		t.Fatalf("route effort = %+v, want auto/medium/native-with-retry", got)
+	}
+	if !got.AutoEffortCompatible || len(got.AutoEffortPolicy) < 4 {
+		t.Fatalf("auto effort policy = %+v compatible=%t, want policy rows and compatible provider", got.AutoEffortPolicy, got.AutoEffortCompatible)
+	}
+	if len(got.ConfiguredProviders) != 2 || len(got.ClaimBoundary) == 0 || len(got.NextSafeActions) == 0 {
+		t.Fatalf("route metadata = %+v, want candidates, claim boundary, and next actions", got)
+	}
+	if got.FallbackPolicy.Mode != "planning_only" || got.FallbackPolicy.AutomaticProviderSwitch {
+		t.Fatalf("fallback policy = %+v, want planning-only without automatic provider switch", got.FallbackPolicy)
+	}
+	if strings.Contains(stdout, "responses-key") || strings.Contains(stdout, "anthropic-key") {
+		t.Fatalf("stdout leaked credential: %q", stdout)
+	}
+}
+
 func TestProviderCommandStatusJSONReportsMissingProvider(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", t.TempDir())

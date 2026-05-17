@@ -69,6 +69,45 @@ type providerSelectionCheckView struct {
 	ProviderSwitchBoundaries       []string `json:"provider_switch_boundaries,omitempty"`
 }
 
+type providerRouteView struct {
+	ActiveProvider                 string                         `json:"active_provider"`
+	ActiveModel                    string                         `json:"active_model"`
+	Ready                          bool                           `json:"ready"`
+	FailureFamily                  string                         `json:"failure_family,omitempty"`
+	Issues                         []string                       `json:"issues,omitempty"`
+	Remediation                    []string                       `json:"remediation,omitempty"`
+	SelectionReason                string                         `json:"selection_reason"`
+	ReasoningEffortMode            string                         `json:"reasoning_effort_mode"`
+	ConfiguredEffort               string                         `json:"configured_effort"`
+	ProviderEffort                 string                         `json:"provider_effort"`
+	ProviderEffortNote             string                         `json:"provider_effort_note,omitempty"`
+	EffortCompatibility            string                         `json:"effort_compatibility"`
+	AutoEffortCompatible           bool                           `json:"auto_effort_compatible"`
+	AutoEffortPolicy               []providerAutoEffortPolicyView `json:"auto_effort_policy,omitempty"`
+	RequestTimeoutSeconds          int                            `json:"request_timeout_seconds"`
+	RuntimeProviderSwitchAvailable bool                           `json:"runtime_provider_switch_available"`
+	ProviderSwitchBoundaries       []string                       `json:"provider_switch_boundaries,omitempty"`
+	FallbackPolicy                 providerFallbackPolicyView     `json:"fallback_policy"`
+	ConfiguredProviders            []providerConfigCandidateView  `json:"configured_providers,omitempty"`
+	NextSafeActions                []string                       `json:"next_safe_actions,omitempty"`
+	ClaimBoundary                  []string                       `json:"claim_boundary,omitempty"`
+}
+
+type providerAutoEffortPolicyView struct {
+	Workload string `json:"workload"`
+	Effort   string `json:"effort"`
+	Reason   string `json:"reason"`
+}
+
+type providerFallbackPolicyView struct {
+	Mode                    string   `json:"mode"`
+	AutomaticProviderSwitch bool     `json:"automatic_provider_switch"`
+	CandidateSource         string   `json:"candidate_source"`
+	EligibleFailureFamilies []string `json:"eligible_failure_families"`
+	BlockedReasons          []string `json:"blocked_reasons"`
+	StopConditions          []string `json:"stop_conditions"`
+}
+
 const (
 	providerSwitchBoundaryRestartRequired         = "restart_required"
 	providerSwitchBoundaryReflectionStartupBound  = "reflection_provider_startup_bound"
@@ -85,6 +124,8 @@ func cmdProvider(_ context.Context, args []string) error {
 		return providerStatus(args[1:])
 	case "candidates":
 		return providerCandidates(args[1:])
+	case "route":
+		return providerRoute(args[1:])
 	case "check":
 		return providerCheck(args[1:])
 	case "help", "-h", "--help":
@@ -95,7 +136,7 @@ func cmdProvider(_ context.Context, args []string) error {
 }
 
 func providerUsage() error {
-	fmt.Fprintln(os.Stdout, "Usage: elnath provider [status [--json]|candidates [--json]|check <provider> [--json]]")
+	fmt.Fprintln(os.Stdout, "Usage: elnath provider [status [--json]|route [--json]|candidates [--json]|check <provider> [--json]]")
 	return nil
 }
 
@@ -250,6 +291,44 @@ func providerCandidates(args []string) error {
 	return nil
 }
 
+func providerRoute(args []string) error {
+	jsonOut := false
+	for _, arg := range args {
+		switch {
+		case arg == "--json":
+			jsonOut = true
+		case arg == "help" || arg == "-h" || arg == "--help":
+			return providerUsage()
+		default:
+			return fmt.Errorf("provider route: unknown flag %q", arg)
+		}
+	}
+
+	cfg, err := loadProviderCommandConfig()
+	if err != nil {
+		return fmt.Errorf("provider route: %w", err)
+	}
+	view, err := providerRouteViewForConfig(cfg)
+	if jsonOut {
+		if err != nil {
+			view = providerRouteFailureView(cfg, err)
+		}
+		enc := json.NewEncoder(os.Stdout)
+		if encodeErr := enc.Encode(view); encodeErr != nil {
+			return encodeErr
+		}
+		if err != nil {
+			return fmt.Errorf("provider route: %w", err)
+		}
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("provider route: %w", err)
+	}
+	fmt.Fprintln(os.Stdout, formatProviderRoute(view))
+	return nil
+}
+
 func providerCheck(args []string) error {
 	providerName := ""
 	jsonOut := false
@@ -301,6 +380,148 @@ func providerCheck(args []string) error {
 	fmt.Fprintln(os.Stdout, "This does not switch any running session.")
 	fmt.Fprintln(os.Stdout, formatProviderSwitchBoundary(view.ProviderSwitchBoundaries))
 	return nil
+}
+
+func providerRouteViewForConfig(cfg *config.Config) (providerRouteView, error) {
+	provider, model, err := buildProvider(cfg)
+	if err != nil {
+		return providerRouteView{}, err
+	}
+	caps := llm.CapabilitiesOf(provider)
+	status := providerStatusView{
+		Provider:                       caps.Name,
+		Model:                          model,
+		Ready:                          true,
+		ReasoningEffort:                caps.ReasoningEffort,
+		ReasoningEffortMode:            cfg.Reasoning.EffortMode,
+		ConfiguredEffort:               cfg.Reasoning.Effort,
+		ProviderEffort:                 caps.ReasoningEffort,
+		ProviderEffortNote:             caps.ReasoningEffortFallback,
+		EffortCompatibility:            caps.ReasoningEffort,
+		AutoEffortCompatible:           autoEffortCompatible(caps.ReasoningEffort),
+		RequestTimeoutSeconds:          caps.RequestTimeoutSeconds,
+		RuntimeProviderSwitchAvailable: false,
+		ProviderSwitchBoundaries:       providerSwitchBoundaries(cfg.SelfHealing.Enabled),
+		ConfiguredProviders:            configuredProviderCandidates(cfg),
+	}
+	return providerRouteViewFromStatus(status, "active_provider_built_from_current_config"), nil
+}
+
+func providerRouteFailureView(cfg *config.Config, err error) providerRouteView {
+	status := providerStatusFailureView(cfg, err)
+	status.ConfiguredProviders = configuredProviderCandidates(cfg)
+	return providerRouteViewFromStatus(status, "active_provider_unavailable")
+}
+
+func providerRouteViewFromStatus(status providerStatusView, selectionReason string) providerRouteView {
+	model := strings.TrimSpace(status.Model)
+	if model == "" && status.Ready {
+		model = "provider default"
+	}
+	view := providerRouteView{
+		ActiveProvider:                 status.Provider,
+		ActiveModel:                    model,
+		Ready:                          status.Ready,
+		FailureFamily:                  status.FailureFamily,
+		Issues:                         status.Issues,
+		Remediation:                    status.Remediation,
+		SelectionReason:                selectionReason,
+		ReasoningEffortMode:            status.ReasoningEffortMode,
+		ConfiguredEffort:               status.ConfiguredEffort,
+		ProviderEffort:                 status.ProviderEffort,
+		ProviderEffortNote:             status.ProviderEffortNote,
+		EffortCompatibility:            status.EffortCompatibility,
+		AutoEffortCompatible:           status.AutoEffortCompatible,
+		AutoEffortPolicy:               providerAutoEffortPolicy(),
+		RequestTimeoutSeconds:          status.RequestTimeoutSeconds,
+		RuntimeProviderSwitchAvailable: status.RuntimeProviderSwitchAvailable,
+		ProviderSwitchBoundaries:       status.ProviderSwitchBoundaries,
+		FallbackPolicy:                 providerFallbackPolicy(),
+		ConfiguredProviders:            status.ConfiguredProviders,
+		ClaimBoundary: []string{
+			"route_explain_only",
+			"does_not_switch_provider",
+			"does_not_make_model_request",
+			"auto_effort_policy_is_heuristic",
+		},
+	}
+	if status.RuntimeProviderSwitchAvailable {
+		view.NextSafeActions = []string{
+			"use /provider use <provider> inside an interactive session when a configured candidate should become active",
+			"use /effort <level> for a manual session override",
+			"use elnath provider candidates --json to inspect configured alternatives",
+		}
+	} else {
+		view.NextSafeActions = []string{
+			"edit provider config or ELNATH_PROVIDER before starting a new runtime when switching is startup-bound",
+			"use /effort <level> for a manual session override",
+			"use elnath provider candidates --json to inspect configured alternatives",
+		}
+	}
+	return view
+}
+
+func providerAutoEffortPolicy() []providerAutoEffortPolicyView {
+	return []providerAutoEffortPolicyView{
+		{Workload: "simple_status_progress_summary", Effort: "low", Reason: "cheap read-only or summarization work"},
+		{Workload: "implementation_debug_benchmark_ci", Effort: "high", Reason: "code edits and verification failures need deeper reasoning"},
+		{Workload: "root_cause_security_architecture_autonomous", Effort: "xhigh", Reason: "high-blast-radius decisions need maximum reasoning"},
+		{Workload: "default", Effort: "medium", Reason: "fallback when no stronger signal is present"},
+		{Workload: "skill_metadata_override", Effort: "skill_defined", Reason: "skill metadata can override automatic routing for known workflows"},
+	}
+}
+
+func providerFallbackPolicy() providerFallbackPolicyView {
+	return providerFallbackPolicyView{
+		Mode:                    "planning_only",
+		AutomaticProviderSwitch: false,
+		CandidateSource:         "configured_providers",
+		EligibleFailureFamilies: []string{
+			"auth_required",
+			"rate_limited",
+			"provider_timeout",
+			"provider_unavailable",
+		},
+		BlockedReasons: []string{
+			"automatic_provider_fallback_not_enabled",
+			"provider_switch_may_be_startup_bound",
+			"explicit_user_provider_or_model_must_not_be_overridden_silently",
+		},
+		StopConditions: []string{
+			"no_ready_configured_candidate",
+			"explicit_provider_or_model_requested",
+			"daemon_shared_runtime_requires_restart",
+			"fallback_would_change_claim_boundary",
+		},
+	}
+}
+
+func formatProviderRoute(view providerRouteView) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Provider route: %s model=%s\n", view.ActiveProvider, view.ActiveModel)
+	fmt.Fprintf(&b, "Selection reason: %s\n", view.SelectionReason)
+	fmt.Fprintf(&b, "Reasoning: mode=%s effort=%s provider_capability=%s auto_compatible=%t\n",
+		view.ReasoningEffortMode,
+		view.ConfiguredEffort,
+		view.ProviderEffort,
+		view.AutoEffortCompatible,
+	)
+	if view.ProviderEffortNote != "" {
+		fmt.Fprintf(&b, "Reasoning note: %s\n", view.ProviderEffortNote)
+	}
+	fmt.Fprintf(&b, "Request timeout: %ds\n", view.RequestTimeoutSeconds)
+	b.WriteString("Auto effort policy:")
+	for _, row := range view.AutoEffortPolicy {
+		fmt.Fprintf(&b, "\n  - %s -> %s (%s)", row.Workload, row.Effort, row.Reason)
+	}
+	b.WriteString("\nNext safe actions:")
+	for _, action := range view.NextSafeActions {
+		fmt.Fprintf(&b, "\n  - %s", action)
+	}
+	fmt.Fprintf(&b, "\nFallback policy: %s automatic_provider_switch=%t", view.FallbackPolicy.Mode, view.FallbackPolicy.AutomaticProviderSwitch)
+	b.WriteString("\n")
+	b.WriteString(formatProviderSwitchBoundary(view.ProviderSwitchBoundaries))
+	return b.String()
 }
 
 func configuredProviderCandidates(cfg *config.Config) []providerConfigCandidateView {

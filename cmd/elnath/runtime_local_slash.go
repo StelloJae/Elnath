@@ -27,7 +27,7 @@ func runtimeLocalSlashCommandSpecs() []localSlashCommandSpec {
 	return []localSlashCommandSpec{
 		{Name: "/effort", Description: "Inspect or set session reasoning effort.", ArgumentHint: "[auto|none|minimal|low|medium|high|xhigh|max|status]", Handler: (*executionRuntime).tryEffortCommand},
 		{Name: "/model", Description: "Inspect or set the session request model.", ArgumentHint: "[status|default|unset|<model>] [--json]", Handler: (*executionRuntime).tryModelCommand},
-		{Name: "/provider", Description: "Inspect or switch active provider capabilities and configured candidates.", ArgumentHint: "status|candidates|check <provider>|use <provider> [--json]", Handler: (*executionRuntime).tryProviderCommand},
+		{Name: "/provider", Description: "Inspect or switch active provider capabilities and configured candidates.", ArgumentHint: "status|route|candidates|check <provider>|use <provider> [--json]", Handler: (*executionRuntime).tryProviderCommand},
 		{Name: "/commands", Description: "List local command catalog entries.", ArgumentHint: "[--json] [--all|--hidden]", Handler: (*executionRuntime).tryCommandsCommand},
 		{Name: "/help", Description: "Alias for the local command catalog.", ArgumentHint: "[--json] [--all|--hidden]", Handler: (*executionRuntime).tryCommandsCommand},
 		{Name: "/skills", Description: "List registered skills without executing them.", ArgumentHint: "[--json] [--all|--hidden]", Handler: (*executionRuntime).trySkillsCommand},
