@@ -400,6 +400,22 @@ func controlSurfaceManifest() []controlSurfaceManifestEntry {
 			Notes:         "session task scratchpad with single in_progress and active_form guards plus verification nudge receipt",
 		},
 		{
+			Name:   "agentic",
+			Status: "implemented",
+			Tools: []string{
+				"agentic_actor_graph",
+				"agentic_task_evidence",
+				"agentic_delegate_create",
+				"agentic_delegate_list",
+				"agentic_delegate_status",
+				"agentic_delegate_enqueue",
+				"agentic_message_send",
+				"agentic_message_list",
+			},
+			ReceiptBacked: true,
+			Notes:         "standing-goal actor graph, delegation, actor messaging, enqueue, and evidence surfaces",
+		},
+		{
 			Name:            "code_intelligence",
 			Status:          "implemented_with_product_boundary",
 			Tools:           []string{"code_symbols"},
