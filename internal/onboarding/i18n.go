@@ -294,6 +294,7 @@ SUBCOMMANDS
   activations [--limit n] [--json]         Show activation run history
   goals [--limit n] [--json]               List standing goals
   goal create [flags]                      Create a standing goal
+  signal create [flags]                    Create a new goal signal
   task <id> [--json]                      Show one agentic task summary
   task --queue-task-id <id> [--json]      Resolve an agentic task from a daemon queue task
   lineage <task-id> [--json]              Show task lineage across ledgers
@@ -304,6 +305,7 @@ EXAMPLES
   $ elnath agentic activations
   $ elnath agentic goals --json
   $ elnath agentic goal create --title "Dogfood activation"
+  $ elnath agentic signal create --goal-id 1 --source manual --type operator_signal
   $ elnath agentic task 42
   $ elnath agentic lineage 42 --json`,
 		"cmd.portability.help": `USAGE
@@ -533,6 +535,7 @@ SEE ALSO
   activations [--limit n] [--json]         activation run history 표시
   goals [--limit n] [--json]               standing goal 목록 표시
   goal create [플래그]                     standing goal 생성
+  signal create [플래그]                   새 goal signal 생성
   task <id> [--json]                      agentic task 요약 표시
   task --queue-task-id <id> [--json]      daemon queue task에서 agentic task 조회
   lineage <task-id> [--json]              ledger lineage 표시`,

@@ -322,6 +322,7 @@ func TestPrintCommandHelp_AgenticMatchesDispatcher(t *testing.T) {
 		"activations",
 		"goals",
 		"goal create",
+		"signal create",
 		"task <id>",
 		"task --queue-task-id <id>",
 		"lineage <task-id>",

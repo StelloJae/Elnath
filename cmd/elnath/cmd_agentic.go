@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -189,6 +191,24 @@ type agenticGoalCreateView struct {
 	Goal            agenticGoalDetailInfo `json:"goal"`
 }
 
+type agenticSignalDetailInfo struct {
+	ID          int64  `json:"id"`
+	GoalID      int64  `json:"goal_id,omitempty"`
+	WatcherID   int64  `json:"watcher_id,omitempty"`
+	Source      string `json:"source"`
+	Type        string `json:"type"`
+	Status      string `json:"status"`
+	Severity    int    `json:"severity"`
+	DedupeKey   string `json:"dedupe_key,omitempty"`
+	Fingerprint string `json:"fingerprint,omitempty"`
+	ObservedAt  string `json:"observed_at"`
+}
+
+type agenticSignalCreateView struct {
+	AutonomyEnabled bool                    `json:"autonomy_enabled"`
+	Signal          agenticSignalDetailInfo `json:"signal"`
+}
+
 type agenticSignalInfo struct {
 	ID        int64  `json:"id"`
 	Source    string `json:"source"`
@@ -328,6 +348,7 @@ Subcommands:
   activations [--limit n] [--json]         Read-only activation history
   goals [--limit n] [--json]               List standing goals
   goal create [flags]                      Create a standing goal
+  signal create [flags]                    Create a new goal signal
   task <id> [--json]                      Read-only task status
   task --queue-task-id <id> [--json]      Resolve agentic task from daemon queue task
   lineage <task-id> [--json]              Read-only task lineage
@@ -349,6 +370,9 @@ Enqueue flags:
 	}
 	if args[0] == "goal" {
 		return cmdAgenticGoal(ctx, args[1:])
+	}
+	if args[0] == "signal" {
+		return cmdAgenticSignal(ctx, args[1:])
 	}
 	cli, closeFn, err := openAgenticCLI()
 	if err != nil {
@@ -470,6 +494,16 @@ type agenticGoalCreateArgs struct {
 	Description string
 	Priority    int
 	RiskBudget  string
+	JSON        bool
+}
+
+type agenticSignalCreateArgs struct {
+	GoalID      int64
+	Source      string
+	SignalType  string
+	PayloadJSON string
+	Severity    int
+	DedupeKey   string
 	JSON        bool
 }
 
@@ -670,6 +704,122 @@ func parseAgenticGoalCreateArgs(args []string) (agenticGoalCreateArgs, error) {
 	}
 	if parsed.RiskBudget == "" {
 		parsed.RiskBudget = agentic.RiskLevelLow
+	}
+	return parsed, nil
+}
+
+func cmdAgenticSignal(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: elnath agentic signal create --goal-id <id> --source <text> --type <text> [--payload-json <json>] [--severity n] [--dedupe-key <text>] [--json]")
+	}
+	switch args[0] {
+	case "create":
+		return cmdAgenticSignalCreate(ctx, args[1:])
+	default:
+		return fmt.Errorf("unknown agentic signal subcommand: %s", args[0])
+	}
+}
+
+func cmdAgenticSignalCreate(ctx context.Context, args []string) error {
+	parsed, err := parseAgenticSignalCreateArgs(args)
+	if err != nil {
+		return err
+	}
+	_, store, closeFn, err := openAgenticWritableStore("agentic signal create")
+	if err != nil {
+		return err
+	}
+	defer closeFn()
+	signal, err := store.CreateGoalSignal(ctx, agentic.GoalSignal{
+		GoalID:      parsed.GoalID,
+		Source:      parsed.Source,
+		Type:        parsed.SignalType,
+		PayloadJSON: parsed.PayloadJSON,
+		Fingerprint: agenticSignalFingerprint(parsed.GoalID, parsed.Source, parsed.SignalType, parsed.PayloadJSON, parsed.DedupeKey),
+		Severity:    parsed.Severity,
+		Status:      agentic.SignalStatusNew,
+		DedupeKey:   parsed.DedupeKey,
+	})
+	if err != nil {
+		return fmt.Errorf("agentic signal create: %w", err)
+	}
+	view := agenticSignalCreateView{
+		AutonomyEnabled: false,
+		Signal:          signalDetailInfo(*signal),
+	}
+	if parsed.JSON {
+		return printJSON(view)
+	}
+	fmt.Print(renderAgenticSignalCreated(&view))
+	return nil
+}
+
+func parseAgenticSignalCreateArgs(args []string) (agenticSignalCreateArgs, error) {
+	parsed := agenticSignalCreateArgs{
+		PayloadJSON: "{}",
+		Severity:    1,
+	}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "--json":
+			parsed.JSON = true
+		case "--goal-id":
+			i++
+			if i >= len(args) {
+				return parsed, fmt.Errorf("usage: elnath agentic signal create --goal-id <id> --source <text> --type <text> [--payload-json <json>] [--severity n] [--dedupe-key <text>] [--json]")
+			}
+			id, err := strconv.ParseInt(args[i], 10, 64)
+			if err != nil || id <= 0 {
+				return parsed, fmt.Errorf("invalid signal goal ID %q", args[i])
+			}
+			parsed.GoalID = id
+		case "--source":
+			i++
+			if i >= len(args) {
+				return parsed, fmt.Errorf("usage: elnath agentic signal create --goal-id <id> --source <text> --type <text> [--payload-json <json>] [--severity n] [--dedupe-key <text>] [--json]")
+			}
+			parsed.Source = strings.TrimSpace(args[i])
+		case "--type":
+			i++
+			if i >= len(args) {
+				return parsed, fmt.Errorf("usage: elnath agentic signal create --goal-id <id> --source <text> --type <text> [--payload-json <json>] [--severity n] [--dedupe-key <text>] [--json]")
+			}
+			parsed.SignalType = strings.TrimSpace(args[i])
+		case "--payload-json":
+			i++
+			if i >= len(args) {
+				return parsed, fmt.Errorf("usage: elnath agentic signal create --goal-id <id> --source <text> --type <text> [--payload-json <json>] [--severity n] [--dedupe-key <text>] [--json]")
+			}
+			parsed.PayloadJSON = strings.TrimSpace(args[i])
+		case "--severity":
+			i++
+			if i >= len(args) {
+				return parsed, fmt.Errorf("usage: elnath agentic signal create --goal-id <id> --source <text> --type <text> [--payload-json <json>] [--severity n] [--dedupe-key <text>] [--json]")
+			}
+			severity, err := strconv.Atoi(args[i])
+			if err != nil {
+				return parsed, fmt.Errorf("invalid signal severity %q", args[i])
+			}
+			parsed.Severity = severity
+		case "--dedupe-key":
+			i++
+			if i >= len(args) {
+				return parsed, fmt.Errorf("usage: elnath agentic signal create --goal-id <id> --source <text> --type <text> [--payload-json <json>] [--severity n] [--dedupe-key <text>] [--json]")
+			}
+			parsed.DedupeKey = strings.TrimSpace(args[i])
+		default:
+			return parsed, fmt.Errorf("unknown signal create flag: %s", arg)
+		}
+	}
+	if parsed.GoalID <= 0 || parsed.Source == "" || parsed.SignalType == "" {
+		return parsed, fmt.Errorf("usage: elnath agentic signal create --goal-id <id> --source <text> --type <text> [--payload-json <json>] [--severity n] [--dedupe-key <text>] [--json]")
+	}
+	if parsed.PayloadJSON == "" {
+		parsed.PayloadJSON = "{}"
+	}
+	if !json.Valid([]byte(parsed.PayloadJSON)) {
+		return parsed, fmt.Errorf("invalid signal payload JSON")
 	}
 	return parsed, nil
 }
@@ -1294,6 +1444,30 @@ func goalDetailInfo(goal agentic.StandingGoal) agenticGoalDetailInfo {
 	}
 }
 
+func signalDetailInfo(signal agentic.GoalSignal) agenticSignalDetailInfo {
+	return agenticSignalDetailInfo{
+		ID:          signal.ID,
+		GoalID:      signal.GoalID,
+		WatcherID:   signal.WatcherID,
+		Source:      signal.Source,
+		Type:        signal.Type,
+		Status:      signal.Status,
+		Severity:    signal.Severity,
+		DedupeKey:   signal.DedupeKey,
+		Fingerprint: signal.Fingerprint,
+		ObservedAt:  signal.ObservedAt.Format(time.RFC3339),
+	}
+}
+
+func agenticSignalFingerprint(goalID int64, source, signalType, payloadJSON, dedupeKey string) string {
+	h := sha256.New()
+	for _, part := range []string{fmt.Sprint(goalID), source, signalType, payloadJSON, dedupeKey} {
+		_, _ = h.Write([]byte(part))
+		_, _ = h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 func taskInfo(task agentic.AgenticTask) agenticTaskInfo {
 	info := agenticTaskInfo{
 		ID:                 task.ID,
@@ -1439,6 +1613,13 @@ func (c *agenticCLI) policyDecisions(ctx context.Context, taskID int64) ([]agent
 }
 
 func (c *agenticCLI) approvals(ctx context.Context, taskID int64, approvalRequestID string) ([]agenticApprovalInfo, error) {
+	exists, err := c.tableExists(ctx, "approval_requests")
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, nil
+	}
 	query := `
 		SELECT id, COALESCE(task_id, 0), COALESCE(policy_decision_id, 0), tool_name, decision, risk_level, reason, decided_by
 		FROM approval_requests
@@ -1657,6 +1838,18 @@ func renderAgenticGoalCreated(view *agenticGoalCreateView) string {
 	fmt.Fprintf(&b, "  priority: %d\n", view.Goal.Priority)
 	fmt.Fprintf(&b, "  autonomy: %s\n", view.Goal.AutonomyLevel)
 	fmt.Fprintf(&b, "  risk_budget: %s\n", noneIfEmpty(view.Goal.RiskBudget))
+	return b.String()
+}
+
+func renderAgenticSignalCreated(view *agenticSignalCreateView) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Created agentic signal #%d\n", view.Signal.ID)
+	fmt.Fprintf(&b, "  goal_id: %s\n", intOrNone(view.Signal.GoalID))
+	fmt.Fprintf(&b, "  source: %s\n", view.Signal.Source)
+	fmt.Fprintf(&b, "  type: %s\n", view.Signal.Type)
+	fmt.Fprintf(&b, "  status: %s\n", view.Signal.Status)
+	fmt.Fprintf(&b, "  severity: %d\n", view.Signal.Severity)
+	fmt.Fprintf(&b, "  dedupe_key: %s\n", noneIfEmpty(view.Signal.DedupeKey))
 	return b.String()
 }
 
