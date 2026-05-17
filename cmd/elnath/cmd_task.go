@@ -362,10 +362,11 @@ func cmdTaskStopWithQueue(ctx context.Context, queue *daemon.Queue, args []strin
 
 func cmdTaskAnswerWithQueue(ctx context.Context, queue *daemon.Queue, outcomeStore *learning.OutcomeStore, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: elnath task answer --session ID --request ID --answer TEXT [--json] [--question TEXT] [--surface TEXT] [--idempotency-key KEY]")
+		return fmt.Errorf("usage: elnath task answer --session ID --request ID (--answer TEXT | --choice N) [--json] [--question TEXT] [--surface TEXT] [--idempotency-key KEY]")
 	}
 	params := map[string]any{}
 	jsonOut := false
+	answerProvided := false
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--json":
@@ -385,11 +386,26 @@ func cmdTaskAnswerWithQueue(ctx context.Context, queue *daemon.Queue, outcomeSto
 			params["request_id"] = value
 			i = next
 		case "--answer":
+			if answerProvided {
+				return fmt.Errorf("task answer: choose only one of --answer or --choice")
+			}
 			value, next, err := parseStringFlag(args, i, "--answer")
 			if err != nil {
 				return err
 			}
 			params["answer"] = value
+			answerProvided = true
+			i = next
+		case "--choice":
+			if answerProvided {
+				return fmt.Errorf("task answer: choose only one of --answer or --choice")
+			}
+			value, next, err := parseStringFlag(args, i, "--choice")
+			if err != nil {
+				return err
+			}
+			params["answer"] = value
+			answerProvided = true
 			i = next
 		case "--question":
 			value, next, err := parseStringFlag(args, i, "--question")
@@ -651,7 +667,7 @@ func printTaskMonitor(view taskMonitorCLIOutput) {
 	fmt.Printf("Observed:     %s\n", emptyDash(view.ObservedAt))
 	fmt.Printf("Next poll:    %ds\n", view.NextPollSeconds)
 	if view.Progress != "" {
-		fmt.Printf("Progress:     %s\n", view.Progress)
+		fmt.Printf("Progress:     %s\n", daemon.RenderProgress(view.Progress))
 	}
 	if view.Summary != "" {
 		fmt.Printf("Summary:      %s\n", view.Summary)
@@ -674,7 +690,11 @@ func printTaskOutput(view taskOutputCLIOutput) {
 	fmt.Printf("Max chars:    %d\n", view.MaxChars)
 	fmt.Printf("Total chars:  %d\n", view.TotalChars)
 	fmt.Printf("Truncated:    %t\n", view.Truncated)
-	fmt.Printf("Content:\n%s\n", view.Content)
+	content := view.Content
+	if view.Field == "progress" {
+		content = daemon.RenderProgress(content)
+	}
+	fmt.Printf("Content:\n%s\n", content)
 }
 
 func printTaskStop(view taskStopCLIOutput) {

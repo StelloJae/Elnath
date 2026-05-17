@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -308,9 +309,11 @@ func (t *UserQuestionAnswerTool) Execute(ctx context.Context, params json.RawMes
 				questionChars = validation.QuestionChars
 			}
 		}
-		if !validation.AllowFreeText && len(validation.Options) > 0 && !userQuestionAnswerMatchesOption(answer, validation.Options) {
+		normalizedAnswer, allowed := normalizeUserQuestionAnswer(answer, validation.Options, validation.AllowFreeText)
+		if !allowed {
 			return tools.ErrorResult("user_question_answer: answer must match one of the pending question options"), nil
 		}
+		answer = normalizedAnswer
 	}
 	surface := strings.TrimSpace(input.Surface)
 	if surface == "" {
@@ -359,14 +362,23 @@ func (t *UserQuestionAnswerTool) Execute(ctx context.Context, params json.RawMes
 	return tools.SuccessResult(string(raw)), nil
 }
 
-func userQuestionAnswerMatchesOption(answer string, options []string) bool {
+func normalizeUserQuestionAnswer(answer string, options []string, allowFreeText bool) (string, bool) {
 	answer = strings.TrimSpace(answer)
+	if answer == "" {
+		return "", false
+	}
 	for _, option := range options {
 		if answer == strings.TrimSpace(option) {
-			return true
+			return strings.TrimSpace(option), true
 		}
 	}
-	return false
+	if idx, err := strconv.Atoi(answer); err == nil && idx >= 1 && idx <= len(options) {
+		return strings.TrimSpace(options[idx-1]), true
+	}
+	if allowFreeText || len(options) == 0 {
+		return answer, true
+	}
+	return "", false
 }
 
 func buildUserQuestionAnswerPrompt(requestID, question, answer string) string {

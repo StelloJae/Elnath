@@ -2,10 +2,12 @@ package telegram
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -57,6 +59,113 @@ func TestHTTPClientSendMessageAndGetUpdates(t *testing.T) {
 	}
 	if updates[0].ID != 42 || updates[0].Message.ChatID != "12345" || updates[0].Message.UserID != "777" || updates[0].Message.Text != "/status" {
 		t.Fatalf("update = %+v", updates[0])
+	}
+}
+
+func TestHTTPClientSendMessageWithButtons(t *testing.T) {
+	var gotSendBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/bottoken/sendMessage" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		body, _ := io.ReadAll(r.Body)
+		gotSendBody = string(body)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	client := NewHTTPClient("token", server.URL)
+	err := client.SendMessageWithButtons(context.Background(), "12345", "Pick one", [][]TelegramButton{
+		{{Text: "1. main", Data: "uq:req-1:1"}},
+		{{Text: "2. new", Data: "uq:req-1:2"}},
+	})
+	if err != nil {
+		t.Fatalf("SendMessageWithButtons: %v", err)
+	}
+
+	values, err := url.ParseQuery(gotSendBody)
+	if err != nil {
+		t.Fatalf("ParseQuery(%q): %v", gotSendBody, err)
+	}
+	if values.Get("chat_id") != "12345" || values.Get("text") != "Pick one" {
+		t.Fatalf("send body = %q", gotSendBody)
+	}
+	var markup telegramInlineKeyboardMarkup
+	if err := json.Unmarshal([]byte(values.Get("reply_markup")), &markup); err != nil {
+		t.Fatalf("reply_markup = %q: %v", values.Get("reply_markup"), err)
+	}
+	if len(markup.InlineKeyboard) != 2 || len(markup.InlineKeyboard[0]) != 1 {
+		t.Fatalf("inline keyboard = %+v, want one row per choice", markup.InlineKeyboard)
+	}
+	if got := markup.InlineKeyboard[1][0]; got.Text != "2. new" || got.CallbackData != "uq:req-1:2" {
+		t.Fatalf("second button = %+v, want callback data", got)
+	}
+}
+
+func TestHTTPClientAnswerCallback(t *testing.T) {
+	var gotBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/bottoken/answerCallbackQuery" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	client := NewHTTPClient("token", server.URL)
+	if err := client.AnswerCallback(context.Background(), "cb-1", "Answer queued"); err != nil {
+		t.Fatalf("AnswerCallback: %v", err)
+	}
+	if !strings.Contains(gotBody, "callback_query_id=cb-1") || !strings.Contains(gotBody, "text=Answer+queued") {
+		t.Fatalf("callback body = %q", gotBody)
+	}
+}
+
+func TestHTTPClientGetUpdatesParsesCallbackQuery(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/bottoken/getUpdates" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{
+			"ok": true,
+			"result": [
+				{
+					"update_id": 43,
+					"callback_query": {
+						"id": "cb-1",
+						"data": "uq:req-1:2",
+						"from": {"id": 777},
+						"message": {
+							"message_id": 50,
+							"text": "Pick one",
+							"chat": {"id": 12345}
+						}
+					}
+				}
+			]
+		}`))
+	}))
+	defer server.Close()
+
+	client := NewHTTPClient("token", server.URL)
+	updates, err := client.GetUpdates(context.Background(), 0, 15)
+	if err != nil {
+		t.Fatalf("GetUpdates: %v", err)
+	}
+	if len(updates) != 1 || updates[0].CallbackQuery == nil {
+		t.Fatalf("updates = %+v, want one callback update", updates)
+	}
+	callback := updates[0].CallbackQuery
+	if callback.ID != "cb-1" || callback.FromID != "777" || callback.Data != "uq:req-1:2" {
+		t.Fatalf("callback = %+v", callback)
+	}
+	if callback.Message.ChatID != "12345" || callback.Message.MessageID != 50 {
+		t.Fatalf("callback message = %+v", callback.Message)
 	}
 }
 

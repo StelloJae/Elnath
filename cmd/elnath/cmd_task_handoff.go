@@ -81,7 +81,7 @@ func cmdTaskHandoff(ctx context.Context, args []string) error {
 
 func cmdTaskHandoffWithQueue(ctx context.Context, queue *daemon.Queue, dataDir string, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: elnath task handoff <id> [--json|--markdown|--save] [--request SURFACE] [--max-messages N]")
+		return fmt.Errorf("usage: elnath task handoff <id> [--json|--markdown|--save] [--request SURFACE] [--state STATE --surface SURFACE --reason TEXT] [--max-messages N]")
 	}
 	taskID, err := parseTaskID(args[0])
 	if err != nil {
@@ -91,6 +91,9 @@ func cmdTaskHandoffWithQueue(ctx context.Context, queue *daemon.Queue, dataDir s
 	markdownOut := false
 	saveMarkdown := false
 	requestSurface := ""
+	handoffState := ""
+	handoffSurface := ""
+	handoffReason := ""
 	maxMessages := defaultTaskHandoffMessages
 	for i := 1; i < len(args); i++ {
 		switch args[i] {
@@ -107,6 +110,27 @@ func cmdTaskHandoffWithQueue(ctx context.Context, queue *daemon.Queue, dataDir s
 			}
 			requestSurface = strings.TrimSpace(value)
 			i = next
+		case "--state":
+			value, next, err := parseStringFlag(args, i, "--state")
+			if err != nil {
+				return err
+			}
+			handoffState = strings.TrimSpace(value)
+			i = next
+		case "--surface":
+			value, next, err := parseStringFlag(args, i, "--surface")
+			if err != nil {
+				return err
+			}
+			handoffSurface = strings.TrimSpace(value)
+			i = next
+		case "--reason":
+			value, next, err := parseStringFlag(args, i, "--reason")
+			if err != nil {
+				return err
+			}
+			handoffReason = strings.TrimSpace(value)
+			i = next
 		case "--max-messages":
 			value, next, err := parseIntFlag(args, i, "--max-messages")
 			if err != nil {
@@ -121,8 +145,16 @@ func cmdTaskHandoffWithQueue(ctx context.Context, queue *daemon.Queue, dataDir s
 	if boolCount(jsonOut, markdownOut, saveMarkdown) > 1 {
 		return fmt.Errorf("task handoff: choose only one output mode: --json, --markdown, or --save")
 	}
+	if requestSurface != "" && handoffState != "" {
+		return fmt.Errorf("task handoff: choose either --request or --state, not both")
+	}
 	if requestSurface != "" {
 		if err := recordTaskHandoffRequest(ctx, queue, dataDir, taskID, requestSurface); err != nil {
+			return err
+		}
+	}
+	if handoffState != "" {
+		if err := recordTaskHandoffState(ctx, queue, dataDir, taskID, handoffState, handoffSurface, handoffReason); err != nil {
 			return err
 		}
 	}
@@ -228,6 +260,35 @@ func recordTaskHandoffRequest(ctx context.Context, queue *daemon.Queue, dataDir 
 		return fmt.Errorf("task handoff: load session %s: %w", view.SessionID, err)
 	}
 	return sess.RecordHandoff("requested", surface, identity.Principal{}, "operator requested task handoff")
+}
+
+func recordTaskHandoffState(ctx context.Context, queue *daemon.Queue, dataDir string, taskID int64, state, surface, reason string) error {
+	view, err := buildTaskHandoff(ctx, queue, dataDir, taskID, 1)
+	if err != nil {
+		return err
+	}
+	sess, err := agent.LoadSession(dataDir, view.SessionID)
+	if err != nil {
+		return fmt.Errorf("task handoff: load session %s: %w", view.SessionID, err)
+	}
+	principal := taskHandoffOperatorPrincipal(surface)
+	return sess.RecordHandoff(state, surface, principal, reason)
+}
+
+func taskHandoffOperatorPrincipal(surface string) identity.Principal {
+	surface = strings.TrimSpace(surface)
+	if surface == "" {
+		surface = "cli"
+	}
+	userID := strings.TrimSpace(os.Getenv("USER"))
+	if userID == "" {
+		userID = "local"
+	}
+	return identity.Principal{
+		UserID:    userID,
+		ProjectID: "elnath",
+		Surface:   surface,
+	}
 }
 
 func normalizeTaskHandoffMessageLimit(n int) int {

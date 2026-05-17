@@ -98,6 +98,51 @@ func (c *HTTPClient) SendMessageReturningID(ctx context.Context, chatID, text st
 	return c.doSendMessage(ctx, form)
 }
 
+func (c *HTTPClient) SendMessageWithButtons(ctx context.Context, chatID, text string, buttons [][]TelegramButton) error {
+	form := url.Values{}
+	form.Set("chat_id", chatID)
+	form.Set("text", text)
+	form.Set("parse_mode", "HTML")
+	if len(buttons) > 0 {
+		markup := telegramInlineKeyboardMarkup{InlineKeyboard: make([][]telegramInlineKeyboardButton, 0, len(buttons))}
+		for _, row := range buttons {
+			if len(row) == 0 {
+				continue
+			}
+			markupRow := make([]telegramInlineKeyboardButton, 0, len(row))
+			for _, button := range row {
+				text := strings.TrimSpace(button.Text)
+				data := strings.TrimSpace(button.Data)
+				if text == "" || data == "" {
+					continue
+				}
+				markupRow = append(markupRow, telegramInlineKeyboardButton{Text: text, CallbackData: data})
+			}
+			if len(markupRow) > 0 {
+				markup.InlineKeyboard = append(markup.InlineKeyboard, markupRow)
+			}
+		}
+		if len(markup.InlineKeyboard) > 0 {
+			raw, err := json.Marshal(markup)
+			if err != nil {
+				return err
+			}
+			form.Set("reply_markup", string(raw))
+		}
+	}
+	_, err := c.doSendMessage(ctx, form)
+	return err
+}
+
+type telegramInlineKeyboardMarkup struct {
+	InlineKeyboard [][]telegramInlineKeyboardButton `json:"inline_keyboard"`
+}
+
+type telegramInlineKeyboardButton struct {
+	Text         string `json:"text"`
+	CallbackData string `json:"callback_data"`
+}
+
 func (c *HTTPClient) EditMessage(ctx context.Context, chatID string, messageID int64, text string) error {
 	form := url.Values{}
 	form.Set("chat_id", chatID)
@@ -138,6 +183,28 @@ func (c *HTTPClient) SetReaction(ctx context.Context, chatID string, messageID i
 	return nil
 }
 
+func (c *HTTPClient) AnswerCallback(ctx context.Context, callbackID, text string) error {
+	form := url.Values{}
+	form.Set("callback_query_id", callbackID)
+	if strings.TrimSpace(text) != "" {
+		form.Set("text", text)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint("answerCallbackQuery"), strings.NewReader(form.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return readAPIError("answerCallbackQuery", resp)
+	}
+	return nil
+}
+
 func (c *HTTPClient) GetUpdates(ctx context.Context, offset int64, timeoutSeconds int) ([]Update, error) {
 	query := url.Values{}
 	if offset > 0 {
@@ -162,17 +229,14 @@ func (c *HTTPClient) GetUpdates(ctx context.Context, offset int64, timeoutSecond
 	var decoded struct {
 		OK     bool `json:"ok"`
 		Result []struct {
-			UpdateID int64 `json:"update_id"`
-			Message  struct {
-				Text string `json:"text"`
-				Chat struct {
-					ID int64 `json:"id"`
-				} `json:"chat"`
-				From struct {
-					ID int64 `json:"id"`
-				} `json:"from"`
-				MessageID int64 `json:"message_id"`
-			} `json:"message"`
+			UpdateID int64              `json:"update_id"`
+			Message  telegramAPIMessage `json:"message"`
+			Callback struct {
+				ID      string             `json:"id"`
+				Data    string             `json:"data"`
+				From    telegramAPIUser    `json:"from"`
+				Message telegramAPIMessage `json:"message"`
+			} `json:"callback_query"`
 		} `json:"result"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
@@ -180,17 +244,53 @@ func (c *HTTPClient) GetUpdates(ctx context.Context, offset int64, timeoutSecond
 	}
 	updates := make([]Update, 0, len(decoded.Result))
 	for _, item := range decoded.Result {
-		updates = append(updates, Update{
+		update := Update{
 			ID: item.UpdateID,
 			Message: Message{
-				ChatID:    strconv.FormatInt(item.Message.Chat.ID, 10),
-				UserID:    strconv.FormatInt(item.Message.From.ID, 10),
+				ChatID:    formatTelegramID(item.Message.Chat.ID),
+				UserID:    formatTelegramID(item.Message.From.ID),
 				MessageID: item.Message.MessageID,
 				Text:      item.Message.Text,
 			},
-		})
+		}
+		if item.Callback.ID != "" {
+			update.CallbackQuery = &CallbackQuery{
+				ID:     item.Callback.ID,
+				FromID: formatTelegramID(item.Callback.From.ID),
+				Data:   item.Callback.Data,
+				Message: Message{
+					ChatID:    formatTelegramID(item.Callback.Message.Chat.ID),
+					UserID:    formatTelegramID(item.Callback.Message.From.ID),
+					MessageID: item.Callback.Message.MessageID,
+					Text:      item.Callback.Message.Text,
+				},
+			}
+		}
+		updates = append(updates, update)
 	}
 	return updates, nil
+}
+
+type telegramAPIMessage struct {
+	Text      string          `json:"text"`
+	Chat      telegramAPIChat `json:"chat"`
+	From      telegramAPIUser `json:"from"`
+	MessageID int64           `json:"message_id"`
+}
+
+type telegramAPIChat struct {
+	ID int64 `json:"id"`
+}
+
+type telegramAPIUser struct {
+	ID int64 `json:"id"`
+}
+
+func formatTelegramID(id int64) string {
+	if id == 0 {
+		return ""
+	}
+	return strconv.FormatInt(id, 10)
 }
 
 func (c *HTTPClient) doSendMessage(ctx context.Context, form url.Values) (int64, error) {

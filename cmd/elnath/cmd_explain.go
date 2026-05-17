@@ -149,6 +149,11 @@ func explainPendingQuestions(outcomeStore *learning.OutcomeStore, args []string)
 		}
 		if item.AnswerCommand != "" {
 			fmt.Fprintf(os.Stdout, "    answer: %s\n", item.AnswerCommand)
+			for i := range item.Options {
+				if command := pendingQuestionNumericChoiceCommand(item.AnswerCommand, i+1); command != "" {
+					fmt.Fprintf(os.Stdout, "    choose %d: %s\n", i+1, command)
+				}
+			}
 		}
 	}
 	return nil
@@ -156,14 +161,25 @@ func explainPendingQuestions(outcomeStore *learning.OutcomeStore, args []string)
 
 func quotedPendingQuestionOptions(options []string) string {
 	quoted := make([]string, 0, len(options))
-	for _, option := range options {
+	for i, option := range options {
 		option = strings.TrimSpace(option)
 		if option == "" {
 			continue
 		}
-		quoted = append(quoted, fmt.Sprintf("%q", option))
+		quoted = append(quoted, fmt.Sprintf("%d. %q", i+1, option))
 	}
 	return strings.Join(quoted, ", ")
+}
+
+func pendingQuestionNumericChoiceCommand(answerCommand string, choice int) string {
+	answerCommand = strings.TrimSpace(answerCommand)
+	if answerCommand == "" || choice <= 0 {
+		return ""
+	}
+	if strings.Contains(answerCommand, " --answer 'ANSWER_TEXT'") {
+		return strings.Replace(answerCommand, " --answer 'ANSWER_TEXT'", fmt.Sprintf(" --choice %d", choice), 1)
+	}
+	return strings.Replace(answerCommand, "'ANSWER_TEXT'", fmt.Sprintf("'%d'", choice), 1)
 }
 
 type controlSurfacePolicyView struct {

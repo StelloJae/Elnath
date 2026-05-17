@@ -98,6 +98,7 @@ func cmdTelegramShell(ctx context.Context) error {
 	}
 	shell, err := telegram.NewShell(queue, approvals, bot, cfg.Telegram.ChatID, statePath, skillReg,
 		telegram.WithWorkDir(cwd),
+		telegram.WithShellDataDir(cfg.DataDir),
 		telegram.WithChatSessionBinder(binder),
 		telegram.WithSkillCreator(skillCreator),
 		telegram.WithShellOutcomeStore(learning.NewOutcomeStore(filepath.Join(cfg.DataDir, "outcomes.jsonl"))),

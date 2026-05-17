@@ -144,6 +144,38 @@ func TestCmdTaskMonitorWithQueueShowsSnapshot(t *testing.T) {
 	}
 }
 
+func TestCmdTaskMonitorWithQueueRendersStructuredProgress(t *testing.T) {
+	ctx := context.Background()
+	queue := newCmdTaskTestQueue(t)
+	id, _, err := queue.Enqueue(ctx, "monitor structured progress", "")
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	task, err := queue.Next(ctx)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if task == nil {
+		t.Fatal("Next returned nil")
+	}
+	rawProgress := daemon.EncodeProgressEvent(daemon.ToolPhaseProgressEvent("bash", "go test ./cmd/elnath", "running", 42, false))
+	if _, err := queue.UpdateAnnotation(ctx, task.ID, rawProgress, "tests running"); err != nil {
+		t.Fatalf("UpdateAnnotation: %v", err)
+	}
+
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdTaskMonitorWithQueue(ctx, queue, []string{fmt.Sprint(id)}); err != nil {
+			t.Fatalf("cmdTaskMonitorWithQueue: %v", err)
+		}
+	})
+	if !strings.Contains(stdout, "Progress:     bash: go test ./cmd/elnath (running)") {
+		t.Fatalf("stdout = %q, want rendered structured progress", stdout)
+	}
+	if strings.Contains(stdout, `"version"`) {
+		t.Fatalf("stdout = %q, should not dump raw progress JSON", stdout)
+	}
+}
+
 func TestCmdTaskMonitorWithQueueJSONWaitsForUpdate(t *testing.T) {
 	ctx := context.Background()
 	queue := newCmdTaskTestQueue(t)
@@ -213,6 +245,38 @@ func TestCmdTaskOutputWithQueueReturnsTail(t *testing.T) {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("stdout = %q, want %q", stdout, want)
 		}
+	}
+}
+
+func TestCmdTaskOutputWithQueueRendersStructuredProgress(t *testing.T) {
+	ctx := context.Background()
+	queue := newCmdTaskTestQueue(t)
+	id, _, err := queue.Enqueue(ctx, "output structured progress", "")
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	task, err := queue.Next(ctx)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if task == nil {
+		t.Fatal("Next returned nil")
+	}
+	rawProgress := daemon.EncodeProgressEvent(daemon.ToolPhaseProgressEvent("bash", "go test ./cmd/elnath", "running", 42, false))
+	if err := queue.UpdateProgress(ctx, task.ID, rawProgress); err != nil {
+		t.Fatalf("UpdateProgress: %v", err)
+	}
+
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdTaskOutputWithQueue(ctx, queue, []string{fmt.Sprint(id), "--field", "progress"}); err != nil {
+			t.Fatalf("cmdTaskOutputWithQueue: %v", err)
+		}
+	})
+	if !strings.Contains(stdout, "Content:\nbash: go test ./cmd/elnath (running)") {
+		t.Fatalf("stdout = %q, want rendered structured progress", stdout)
+	}
+	if strings.Contains(stdout, `"version"`) {
+		t.Fatalf("stdout = %q, should not dump raw progress JSON", stdout)
 	}
 }
 
@@ -334,6 +398,46 @@ func TestCmdTaskAnswerWithQueueEnqueuesBoundAnswer(t *testing.T) {
 	}
 	if pending := learning.PendingUserQuestions(records, "sess-123", 10); len(pending) != 0 {
 		t.Fatalf("pending = %+v, want CLI answer receipt to close req-123", pending)
+	}
+}
+
+func TestCmdTaskAnswerWithQueueAcceptsChoiceFlag(t *testing.T) {
+	ctx := context.Background()
+	queue := newCmdTaskTestQueue(t)
+	store := learning.NewOutcomeStore(filepath.Join(t.TempDir(), "outcomes.jsonl"))
+	if err := store.Append(learning.OutcomeRecord{
+		Timestamp: time.Date(2026, 5, 13, 7, 0, 0, 0, time.UTC),
+		ControlToolReceipts: []learning.ControlToolReceipt{{
+			Tool:          "ask_user_question",
+			Action:        "request",
+			RequestID:     "req-123",
+			SessionID:     "sess-123",
+			Question:      "Which branch?",
+			Options:       []string{"main", "new"},
+			AllowFreeText: false,
+		}},
+	}); err != nil {
+		t.Fatalf("Append outcome: %v", err)
+	}
+
+	if err := cmdTaskAnswerWithQueue(ctx, queue, store, []string{
+		"--session", "sess-123",
+		"--request", "req-123",
+		"--choice", "2",
+	}); err != nil {
+		t.Fatalf("cmdTaskAnswerWithQueue: %v", err)
+	}
+
+	tasks, err := queue.List(ctx)
+	if err != nil {
+		t.Fatalf("List tasks: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("tasks = %+v, want one answer resume task", tasks)
+	}
+	payload := daemon.ParseTaskPayload(tasks[0].Payload)
+	if !strings.Contains(payload.Prompt, "Answer:\nnew") {
+		t.Fatalf("payload = %+v, want choice normalized to option text", payload)
 	}
 }
 
@@ -496,6 +600,45 @@ func TestCmdTaskHandoffWithQueueRequestRecordsHandoffState(t *testing.T) {
 	}
 	if status == nil || status.State != "requested" || status.Surface != "telegram" {
 		t.Fatalf("handoff status = %+v, want requested telegram", status)
+	}
+}
+
+func TestCmdTaskHandoffWithQueueRecordsLifecycleState(t *testing.T) {
+	ctx := context.Background()
+	queue := newCmdTaskTestQueue(t)
+	dataDir := t.TempDir()
+	sess, taskID := seedTaskHandoffFixture(t, ctx, queue, dataDir)
+
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdTaskHandoffWithQueue(ctx, queue, dataDir, []string{
+			fmt.Sprint(taskID),
+			"--state", "claimed",
+			"--surface", "cli",
+			"--reason", "claimed by local operator",
+			"--json",
+		}); err != nil {
+			t.Fatalf("cmdTaskHandoffWithQueue: %v", err)
+		}
+	})
+	for _, want := range []string{
+		`"handoff": {`,
+		`"state": "claimed"`,
+		`"surface": "cli"`,
+		`"reason": "claimed by local operator"`,
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout = %q, want %q", stdout, want)
+		}
+	}
+	status, err := agent.LoadSessionHandoffStatus(dataDir, sess.ID)
+	if err != nil {
+		t.Fatalf("LoadSessionHandoffStatus: %v", err)
+	}
+	if status == nil || status.State != "claimed" || status.Surface != "cli" || status.Reason != "claimed by local operator" {
+		t.Fatalf("handoff status = %+v, want claimed cli", status)
+	}
+	if status.Principal.Surface != "cli" {
+		t.Fatalf("handoff principal = %+v, want cli operator principal", status.Principal)
 	}
 }
 

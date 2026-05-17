@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/stello/elnath/internal/agent"
 	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/daemon"
 	"github.com/stello/elnath/internal/identity"
@@ -24,8 +25,9 @@ import (
 )
 
 type Update struct {
-	ID      int64   `json:"update_id"`
-	Message Message `json:"message"`
+	ID            int64          `json:"update_id"`
+	Message       Message        `json:"message"`
+	CallbackQuery *CallbackQuery `json:"callback_query,omitempty"`
 }
 
 type Message struct {
@@ -35,12 +37,32 @@ type Message struct {
 	Text      string
 }
 
+type CallbackQuery struct {
+	ID      string
+	FromID  string
+	Data    string
+	Message Message
+}
+
+type TelegramButton struct {
+	Text string
+	Data string
+}
+
 type BotClient interface {
 	SendMessage(ctx context.Context, chatID, text string) error
 	SendMessageReturningID(ctx context.Context, chatID, text string) (int64, error)
 	EditMessage(ctx context.Context, chatID string, messageID int64, text string) error
 	SetReaction(ctx context.Context, chatID string, messageID int64, emoji string) error
 	GetUpdates(ctx context.Context, offset int64, timeoutSeconds int) ([]Update, error)
+}
+
+type buttonMessageSender interface {
+	SendMessageWithButtons(ctx context.Context, chatID, text string, buttons [][]TelegramButton) error
+}
+
+type callbackAcknowledger interface {
+	AnswerCallback(ctx context.Context, callbackID, text string) error
 }
 
 // IntentClassifier classifies user messages into intent categories.
@@ -80,6 +102,10 @@ func WithTaskTracker(tracker TaskTracker) ShellOption {
 
 func WithWorkDir(workDir string) ShellOption {
 	return func(s *Shell) { s.workDir = strings.TrimSpace(workDir) }
+}
+
+func WithShellDataDir(dataDir string) ShellOption {
+	return func(s *Shell) { s.dataDir = strings.TrimSpace(dataDir) }
 }
 
 func WithChatSessionBinder(binder *ChatSessionBinder) ShellOption {
@@ -129,6 +155,7 @@ type Shell struct {
 	classifyProvider   llm.Provider
 	taskTracker        TaskTracker
 	workDir            string
+	dataDir            string
 	binder             *ChatSessionBinder
 	historyLoader      ChatHistoryLoader
 	skillReg           *skill.Registry
@@ -180,6 +207,9 @@ func NewShell(queue *daemon.Queue, approvals *daemon.ApprovalStore, bot BotClien
 }
 
 func (s *Shell) HandleUpdate(ctx context.Context, update Update) error {
+	if update.CallbackQuery != nil && strings.TrimSpace(update.CallbackQuery.Data) != "" {
+		return s.handleCallbackQuery(ctx, *update.CallbackQuery)
+	}
 	if strings.TrimSpace(update.Message.Text) == "" {
 		return nil
 	}
@@ -214,6 +244,11 @@ func (s *Shell) HandleUpdate(ctx context.Context, update Update) error {
 		reply, err := s.handleCommand(ctx, text, principal, update.Message.MessageID)
 		if err != nil {
 			reply = "⚠️ " + err.Error()
+		}
+		if err == nil && (fields[0] == "/questions" || fields[0] == "/pending-questions") {
+			if sent, sendErr := s.trySendPendingQuestionsWithButtons(ctx, principal, reply); sent {
+				return sendErr
+			}
 		}
 		return s.bot.SendMessage(ctx, s.chatID, reply)
 	}
@@ -428,6 +463,8 @@ func (s *Shell) handleCommand(ctx context.Context, text string, principal identi
 		return s.resolveApproval(ctx, fields, false, principal)
 	case "/followup", "/resume":
 		return s.enqueueFollowUp(ctx, text, principal, userMsgID)
+	case "/handoff":
+		return s.handleHandoff(ctx, fields, principal)
 	case "/submit":
 		return s.enqueueNewTask(ctx, text, principal)
 	case "/questions", "/pending-questions":
@@ -539,6 +576,7 @@ func (s *Shell) handleCommand(ctx context.Context, text string, principal identi
 			"• <code>/questions</code> — pending user questions\n" +
 			"• <code>/answer &lt;sid&gt; &lt;rid&gt; &lt;text&gt;</code> — answer pending question\n" +
 			"• <code>/cancel-question &lt;sid&gt; &lt;rid&gt; [reason]</code> — cancel pending question\n" +
+			"• <code>/handoff &lt;task&gt; [state] [reason]</code> — session handoff recap/state\n" +
 			"• <code>/skill-list</code> — registered skills\n" +
 			"• <code>/skill-create</code> — create draft skill\n" +
 			"• <code>/followup &lt;sid&gt; &lt;msg&gt;</code> — follow-up\n" +
@@ -628,6 +666,147 @@ func (s *Shell) handleSkillCreate(name string) (string, error) {
 	return fmt.Sprintf("Created draft skill /%s. Edit the wiki entry to finish it.", name), nil
 }
 
+func (s *Shell) handleHandoff(ctx context.Context, fields []string, principal identity.Principal) (string, error) {
+	if strings.TrimSpace(s.dataDir) == "" {
+		return "Handoff unavailable: data dir is not configured.", nil
+	}
+	if len(fields) < 2 {
+		return "Usage: /handoff <task_id> [requested|claimed|running|completed|failed] [reason]", nil
+	}
+	taskID, err := strconv.ParseInt(fields[1], 10, 64)
+	if err != nil || taskID <= 0 {
+		return "Usage: /handoff <task_id> [requested|claimed|running|completed|failed] [reason]", nil
+	}
+	if len(fields) >= 3 {
+		state := strings.TrimSpace(fields[2])
+		reason := strings.TrimSpace(strings.Join(fields[3:], " "))
+		if state == "request" {
+			state = "requested"
+		}
+		if err := s.recordHandoffState(ctx, taskID, state, reason, principal); err != nil {
+			return "", err
+		}
+	}
+	return s.renderTaskHandoff(ctx, taskID)
+}
+
+func (s *Shell) recordHandoffState(ctx context.Context, taskID int64, state, reason string, principal identity.Principal) error {
+	sessionID, err := s.taskSessionID(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	sess, err := agent.LoadSession(s.dataDir, sessionID)
+	if err != nil {
+		return fmt.Errorf("telegram handoff: load session %s: %w", sessionID, err)
+	}
+	return sess.RecordHandoff(state, "telegram", principal, reason)
+}
+
+func (s *Shell) renderTaskHandoff(ctx context.Context, taskID int64) (string, error) {
+	task, err := s.queue.Get(ctx, taskID)
+	if err != nil {
+		return "", err
+	}
+	sessionID := strings.TrimSpace(task.SessionID)
+	if task.Completion != nil && strings.TrimSpace(task.Completion.SessionID) != "" {
+		sessionID = strings.TrimSpace(task.Completion.SessionID)
+	}
+	if sessionID == "" {
+		return fmt.Sprintf("Task #%d has no session bound.", taskID), nil
+	}
+	sess, err := agent.LoadSession(s.dataDir, sessionID)
+	if err != nil {
+		return "", fmt.Errorf("telegram handoff: load session %s: %w", sessionID, err)
+	}
+	handoff, err := agent.LoadSessionHandoffStatus(s.dataDir, sessionID)
+	if err != nil {
+		return "", fmt.Errorf("telegram handoff: load handoff status %s: %w", sessionID, err)
+	}
+	messages := sess.SnapshotMessages()
+	lines := []string{
+		fmt.Sprintf("🔁 <b>Task handoff</b> <code>#%d</code>", task.ID),
+		fmt.Sprintf("Status: <code>%s</code>", escapeHTML(string(task.Status))),
+		fmt.Sprintf("Session: <code>%s</code>", escapeHTML(truncateSessionID(sessionID))),
+		fmt.Sprintf("Resume: <code>elnath task resume %d</code>", task.ID),
+	}
+	if task.Summary != "" {
+		lines = append(lines, "Summary: "+escapeHTML(truncateTelegramText(strings.TrimSpace(task.Summary), 160)))
+	}
+	if handoff != nil {
+		stateLine := fmt.Sprintf("Handoff: <code>%s</code>", escapeHTML(handoff.State))
+		if handoff.Surface != "" {
+			stateLine += " via <code>" + escapeHTML(handoff.Surface) + "</code>"
+		}
+		if handoff.Reason != "" {
+			stateLine += " — " + escapeHTML(truncateTelegramText(handoff.Reason, 120))
+		}
+		lines = append(lines, stateLine)
+	}
+	tail := telegramHandoffMessages(messages, 3)
+	if len(tail) > 0 {
+		lines = append(lines, "Last messages:")
+		lines = append(lines, tail...)
+	}
+	return strings.Join(lines, "\n"), nil
+}
+
+func (s *Shell) taskSessionID(ctx context.Context, taskID int64) (string, error) {
+	task, err := s.queue.Get(ctx, taskID)
+	if err != nil {
+		return "", err
+	}
+	sessionID := strings.TrimSpace(task.SessionID)
+	if task.Completion != nil && strings.TrimSpace(task.Completion.SessionID) != "" {
+		sessionID = strings.TrimSpace(task.Completion.SessionID)
+	}
+	if sessionID == "" {
+		return "", fmt.Errorf("telegram handoff: task %d has no session bound", taskID)
+	}
+	return sessionID, nil
+}
+
+func telegramHandoffMessages(messages []llm.Message, limit int) []string {
+	if limit <= 0 {
+		return nil
+	}
+	start := len(messages) - limit
+	if start < 0 {
+		start = 0
+	}
+	out := make([]string, 0, len(messages)-start)
+	for _, msg := range messages[start:] {
+		text := truncateTelegramText(strings.TrimSpace(msg.TextContent()), 180)
+		if text == "" {
+			continue
+		}
+		out = append(out, fmt.Sprintf("• <code>%s</code>: %s", escapeHTML(msg.Role), escapeHTML(text)))
+	}
+	return out
+}
+
+func truncateTelegramText(value string, max int) string {
+	value = strings.TrimSpace(value)
+	if value == "" || max <= 0 {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= max {
+		return value
+	}
+	if max <= 3 {
+		return string(runes[:max])
+	}
+	return string(runes[:max-3]) + "..."
+}
+
+func truncateSessionID(sessionID string) string {
+	sessionID = strings.TrimSpace(sessionID)
+	if len(sessionID) <= 8 {
+		return sessionID
+	}
+	return sessionID[:8]
+}
+
 func (s *Shell) renderPendingQuestions(principal identity.Principal) (string, error) {
 	if s.outcomeStore == nil {
 		return "Pending questions are unavailable in this shell.", nil
@@ -649,8 +828,8 @@ func (s *Shell) renderPendingQuestions(principal identity.Principal) (string, er
 		}
 		if len(q.Options) > 0 {
 			choices := make([]string, 0, len(q.Options))
-			for _, opt := range q.Options {
-				choices = append(choices, "<code>"+escapeHTML(opt)+"</code>")
+			for i, opt := range q.Options {
+				choices = append(choices, fmt.Sprintf("<code>%d. %s</code>", i+1, escapeHTML(opt)))
 			}
 			lines = append(lines, "  choices: "+strings.Join(choices, ", "))
 		}
@@ -660,6 +839,62 @@ func (s *Shell) renderPendingQuestions(principal identity.Principal) (string, er
 		lines = append(lines, renderPendingQuestionHandoffLines(q, directReplyAllowed && q.SessionID == directReplySessionID)...)
 	}
 	return strings.Join(lines, "\n"), nil
+}
+
+func (s *Shell) trySendPendingQuestionsWithButtons(ctx context.Context, principal identity.Principal, text string) (bool, error) {
+	sender, ok := s.bot.(buttonMessageSender)
+	if !ok {
+		return false, nil
+	}
+	buttons, err := s.pendingQuestionButtonRows(principal)
+	if err != nil {
+		return false, err
+	}
+	if len(buttons) == 0 {
+		return false, nil
+	}
+	if err := sender.SendMessageWithButtons(ctx, s.chatID, text, buttons); err != nil {
+		return true, s.bot.SendMessage(ctx, s.chatID, text)
+	}
+	return true, nil
+}
+
+func (s *Shell) pendingQuestionButtonRows(principal identity.Principal) ([][]TelegramButton, error) {
+	if s.outcomeStore == nil {
+		return nil, nil
+	}
+	records, err := s.outcomeStore.Recent(0)
+	if err != nil {
+		return nil, err
+	}
+	directReplySessionID, directReplyAllowed := s.directReplyPendingQuestionSession(records, principal)
+	pending := learning.PendingUserQuestions(records, "", 10)
+	rows := make([][]TelegramButton, 0)
+	for _, question := range pending {
+		if !question.Answerable || len(question.Options) == 0 {
+			continue
+		}
+		if directReplyAllowed && question.SessionID != directReplySessionID {
+			continue
+		}
+		for i, option := range question.Options {
+			label := fmt.Sprintf("%d. %s", i+1, strings.TrimSpace(option))
+			rows = append(rows, []TelegramButton{{
+				Text: truncateTelegramButtonLabel(label),
+				Data: fmt.Sprintf("uq:%s:%d", question.RequestID, i+1),
+			}})
+		}
+	}
+	return rows, nil
+}
+
+func truncateTelegramButtonLabel(label string) string {
+	label = strings.TrimSpace(label)
+	if len([]rune(label)) <= 60 {
+		return label
+	}
+	runes := []rune(label)
+	return string(runes[:57]) + "..."
 }
 
 func (s *Shell) directReplyPendingQuestionSession(records []learning.OutcomeRecord, principal identity.Principal) (string, bool) {
@@ -674,6 +909,53 @@ func (s *Shell) directReplyPendingQuestionSession(records []learning.OutcomeReco
 	return sessionID, len(pending) == 1
 }
 
+func (s *Shell) handleCallbackQuery(ctx context.Context, callback CallbackQuery) error {
+	if callback.Message.ChatID != "" && callback.Message.ChatID != s.chatID {
+		return nil
+	}
+	data := strings.TrimSpace(callback.Data)
+	if !strings.HasPrefix(data, "uq:") {
+		return nil
+	}
+	parts := strings.Split(data, ":")
+	if len(parts) != 3 {
+		return s.answerCallbackOrMessage(ctx, callback, "Invalid question choice.")
+	}
+	requestID := strings.TrimSpace(parts[1])
+	choice, err := strconv.Atoi(strings.TrimSpace(parts[2]))
+	if err != nil || choice <= 0 {
+		return s.answerCallbackOrMessage(ctx, callback, "Invalid question choice.")
+	}
+	question, ok, err := s.findPendingQuestionByRequest(ctx, requestID)
+	if err != nil {
+		return err
+	}
+	if !ok || choice > len(question.Options) {
+		return s.answerCallbackOrMessage(ctx, callback, "Question is no longer pending.")
+	}
+	answer := strings.TrimSpace(question.Options[choice-1])
+	principal := identity.Principal{
+		UserID:    strings.TrimSpace(callback.FromID),
+		ProjectID: "elnath",
+		Surface:   "telegram",
+	}
+	output, err := s.enqueuePendingQuestionAnswer(ctx, question.SessionID, question.RequestID, answer, principal)
+	if err != nil {
+		return err
+	}
+	if ack, ok := s.bot.(callbackAcknowledger); ok {
+		_ = ack.AnswerCallback(ctx, callback.ID, "Answer queued")
+	}
+	return s.bot.SendMessage(ctx, s.chatID, renderTelegramQuestionAnswerQueued(question.RequestID, output))
+}
+
+func (s *Shell) answerCallbackOrMessage(ctx context.Context, callback CallbackQuery, text string) error {
+	if ack, ok := s.bot.(callbackAcknowledger); ok {
+		_ = ack.AnswerCallback(ctx, callback.ID, text)
+	}
+	return s.bot.SendMessage(ctx, s.chatID, "⚠️ "+text)
+}
+
 func renderPendingQuestionHandoffLines(q learning.PendingUserQuestion, directReplyAllowed bool) []string {
 	if !q.Answerable {
 		return []string{"  not answerable: missing session binding; inspect the receipt or ask again from a bound session."}
@@ -684,16 +966,17 @@ func renderPendingQuestionHandoffLines(q learning.PendingUserQuestion, directRep
 	if directReplyAllowed {
 		if len(q.Options) > 0 && !q.AllowFreeText {
 			choices := make([]string, 0, len(q.Options))
-			for _, opt := range q.Options {
-				choices = append(choices, "<code>"+escapeHTML(opt)+"</code>")
+			for i, opt := range q.Options {
+				choices = append(choices, fmt.Sprintf("<code>%d. %s</code>", i+1, escapeHTML(opt)))
 			}
 			lines = append(lines, "  reply directly: "+strings.Join(choices, ", "))
 		} else {
 			lines = append(lines, "  reply directly with your answer in this chat.")
 		}
 	}
-	for _, opt := range q.Options {
+	for i, opt := range q.Options {
 		lines = append(lines, fmt.Sprintf("  choose <code>%s</code>: <code>/answer %s %s %s</code>", escapeHTML(opt), sessionID, requestID, escapeHTML(opt)))
+		lines = append(lines, fmt.Sprintf("  choose <code>%d</code>: <code>/answer %s %s %d</code>", i+1, sessionID, requestID, i+1))
 	}
 	if q.AllowFreeText || len(q.Options) == 0 {
 		lines = append(lines, fmt.Sprintf("  free text: <code>/answer %s %s ANSWER_TEXT</code>", sessionID, requestID))
@@ -713,6 +996,13 @@ func (s *Shell) answerPendingQuestion(ctx context.Context, raw string, principal
 	sessionID := strings.TrimSpace(parts[1])
 	requestID := strings.TrimSpace(parts[2])
 	answer := strings.TrimSpace(parts[3])
+	if question, ok, err := s.findPendingQuestion(ctx, sessionID, requestID); err != nil {
+		return "", err
+	} else if ok {
+		if normalized, allowed := normalizePendingQuestionAnswer(question, answer); allowed {
+			answer = normalized
+		}
+	}
 	output, err := s.enqueuePendingQuestionAnswer(ctx, sessionID, requestID, answer, principal)
 	if err != nil {
 		return "", err
@@ -744,30 +1034,63 @@ func (s *Shell) handlePendingQuestionText(ctx context.Context, text string, prin
 		return true, "⚠️ Multiple pending questions for this session. Use /questions and answer with /answer <session_id> <request_id> <answer>.", nil
 	}
 	question := pending[0]
-	if !pendingQuestionTextAnswerAllowed(question, answer) {
+	normalizedAnswer, allowed := normalizePendingQuestionAnswer(question, answer)
+	if !allowed {
 		return true, fmt.Sprintf("⚠️ Answer does not match pending choices for <code>%s</code>. Use /questions.", escapeHTML(question.RequestID)), nil
 	}
-	output, err := s.enqueuePendingQuestionAnswer(ctx, question.SessionID, question.RequestID, answer, principal)
+	output, err := s.enqueuePendingQuestionAnswer(ctx, question.SessionID, question.RequestID, normalizedAnswer, principal)
 	if err != nil {
 		return true, "", err
 	}
 	return true, renderTelegramQuestionAnswerQueued(question.RequestID, output), nil
 }
 
-func pendingQuestionTextAnswerAllowed(question learning.PendingUserQuestion, answer string) bool {
+func normalizePendingQuestionAnswer(question learning.PendingUserQuestion, answer string) (string, bool) {
 	answer = strings.TrimSpace(answer)
 	if answer == "" {
-		return false
-	}
-	if question.AllowFreeText || len(question.Options) == 0 {
-		return true
+		return "", false
 	}
 	for _, option := range question.Options {
 		if answer == strings.TrimSpace(option) {
-			return true
+			return strings.TrimSpace(option), true
 		}
 	}
-	return false
+	if idx, err := strconv.Atoi(answer); err == nil && idx >= 1 && idx <= len(question.Options) {
+		return strings.TrimSpace(question.Options[idx-1]), true
+	}
+	if question.AllowFreeText || len(question.Options) == 0 {
+		return answer, true
+	}
+	return "", false
+}
+
+func (s *Shell) findPendingQuestion(ctx context.Context, sessionID, requestID string) (learning.PendingUserQuestion, bool, error) {
+	if s.outcomeStore == nil {
+		return learning.PendingUserQuestion{}, false, nil
+	}
+	records, err := s.outcomeStore.Recent(0)
+	if err != nil {
+		return learning.PendingUserQuestion{}, false, err
+	}
+	question, ok := learning.FindPendingUserQuestion(records, sessionID, requestID)
+	return question, ok, nil
+}
+
+func (s *Shell) findPendingQuestionByRequest(ctx context.Context, requestID string) (learning.PendingUserQuestion, bool, error) {
+	if s.outcomeStore == nil {
+		return learning.PendingUserQuestion{}, false, nil
+	}
+	records, err := s.outcomeStore.Recent(0)
+	if err != nil {
+		return learning.PendingUserQuestion{}, false, err
+	}
+	requestID = strings.TrimSpace(requestID)
+	for _, question := range learning.PendingUserQuestions(records, "", 0) {
+		if question.RequestID == requestID {
+			return question, true, nil
+		}
+	}
+	return learning.PendingUserQuestion{}, false, nil
 }
 
 func (s *Shell) enqueuePendingQuestionAnswer(ctx context.Context, sessionID, requestID, answer string, principal identity.Principal) (telegramQuestionAnswerOutput, error) {

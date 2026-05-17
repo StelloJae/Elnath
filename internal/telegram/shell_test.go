@@ -11,6 +11,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"github.com/stello/elnath/internal/agent"
 	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/daemon"
 	"github.com/stello/elnath/internal/identity"
@@ -23,12 +24,25 @@ import (
 
 type fakeBotClient struct {
 	sent      []sentMessage
+	buttons   []sentButtonMessage
+	callbacks []answeredCallback
 	reactions []sentReaction
 }
 
 type sentMessage struct {
 	chatID string
 	text   string
+}
+
+type sentButtonMessage struct {
+	chatID  string
+	text    string
+	buttons [][]TelegramButton
+}
+
+type answeredCallback struct {
+	id   string
+	text string
 }
 
 type sentReaction struct {
@@ -68,6 +82,17 @@ func (f *fakeBotClient) SendMessage(_ context.Context, chatID, text string) erro
 func (f *fakeBotClient) SendMessageReturningID(_ context.Context, chatID, text string) (int64, error) {
 	f.sent = append(f.sent, sentMessage{chatID: chatID, text: text})
 	return int64(len(f.sent)), nil
+}
+
+func (f *fakeBotClient) SendMessageWithButtons(_ context.Context, chatID, text string, buttons [][]TelegramButton) error {
+	f.sent = append(f.sent, sentMessage{chatID: chatID, text: text})
+	f.buttons = append(f.buttons, sentButtonMessage{chatID: chatID, text: text, buttons: buttons})
+	return nil
+}
+
+func (f *fakeBotClient) AnswerCallback(_ context.Context, callbackID, text string) error {
+	f.callbacks = append(f.callbacks, answeredCallback{id: callbackID, text: text})
+	return nil
 }
 
 func (f *fakeBotClient) EditMessage(_ context.Context, _ string, _ int64, _ string) error {
@@ -116,6 +141,38 @@ func newTestShellWithOptions(t *testing.T, skillReg *skill.Registry, opts ...She
 		t.Fatalf("NewShell: %v", err)
 	}
 	return shell, queue, approvals, bot
+}
+
+func seedTelegramHandoffTask(t *testing.T, dataDir string, queue *daemon.Queue) (*agent.Session, int64) {
+	t.Helper()
+	sess, err := agent.NewSession(dataDir, identity.Principal{UserID: "77", ProjectID: "elnath", Surface: "telegram"})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if err := sess.AppendMessages([]llm.Message{
+		llm.NewUserMessage("finish runtime polish"),
+		llm.NewAssistantMessage("recap ready"),
+	}); err != nil {
+		t.Fatalf("AppendMessages: %v", err)
+	}
+	id, _, err := queue.Enqueue(context.Background(), "handoff task", "")
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	task, err := queue.Next(context.Background())
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if task == nil || task.ID != id {
+		t.Fatalf("task = %+v, want %d", task, id)
+	}
+	if err := queue.BindSession(context.Background(), id, sess.ID); err != nil {
+		t.Fatalf("BindSession: %v", err)
+	}
+	if err := queue.MarkDone(context.Background(), id, "done", "runtime polish done"); err != nil {
+		t.Fatalf("MarkDone: %v", err)
+	}
+	return sess, id
 }
 
 func newShellBinder(t *testing.T) (*ChatSessionBinder, *stubSessionValidator) {
@@ -298,10 +355,12 @@ func TestShellQuestionsCommandShowsPendingUserChoices(t *testing.T) {
 		"Pending questions",
 		"req-1",
 		"Which branch?",
-		"main",
-		"new",
+		"1. main",
+		"2. new",
 		"/answer sess-1 req-1 main",
 		"/answer sess-1 req-1 new",
+		"/answer sess-1 req-1 1",
+		"/answer sess-1 req-1 2",
 		"/cancel-question sess-1 req-1",
 	} {
 		if !strings.Contains(bot.sent[0].text, want) {
@@ -350,6 +409,44 @@ func TestShellQuestionsCommandShowsDirectReplyHintForSingleBoundQuestion(t *test
 		if !strings.Contains(bot.sent[0].text, want) {
 			t.Fatalf("questions reply = %q, want %q", bot.sent[0].text, want)
 		}
+	}
+}
+
+func TestShellQuestionsCommandSendsChoiceButtons(t *testing.T) {
+	store := learning.NewOutcomeStore(filepath.Join(t.TempDir(), "outcomes.jsonl"))
+	if err := store.Append(learning.OutcomeRecord{
+		ControlToolReceipts: []learning.ControlToolReceipt{{
+			Tool:          "ask_user_question",
+			Action:        "request",
+			RequestID:     "req-1",
+			SessionID:     "sess-1",
+			Question:      "Which branch?",
+			Options:       []string{"main", "new"},
+			AllowFreeText: false,
+		}},
+	}); err != nil {
+		t.Fatalf("Append outcome: %v", err)
+	}
+	shell, _, _, bot := newTestShellWithOptions(t, nil, WithShellOutcomeStore(store))
+
+	if err := shell.HandleUpdate(context.Background(), Update{
+		ID:      1,
+		Message: Message{ChatID: "chat-1", UserID: "77", MessageID: 11, Text: "/questions"},
+	}); err != nil {
+		t.Fatalf("HandleUpdate: %v", err)
+	}
+
+	if len(bot.buttons) != 1 {
+		t.Fatalf("button messages = %+v, want one", bot.buttons)
+	}
+	if len(bot.buttons[0].buttons) != 2 || len(bot.buttons[0].buttons[0]) != 1 {
+		t.Fatalf("buttons = %+v, want one row per choice", bot.buttons[0].buttons)
+	}
+	if got := bot.buttons[0].buttons[0][0]; got.Text != "1. main" || got.Data != "uq:req-1:1" {
+		t.Fatalf("first button = %+v, want numeric user-question callback", got)
+	}
+	if got := bot.buttons[0].buttons[1][0]; got.Text != "2. new" || got.Data != "uq:req-1:2" {
+		t.Fatalf("second button = %+v, want numeric user-question callback", got)
 	}
 }
 
@@ -471,6 +568,43 @@ func TestShellAnswerCommandEnqueuesPendingQuestionAnswer(t *testing.T) {
 	}
 }
 
+func TestShellAnswerCommandAcceptsNumericChoice(t *testing.T) {
+	store := learning.NewOutcomeStore(filepath.Join(t.TempDir(), "outcomes.jsonl"))
+	if err := store.Append(learning.OutcomeRecord{
+		ControlToolReceipts: []learning.ControlToolReceipt{{
+			Tool:          "ask_user_question",
+			Action:        "request",
+			RequestID:     "req-1",
+			SessionID:     "sess-1",
+			Question:      "Which branch?",
+			Options:       []string{"main", "new"},
+			AllowFreeText: false,
+		}},
+	}); err != nil {
+		t.Fatalf("Append outcome: %v", err)
+	}
+	shell, queue, _, _ := newTestShellWithOptions(t, nil, WithShellOutcomeStore(store))
+
+	if err := shell.HandleUpdate(context.Background(), Update{
+		ID:      1,
+		Message: Message{ChatID: "chat-1", UserID: "77", MessageID: 11, Text: "/answer sess-1 req-1 2"},
+	}); err != nil {
+		t.Fatalf("HandleUpdate: %v", err)
+	}
+
+	tasks, err := queue.List(context.Background())
+	if err != nil {
+		t.Fatalf("List tasks: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("tasks = %+v, want one answer resume task", tasks)
+	}
+	payload := daemon.ParseTaskPayload(tasks[0].Payload)
+	if !strings.Contains(payload.Prompt, "Answer:\nnew") {
+		t.Fatalf("payload.Prompt = %q, want numeric answer normalized to option text", payload.Prompt)
+	}
+}
+
 func TestShellPlainTextAnswersSingleBoundPendingQuestion(t *testing.T) {
 	store := learning.NewOutcomeStore(filepath.Join(t.TempDir(), "outcomes.jsonl"))
 	if err := store.Append(learning.OutcomeRecord{
@@ -526,6 +660,151 @@ func TestShellPlainTextAnswersSingleBoundPendingQuestion(t *testing.T) {
 	}
 	if len(bot.reactions) != 0 {
 		t.Fatalf("reactions = %+v, want no task-intent reaction for captured answer", bot.reactions)
+	}
+}
+
+func TestShellPlainTextAnswersSingleBoundPendingQuestionByNumber(t *testing.T) {
+	store := learning.NewOutcomeStore(filepath.Join(t.TempDir(), "outcomes.jsonl"))
+	if err := store.Append(learning.OutcomeRecord{
+		ControlToolReceipts: []learning.ControlToolReceipt{{
+			Tool:          "ask_user_question",
+			Action:        "request",
+			RequestID:     "req-1",
+			SessionID:     "sess-1",
+			Question:      "Which branch?",
+			Options:       []string{"main", "new"},
+			AllowFreeText: false,
+		}},
+	}); err != nil {
+		t.Fatalf("Append outcome: %v", err)
+	}
+	binder, validator := newShellBinder(t)
+	validator.set("sess-1", true)
+	if err := binder.Remember("chat-1", "77", "sess-1"); err != nil {
+		t.Fatalf("Remember: %v", err)
+	}
+	shell, queue, _, _ := newTestShellWithOptions(t, nil, WithShellOutcomeStore(store), WithChatSessionBinder(binder))
+
+	if err := shell.HandleUpdate(context.Background(), Update{
+		ID:      1,
+		Message: Message{ChatID: "chat-1", UserID: "77", MessageID: 11, Text: "2"},
+	}); err != nil {
+		t.Fatalf("HandleUpdate: %v", err)
+	}
+
+	tasks, err := queue.List(context.Background())
+	if err != nil {
+		t.Fatalf("List tasks: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("tasks = %+v, want one answer resume task", tasks)
+	}
+	payload := daemon.ParseTaskPayload(tasks[0].Payload)
+	if !strings.Contains(payload.Prompt, "Answer:\nnew") {
+		t.Fatalf("payload.Prompt = %q, want numeric answer normalized to option text", payload.Prompt)
+	}
+}
+
+func TestShellQuestionChoiceCallbackEnqueuesAnswer(t *testing.T) {
+	store := learning.NewOutcomeStore(filepath.Join(t.TempDir(), "outcomes.jsonl"))
+	if err := store.Append(learning.OutcomeRecord{
+		ControlToolReceipts: []learning.ControlToolReceipt{{
+			Tool:          "ask_user_question",
+			Action:        "request",
+			RequestID:     "req-1",
+			SessionID:     "sess-1",
+			Question:      "Which branch?",
+			Options:       []string{"main", "new"},
+			AllowFreeText: false,
+		}},
+	}); err != nil {
+		t.Fatalf("Append outcome: %v", err)
+	}
+	shell, queue, _, bot := newTestShellWithOptions(t, nil, WithShellOutcomeStore(store))
+
+	if err := shell.HandleUpdate(context.Background(), Update{
+		ID: 2,
+		CallbackQuery: &CallbackQuery{
+			ID:     "cb-1",
+			FromID: "77",
+			Data:   "uq:req-1:2",
+			Message: Message{
+				ChatID:    "chat-1",
+				MessageID: 50,
+			},
+		},
+	}); err != nil {
+		t.Fatalf("HandleUpdate: %v", err)
+	}
+
+	tasks, err := queue.List(context.Background())
+	if err != nil {
+		t.Fatalf("List tasks: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("tasks = %+v, want one answer resume task", tasks)
+	}
+	payload := daemon.ParseTaskPayload(tasks[0].Payload)
+	if !strings.Contains(payload.Prompt, "Answer:\nnew") {
+		t.Fatalf("payload.Prompt = %q, want callback answer normalized to option text", payload.Prompt)
+	}
+	if len(bot.callbacks) != 1 || bot.callbacks[0].id != "cb-1" {
+		t.Fatalf("callbacks = %+v, want callback acknowledgement", bot.callbacks)
+	}
+	if len(bot.sent) != 1 || !strings.Contains(bot.sent[0].text, "Answer queued") {
+		t.Fatalf("reply = %+v, want answer queued", bot.sent)
+	}
+}
+
+func TestShellHandoffCommandRendersTaskRecap(t *testing.T) {
+	dataDir := t.TempDir()
+	shell, queue, _, bot := newTestShellWithOptions(t, nil, WithShellDataDir(dataDir))
+	sess, taskID := seedTelegramHandoffTask(t, dataDir, queue)
+
+	if err := shell.HandleUpdate(context.Background(), Update{
+		ID:      1,
+		Message: Message{ChatID: "chat-1", UserID: "77", MessageID: 11, Text: fmt.Sprintf("/handoff %d", taskID)},
+	}); err != nil {
+		t.Fatalf("HandleUpdate: %v", err)
+	}
+
+	if len(bot.sent) != 1 {
+		t.Fatalf("sent = %+v, want one handoff reply", bot.sent)
+	}
+	for _, want := range []string{
+		"Task handoff",
+		fmt.Sprintf("#%d", taskID),
+		sess.ID[:8],
+		"finish runtime polish",
+		"recap ready",
+	} {
+		if !strings.Contains(bot.sent[0].text, want) {
+			t.Fatalf("handoff reply = %q, want %q", bot.sent[0].text, want)
+		}
+	}
+}
+
+func TestShellHandoffCommandRecordsLifecycleState(t *testing.T) {
+	dataDir := t.TempDir()
+	shell, queue, _, bot := newTestShellWithOptions(t, nil, WithShellDataDir(dataDir))
+	sess, taskID := seedTelegramHandoffTask(t, dataDir, queue)
+
+	if err := shell.HandleUpdate(context.Background(), Update{
+		ID:      1,
+		Message: Message{ChatID: "chat-1", UserID: "77", MessageID: 11, Text: fmt.Sprintf("/handoff %d claimed taking over from phone", taskID)},
+	}); err != nil {
+		t.Fatalf("HandleUpdate: %v", err)
+	}
+
+	status, err := agent.LoadSessionHandoffStatus(dataDir, sess.ID)
+	if err != nil {
+		t.Fatalf("LoadSessionHandoffStatus: %v", err)
+	}
+	if status == nil || status.State != "claimed" || status.Surface != "telegram" || status.Principal.UserID != "77" || status.Reason != "taking over from phone" {
+		t.Fatalf("handoff status = %+v, want claimed telegram user 77", status)
+	}
+	if len(bot.sent) != 1 || !strings.Contains(bot.sent[0].text, "claimed") {
+		t.Fatalf("reply = %+v, want claimed handoff reply", bot.sent)
 	}
 }
 
