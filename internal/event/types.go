@@ -105,6 +105,14 @@ type WorkflowProgressEvent struct {
 
 func (e WorkflowProgressEvent) EventType() string { return "workflow_progress" }
 
+type RuntimeProgressEvent struct {
+	Base
+	Phase   string
+	Message string
+}
+
+func (e RuntimeProgressEvent) EventType() string { return "runtime_progress" }
+
 type UsageProgressEvent struct {
 	Base
 	Summary string

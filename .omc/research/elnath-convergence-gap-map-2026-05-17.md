@@ -1920,3 +1920,50 @@ Remaining skill feedback gaps:
 - Apply path is mechanical append, not natural skill rewrite.
 - No automatic lifecycle curator.
 - No Telegram/operator proposal review surface.
+
+## Post-PR261 Runtime Progress / Alive Status Milestone Update
+
+Date: 2026-05-18 KST
+
+Branch:
+
+- `codex/runtime-progress-status`
+
+Artifact:
+
+- `.omc/research/runtime-progress-alive-status-2026-05-18.md`
+
+What changed:
+
+- Added typed `event.RuntimeProgressEvent`.
+- Added daemon progress kind `runtime`.
+- Added runtime phase progress forwarding to CLI, daemon progress observers,
+  and legacy CLI callbacks.
+- Added phase events for prompt build, workflow run, completion check,
+  session persistence, completion retry, and verification retry.
+- Added parsed `progress_event` metadata to `task_monitor` tool output and
+  `elnath task monitor --json` output.
+
+Reference impact:
+
+- Moves Elnath closer to Hermes-style "the run is alive" visibility without
+  adding a separate streaming subsystem.
+- Moves Elnath closer to Claude Code-style progress grouping at the substrate
+  level while not claiming TUI parity.
+
+Verification:
+
+- `go test ./internal/event ./internal/daemon ./cmd/elnath -run 'TestRuntimeProgressEvent|TestOnTextToSinkRuntimeProgressEncodesJSON|TestProgressObserverDispatchesRepresentativeEventTypesAndIgnoresUnknown|TestLegacyCallbackObserverDispatchesRepresentativeEventTypesAndIgnoresUnknown|TestExecutionRuntimeRunTaskEmitsRuntimePhaseProgress|TestDeliveryRouter_OnProgressParsesAndRoutes|TestCmdDaemonStatusRendersStructuredProgressEnvelope' -count=1`
+  passed.
+- `go test ./internal/event ./internal/daemon ./cmd/elnath -run 'TestRuntimeProgressEvent|TestOnTextToSinkRuntimeProgressEncodesJSON|TestProgressObserverDispatchesRepresentativeEventTypesAndIgnoresUnknown|TestLegacyCallbackObserverDispatchesRepresentativeEventTypesAndIgnoresUnknown|TestExecutionRuntimeRunTaskEmitsRuntimePhaseProgress|TestDeliveryRouter_OnProgressParsesAndRoutes|TestCmdDaemonStatusRendersStructuredProgressEnvelope|TestTaskMonitorToolReturnsParsedProgressEvent|TestCmdTaskMonitorWithQueueJSONIncludesParsedProgressEvent' -count=1`
+  passed.
+- `go test ./cmd/elnath ./internal/event ./internal/daemon -count=1`
+  passed.
+- `go vet ./...` passed.
+- `git diff --check` passed.
+
+Remaining progress/UX gaps:
+
+- Runtime progress is phase-level, not a rich timeline.
+- Telegram uses existing progress delivery; no new native transcript UI.
+- No Claude Code-style condensed terminal transcript grouping yet.

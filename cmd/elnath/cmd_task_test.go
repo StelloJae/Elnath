@@ -245,6 +245,37 @@ func TestCmdTaskMonitorWithQueueJSONWaitsForUpdate(t *testing.T) {
 	}
 }
 
+func TestCmdTaskMonitorWithQueueJSONIncludesParsedProgressEvent(t *testing.T) {
+	ctx := context.Background()
+	queue := newCmdTaskTestQueue(t)
+	id, _, err := queue.Enqueue(ctx, "json structured progress", "")
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	task, err := queue.Next(ctx)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if task == nil {
+		t.Fatal("Next returned nil")
+	}
+	rawProgress := daemon.EncodeProgressEvent(daemon.RuntimeProgressEvent("completion_check", "checking completion contract"))
+	if _, err := queue.UpdateAnnotation(ctx, task.ID, rawProgress, "checking"); err != nil {
+		t.Fatalf("UpdateAnnotation: %v", err)
+	}
+
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdTaskMonitorWithQueue(ctx, queue, []string{fmt.Sprint(id), "--json"}); err != nil {
+			t.Fatalf("cmdTaskMonitorWithQueue: %v", err)
+		}
+	})
+	for _, want := range []string{`"progress_event"`, `"kind":"runtime"`, `"phase":"completion_check"`, `"message":"checking completion contract"`} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout = %q, want %q", stdout, want)
+		}
+	}
+}
+
 func TestCmdTaskOutputWithQueueReturnsTail(t *testing.T) {
 	ctx := context.Background()
 	queue := newCmdTaskTestQueue(t)

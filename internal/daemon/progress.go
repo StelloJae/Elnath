@@ -13,6 +13,7 @@ const (
 	ProgressKindText     = "text"
 	ProgressKindUsage    = "usage"
 	ProgressKindTool     = "tool"
+	ProgressKindRuntime  = "runtime"
 )
 
 // ProgressEvent is the shared, UI-safe progress envelope consumed by daemon
@@ -38,6 +39,20 @@ func WorkflowProgressEvent(intent, workflow string) ProgressEvent {
 		Message:  message,
 		Intent:   strings.TrimSpace(intent),
 		Workflow: strings.TrimSpace(workflow),
+	}
+}
+
+func RuntimeProgressEvent(phase, message string) ProgressEvent {
+	phase = strings.TrimSpace(phase)
+	message = strings.TrimSpace(message)
+	if message == "" {
+		message = phase
+	}
+	return ProgressEvent{
+		Version: progressSchemaVersion,
+		Kind:    ProgressKindRuntime,
+		Message: message,
+		Phase:   phase,
 	}
 }
 

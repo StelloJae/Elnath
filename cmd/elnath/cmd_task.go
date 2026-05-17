@@ -605,20 +605,21 @@ type taskMonitorCLIOutput struct {
 		TimeoutMS      int    `json:"timeout_ms"`
 		MaxChars       int    `json:"max_chars"`
 	} `json:"observation"`
-	NextPollSeconds    int    `json:"next_poll_seconds"`
-	ObservedAt         string `json:"observed_at"`
-	UpdatedAt          string `json:"updated_at"`
-	AgeSeconds         int64  `json:"age_seconds"`
-	RunningSeconds     int64  `json:"running_seconds"`
-	IdleSeconds        int64  `json:"idle_seconds"`
-	Progress           string `json:"progress"`
-	Summary            string `json:"summary"`
-	ResultTail         string `json:"result_tail"`
-	ResultTotalChars   int    `json:"result_total_chars"`
-	ResultTruncated    bool   `json:"result_truncated"`
-	TimeoutClass       string `json:"timeout_class"`
-	IdleTimeoutCount   int    `json:"idle_timeout_count"`
-	ActiveTimeoutCount int    `json:"active_timeout_count"`
+	NextPollSeconds    int                   `json:"next_poll_seconds"`
+	ObservedAt         string                `json:"observed_at"`
+	UpdatedAt          string                `json:"updated_at"`
+	AgeSeconds         int64                 `json:"age_seconds"`
+	RunningSeconds     int64                 `json:"running_seconds"`
+	IdleSeconds        int64                 `json:"idle_seconds"`
+	Progress           string                `json:"progress"`
+	ProgressEvent      *daemon.ProgressEvent `json:"progress_event,omitempty"`
+	Summary            string                `json:"summary"`
+	ResultTail         string                `json:"result_tail"`
+	ResultTotalChars   int                   `json:"result_total_chars"`
+	ResultTruncated    bool                  `json:"result_truncated"`
+	TimeoutClass       string                `json:"timeout_class"`
+	IdleTimeoutCount   int                   `json:"idle_timeout_count"`
+	ActiveTimeoutCount int                   `json:"active_timeout_count"`
 }
 
 type taskOutputCLIOutput struct {
