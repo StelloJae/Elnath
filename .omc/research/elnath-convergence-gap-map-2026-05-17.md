@@ -1676,3 +1676,51 @@ Remaining handoff/gateway gaps:
 - No remote claimant authentication.
 - Gateway handoff lifecycle exposure still remains a candidate if product need
   persists.
+
+## Post-Session-Handoff-Transition-Guard Local Update
+
+Date: 2026-05-17 KST
+
+Branch:
+
+- `codex/handoff-notification`
+
+Artifact:
+
+- `.omc/research/session-handoff-transition-guard-2026-05-17.md`
+
+What changed:
+
+- Session handoff writes now validate lifecycle transitions before appending
+  JSONL handoff events.
+- Terminal states `completed` / `failed` can be retried only by starting a new
+  `requested` handoff.
+- Stale active writes after terminal completion are rejected as invalid
+  transitions.
+
+Reference impact:
+
+- Moves Elnath's handoff behavior closer to Hermes-style explicit lifecycle
+  discipline while staying compatible with existing Elnath CLI/Telegram direct
+  operator flows.
+- Does not claim distributed atomic gateway claim or full Hermes handoff parity.
+
+Verification:
+
+- `go test ./internal/agent -run TestRecordHandoffRejectsInvalidTransition -count=1`
+  failed before implementation because terminal-first handoff writes were
+  accepted.
+- `go test ./internal/agent -run 'TestRecordHandoff(AndLoadStatus|RejectsUnknownState|RejectsInvalidTransition)' -count=1`
+  passed.
+- `go test ./cmd/elnath ./internal/telegram ./internal/agent -run 'TestRecordHandoff|TestCmdTaskHandoffWithQueue|TestShellHandoffCommand' -count=1`
+  passed.
+- `go test ./cmd/elnath ./internal/telegram ./internal/daemon ./internal/agent -count=1`
+  passed.
+- `go vet ./...` passed.
+- `git diff --check` passed.
+
+Remaining handoff/gateway gaps:
+
+- No distributed atomic gateway claim lock.
+- No remote claimant authentication.
+- No live runtime migration.
