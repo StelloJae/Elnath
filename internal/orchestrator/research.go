@@ -131,6 +131,7 @@ func (w *ResearchWorkflow) Run(ctx context.Context, input WorkflowInput) (*Workf
 		Messages:     messages,
 		Summary:      result.Summary,
 		Usage:        totalResearchUsage(result),
+		Mutations:    researchMutationReceipts(result),
 		Workflow:     w.Name(),
 		FinishReason: "stop",
 	}, nil

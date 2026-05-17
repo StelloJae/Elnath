@@ -3,6 +3,7 @@ package research
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"os"
@@ -71,6 +72,54 @@ func (m *mockProvider) Stream(_ context.Context, req llm.ChatRequest, cb func(ll
 
 func (m *mockProvider) Name() string            { return "mock" }
 func (m *mockProvider) Models() []llm.ModelInfo { return nil }
+
+type researchToolUseProvider struct {
+	streamCalls int
+}
+
+func (p *researchToolUseProvider) Chat(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+	return &llm.ChatResponse{}, nil
+}
+
+func (p *researchToolUseProvider) Stream(_ context.Context, _ llm.ChatRequest, cb func(llm.StreamEvent)) error {
+	p.streamCalls++
+	switch p.streamCalls {
+	case 1:
+		cb(llm.StreamEvent{Type: llm.EventToolUseStart, ToolCall: &llm.ToolUseEvent{ID: "write-1", Name: "write_file"}})
+		cb(llm.StreamEvent{Type: llm.EventToolUseDone, ToolCall: &llm.ToolUseEvent{ID: "write-1", Name: "write_file", Input: `{"file_path":"foo.go","content":"package main\n"}`}})
+	default:
+		cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: `{"findings":"f","evidence":"e","confidence":"high","supported":true}`})
+	}
+	cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{InputTokens: 1, OutputTokens: 1}})
+	return nil
+}
+
+func (p *researchToolUseProvider) Name() string            { return "mock" }
+func (p *researchToolUseProvider) Models() []llm.ModelInfo { return nil }
+
+type researchMutationTool struct{}
+
+func (t *researchMutationTool) Name() string                           { return "write_file" }
+func (t *researchMutationTool) Description() string                    { return "write" }
+func (t *researchMutationTool) Schema() json.RawMessage                { return json.RawMessage(`{"type":"object"}`) }
+func (t *researchMutationTool) IsConcurrencySafe(json.RawMessage) bool { return false }
+func (t *researchMutationTool) Reversible() bool                       { return false }
+func (t *researchMutationTool) Scope(json.RawMessage) tools.ToolScope {
+	return tools.ConservativeScope()
+}
+func (t *researchMutationTool) ShouldCancelSiblingsOnError() bool { return false }
+func (t *researchMutationTool) Execute(context.Context, json.RawMessage) (*tools.Result, error) {
+	return &tools.Result{
+		Output: "wrote foo.go",
+		Mutation: &tools.FileMutation{
+			Operation:          "write_file",
+			Path:               "foo.go",
+			Changed:            true,
+			DiagnosticLanguage: "go",
+			DiagnosticStatus:   "diagnostic_delta_clean",
+		},
+	}, nil
+}
 
 // mockSearcher implements WikiSearcher with canned results.
 type mockSearcher struct {
@@ -531,6 +580,25 @@ func TestExperimentRunner_NilPipelineUsesLegacy(t *testing.T) {
 	systems := provider.capturedSystems()
 	if len(systems) == 0 || systems[0] != experimentSystemPrompt {
 		t.Errorf("expected legacy prompt, got %q", systems)
+	}
+}
+
+func TestExperimentRunner_PropagatesMutationReceipts(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	provider := &researchToolUseProvider{}
+	reg := tools.NewRegistry()
+	reg.Register(&researchMutationTool{})
+	er := NewExperimentRunner(provider, reg, "test-model", logger)
+
+	result, err := er.Run(context.Background(), Hypothesis{ID: "H1", Statement: "s", TestPlan: "write file"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(result.Mutations) != 1 {
+		t.Fatalf("Mutations = %+v, want one mutation receipt", result.Mutations)
+	}
+	if result.Mutations[0].Path != "foo.go" || result.Mutations[0].DiagnosticStatus != "diagnostic_delta_clean" {
+		t.Fatalf("mutation receipt = %+v", result.Mutations[0])
 	}
 }
 

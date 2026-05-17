@@ -589,14 +589,9 @@ func diagnosticDeltaReceiptsFromMutations(mutations []*tools.FileMutation) []com
 	if len(mutations) == 0 {
 		return nil
 	}
-	receipts := make([]completionDiagnosticDeltaReceipt, 0, len(mutations))
-	for _, mutation := range mutations {
-		if mutation == nil || strings.TrimSpace(mutation.DiagnosticStatus) == "" {
-			continue
-		}
-		if !mutation.Changed {
-			continue
-		}
+	latest := latestDiagnosticMutationsByPath(mutations)
+	receipts := make([]completionDiagnosticDeltaReceipt, 0, len(latest))
+	for _, mutation := range latest {
 		receipt := completionDiagnosticDeltaReceipt{
 			Tool:                    "structured_mutation_receipt",
 			Action:                  "diagnostics_delta",
@@ -619,6 +614,38 @@ func diagnosticDeltaReceiptsFromMutations(mutations []*tools.FileMutation) []com
 		return nil
 	}
 	return receipts
+}
+
+func latestDiagnosticMutationsByPath(mutations []*tools.FileMutation) []*tools.FileMutation {
+	if len(mutations) == 0 {
+		return nil
+	}
+	latestByPath := make(map[string]*tools.FileMutation)
+	var order []string
+	for _, mutation := range mutations {
+		if mutation == nil || !mutation.Changed || strings.TrimSpace(mutation.DiagnosticStatus) == "" {
+			continue
+		}
+		key := normalizeCompletionScopePath(mutation.Path)
+		if key == "" {
+			key = strings.TrimSpace(mutation.Path)
+		}
+		if key == "" {
+			continue
+		}
+		if _, exists := latestByPath[key]; !exists {
+			order = append(order, key)
+		}
+		latestByPath[key] = mutation
+	}
+	if len(order) == 0 {
+		return nil
+	}
+	out := make([]*tools.FileMutation, 0, len(order))
+	for _, key := range order {
+		out = append(out, latestByPath[key])
+	}
+	return out
 }
 
 func withoutDiagnosticDeltaReceiptsFromTool(receipts []completionDiagnosticDeltaReceipt, tool string) []completionDiagnosticDeltaReceipt {

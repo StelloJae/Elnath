@@ -15,12 +15,13 @@ import (
 
 // ExperimentResult captures the outcome of testing a hypothesis.
 type ExperimentResult struct {
-	HypothesisID string         `json:"hypothesis_id"`
-	Findings     string         `json:"findings"`
-	Evidence     string         `json:"evidence"`
-	Confidence   string         `json:"confidence"`
-	Supported    bool           `json:"supported"`
-	Usage        llm.UsageStats `json:"-"`
+	HypothesisID string                `json:"hypothesis_id"`
+	Findings     string                `json:"findings"`
+	Evidence     string                `json:"evidence"`
+	Confidence   string                `json:"confidence"`
+	Supported    bool                  `json:"supported"`
+	Usage        llm.UsageStats        `json:"-"`
+	Mutations    []*tools.FileMutation `json:"-"`
 }
 
 // ExperimentRunner executes hypothesis test plans via the agent loop.
@@ -126,6 +127,7 @@ func (r *ExperimentRunner) Run(ctx context.Context, hyp Hypothesis) (*Experiment
 
 	expResult := parseExperimentResult(lastText, hyp.ID)
 	expResult.Usage = result.Usage
+	expResult.Mutations = result.Mutations
 
 	r.logger.Info("experiment complete",
 		"hypothesis_id", hyp.ID,
