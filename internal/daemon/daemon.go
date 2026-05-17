@@ -114,6 +114,8 @@ type CompletionGate interface {
 
 type runningTaskCancelFunc func(reason string)
 
+const taskFinalizationTimeout = 5 * time.Second
+
 // Daemon runs background task processing with Unix domain socket IPC.
 type Daemon struct {
 	queue             *Queue
@@ -594,11 +596,12 @@ func (d *Daemon) worker(ctx context.Context, id int) {
 				"principal_surface", principal.Surface,
 				"error", err,
 			)
+			finalizeCtx, finalizeCancel := taskFinalizationContext(ctx)
 			failureMeta := taskFailureMetadata(err)
-			if markErr := d.queue.MarkFailedWithMetadata(ctx, task.ID, err.Error(), failureMeta); markErr != nil {
+			if markErr := d.queue.MarkFailedWithMetadata(finalizeCtx, task.ID, err.Error(), failureMeta); markErr != nil {
 				d.logger.Error("worker: mark failed", "task_id", task.ID, "error", markErr)
 			} else if envelopeRun != nil {
-				if envelopeErr := envelopeRun.Fail(ctx); envelopeErr != nil {
+				if envelopeErr := envelopeRun.Fail(finalizeCtx); envelopeErr != nil {
 					d.logger.Error("worker: task envelope fail update",
 						"task_id", task.ID,
 						"agentic_task_id", envelopeRun.AgenticTaskID(),
@@ -607,8 +610,9 @@ func (d *Daemon) worker(ctx context.Context, id int) {
 					)
 				}
 			}
-			d.retireSessionAfterFailure(ctx, task, failureMeta)
-			d.deliver(ctx, task.ID)
+			d.retireSessionAfterFailure(finalizeCtx, task, failureMeta)
+			d.deliver(finalizeCtx, task.ID)
+			finalizeCancel()
 			continue
 		}
 
@@ -638,10 +642,11 @@ func (d *Daemon) worker(ctx context.Context, id int) {
 				continue
 			}
 		}
-		if markErr := d.queue.MarkDone(ctx, task.ID, result.Result, result.Summary); markErr != nil {
+		finalizeCtx, finalizeCancel := taskFinalizationContext(ctx)
+		if markErr := d.queue.MarkDone(finalizeCtx, task.ID, result.Result, result.Summary); markErr != nil {
 			d.logger.Error("worker: mark done", "task_id", task.ID, "error", markErr)
 		} else if envelopeRun != nil {
-			if envelopeErr := envelopeRun.Succeed(ctx); envelopeErr != nil {
+			if envelopeErr := envelopeRun.Succeed(finalizeCtx); envelopeErr != nil {
 				d.logger.Error("worker: task envelope success update",
 					"task_id", task.ID,
 					"agentic_task_id", envelopeRun.AgenticTaskID(),
@@ -650,7 +655,8 @@ func (d *Daemon) worker(ctx context.Context, id int) {
 				)
 			}
 		}
-		d.deliver(ctx, task.ID)
+		d.deliver(finalizeCtx, task.ID)
+		finalizeCancel()
 	}
 }
 
@@ -680,10 +686,12 @@ func (d *Daemon) retireSessionAfterFailure(ctx context.Context, task *Task, meta
 func (d *Daemon) failCompletionGate(ctx context.Context, task *Task, envelopeRun TaskEnvelopeRun, reason string) {
 	message := "completion gate blocked: " + reason
 	d.logger.Error("worker: completion gate blocked", "task_id", task.ID, "error", reason)
-	if markErr := d.queue.MarkFailed(ctx, task.ID, message); markErr != nil {
+	finalizeCtx, finalizeCancel := taskFinalizationContext(ctx)
+	defer finalizeCancel()
+	if markErr := d.queue.MarkFailed(finalizeCtx, task.ID, message); markErr != nil {
 		d.logger.Error("worker: completion gate mark failed", "task_id", task.ID, "error", markErr)
 	} else if envelopeRun != nil {
-		if envelopeErr := envelopeRun.Fail(ctx); envelopeErr != nil {
+		if envelopeErr := envelopeRun.Fail(finalizeCtx); envelopeErr != nil {
 			d.logger.Error("worker: task envelope fail update",
 				"task_id", task.ID,
 				"agentic_task_id", envelopeRun.AgenticTaskID(),
@@ -692,7 +700,11 @@ func (d *Daemon) failCompletionGate(ctx context.Context, task *Task, envelopeRun
 			)
 		}
 	}
-	d.deliver(ctx, task.ID)
+	d.deliver(finalizeCtx, task.ID)
+}
+
+func taskFinalizationContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), taskFinalizationTimeout)
 }
 
 func (d *Daemon) runTaskSafely(ctx context.Context, task *Task) (result TaskResult, err error) {
@@ -858,6 +870,9 @@ func (d *Daemon) runTask(ctx context.Context, task *Task) (TaskResult, error) {
 		if manualCanceled.Load() && taskCtx.Err() != nil && ctx.Err() == nil {
 			reason, _ := manualCancelReason.Load().(string)
 			return TaskResult{}, taskCanceledError{reason: reason}
+		}
+		if taskCtx.Err() != nil && ctx.Err() != nil {
+			return TaskResult{}, taskCanceledError{reason: "daemon shutdown"}
 		}
 		if taskCtx.Err() != nil && ctx.Err() == nil {
 			inner := fmt.Errorf("daemon: task timed out: %w", taskCtx.Err())

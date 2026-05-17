@@ -859,6 +859,79 @@ func TestAgenticCommand_StatusReportsAttentionItems(t *testing.T) {
 	}
 }
 
+func TestAgenticCommand_ApprovalsListsPendingRequests(t *testing.T) {
+	fx := newAgenticCommandFixture(t)
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdAgentic(context.Background(), []string{"approvals"}); err != nil {
+			t.Fatalf("cmdAgentic approvals: %v", err)
+		}
+	})
+	for _, want := range []string{
+		"Agentic Approvals",
+		fmt.Sprintf("#%d pending tool=bash task=%d policy=%d risk=high", fx.approval.ID, fx.task.ID, fx.policy.ID),
+		"shell command requires approval",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("approvals output = %q, want %q", stdout, want)
+		}
+	}
+	assertNoRawSecrets(t, stdout, fx.rawSecrets)
+}
+
+func TestAgenticCommand_ApproveDecidesPendingRequest(t *testing.T) {
+	fx := newAgenticCommandFixture(t)
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdAgentic(context.Background(), []string{"approve", fmt.Sprint(fx.approval.ID)}); err != nil {
+			t.Fatalf("cmdAgentic approve: %v", err)
+		}
+	})
+	for _, want := range []string{
+		fmt.Sprintf("Agentic approval #%d approved", fx.approval.ID),
+		"tool: bash",
+		fmt.Sprintf("task_id: %d", fx.task.ID),
+		"decided_by: cli",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("approve output = %q, want %q", stdout, want)
+		}
+	}
+	got, err := fx.approvals.Get(context.Background(), fx.approval.ID)
+	if err != nil {
+		t.Fatalf("Get approval: %v", err)
+	}
+	if got.Decision != daemon.ApprovalDecisionApproved || got.DecidedBy != "cli" {
+		t.Fatalf("approval = %+v, want approved by cli", got)
+	}
+	listJSON, _ := captureOutput(t, func() {
+		if err := cmdAgentic(context.Background(), []string{"approvals", "--json"}); err != nil {
+			t.Fatalf("cmdAgentic approvals after approve: %v", err)
+		}
+	})
+	var list agenticApprovalsView
+	if err := json.Unmarshal([]byte(listJSON), &list); err != nil {
+		t.Fatalf("unmarshal approvals output: %v\n%s", err, listJSON)
+	}
+	if list.Approvals == nil || len(list.Approvals) != 0 {
+		t.Fatalf("approvals after approve = %+v, want empty JSON array", list.Approvals)
+	}
+}
+
+func TestAgenticCommand_DenyDecidesPendingRequestJSON(t *testing.T) {
+	fx := newAgenticCommandFixture(t)
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdAgentic(context.Background(), []string{"deny", fmt.Sprint(fx.approval.ID), "--json"}); err != nil {
+			t.Fatalf("cmdAgentic deny: %v", err)
+		}
+	})
+	var out agenticApprovalDecisionView
+	if err := json.Unmarshal([]byte(stdout), &out); err != nil {
+		t.Fatalf("unmarshal deny output: %v\n%s", err, stdout)
+	}
+	if out.Approval.ID != fx.approval.ID || out.Approval.Decision != string(daemon.ApprovalDecisionDenied) || out.Approval.DecidedBy != "cli" {
+		t.Fatalf("deny output = %+v, want denied approval by cli", out)
+	}
+}
+
 func TestAgenticCommand_CompletionGateViewsHandleMissingTable(t *testing.T) {
 	fx := newAgenticCommandFixture(t)
 	if _, err := fx.db.Main.Exec(`DROP TABLE completion_gates`); err != nil {

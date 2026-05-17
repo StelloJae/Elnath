@@ -121,6 +121,17 @@ type agenticTasksView struct {
 	Tasks           []agenticTaskInfo `json:"tasks"`
 }
 
+type agenticApprovalsView struct {
+	AutonomyEnabled bool                  `json:"autonomy_enabled"`
+	Limit           int                   `json:"limit"`
+	Approvals       []agenticApprovalInfo `json:"approvals"`
+}
+
+type agenticApprovalDecisionView struct {
+	AutonomyEnabled bool                `json:"autonomy_enabled"`
+	Approval        agenticApprovalInfo `json:"approval"`
+}
+
 type agenticLineageView struct {
 	AutonomyEnabled  bool                      `json:"autonomy_enabled"`
 	Goal             *agenticGoalInfo          `json:"goal,omitempty"`
@@ -359,6 +370,9 @@ Subcommands:
   tasks [--status s] [--limit n] [--json]  List agentic tasks
   task <id> [--json]                      Read-only task status
   task --queue-task-id <id> [--json]      Resolve agentic task from daemon queue task
+  approvals [--limit n] [--json]          List pending tool approvals
+  approve <approval-id> [--json]          Approve a pending tool request
+  deny <approval-id> [--json]             Deny a pending tool request
   lineage <task-id> [--json]              Read-only task lineage
   evidence <task-id> [--json]             Compact task evidence chain
   enqueue <task-id> [flags]               Explicitly enqueue an approved proposed task
@@ -381,6 +395,12 @@ Enqueue flags:
 	}
 	if args[0] == "signal" {
 		return cmdAgenticSignal(ctx, args[1:])
+	}
+	if args[0] == "approve" {
+		return cmdAgenticApprovalDecision(ctx, args[1:], true, "elnath agentic approve <approval-id> [--json]")
+	}
+	if args[0] == "deny" {
+		return cmdAgenticApprovalDecision(ctx, args[1:], false, "elnath agentic deny <approval-id> [--json]")
 	}
 	cli, closeFn, err := openAgenticCLI()
 	if err != nil {
@@ -440,6 +460,20 @@ Enqueue flags:
 			return printJSON(view)
 		}
 		fmt.Print(renderAgenticTasks(view))
+		return nil
+	case "approvals":
+		limit, jsonOut, err := parseAgenticListArgs(args[1:], "elnath agentic approvals [--limit n] [--json]")
+		if err != nil {
+			return err
+		}
+		view, err := cli.pendingApprovals(ctx, limit)
+		if err != nil {
+			return err
+		}
+		if jsonOut {
+			return printJSON(view)
+		}
+		fmt.Print(renderAgenticApprovals(view))
 		return nil
 	case "task":
 		id, jsonOut, err := cli.resolveTaskID(ctx, args[1:])
@@ -503,6 +537,11 @@ type agenticEnqueueArgs struct {
 	RequestedEnforcement    string
 	RequestedCompletionGate string
 	JSON                    bool
+}
+
+type agenticApprovalDecisionArgs struct {
+	ID   int64
+	JSON bool
 }
 
 type agenticActivateArgs struct {
@@ -958,6 +997,82 @@ func parseAgenticEnqueueArgs(args []string) (agenticEnqueueArgs, error) {
 		return parsed, fmt.Errorf("invalid agentic task ID %q: %w", ids[0], err)
 	}
 	parsed.TaskID = id
+	return parsed, nil
+}
+
+func cmdAgenticApprovalDecision(ctx context.Context, args []string, approved bool, usage string) error {
+	parsed, err := parseAgenticApprovalDecisionArgs(args, usage)
+	if err != nil {
+		return err
+	}
+	action := "agentic approve"
+	if !approved {
+		action = "agentic deny"
+	}
+	cfgPath := extractConfigFlag(os.Args)
+	if cfgPath == "" {
+		cfgPath = config.DefaultConfigPath()
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return fmt.Errorf("%s: load config: %w", action, err)
+	}
+	db, err := core.OpenDB(cfg.DataDir)
+	if err != nil {
+		return fmt.Errorf("%s: open db: %w", action, err)
+	}
+	defer db.Close()
+	if err := agentic.InitSchema(db.Main); err != nil {
+		return fmt.Errorf("%s: init schema: %w", action, err)
+	}
+	approvalStore, err := daemon.NewApprovalStore(db.Main)
+	if err != nil {
+		return fmt.Errorf("%s: open approvals: %w", action, err)
+	}
+	decidedBy := strings.TrimSpace(cfg.Principal.UserID)
+	if decidedBy == "" {
+		decidedBy = "cli"
+	}
+	if err := approvalStore.DecideBy(ctx, parsed.ID, approved, decidedBy); err != nil {
+		return err
+	}
+	approval, err := approvalStore.Get(ctx, parsed.ID)
+	if err != nil {
+		return err
+	}
+	view := agenticApprovalDecisionView{
+		AutonomyEnabled: false,
+		Approval:        approvalInfo(*approval),
+	}
+	if parsed.JSON {
+		return printJSON(view)
+	}
+	fmt.Print(renderAgenticApprovalDecision(&view))
+	return nil
+}
+
+func parseAgenticApprovalDecisionArgs(args []string, usage string) (agenticApprovalDecisionArgs, error) {
+	var parsed agenticApprovalDecisionArgs
+	var ids []string
+	for _, arg := range args {
+		switch arg {
+		case "--json":
+			parsed.JSON = true
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return parsed, fmt.Errorf("unknown approval flag: %s", arg)
+			}
+			ids = append(ids, arg)
+		}
+	}
+	if len(ids) != 1 {
+		return parsed, fmt.Errorf("usage: %s", usage)
+	}
+	id, err := strconv.ParseInt(ids[0], 10, 64)
+	if err != nil {
+		return parsed, fmt.Errorf("invalid approval ID %q: %w", ids[0], err)
+	}
+	parsed.ID = id
 	return parsed, nil
 }
 
@@ -1491,6 +1606,39 @@ func (c *agenticCLI) taskEnqueueDecisions(ctx context.Context, taskID int64) ([]
 	return out, nil
 }
 
+func (c *agenticCLI) pendingApprovals(ctx context.Context, limit int) (*agenticApprovalsView, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	exists, err := c.tableExists(ctx, "approval_requests")
+	if err != nil {
+		return nil, err
+	}
+	view := &agenticApprovalsView{AutonomyEnabled: false, Limit: limit, Approvals: []agenticApprovalInfo{}}
+	if !exists {
+		return view, nil
+	}
+	rows, err := c.db.QueryContext(ctx, `
+		SELECT id, COALESCE(task_id, 0), COALESCE(policy_decision_id, 0), tool_name, decision, risk_level, reason, decided_by
+		FROM approval_requests
+		WHERE decision = ?
+		ORDER BY created_at ASC, id ASC
+		LIMIT ?`, string(daemon.ApprovalDecisionPending), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var a agenticApprovalInfo
+		if err := rows.Scan(&a.ID, &a.TaskID, &a.PolicyDecisionID, &a.ToolName, &a.Decision, &a.RiskLevel, &a.Reason, &a.DecidedBy); err != nil {
+			return nil, err
+		}
+		a.Reason = bounded(a.Reason, 120)
+		view.Approvals = append(view.Approvals, a)
+	}
+	return view, rows.Err()
+}
+
 func enqueueInfo(decision agentic.TaskEnqueueDecision) *agenticEnqueueInfo {
 	return &agenticEnqueueInfo{
 		ID:                      decision.ID,
@@ -1502,6 +1650,19 @@ func enqueueInfo(decision agentic.TaskEnqueueDecision) *agenticEnqueueInfo {
 		RequestedCompletionGate: decision.RequestedCompletionGate,
 		Status:                  decision.Status,
 		FailureReason:           bounded(decision.FailureReason, 120),
+	}
+}
+
+func approvalInfo(approval daemon.ApprovalRequest) agenticApprovalInfo {
+	return agenticApprovalInfo{
+		ID:               approval.ID,
+		TaskID:           approval.TaskID,
+		PolicyDecisionID: approval.PolicyDecisionID,
+		ToolName:         approval.ToolName,
+		Decision:         string(approval.Decision),
+		RiskLevel:        approval.RiskLevel,
+		Reason:           bounded(approval.Reason, 120),
+		DecidedBy:        approval.DecidedBy,
 	}
 }
 
@@ -1944,6 +2105,33 @@ func renderAgenticTasks(view *agenticTasksView) string {
 	for _, task := range view.Tasks {
 		fmt.Fprintf(&b, "  - #%d %s status=%s goal=%s signal=%s queue=%s risk=%s verification=%s\n", task.ID, task.Title, task.Status, intOrNone(task.GoalID), intOrNone(task.SignalID), intOrNone(task.QueueTaskID), task.RiskLevel, task.VerificationStatus)
 	}
+	return b.String()
+}
+
+func renderAgenticApprovals(view *agenticApprovalsView) string {
+	var b strings.Builder
+	fmt.Fprintln(&b, "Agentic Approvals")
+	fmt.Fprintf(&b, "  autonomy_enabled: %t\n", view.AutonomyEnabled)
+	fmt.Fprintf(&b, "  limit: %d\n", view.Limit)
+	if len(view.Approvals) == 0 {
+		fmt.Fprintln(&b, "  approvals: none")
+		return b.String()
+	}
+	fmt.Fprintln(&b, "  approvals:")
+	for _, approval := range view.Approvals {
+		fmt.Fprintf(&b, "  - #%d %s tool=%s task=%s policy=%s risk=%s reason=%s\n", approval.ID, approval.Decision, approval.ToolName, intOrNone(approval.TaskID), intOrNone(approval.PolicyDecisionID), noneIfEmpty(approval.RiskLevel), noneIfEmpty(approval.Reason))
+	}
+	return b.String()
+}
+
+func renderAgenticApprovalDecision(view *agenticApprovalDecisionView) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Agentic approval #%d %s\n", view.Approval.ID, view.Approval.Decision)
+	fmt.Fprintf(&b, "  tool: %s\n", view.Approval.ToolName)
+	fmt.Fprintf(&b, "  task_id: %s\n", intOrNone(view.Approval.TaskID))
+	fmt.Fprintf(&b, "  policy_decision_id: %s\n", intOrNone(view.Approval.PolicyDecisionID))
+	fmt.Fprintf(&b, "  risk: %s\n", noneIfEmpty(view.Approval.RiskLevel))
+	fmt.Fprintf(&b, "  decided_by: %s\n", noneIfEmpty(view.Approval.DecidedBy))
 	return b.String()
 }
 
