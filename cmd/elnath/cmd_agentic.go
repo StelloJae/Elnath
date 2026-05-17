@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/stello/elnath/internal/agentic"
+	agenticactivation "github.com/stello/elnath/internal/agentic/activation"
 	agenticenqueue "github.com/stello/elnath/internal/agentic/enqueue"
 	"github.com/stello/elnath/internal/config"
 	"github.com/stello/elnath/internal/core"
@@ -33,6 +34,23 @@ type agenticStatusView struct {
 	ProposedAwaitingEnqueue int                       `json:"proposed_awaiting_enqueue"`
 	DueFollowups            int                       `json:"due_followups"`
 	Attention               []agenticAttentionItem    `json:"attention"`
+}
+
+type agenticActivationView struct {
+	AutonomyEnabled  bool                    `json:"autonomy_enabled"`
+	ExecutionPolicy  string                  `json:"execution_policy"`
+	Limit            int                     `json:"limit"`
+	EnqueuePerformed bool                    `json:"enqueue_performed"`
+	Followups        agenticActivationCounts `json:"followups"`
+	Signals          agenticActivationCounts `json:"signals"`
+}
+
+type agenticActivationCounts struct {
+	Processed int `json:"processed"`
+	Created   int `json:"created"`
+	Linked    int `json:"linked,omitempty"`
+	Skipped   int `json:"skipped,omitempty"`
+	Failed    int `json:"failed"`
 }
 
 type agenticAttentionItem struct {
@@ -221,6 +239,7 @@ func cmdAgentic(ctx context.Context, args []string) error {
 
 Subcommands:
   status [--json]                         Read-only control-plane summary
+  activate --once [--limit n] [--json]    Advance due followups and new signals once
   task <id> [--json]                      Read-only task status
   task --queue-task-id <id> [--json]      Resolve agentic task from daemon queue task
   lineage <task-id> [--json]              Read-only task lineage
@@ -235,6 +254,9 @@ Enqueue flags:
 	}
 	if args[0] == "enqueue" {
 		return cmdAgenticEnqueue(ctx, args[1:])
+	}
+	if args[0] == "activate" {
+		return cmdAgenticActivate(ctx, args[1:])
 	}
 	cli, closeFn, err := openAgenticCLI()
 	if err != nil {
@@ -301,6 +323,74 @@ type agenticEnqueueArgs struct {
 	RequestedEnforcement    string
 	RequestedCompletionGate string
 	JSON                    bool
+}
+
+type agenticActivateArgs struct {
+	Once  bool
+	Limit int
+	JSON  bool
+}
+
+func cmdAgenticActivate(ctx context.Context, args []string) error {
+	parsed, err := parseAgenticActivateArgs(args)
+	if err != nil {
+		return err
+	}
+	cfgPath := extractConfigFlag(os.Args)
+	if cfgPath == "" {
+		cfgPath = config.DefaultConfigPath()
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return fmt.Errorf("agentic activate: load config: %w", err)
+	}
+	db, err := core.OpenDB(cfg.DataDir)
+	if err != nil {
+		return fmt.Errorf("agentic activate: open db: %w", err)
+	}
+	defer db.Close()
+	if err := agentic.InitSchema(db.Main); err != nil {
+		return fmt.Errorf("agentic activate: init schema: %w", err)
+	}
+	result, err := agenticactivation.NewService(agentic.NewStore(db.Main)).RunOnce(ctx, parsed.Limit)
+	if err != nil {
+		return err
+	}
+	view := activationView(result)
+	if parsed.JSON {
+		return printJSON(view)
+	}
+	fmt.Print(renderAgenticActivation(view))
+	return nil
+}
+
+func parseAgenticActivateArgs(args []string) (agenticActivateArgs, error) {
+	parsed := agenticActivateArgs{Limit: 25}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "--once":
+			parsed.Once = true
+		case "--json":
+			parsed.JSON = true
+		case "--limit":
+			i++
+			if i >= len(args) {
+				return parsed, fmt.Errorf("usage: elnath agentic activate --once [--limit n] [--json]")
+			}
+			limit, err := strconv.Atoi(args[i])
+			if err != nil || limit <= 0 {
+				return parsed, fmt.Errorf("invalid activate limit %q", args[i])
+			}
+			parsed.Limit = limit
+		default:
+			return parsed, fmt.Errorf("unknown activate flag: %s", arg)
+		}
+	}
+	if !parsed.Once {
+		return parsed, fmt.Errorf("usage: elnath agentic activate --once [--limit n] [--json]")
+	}
+	return parsed, nil
 }
 
 func cmdAgenticEnqueue(ctx context.Context, args []string) error {
@@ -992,6 +1082,39 @@ func printJSON(v any) error {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
+}
+
+func activationView(result agenticactivation.Result) *agenticActivationView {
+	return &agenticActivationView{
+		AutonomyEnabled:  false,
+		ExecutionPolicy:  result.ExecutionPolicy,
+		Limit:            result.Limit,
+		EnqueuePerformed: result.EnqueuePerformed,
+		Followups: agenticActivationCounts{
+			Processed: result.Followups.Processed,
+			Created:   result.Followups.Created,
+			Skipped:   result.Followups.Skipped,
+			Failed:    result.Followups.Failed,
+		},
+		Signals: agenticActivationCounts{
+			Processed: result.Signals.Processed,
+			Created:   result.Signals.Created,
+			Linked:    result.Signals.Linked,
+			Failed:    result.Signals.Failed,
+		},
+	}
+}
+
+func renderAgenticActivation(view *agenticActivationView) string {
+	var b strings.Builder
+	fmt.Fprintln(&b, "Agentic Activation")
+	fmt.Fprintf(&b, "  autonomy_enabled: %t\n", view.AutonomyEnabled)
+	fmt.Fprintf(&b, "  execution_policy: %s\n", view.ExecutionPolicy)
+	fmt.Fprintf(&b, "  limit: %d\n", view.Limit)
+	fmt.Fprintf(&b, "  enqueue_performed: %t\n", view.EnqueuePerformed)
+	fmt.Fprintf(&b, "  followups: processed=%d created=%d skipped=%d failed=%d\n", view.Followups.Processed, view.Followups.Created, view.Followups.Skipped, view.Followups.Failed)
+	fmt.Fprintf(&b, "  signals: processed=%d created=%d linked=%d failed=%d\n", view.Signals.Processed, view.Signals.Created, view.Signals.Linked, view.Signals.Failed)
+	return b.String()
 }
 
 func renderAgenticStatus(view *agenticStatusView) string {

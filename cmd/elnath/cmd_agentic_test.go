@@ -530,6 +530,81 @@ func TestProposedTaskEnqueue_DoesNotCreateToolReceiptsVerificationMemoryOrFollow
 	}
 }
 
+func TestAgenticActivate_RunOnceJSONProcessesDueFollowupWithoutEnqueue(t *testing.T) {
+	fx := newAgenticCommandFixture(t)
+	beforeQueue := countQueueRows(t, fx.db.Main)
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdAgentic(context.Background(), []string{"activate", "--once", "--limit", "10", "--json"}); err != nil {
+			t.Fatalf("cmdAgentic activate: %v", err)
+		}
+	})
+	var view agenticActivationView
+	if err := json.Unmarshal([]byte(stdout), &view); err != nil {
+		t.Fatalf("activate JSON = %q, unmarshal: %v", stdout, err)
+	}
+	if view.AutonomyEnabled || view.ExecutionPolicy != "propose_only" || view.Limit != 10 || view.EnqueuePerformed {
+		t.Fatalf("activate view = %+v", view)
+	}
+	if view.Followups.Processed != 1 || view.Followups.Created != 1 {
+		t.Fatalf("followup counts = %+v", view.Followups)
+	}
+	if view.Signals.Processed != 1 || view.Signals.Failed != 0 {
+		t.Fatalf("signal counts = %+v", view.Signals)
+	}
+	if after := countQueueRows(t, fx.db.Main); after != beforeQueue {
+		t.Fatalf("queue rows changed: before=%d after=%d", beforeQueue, after)
+	}
+	updated, err := fx.store.GetFollowup(context.Background(), fx.followup.ID)
+	if err != nil {
+		t.Fatalf("GetFollowup: %v", err)
+	}
+	if updated.Status != agentic.FollowupStatusCreated || updated.CreatedTaskID == 0 {
+		t.Fatalf("followup after activate = %+v", updated)
+	}
+	child, err := fx.store.GetAgenticTask(context.Background(), updated.CreatedTaskID)
+	if err != nil {
+		t.Fatalf("GetAgenticTask child: %v", err)
+	}
+	if child.Status != agentic.TaskStatusProposed || child.QueueTaskID != 0 || child.ParentID != fx.task.ID {
+		t.Fatalf("child task = %+v", child)
+	}
+	signal, err := fx.store.GetGoalSignal(context.Background(), child.SignalID)
+	if err != nil {
+		t.Fatalf("GetGoalSignal: %v", err)
+	}
+	if signal.Status != agentic.SignalStatusTriaged {
+		t.Fatalf("signal status = %q, want triaged", signal.Status)
+	}
+}
+
+func TestAgenticActivate_RequiresExplicitOnce(t *testing.T) {
+	newAgenticCommandFixture(t)
+	err := cmdAgentic(context.Background(), []string{"activate", "--json"})
+	if err == nil || !strings.Contains(err.Error(), "activate --once") {
+		t.Fatalf("activate without --once err = %v, want usage", err)
+	}
+}
+
+func TestAgenticActivate_HumanOutputSummarizesPolicy(t *testing.T) {
+	newAgenticCommandFixture(t)
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdAgentic(context.Background(), []string{"activate", "--once"}); err != nil {
+			t.Fatalf("cmdAgentic activate: %v", err)
+		}
+	})
+	for _, want := range []string{
+		"Agentic Activation",
+		"execution_policy: propose_only",
+		"enqueue_performed: false",
+		"followups: processed=1 created=1",
+		"signals: processed=1",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("activate output = %q, want %q", stdout, want)
+		}
+	}
+}
+
 func TestAgenticOperatorLineage_ShowsProposedTaskEnqueueState(t *testing.T) {
 	fx := newAgenticCommandFixture(t)
 	task := createStandaloneProposedTask(t, fx)
