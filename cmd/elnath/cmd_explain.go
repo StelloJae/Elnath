@@ -316,7 +316,7 @@ func controlSurfaceReplacementPaths() map[string][]string {
 			"code_symbols document_symbols/workspace_symbols",
 			"code_symbols definition/references/hover",
 			"code_symbols diagnostics/diagnostics_delta",
-			"structured mutation diagnostics for Go and Python syntax",
+			"structured mutation diagnostics for Go, Python syntax, and conditional TypeScript/JavaScript syntax",
 			"future plugin/provider adapters for non-Go language servers",
 		},
 	}
@@ -405,7 +405,7 @@ func controlSurfaceManifest() []controlSurfaceManifestEntry {
 			ReceiptBacked:   true,
 			ProductBoundary: controlSurfaceBoundaryReasons()["code_intelligence"],
 			ReplacementPath: controlSurfaceReplacementPaths()["code_intelligence"],
-			Notes:           "Go-native symbols, definitions, references, hover signatures, syntax diagnostics, edit-aware diagnostic deltas, and Python syntax mutation diagnostics",
+			Notes:           "Go-native symbols, definitions, references, hover signatures, syntax diagnostics, edit-aware diagnostic deltas, Python syntax mutation diagnostics, and conditional TypeScript/JavaScript syntax mutation diagnostics",
 		},
 	}
 }
