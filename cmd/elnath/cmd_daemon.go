@@ -357,7 +357,7 @@ func cmdDaemonStart(ctx context.Context) error {
 			return fmt.Errorf("create telegram shell: %w", shellErr)
 		}
 		router.Register(tgSink)
-		d.WithProgressObserver(tgSink)
+		d.WithProgressObserver(router)
 		shell.SkipNotifyCompletions()
 
 		go func() {

@@ -22,12 +22,28 @@ type CompletionSink interface {
 	NotifyCompletion(ctx context.Context, completion TaskCompletion) error
 }
 
-// DeliveryRouter fans out completion events to registered sinks.
-type DeliveryRouter struct {
-	sinks  []CompletionSink
-	db     *sql.DB
-	logger *slog.Logger
+// TaskProgress is the UI-safe progress contract for a running task.
+type TaskProgress struct {
+	TaskID      int64
+	Event       ProgressEvent
+	Raw         string
+	DeliveredAt time.Time
 }
+
+// ProgressSink receives notification when a running task emits progress.
+type ProgressSink interface {
+	NotifyProgress(ctx context.Context, progress TaskProgress) error
+}
+
+// DeliveryRouter fans out task events to registered sinks.
+type DeliveryRouter struct {
+	sinks         []CompletionSink
+	progressSinks []ProgressSink
+	db            *sql.DB
+	logger        *slog.Logger
+}
+
+var _ ProgressObserver = (*DeliveryRouter)(nil)
 
 // NewDeliveryRouter returns a DeliveryRouter with no sinks registered.
 func NewDeliveryRouter(db *sql.DB, logger *slog.Logger) (*DeliveryRouter, error) {
@@ -42,9 +58,18 @@ func NewDeliveryRouter(db *sql.DB, logger *slog.Logger) (*DeliveryRouter, error)
 	return &DeliveryRouter{db: db, logger: logger}, nil
 }
 
-// Register adds a sink to the router.
+// Register adds a completion sink to the router. Sinks that also implement
+// ProgressSink receive progress events through the same router.
 func (r *DeliveryRouter) Register(sink CompletionSink) {
 	r.sinks = append(r.sinks, sink)
+	if progressSink, ok := sink.(ProgressSink); ok {
+		r.progressSinks = append(r.progressSinks, progressSink)
+	}
+}
+
+// RegisterProgress adds a progress-only sink to the router.
+func (r *DeliveryRouter) RegisterProgress(sink ProgressSink) {
+	r.progressSinks = append(r.progressSinks, sink)
 }
 
 // Deliver calls all registered sinks. Individual sink failures are logged but
@@ -115,7 +140,67 @@ func (r *DeliveryRouter) Deliver(ctx context.Context, completion TaskCompletion)
 	return nil
 }
 
-func sinkNameOf(sink CompletionSink) string {
+// DeliverProgress fans out progress events. Unlike completion delivery, progress
+// delivery is not deduplicated: every progress event is part of the live stream.
+func (r *DeliveryRouter) DeliverProgress(ctx context.Context, progress TaskProgress) error {
+	if len(r.progressSinks) == 0 {
+		return nil
+	}
+	progress = normalizeTaskProgress(progress)
+	if progress.Event.Message == "" {
+		return nil
+	}
+
+	var errs []error
+	for _, sink := range r.progressSinks {
+		if err := sink.NotifyProgress(ctx, progress); err != nil {
+			r.logger.Error("delivery: progress sink failed",
+				"task_id", progress.TaskID,
+				"sink", sinkNameOf(sink),
+				"error", err,
+			)
+			errs = append(errs, err)
+		}
+	}
+
+	if len(errs) == len(r.progressSinks) {
+		return fmt.Errorf("delivery: all progress sinks failed: %w", errors.Join(errs...))
+	}
+	return nil
+}
+
+// OnProgress implements ProgressObserver so the daemon can route progress
+// through the same delivery layer used for completion notifications.
+func (r *DeliveryRouter) OnProgress(taskID int64, progress string) {
+	ev, ok := ParseProgressEvent(progress)
+	if !ok {
+		return
+	}
+	if err := r.DeliverProgress(context.Background(), TaskProgress{
+		TaskID: taskID,
+		Event:  ev,
+		Raw:    progress,
+	}); err != nil {
+		r.logger.Error("delivery: progress router failed", "task_id", taskID, "error", err)
+	}
+}
+
+func normalizeTaskProgress(progress TaskProgress) TaskProgress {
+	if progress.DeliveredAt.IsZero() {
+		progress.DeliveredAt = time.Now()
+	}
+	if progress.Raw == "" {
+		progress.Raw = EncodeProgressEvent(progress.Event)
+	}
+	if progress.Event.Message == "" && progress.Raw != "" {
+		if ev, ok := ParseProgressEvent(progress.Raw); ok {
+			progress.Event = ev
+		}
+	}
+	return progress
+}
+
+func sinkNameOf(sink any) string {
 	if named, ok := sink.(interface{ String() string }); ok {
 		return named.String()
 	}
