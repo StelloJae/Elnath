@@ -471,6 +471,34 @@ func TestCmdTaskHandoffWithQueueJSONIncludesRetirement(t *testing.T) {
 	}
 }
 
+func TestCmdTaskHandoffWithQueueRequestRecordsHandoffState(t *testing.T) {
+	ctx := context.Background()
+	queue := newCmdTaskTestQueue(t)
+	dataDir := t.TempDir()
+	sess, taskID := seedTaskHandoffFixture(t, ctx, queue, dataDir)
+
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdTaskHandoffWithQueue(ctx, queue, dataDir, []string{fmt.Sprint(taskID), "--request", "telegram"}); err != nil {
+			t.Fatalf("cmdTaskHandoffWithQueue: %v", err)
+		}
+	})
+	for _, want := range []string{
+		"Handoff:     requested surface=telegram",
+		"Resume:       elnath task resume",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout = %q, want %q", stdout, want)
+		}
+	}
+	status, err := agent.LoadSessionHandoffStatus(dataDir, sess.ID)
+	if err != nil {
+		t.Fatalf("LoadSessionHandoffStatus: %v", err)
+	}
+	if status == nil || status.State != "requested" || status.Surface != "telegram" {
+		t.Fatalf("handoff status = %+v, want requested telegram", status)
+	}
+}
+
 func TestCmdTaskHandoffWithQueueMarkdownOutput(t *testing.T) {
 	ctx := context.Background()
 	queue := newCmdTaskTestQueue(t)
