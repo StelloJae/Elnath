@@ -295,6 +295,17 @@ func (s *Session) RecordHandoff(state, surface string, principal identity.Princi
 	if !validSessionHandoffState(state) {
 		return fmt.Errorf("session: invalid handoff state %q", state)
 	}
+	current, err := readSessionHandoffStatus(s.path)
+	if err != nil {
+		return err
+	}
+	currentState := ""
+	if current != nil {
+		currentState = current.State
+	}
+	if !validSessionHandoffTransition(currentState, state) {
+		return fmt.Errorf("session: invalid handoff transition %q -> %q", currentState, state)
+	}
 	if principal.IsZero() {
 		principal = s.Principal
 	}
@@ -332,6 +343,25 @@ func validSessionHandoffState(state string) bool {
 	switch strings.TrimSpace(state) {
 	case "requested", "claimed", "running", "completed", "failed":
 		return true
+	default:
+		return false
+	}
+}
+
+func validSessionHandoffTransition(current, next string) bool {
+	current = strings.TrimSpace(current)
+	next = strings.TrimSpace(next)
+	switch current {
+	case "":
+		return next == "requested" || next == "claimed" || next == "running"
+	case "requested":
+		return next == "claimed" || next == "running" || next == "failed"
+	case "claimed":
+		return next == "running" || next == "completed" || next == "failed"
+	case "running":
+		return next == "completed" || next == "failed"
+	case "completed", "failed":
+		return next == "requested"
 	default:
 		return false
 	}

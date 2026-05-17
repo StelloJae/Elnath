@@ -460,6 +460,43 @@ func TestRecordHandoffRejectsUnknownState(t *testing.T) {
 	}
 }
 
+func TestRecordHandoffRejectsInvalidTransition(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewSession(dir)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	err = s.RecordHandoff("completed", "telegram", identity.Principal{}, "no active handoff")
+	if err == nil || !strings.Contains(err.Error(), "invalid handoff transition") {
+		t.Fatalf("RecordHandoff(completed first) err = %v, want invalid transition", err)
+	}
+	if err := s.RecordHandoff("requested", "telegram", identity.Principal{}, "start handoff"); err != nil {
+		t.Fatalf("RecordHandoff(requested): %v", err)
+	}
+	if err := s.RecordHandoff("running", "telegram", identity.Principal{}, "claimed by gateway"); err != nil {
+		t.Fatalf("RecordHandoff(running): %v", err)
+	}
+	if err := s.RecordHandoff("completed", "telegram", identity.Principal{}, "done"); err != nil {
+		t.Fatalf("RecordHandoff(completed): %v", err)
+	}
+
+	err = s.RecordHandoff("running", "telegram", identity.Principal{}, "late stale claim")
+	if err == nil || !strings.Contains(err.Error(), "invalid handoff transition") {
+		t.Fatalf("RecordHandoff(running after completed) err = %v, want invalid transition", err)
+	}
+	if err := s.RecordHandoff("requested", "discord", identity.Principal{}, "retry handoff"); err != nil {
+		t.Fatalf("RecordHandoff(requested retry): %v", err)
+	}
+	status, err := LoadSessionHandoffStatus(dir, s.ID)
+	if err != nil {
+		t.Fatalf("LoadSessionHandoffStatus: %v", err)
+	}
+	if status == nil || status.State != "requested" || status.Surface != "discord" {
+		t.Fatalf("handoff status = %+v, want requested discord retry", status)
+	}
+}
+
 func TestLoadSessionSkipsResumeLines(t *testing.T) {
 	dir := t.TempDir()
 	s, err := NewSession(dir, identity.Principal{UserID: "12345", ProjectID: "elnath", Surface: "telegram"})
