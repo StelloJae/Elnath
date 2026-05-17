@@ -81,6 +81,11 @@ func taskResumeHandoffTaskIDFromArgs(args []string) (int64, bool, error) {
 	return taskID, true, nil
 }
 
+func taskResumeHandoffContextRequested(args []string) bool {
+	return strings.TrimSpace(extractFlagValue(args, taskResumeHandoffContextFlag)) != "" ||
+		strings.TrimSpace(extractFlagValue(args, "--continue-task")) != ""
+}
+
 func formatTaskResumeHandoffContext(view taskHandoffCLIOutput, maxChars int) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "task_id: %d\n", view.TaskID)
