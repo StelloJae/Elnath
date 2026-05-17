@@ -310,8 +310,18 @@ func TestExplainControlSurfacesJSON(t *testing.T) {
 		t.Fatalf("python diagnostic adapter status = %q, want available or diagnostics_not_configured", pythonAdapter.status)
 	}
 	tsAdapter, ok := adaptersByLanguage["typescript"]
-	if !ok || tsAdapter.status != "diagnostics_not_configured" {
-		t.Fatalf("typescript diagnostic adapter = %+v, ok=%t, want diagnostics_not_configured", tsAdapter, ok)
+	if !ok || tsAdapter.adapter != "typescript/transpileModule" || tsAdapter.command != "node" || tsAdapter.timeoutMS != 2000 {
+		t.Fatalf("typescript diagnostic adapter = %+v, ok=%t, want transpileModule command with 2000ms timeout", tsAdapter, ok)
+	}
+	if tsAdapter.status != "conditional" && tsAdapter.status != "diagnostics_not_configured" {
+		t.Fatalf("typescript diagnostic adapter status = %q, want conditional or diagnostics_not_configured", tsAdapter.status)
+	}
+	jsAdapter, ok := adaptersByLanguage["javascript"]
+	if !ok || jsAdapter.adapter != "typescript/transpileModule" || jsAdapter.command != "node" || jsAdapter.timeoutMS != 2000 {
+		t.Fatalf("javascript diagnostic adapter = %+v, ok=%t, want transpileModule command with 2000ms timeout", jsAdapter, ok)
+	}
+	if jsAdapter.status != "conditional" && jsAdapter.status != "diagnostics_not_configured" {
+		t.Fatalf("javascript diagnostic adapter status = %q, want conditional or diagnostics_not_configured", jsAdapter.status)
 	}
 	scratchpad, ok := byName["scratchpad"]
 	if !ok {

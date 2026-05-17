@@ -194,7 +194,14 @@ func TestWriteToolRecordsNonGoDiagnosticPolicy(t *testing.T) {
 			filePath: "app.ts",
 			content:  "const ok = true;\n",
 			language: "typescript",
-			status:   "diagnostics_not_configured",
+			status:   expectedTypeScriptDiagnosticStatus("diagnostic_delta_clean"),
+		},
+		{
+			name:     "javascript",
+			filePath: "app.js",
+			content:  "const ok = true;\n",
+			language: "javascript",
+			status:   expectedTypeScriptDiagnosticStatus("diagnostic_delta_clean"),
 		},
 	}
 
@@ -290,6 +297,139 @@ func TestWriteToolRecordsPythonDiagnosticPolicyWhenAdapterMissing(t *testing.T) 
 		t.Fatal("Mutation = nil, want structured file mutation receipt")
 	}
 	if got, want := res.Mutation.DiagnosticLanguage, "python"; got != want {
+		t.Fatalf("DiagnosticLanguage = %q, want %q", got, want)
+	}
+	if got, want := res.Mutation.DiagnosticStatus, "diagnostics_not_configured"; got != want {
+		t.Fatalf("DiagnosticStatus = %q, want %q", got, want)
+	}
+}
+
+func TestWriteToolRecordsTypeScriptDiagnosticDelta(t *testing.T) {
+	oldCommand := typescriptDiagnosticCommand
+	typescriptDiagnosticCommand = fakeTypeScriptDiagnosticCommand(t)
+	t.Cleanup(func() { typescriptDiagnosticCommand = oldCommand })
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.ts")
+	if err := os.WriteFile(path, []byte("const ok: boolean = true;\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	tool := NewWriteTool(NewPathGuard(dir, nil))
+
+	res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{
+		"file_path": "app.ts",
+		"content":   "const broken: = true;\n",
+	}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.Output)
+	}
+	if res.Mutation == nil {
+		t.Fatal("Mutation = nil, want structured file mutation receipt")
+	}
+	if got, want := res.Mutation.DiagnosticLanguage, "typescript"; got != want {
+		t.Fatalf("DiagnosticLanguage = %q, want %q", got, want)
+	}
+	if got, want := res.Mutation.DiagnosticStatus, "new_diagnostics_found"; got != want {
+		t.Fatalf("DiagnosticStatus = %q, want %q", got, want)
+	}
+	if res.Mutation.NewDiagnosticCount == 0 || len(res.Mutation.NewDiagnostics) == 0 {
+		t.Fatalf("new diagnostics = count %d details %+v, want at least one", res.Mutation.NewDiagnosticCount, res.Mutation.NewDiagnostics)
+	}
+	if got := res.Mutation.NewDiagnostics[0]; got.Line == 0 || got.Column == 0 || got.Error == "" || got.Source != "typescript/transpileModule" {
+		t.Fatalf("first new diagnostic = %+v, want located typescript/transpileModule error", got)
+	}
+}
+
+func TestWriteToolRecordsJavaScriptDiagnosticDelta(t *testing.T) {
+	oldCommand := typescriptDiagnosticCommand
+	typescriptDiagnosticCommand = fakeTypeScriptDiagnosticCommand(t)
+	t.Cleanup(func() { typescriptDiagnosticCommand = oldCommand })
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.js")
+	if err := os.WriteFile(path, []byte("const ok = true;\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	tool := NewWriteTool(NewPathGuard(dir, nil))
+
+	res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{
+		"file_path": "app.js",
+		"content":   "const broken = ;\n",
+	}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.Output)
+	}
+	if res.Mutation == nil {
+		t.Fatal("Mutation = nil, want structured file mutation receipt")
+	}
+	if got, want := res.Mutation.DiagnosticLanguage, "javascript"; got != want {
+		t.Fatalf("DiagnosticLanguage = %q, want %q", got, want)
+	}
+	if got, want := res.Mutation.DiagnosticStatus, "new_diagnostics_found"; got != want {
+		t.Fatalf("DiagnosticStatus = %q, want %q", got, want)
+	}
+	if res.Mutation.NewDiagnosticCount == 0 || len(res.Mutation.NewDiagnostics) == 0 {
+		t.Fatalf("new diagnostics = count %d details %+v, want at least one", res.Mutation.NewDiagnosticCount, res.Mutation.NewDiagnostics)
+	}
+}
+
+func TestWriteToolRecordsTypeScriptDiagnosticPolicyWhenAdapterMissing(t *testing.T) {
+	oldCommand := typescriptDiagnosticCommand
+	typescriptDiagnosticCommand = "elnath-typescript-not-present-for-test"
+	t.Cleanup(func() { typescriptDiagnosticCommand = oldCommand })
+
+	dir := t.TempDir()
+	tool := NewWriteTool(NewPathGuard(dir, nil))
+
+	res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{
+		"file_path": "app.ts",
+		"content":   "const ok = true;\n",
+	}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.Output)
+	}
+	if res.Mutation == nil {
+		t.Fatal("Mutation = nil, want structured file mutation receipt")
+	}
+	if got, want := res.Mutation.DiagnosticLanguage, "typescript"; got != want {
+		t.Fatalf("DiagnosticLanguage = %q, want %q", got, want)
+	}
+	if got, want := res.Mutation.DiagnosticStatus, "diagnostics_not_configured"; got != want {
+		t.Fatalf("DiagnosticStatus = %q, want %q", got, want)
+	}
+}
+
+func TestWriteToolRecordsJavaScriptDiagnosticPolicyWhenAdapterMissing(t *testing.T) {
+	oldCommand := typescriptDiagnosticCommand
+	typescriptDiagnosticCommand = "elnath-typescript-not-present-for-test"
+	t.Cleanup(func() { typescriptDiagnosticCommand = oldCommand })
+
+	dir := t.TempDir()
+	tool := NewWriteTool(NewPathGuard(dir, nil))
+
+	res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{
+		"file_path": "app.js",
+		"content":   "const ok = true;\n",
+	}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.Output)
+	}
+	if res.Mutation == nil {
+		t.Fatal("Mutation = nil, want structured file mutation receipt")
+	}
+	if got, want := res.Mutation.DiagnosticLanguage, "javascript"; got != want {
 		t.Fatalf("DiagnosticLanguage = %q, want %q", got, want)
 	}
 	if got, want := res.Mutation.DiagnosticStatus, "diagnostics_not_configured"; got != want {
@@ -739,6 +879,34 @@ func expectedPythonDiagnosticStatus(statusWhenAvailable string) string {
 		return statusWhenAvailable
 	}
 	return "diagnostics_not_configured"
+}
+
+func expectedTypeScriptDiagnosticStatus(statusWhenAvailable string) string {
+	if !typescriptDiagnosticCommandAvailable() {
+		return "diagnostics_not_configured"
+	}
+	cmd := exec.Command(typescriptDiagnosticCommand, "-e", `try { require("typescript"); process.exit(0); } catch (_) { process.exit(1); }`)
+	if cmd.Run() != nil {
+		return "diagnostics_not_configured"
+	}
+	return statusWhenAvailable
+}
+
+func fakeTypeScriptDiagnosticCommand(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "fake-node")
+	body := `#!/bin/sh
+if grep -q 'broken' "$3"; then
+  printf '%s\n' '{"configured":true,"diagnostics":[{"line":1,"column":7,"severity":"error","message":"TypeScript syntax expected a type","code":1005,"source":"typescript/transpileModule"}]}'
+else
+  printf '%s\n' '{"configured":true,"diagnostics":[]}'
+fi
+`
+	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+		t.Fatalf("write fake typescript diagnostic command: %v", err)
+	}
+	return path
 }
 
 // ---------------------------------------------------------------------------

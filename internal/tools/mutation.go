@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,7 +18,78 @@ import (
 const defaultMutationDiagnosticTimeout = 2 * time.Second
 
 var pythonDiagnosticCommand = "python3"
+var typescriptDiagnosticCommand = "node"
 var pythonDiagnosticLinePattern = regexp.MustCompile(`(?i)\bline\s+(\d+)\b`)
+
+const typescriptDiagnosticScript = `
+const fs = require("fs");
+const path = require("path");
+const { createRequire } = require("module");
+
+const tempPath = process.argv[1];
+const fileName = process.argv[2] || tempPath;
+let ts = null;
+let error = "";
+for (const req of [createRequire(path.resolve(fileName)), require]) {
+  try {
+    ts = req("typescript");
+    break;
+  } catch (err) {
+    error = err && (err.code || err.message) ? String(err.code || err.message) : String(err);
+  }
+}
+if (!ts) {
+  console.log(JSON.stringify({ configured: false, error }));
+  process.exit(0);
+}
+
+const source = fs.readFileSync(tempPath, "utf8");
+const result = ts.transpileModule(source, {
+  fileName,
+  reportDiagnostics: true,
+  compilerOptions: {
+    target: ts.ScriptTarget.ES2020,
+    module: ts.ModuleKind.CommonJS,
+    jsx: ts.JsxEmit.ReactJSX,
+    allowJs: true,
+    noEmitOnError: false
+  }
+});
+
+const diagnostics = (result.diagnostics || []).map((diag) => {
+  let line = 1;
+  let column = 1;
+  if (diag.file && typeof diag.start === "number") {
+    const pos = diag.file.getLineAndCharacterOfPosition(diag.start);
+    line = pos.line + 1;
+    column = pos.character + 1;
+  }
+  const severity =
+    diag.category === ts.DiagnosticCategory.Error ? "error" :
+    diag.category === ts.DiagnosticCategory.Warning ? "warning" :
+    diag.category === ts.DiagnosticCategory.Suggestion ? "suggestion" :
+    "info";
+  const message = ts.flattenDiagnosticMessageText(diag.messageText, " ");
+  return { line, column, severity, message, code: diag.code, source: "typescript/transpileModule" };
+});
+
+console.log(JSON.stringify({ configured: true, diagnostics }));
+`
+
+type typescriptDiagnosticOutput struct {
+	Configured  bool                          `json:"configured"`
+	Error       string                        `json:"error,omitempty"`
+	Diagnostics []typescriptDiagnosticPayload `json:"diagnostics,omitempty"`
+}
+
+type typescriptDiagnosticPayload struct {
+	Line     int    `json:"line"`
+	Column   int    `json:"column"`
+	Severity string `json:"severity"`
+	Message  string `json:"message"`
+	Code     int    `json:"code"`
+	Source   string `json:"source"`
+}
 
 type FileMutation struct {
 	Operation               string                   `json:"operation"`
@@ -123,6 +195,10 @@ func MutationDiagnosticAdapterPolicies() []MutationDiagnosticAdapterPolicy {
 	if pythonDiagnosticCommandAvailable() {
 		pythonStatus = "available"
 	}
+	typescriptStatus := "diagnostics_not_configured"
+	if typescriptDiagnosticCommandAvailable() {
+		typescriptStatus = "conditional"
+	}
 	return []MutationDiagnosticAdapterPolicy{
 		{
 			Language: "go",
@@ -141,16 +217,22 @@ func MutationDiagnosticAdapterPolicies() []MutationDiagnosticAdapterPolicy {
 			Notes:     "best-effort temp-file syntax diagnostic delta",
 		},
 		{
-			Language: "typescript",
-			Status:   "diagnostics_not_configured",
-			Scope:    "none",
-			Notes:    "explicit fallback until a local TypeScript adapter or LSP boundary is configured",
+			Language:  "typescript",
+			Status:    typescriptStatus,
+			Adapter:   "typescript/transpileModule",
+			Command:   strings.TrimSpace(typescriptDiagnosticCommand),
+			TimeoutMS: int(defaultMutationDiagnosticTimeout / time.Millisecond),
+			Scope:     "syntax",
+			Notes:     "best-effort temp-file syntax diagnostic delta; requires a project-local or globally resolvable typescript module",
 		},
 		{
-			Language: "javascript",
-			Status:   "diagnostics_not_configured",
-			Scope:    "none",
-			Notes:    "explicit fallback until a local JavaScript adapter or LSP boundary is configured",
+			Language:  "javascript",
+			Status:    typescriptStatus,
+			Adapter:   "typescript/transpileModule",
+			Command:   strings.TrimSpace(typescriptDiagnosticCommand),
+			TimeoutMS: int(defaultMutationDiagnosticTimeout / time.Millisecond),
+			Scope:     "syntax",
+			Notes:     "best-effort temp-file syntax diagnostic delta via TypeScript parser; requires a project-local or globally resolvable typescript module",
 		},
 	}
 }
@@ -164,6 +246,8 @@ func mutationDiagnosticsFromSource(absPath string, basePath string, src []byte, 
 		return parseGoDiagnosticsFromSource(absPath, basePath, src), "", true
 	case "python":
 		return parsePythonDiagnosticsFromSource(absPath, basePath, src)
+	case "typescript", "javascript":
+		return parseTypeScriptFamilyDiagnosticsFromSource(absPath, basePath, src)
 	default:
 		return nil, "diagnostics_not_configured", false
 	}
@@ -218,6 +302,106 @@ func pythonDiagnosticCommandPath(command string) (string, bool) {
 		return "", false
 	}
 	return exe, true
+}
+
+func parseTypeScriptFamilyDiagnosticsFromSource(absPath string, basePath string, src []byte) ([]codeSymbolError, string, bool) {
+	command := strings.TrimSpace(typescriptDiagnosticCommand)
+	if command == "" {
+		return nil, "diagnostics_not_configured", false
+	}
+	exe, ok := typescriptDiagnosticCommandPath(command)
+	if !ok {
+		return nil, "diagnostics_not_configured", false
+	}
+	tmpDir, err := os.MkdirTemp("", "elnath-typescript-diagnostics-*")
+	if err != nil {
+		return nil, "diagnostics_unavailable", false
+	}
+	defer os.RemoveAll(tmpDir)
+
+	tmpPath := filepath.Join(tmpDir, filepath.Base(absPath))
+	if err := os.WriteFile(tmpPath, src, 0o644); err != nil {
+		return nil, "diagnostics_unavailable", false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), defaultMutationDiagnosticTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, exe, "-e", typescriptDiagnosticScript, tmpPath, absPath)
+	if strings.TrimSpace(basePath) != "" {
+		cmd.Dir = basePath
+	}
+	output, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		return nil, "diagnostics_unavailable", false
+	}
+	if err != nil {
+		return nil, "diagnostics_unavailable", false
+	}
+	var parsed typescriptDiagnosticOutput
+	if err := json.Unmarshal(output, &parsed); err != nil {
+		return nil, "diagnostics_unavailable", false
+	}
+	if !parsed.Configured {
+		return nil, "diagnostics_not_configured", false
+	}
+	return typescriptDiagnosticsFromPayload(relPath(basePath, absPath), src, parsed.Diagnostics), "", true
+}
+
+func typescriptDiagnosticCommandAvailable() bool {
+	_, ok := typescriptDiagnosticCommandPath(strings.TrimSpace(typescriptDiagnosticCommand))
+	return ok
+}
+
+func typescriptDiagnosticCommandPath(command string) (string, bool) {
+	if command == "" {
+		return "", false
+	}
+	exe, err := exec.LookPath(command)
+	if err != nil {
+		return "", false
+	}
+	return exe, true
+}
+
+func typescriptDiagnosticsFromPayload(filePath string, src []byte, diagnostics []typescriptDiagnosticPayload) []codeSymbolError {
+	if len(diagnostics) == 0 {
+		return nil
+	}
+	out := make([]codeSymbolError, 0, len(diagnostics))
+	for _, item := range diagnostics {
+		line := item.Line
+		if line <= 0 {
+			line = 1
+		}
+		column := item.Column
+		if column <= 0 {
+			column = 1
+		}
+		severity := strings.TrimSpace(item.Severity)
+		if severity == "" {
+			severity = "error"
+		}
+		source := strings.TrimSpace(item.Source)
+		if source == "" {
+			source = "typescript/transpileModule"
+		}
+		message := strings.TrimSpace(item.Message)
+		if message == "" {
+			message = "typescript syntax check failed"
+		}
+		diagnostic := codeSymbolError{
+			FilePath: filePath,
+			Line:     line,
+			Column:   column,
+			Error:    message,
+			Severity: severity,
+			Source:   source,
+			LineText: codeSymbolSourceLine(src, line),
+		}
+		diagnostic.Fingerprint = codeSymbolDiagnosticFingerprint(diagnostic)
+		out = append(out, diagnostic)
+	}
+	return out
 }
 
 func pythonDiagnosticFromCompileOutput(filePath string, src []byte, output string, err error) codeSymbolError {
