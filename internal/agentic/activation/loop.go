@@ -15,6 +15,7 @@ type LoopOptions struct {
 	Limit      int
 	RunOnStart bool
 	Logger     *slog.Logger
+	OnResult   func(context.Context, Result, error)
 }
 
 func RunLoop(ctx context.Context, runner Runner, opts LoopOptions) {
@@ -35,6 +36,9 @@ func RunLoop(ctx context.Context, runner Runner, opts LoopOptions) {
 	}
 	run := func() {
 		result, err := runner.RunOnce(ctx, limit)
+		if opts.OnResult != nil {
+			opts.OnResult(ctx, result, err)
+		}
 		if err != nil {
 			logger.Warn("agentic activation tick failed", "run_id", result.RunID, "error", err)
 			return

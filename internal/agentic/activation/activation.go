@@ -3,6 +3,7 @@ package activation
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/stello/elnath/internal/agentic"
 	"github.com/stello/elnath/internal/agentic/followup"
@@ -18,6 +19,7 @@ type Result struct {
 	EnqueuePerformed bool
 	Status           string
 	Reason           string
+	CreatedAt        time.Time
 	Followups        followup.Result
 	Signals          triage.Result
 }
@@ -84,6 +86,7 @@ func (s *Service) record(ctx context.Context, result Result, runErr error) (Resu
 		return result, recordErr
 	}
 	result.RunID = run.ID
+	result.CreatedAt = run.CreatedAt
 	if runErr != nil {
 		return result, runErr
 	}

@@ -185,10 +185,11 @@ type AgenticCompletionGateConfig struct {
 }
 
 type AgenticActivationConfig struct {
-	Enabled         bool `yaml:"enabled"`
-	IntervalSeconds int  `yaml:"interval_seconds"`
-	Limit           int  `yaml:"limit"`
-	RunOnStart      bool `yaml:"run_on_start"`
+	Enabled         bool     `yaml:"enabled"`
+	IntervalSeconds int      `yaml:"interval_seconds"`
+	Limit           int      `yaml:"limit"`
+	RunOnStart      bool     `yaml:"run_on_start"`
+	DeliveryTargets []string `yaml:"delivery_targets"`
 }
 
 type TelegramConfig struct {

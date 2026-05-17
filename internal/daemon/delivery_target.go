@@ -109,6 +109,10 @@ func deliveryTargetStrings(targets []DeliveryTarget) []string {
 	return out
 }
 
+func DeliveryTargetStrings(targets []DeliveryTarget) []string {
+	return deliveryTargetStrings(targets)
+}
+
 func parseDeliveryTargetsLenient(raw []string) []DeliveryTarget {
 	targets, err := ParseDeliveryTargets(raw)
 	if err != nil {

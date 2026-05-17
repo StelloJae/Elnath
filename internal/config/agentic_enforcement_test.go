@@ -49,6 +49,8 @@ agentic:
     interval_seconds: 60
     limit: 5
     run_on_start: false
+    delivery_targets:
+      - telegram
 `), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
@@ -63,7 +65,7 @@ agentic:
 	if got := cfg.Agentic.CompletionGate.Mode; got != AgenticCompletionGateModeVerification {
 		t.Fatalf("agentic.completion_gate.mode = %q, want %q", got, AgenticCompletionGateModeVerification)
 	}
-	if !cfg.Agentic.Activation.Enabled || cfg.Agentic.Activation.IntervalSeconds != 60 || cfg.Agentic.Activation.Limit != 5 || cfg.Agentic.Activation.RunOnStart {
+	if !cfg.Agentic.Activation.Enabled || cfg.Agentic.Activation.IntervalSeconds != 60 || cfg.Agentic.Activation.Limit != 5 || cfg.Agentic.Activation.RunOnStart || len(cfg.Agentic.Activation.DeliveryTargets) != 1 || cfg.Agentic.Activation.DeliveryTargets[0] != "telegram" {
 		t.Fatalf("agentic.activation = %+v", cfg.Agentic.Activation)
 	}
 }

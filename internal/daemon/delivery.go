@@ -39,6 +39,32 @@ type ProgressSink interface {
 	NotifyProgress(ctx context.Context, progress TaskProgress) error
 }
 
+type ActivationCounts struct {
+	Processed int
+	Created   int
+	Linked    int
+	Skipped   int
+	Failed    int
+}
+
+type ActivationSummary struct {
+	RunID            int64
+	OriginSurface    string
+	DeliveryTargets  []DeliveryTarget
+	ExecutionPolicy  string
+	Limit            int
+	EnqueuePerformed bool
+	Status           string
+	Reason           string
+	Followups        ActivationCounts
+	Signals          ActivationCounts
+	CreatedAt        time.Time
+}
+
+type ActivationSink interface {
+	NotifyActivation(ctx context.Context, activation ActivationSummary) error
+}
+
 // TargetedSink can opt into delivery-target filtering. Sinks that do not
 // implement this interface are treated as internal audit sinks and still see
 // all events so logging/spine observability is not lost.
@@ -55,6 +81,7 @@ type DeliverySinkStatus struct {
 	Name         string `json:"name"`
 	Completion   bool   `json:"completion"`
 	Progress     bool   `json:"progress"`
+	Activation   bool   `json:"activation"`
 	TargetAware  bool   `json:"target_aware"`
 	Internal     bool   `json:"internal"`
 	Target       string `json:"target,omitempty"`
@@ -69,6 +96,7 @@ type DeliverySinkStatus struct {
 type DeliveryRouterStatus struct {
 	CompletionSinkCount int                  `json:"completion_sink_count"`
 	ProgressSinkCount   int                  `json:"progress_sink_count"`
+	ActivationSinkCount int                  `json:"activation_sink_count"`
 	TargetAwareCount    int                  `json:"target_aware_count"`
 	InternalSinkCount   int                  `json:"internal_sink_count"`
 	Sinks               []DeliverySinkStatus `json:"sinks"`
@@ -76,12 +104,13 @@ type DeliveryRouterStatus struct {
 
 // DeliveryRouter fans out task events to registered sinks.
 type DeliveryRouter struct {
-	sinks         []CompletionSink
-	progressSinks []ProgressSink
-	db            *sql.DB
-	logger        *slog.Logger
-	mu            sync.Mutex
-	taskRoutes    map[int64]DeliveryRoute
+	sinks           []CompletionSink
+	progressSinks   []ProgressSink
+	activationSinks []ActivationSink
+	db              *sql.DB
+	logger          *slog.Logger
+	mu              sync.Mutex
+	taskRoutes      map[int64]DeliveryRoute
 }
 
 var _ ProgressObserver = (*DeliveryRouter)(nil)
@@ -106,6 +135,9 @@ func (r *DeliveryRouter) Register(sink CompletionSink) {
 	if progressSink, ok := sink.(ProgressSink); ok {
 		r.progressSinks = append(r.progressSinks, progressSink)
 	}
+	if activationSink, ok := sink.(ActivationSink); ok {
+		r.activationSinks = append(r.activationSinks, activationSink)
+	}
 }
 
 // RegisterProgress adds a progress-only sink to the router.
@@ -120,13 +152,17 @@ func (r *DeliveryRouter) Status() DeliveryRouterStatus {
 	status := DeliveryRouterStatus{
 		CompletionSinkCount: len(r.sinks),
 		ProgressSinkCount:   len(r.progressSinks),
+		ActivationSinkCount: len(r.activationSinks),
 	}
 	byName := make(map[string]int)
 	for _, sink := range r.sinks {
-		status.addSinkStatus(sink, true, false, byName)
+		status.addSinkStatus(sink, true, false, false, byName)
 	}
 	for _, sink := range r.progressSinks {
-		status.addSinkStatus(sink, false, true, byName)
+		status.addSinkStatus(sink, false, true, false, byName)
+	}
+	for _, sink := range r.activationSinks {
+		status.addSinkStatus(sink, false, false, true, byName)
 	}
 	for _, sink := range status.Sinks {
 		if sink.TargetAware {
@@ -139,16 +175,18 @@ func (r *DeliveryRouter) Status() DeliveryRouterStatus {
 	return status
 }
 
-func (s *DeliveryRouterStatus) addSinkStatus(sink any, completion, progress bool, byName map[string]int) {
+func (s *DeliveryRouterStatus) addSinkStatus(sink any, completion, progress, activation bool, byName map[string]int) {
 	view := deliverySinkStatusOf(sink)
 	key := view.Name + "\x00" + view.Target
 	if idx, ok := byName[key]; ok {
 		s.Sinks[idx].Completion = s.Sinks[idx].Completion || completion
 		s.Sinks[idx].Progress = s.Sinks[idx].Progress || progress
+		s.Sinks[idx].Activation = s.Sinks[idx].Activation || activation
 		return
 	}
 	view.Completion = completion
 	view.Progress = progress
+	view.Activation = activation
 	byName[key] = len(s.Sinks)
 	s.Sinks = append(s.Sinks, view)
 }
@@ -286,6 +324,33 @@ func (r *DeliveryRouter) DeliverProgress(ctx context.Context, progress TaskProgr
 
 	if eligible > 0 && len(errs) == eligible {
 		return fmt.Errorf("delivery: all progress sinks failed: %w", errors.Join(errs...))
+	}
+	return nil
+}
+
+func (r *DeliveryRouter) DeliverActivation(ctx context.Context, activation ActivationSummary) error {
+	if len(r.activationSinks) == 0 {
+		return nil
+	}
+	route := DeliveryRoute{OriginSurface: activation.OriginSurface, DeliveryTargets: activation.DeliveryTargets}
+	var errs []error
+	eligible := 0
+	for _, sink := range r.activationSinks {
+		if !shouldDeliverToSink(sink, route) {
+			continue
+		}
+		eligible++
+		if err := sink.NotifyActivation(ctx, activation); err != nil {
+			r.logger.Error("delivery: activation sink failed",
+				"run_id", activation.RunID,
+				"sink", sinkNameOf(sink),
+				"error", err,
+			)
+			errs = append(errs, err)
+		}
+	}
+	if eligible > 0 && len(errs) == eligible {
+		return fmt.Errorf("delivery: all activation sinks failed: %w", errors.Join(errs...))
 	}
 	return nil
 }

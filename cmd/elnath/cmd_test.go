@@ -13,6 +13,10 @@ import (
 	"time"
 
 	"github.com/stello/elnath/internal/agent"
+	"github.com/stello/elnath/internal/agentic"
+	agenticactivation "github.com/stello/elnath/internal/agentic/activation"
+	"github.com/stello/elnath/internal/agentic/followup"
+	"github.com/stello/elnath/internal/agentic/triage"
 	"github.com/stello/elnath/internal/config"
 	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/core"
@@ -2268,6 +2272,44 @@ func TestCmdSearchWithData(t *testing.T) {
 // Note: cmdDaemonStart and cmdDaemonInstall are not tested here because they
 // require real infrastructure (starts daemon, installs launchd plist) and
 // fall through to the real config when the given config path fails.
+
+func TestActivationDeliverySummaryMapsResult(t *testing.T) {
+	createdAt := time.Unix(123, 0)
+	targets := []daemon.DeliveryTarget{{Kind: daemon.DeliveryTargetPlatform, Platform: "telegram"}}
+	summary := activationDeliverySummary(agenticactivation.Result{
+		RunID:            42,
+		ExecutionPolicy:  "propose_only",
+		Limit:            7,
+		EnqueuePerformed: false,
+		Status:           agentic.ActivationRunStatusSucceeded,
+		Followups:        followup.Result{Processed: 3, Created: 2, Skipped: 1},
+		Signals:          triage.Result{Processed: 4, Created: 2, Linked: 1, Failed: 1},
+		CreatedAt:        createdAt,
+	}, nil, targets)
+
+	if summary.RunID != 42 || summary.Status != agentic.ActivationRunStatusSucceeded || summary.ExecutionPolicy != "propose_only" || summary.Limit != 7 {
+		t.Fatalf("summary identity = %+v", summary)
+	}
+	if len(summary.DeliveryTargets) != 1 || summary.DeliveryTargets[0].Platform != "telegram" {
+		t.Fatalf("summary targets = %+v", summary.DeliveryTargets)
+	}
+	if summary.Followups.Processed != 3 || summary.Followups.Created != 2 || summary.Followups.Skipped != 1 {
+		t.Fatalf("summary followups = %+v", summary.Followups)
+	}
+	if summary.Signals.Processed != 4 || summary.Signals.Created != 2 || summary.Signals.Linked != 1 || summary.Signals.Failed != 1 {
+		t.Fatalf("summary signals = %+v", summary.Signals)
+	}
+	if !summary.CreatedAt.Equal(createdAt) {
+		t.Fatalf("summary created_at = %v, want %v", summary.CreatedAt, createdAt)
+	}
+}
+
+func TestActivationDeliverySummaryMarksRunErrorFailed(t *testing.T) {
+	summary := activationDeliverySummary(agenticactivation.Result{RunID: 9}, fmt.Errorf("boom"), nil)
+	if summary.Status != agentic.ActivationRunStatusFailed || summary.Reason != "boom" {
+		t.Fatalf("summary = %+v, want failed with reason", summary)
+	}
+}
 
 // ---------------------------------------------------------------------------
 // cmdTelegramShell error paths

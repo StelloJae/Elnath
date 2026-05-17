@@ -187,17 +187,6 @@ func cmdDaemonStart(ctx context.Context) error {
 
 	agenticStore := agentic.NewStore(db.Main)
 	signalBridge := agenticsignals.NewBridge(agenticStore)
-	if cfg.Agentic.Activation.Enabled {
-		interval := time.Duration(cfg.Agentic.Activation.IntervalSeconds) * time.Second
-		limit := cfg.Agentic.Activation.Limit
-		go agenticactivation.RunLoop(ctx, agenticactivation.NewService(agenticStore), agenticactivation.LoopOptions{
-			Interval:   interval,
-			Limit:      limit,
-			RunOnStart: cfg.Agentic.Activation.RunOnStart,
-			Logger:     app.Logger.With("component", "agentic-activation"),
-		})
-		app.Logger.Info("agentic activation loop active", "interval_seconds", cfg.Agentic.Activation.IntervalSeconds, "limit", limit, "run_on_start", cfg.Agentic.Activation.RunOnStart)
-	}
 
 	d := daemon.New(queue, cfg.Daemon.SocketPath, cfg.Daemon.MaxWorkers, rt.newDaemonTaskRunner(), app.Logger)
 	rt.bindRunningTaskCanceller(d)
@@ -381,7 +370,85 @@ func cmdDaemonStart(ctx context.Context) error {
 		app.Logger.Info("telegram shell embedded in daemon")
 	}
 
+	if err := startAgenticActivationLoop(ctx, cfg, agenticStore, router, app.Logger); err != nil {
+		return err
+	}
+
 	return d.Start(ctx)
+}
+
+func startAgenticActivationLoop(ctx context.Context, cfg *config.Config, store *agentic.Store, router *daemon.DeliveryRouter, logger *slog.Logger) error {
+	if cfg == nil || store == nil || !cfg.Agentic.Activation.Enabled {
+		return nil
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	targets, err := daemon.ParseDeliveryTargets(cfg.Agentic.Activation.DeliveryTargets)
+	if err != nil {
+		return fmt.Errorf("agentic activation delivery target: %w", err)
+	}
+	interval := time.Duration(cfg.Agentic.Activation.IntervalSeconds) * time.Second
+	limit := cfg.Agentic.Activation.Limit
+	activationLogger := logger.With("component", "agentic-activation")
+	go agenticactivation.RunLoop(ctx, agenticactivation.NewService(store), agenticactivation.LoopOptions{
+		Interval:   interval,
+		Limit:      limit,
+		RunOnStart: cfg.Agentic.Activation.RunOnStart,
+		Logger:     activationLogger,
+		OnResult: func(callbackCtx context.Context, result agenticactivation.Result, runErr error) {
+			if router == nil || len(targets) == 0 {
+				return
+			}
+			if err := router.DeliverActivation(callbackCtx, activationDeliverySummary(result, runErr, targets)); err != nil {
+				activationLogger.Warn("agentic activation delivery failed", "run_id", result.RunID, "error", err)
+			}
+		},
+	})
+	logger.Info("agentic activation loop active",
+		"interval_seconds", cfg.Agentic.Activation.IntervalSeconds,
+		"limit", limit,
+		"run_on_start", cfg.Agentic.Activation.RunOnStart,
+		"delivery_targets", daemon.DeliveryTargetStrings(targets),
+	)
+	return nil
+}
+
+func activationDeliverySummary(result agenticactivation.Result, runErr error, targets []daemon.DeliveryTarget) daemon.ActivationSummary {
+	status := result.Status
+	if status == "" {
+		if runErr != nil {
+			status = agentic.ActivationRunStatusFailed
+		} else {
+			status = agentic.ActivationRunStatusSucceeded
+		}
+	}
+	reason := result.Reason
+	if reason == "" && runErr != nil {
+		reason = runErr.Error()
+	}
+	return daemon.ActivationSummary{
+		RunID:            result.RunID,
+		DeliveryTargets:  targets,
+		ExecutionPolicy:  result.ExecutionPolicy,
+		Limit:            result.Limit,
+		EnqueuePerformed: result.EnqueuePerformed,
+		Status:           status,
+		Reason:           reason,
+		Followups: daemon.ActivationCounts{
+			Processed: result.Followups.Processed,
+			Created:   result.Followups.Created,
+			Skipped:   result.Followups.Skipped,
+			Failed:    result.Followups.Failed,
+		},
+		Signals: daemon.ActivationCounts{
+			Processed: result.Signals.Processed,
+			Created:   result.Signals.Created,
+			Linked:    result.Signals.Linked,
+			Failed:    result.Signals.Failed,
+		},
+		CreatedAt: result.CreatedAt,
+	}
 }
 
 func autoRotateLessons(logger *slog.Logger, store *learning.Store, opts learning.RotateOpts) {
