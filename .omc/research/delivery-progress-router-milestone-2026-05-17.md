@@ -76,6 +76,17 @@ Progress behavior:
 - `DeliverProgress` returns an error only when every registered progress sink
   fails, matching completion-delivery failure semantics.
 
+Added a small delivery target model:
+
+- `daemon.DeliveryTarget`
+- `daemon.ParseDeliveryTarget`
+- `daemon.ParseDeliveryTargets`
+- `origin`, `local`, platform home-channel, and explicit
+  `platform:address[:thread]` forms
+
+This mirrors the useful Hermes delivery vocabulary without adding new external
+platforms or changing task routing yet.
+
 ## Verification
 
 Focused TDD proof:
@@ -115,6 +126,14 @@ git diff --check
 
 Result: PASS.
 
+Delivery target parser proof:
+
+```text
+go test ./internal/daemon -run 'TestParseDeliveryTarget|TestParseDeliveryTargets|TestDeliveryTargetString|TestDeliveryTargetHomeChannel' -count=1
+```
+
+Result: PASS.
+
 ## Claim Boundary
 
 Allowed:
@@ -122,6 +141,8 @@ Allowed:
 - Elnath daemon progress can now flow through the delivery router.
 - Telegram daemon progress delivery now uses the same router layer as completion
   delivery.
+- Elnath now has a tested delivery target vocabulary for origin, local, home
+  channel, and explicit platform destination forms.
 - The change is locally verified for daemon, Telegram, and CLI daemon wiring.
 
 Not claimed:
@@ -129,6 +150,7 @@ Not claimed:
 - full multi-platform Hermes-style gateway parity;
 - native button UX;
 - durable per-progress delivery receipt table;
+- delivery target enforcement or per-target fanout;
 - benchmark success;
 - Codex/Claude/Hermes superiority;
 - full v8 benchmark readiness.
