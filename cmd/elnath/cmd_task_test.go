@@ -499,6 +499,50 @@ func TestCmdTaskAnswerWithQueueAcceptsChoiceFlag(t *testing.T) {
 	}
 }
 
+func TestCmdTaskAnswerWithQueueInteractiveChoice(t *testing.T) {
+	ctx := context.Background()
+	queue := newCmdTaskTestQueue(t)
+	store := learning.NewOutcomeStore(filepath.Join(t.TempDir(), "outcomes.jsonl"))
+	if err := store.Append(learning.OutcomeRecord{
+		Timestamp: time.Date(2026, 5, 13, 7, 0, 0, 0, time.UTC),
+		ControlToolReceipts: []learning.ControlToolReceipt{{
+			Tool:          "ask_user_question",
+			Action:        "request",
+			RequestID:     "req-123",
+			SessionID:     "sess-123",
+			Question:      "Which branch?",
+			Options:       []string{"main", "new"},
+			AllowFreeText: false,
+		}},
+	}); err != nil {
+		t.Fatalf("Append outcome: %v", err)
+	}
+
+	withStdin(t, "2\n")
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdTaskAnswerWithQueue(ctx, queue, store, []string{"--interactive", "--session", "sess-123"}); err != nil {
+			t.Fatalf("cmdTaskAnswerWithQueue: %v", err)
+		}
+	})
+	for _, want := range []string{"Which branch?", "1. main", "2. new", "Answer task:"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout = %q, want %q", stdout, want)
+		}
+	}
+
+	tasks, err := queue.List(ctx)
+	if err != nil {
+		t.Fatalf("List tasks: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("tasks = %+v, want one answer resume task", tasks)
+	}
+	payload := daemon.ParseTaskPayload(tasks[0].Payload)
+	if payload.SessionID != "sess-123" || !strings.Contains(payload.Prompt, "Request ID:\nreq-123") || !strings.Contains(payload.Prompt, "Answer:\nnew") {
+		t.Fatalf("payload = %+v, want interactive choice normalized to option text", payload)
+	}
+}
+
 func TestCmdTaskAnswerWithQueueRejectsStaleRequest(t *testing.T) {
 	ctx := context.Background()
 	queue := newCmdTaskTestQueue(t)

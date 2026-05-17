@@ -2017,3 +2017,48 @@ Remaining skill feedback gaps:
 - Installed curator schedules take effect after daemon restart; no hot reload.
 - Curator still uses existing draft promotion/cleanup thresholds only.
 - Proposal application remains review/approval driven.
+
+## Post-PR261 Terminal User Question Interactive Answer Milestone Update
+
+Date: 2026-05-18 KST
+
+Branch:
+
+- `codex/runtime-progress-status`
+
+Artifact:
+
+- `.omc/research/terminal-user-question-interactive-answer-2026-05-18.md`
+
+What changed:
+
+- Added `elnath task answer --interactive`.
+- Added interactive pending-question lookup by optional `--session` and
+  `--request`.
+- Added terminal question display with numbered options.
+- Interactive answers reuse the existing `user_question_answer` validation and
+  queue-backed resume path.
+
+Reference impact:
+
+- Moves Elnath closer to Claude Code-style interactive choice UX for
+  AskUserQuestion flows.
+- Moves Elnath closer to Hermes-style clarify fallback while staying
+  CLI-native.
+- Does not claim full TUI modal parity or multi-select support.
+
+Verification:
+
+- `go test ./cmd/elnath -run TestCmdTaskAnswerWithQueueInteractiveChoice -count=1`
+  passed.
+- `go test ./cmd/elnath -run 'TestCmdTaskAnswerWithQueue(InteractiveChoice|AcceptsChoiceFlag|EnqueuesBoundAnswer|RejectsStaleRequest|RejectsTimedOutRequest)' -count=1`
+  passed.
+- `go test ./cmd/elnath -count=1` passed.
+- `go vet ./...` passed.
+- `git diff --check` passed.
+
+Remaining user-input UX gaps:
+
+- Interactive prompt is simple stdin/stdout, not a full TUI modal.
+- Multi-select questions remain outside scope.
+- No fuzzy search/filtering for many pending questions.
