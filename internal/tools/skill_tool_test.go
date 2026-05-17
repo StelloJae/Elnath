@@ -3,6 +3,7 @@ package tools_test
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -148,11 +149,56 @@ func TestSkillToolDeleteRemovesSkillFromRegistry(t *testing.T) {
 	}
 }
 
+func TestSkillToolProposeImprovementWritesReviewArtifact(t *testing.T) {
+	t.Parallel()
+
+	store, err := wiki.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	trackerDir := t.TempDir()
+	creator := skill.NewCreator(store, skill.NewTracker(trackerDir), nil)
+	tool := tools.NewSkillTool(creator, skill.NewRegistry())
+
+	result, err := tool.Execute(context.Background(), marshalSkillToolParams(t, map[string]any{
+		"action":           "propose_improvement",
+		"name":             "review-pr",
+		"session_id":       "sess-1",
+		"reason":           "User corrected output order.",
+		"evidence":         []string{"findings should come first"},
+		"suggested_change": "Start with findings before summary.",
+	}))
+	if err != nil {
+		t.Fatalf("Execute(propose_improvement) error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute(propose_improvement) returned error result: %s", result.Output)
+	}
+	if !strings.Contains(result.Output, "Proposed improvement for /review-pr:") {
+		t.Fatalf("output = %q, want proposal path", result.Output)
+	}
+	path := strings.TrimSpace(strings.TrimPrefix(result.Output, "Proposed improvement for /review-pr:"))
+	if !strings.HasPrefix(path, filepath.Join(trackerDir, "skill-improvement-proposals")) {
+		t.Fatalf("proposal path = %q, want under tracker dir %q", path, trackerDir)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read proposal: %v", err)
+	}
+	if text := string(content); !strings.Contains(text, "User corrected output order.") || !strings.Contains(text, "Start with findings before summary.") {
+		t.Fatalf("proposal content = %q, want reason and suggested change", text)
+	}
+	if _, err := store.Read("skills/review-pr.md"); err == nil {
+		t.Fatal("proposal unexpectedly created or edited skill page")
+	}
+}
+
 func TestSkillToolScope(t *testing.T) {
 	t.Parallel()
 
-	tool, store := newTestSkillTool(t)
+	tool, store, trackerDir := newTestSkillToolWithTracker(t)
 	wikiDir := filepath.Clean(store.WikiDir())
+	proposalDir := filepath.Join(trackerDir, "skill-improvement-proposals")
 
 	listScope := tool.Scope(marshalSkillToolParams(t, map[string]any{"action": "list"}))
 	if want := (tools.ToolScope{ReadPaths: []string{wikiDir}}); !reflect.DeepEqual(listScope, want) {
@@ -167,6 +213,10 @@ func TestSkillToolScope(t *testing.T) {
 	deleteScope := tool.Scope(marshalSkillToolParams(t, map[string]any{"action": "delete", "name": "scoped"}))
 	if want := (tools.ToolScope{ReadPaths: []string{wikiDir}, WritePaths: []string{wikiDir}, Persistent: true}); !reflect.DeepEqual(deleteScope, want) {
 		t.Fatalf("Scope(delete) = %+v, want %+v", deleteScope, want)
+	}
+	proposeScope := tool.Scope(marshalSkillToolParams(t, map[string]any{"action": "propose_improvement", "name": "scoped"}))
+	if want := (tools.ToolScope{WritePaths: []string{proposalDir}, Persistent: true}); !reflect.DeepEqual(proposeScope, want) {
+		t.Fatalf("Scope(propose_improvement) = %+v, want %+v", proposeScope, want)
 	}
 	if !tool.DeferInitialToolSchema() {
 		t.Fatal("create_skill should be deferred in search-first mode")
@@ -208,13 +258,21 @@ func TestSkillToolCreateRejectsEmptyPrompt(t *testing.T) {
 func newTestSkillTool(t *testing.T) (*tools.SkillTool, *wiki.Store) {
 	t.Helper()
 
+	tool, store, _ := newTestSkillToolWithTracker(t)
+	return tool, store
+}
+
+func newTestSkillToolWithTracker(t *testing.T) (*tools.SkillTool, *wiki.Store, string) {
+	t.Helper()
+
 	store, err := wiki.NewStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewStore() error = %v", err)
 	}
 	registry := skill.NewRegistry()
-	creator := skill.NewCreator(store, skill.NewTracker(t.TempDir()), nil)
-	return tools.NewSkillTool(creator, registry), store
+	trackerDir := t.TempDir()
+	creator := skill.NewCreator(store, skill.NewTracker(trackerDir), nil)
+	return tools.NewSkillTool(creator, registry), store, trackerDir
 }
 
 func marshalSkillToolParams(t *testing.T, input map[string]any) json.RawMessage {

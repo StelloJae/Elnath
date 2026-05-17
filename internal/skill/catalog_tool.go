@@ -288,14 +288,22 @@ func (t *CatalogTool) recommendedSkillEntries(query string, maxResults int, filt
 }
 
 type catalogUsageEntry struct {
-	SkillName   string `json:"skill_name"`
-	Invocations int    `json:"invocations"`
-	Successes   int    `json:"successes"`
-	Failures    int    `json:"failures"`
-	LastUsedAt  string `json:"last_used_at,omitempty"`
-	Source      string `json:"source,omitempty"`
-	TrustLevel  string `json:"trust_level,omitempty"`
-	External    bool   `json:"external"`
+	SkillName                   string   `json:"skill_name"`
+	Invocations                 int      `json:"invocations"`
+	Successes                   int      `json:"successes"`
+	Failures                    int      `json:"failures"`
+	LastUsedAt                  string   `json:"last_used_at,omitempty"`
+	RequiredTools               []string `json:"required_tools,omitempty"`
+	VerificationPassed          int      `json:"verification_passed,omitempty"`
+	VerificationFailed          int      `json:"verification_failed,omitempty"`
+	VerificationNotRun          int      `json:"verification_not_run,omitempty"`
+	VerificationUnknown         int      `json:"verification_unknown,omitempty"`
+	PromotionCandidates         int      `json:"promotion_candidates,omitempty"`
+	LastUserOutcome             string   `json:"last_user_outcome,omitempty"`
+	LastImprovementProposalPath string   `json:"last_improvement_proposal_path,omitempty"`
+	Source                      string   `json:"source,omitempty"`
+	TrustLevel                  string   `json:"trust_level,omitempty"`
+	External                    bool     `json:"external"`
 }
 
 func (t *CatalogTool) usageEntries(filter skillTrustFilter) ([]catalogUsageEntry, error) {
@@ -316,13 +324,21 @@ func (t *CatalogTool) usageEntries(filter skillTrustFilter) ([]catalogUsageEntry
 			continue
 		}
 		entry := catalogUsageEntry{
-			SkillName:   sk.Name,
-			Invocations: summary.Invocations,
-			Successes:   summary.Successes,
-			Failures:    summary.Failures,
-			Source:      sk.Source,
-			TrustLevel:  sk.TrustLevel(),
-			External:    sk.External(),
+			SkillName:                   sk.Name,
+			Invocations:                 summary.Invocations,
+			Successes:                   summary.Successes,
+			Failures:                    summary.Failures,
+			RequiredTools:               append([]string(nil), summary.RequiredTools...),
+			VerificationPassed:          summary.VerificationPassed,
+			VerificationFailed:          summary.VerificationFailed,
+			VerificationNotRun:          summary.VerificationNotRun,
+			VerificationUnknown:         summary.VerificationUnknown,
+			PromotionCandidates:         summary.PromotionCandidates,
+			LastUserOutcome:             summary.LastUserOutcome,
+			LastImprovementProposalPath: summary.LastImprovementProposalPath,
+			Source:                      sk.Source,
+			TrustLevel:                  sk.TrustLevel(),
+			External:                    sk.External(),
 		}
 		if !summary.LastUsedAt.IsZero() {
 			entry.LastUsedAt = summary.LastUsedAt.UTC().Format(time.RFC3339)

@@ -146,10 +146,10 @@ func (t *InvocationTool) Execute(ctx context.Context, params json.RawMessage) (*
 		SessionID:  tools.SessionIDFrom(ctx),
 	})
 	if err != nil {
-		t.recordUsage(ctx, name, false)
+		t.recordUsage(ctx, name, false, sk.RequiredTools, SkillVerificationNotRun, "failed")
 		return tools.ErrorResult(fmt.Sprintf("skill %q: %v", name, err)), nil
 	}
-	usageRecorded := t.recordUsage(ctx, name, true)
+	usageRecorded := t.recordUsage(ctx, name, true, result.Receipt.RequiredTools, SkillVerificationNotRun, "completed")
 
 	raw, err := json.Marshal(invocationOutput{
 		Skill:         name,
@@ -167,14 +167,17 @@ func (t *InvocationTool) Execute(ctx context.Context, params json.RawMessage) (*
 	return tools.SuccessResult(string(raw)), nil
 }
 
-func (t *InvocationTool) recordUsage(ctx context.Context, skillName string, success bool) bool {
+func (t *InvocationTool) recordUsage(ctx context.Context, skillName string, success bool, requiredTools []string, verificationResult, userOutcome string) bool {
 	if t == nil || t.cfg.Tracker == nil {
 		return false
 	}
 	if err := t.cfg.Tracker.RecordUsage(UsageRecord{
-		SkillName: skillName,
-		SessionID: tools.SessionIDFrom(ctx),
-		Success:   success,
+		SkillName:          skillName,
+		SessionID:          tools.SessionIDFrom(ctx),
+		Success:            success,
+		RequiredTools:      requiredTools,
+		VerificationResult: verificationResult,
+		UserOutcome:        userOutcome,
 	}); err != nil {
 		return false
 	}

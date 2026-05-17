@@ -124,9 +124,10 @@ func TestInvocationToolRecordsSkillUsageOnSuccess(t *testing.T) {
 
 	skillReg := NewRegistry()
 	skillReg.Add(&Skill{
-		Name:   "probe",
-		Prompt: "Probe.",
-		Status: "active",
+		Name:          "probe",
+		Prompt:        "Probe.",
+		Status:        "active",
+		RequiredTools: []string{"read_file"},
 	})
 	tracker := NewTracker(t.TempDir())
 	provider := &mockProvider{
@@ -170,6 +171,9 @@ func TestInvocationToolRecordsSkillUsageOnSuccess(t *testing.T) {
 	if records[0].SkillName != "probe" || records[0].SessionID != "session-usage-success" || !records[0].Success {
 		t.Fatalf("usage record = %+v, want successful probe invocation bound to session", records[0])
 	}
+	if !reflect.DeepEqual(records[0].RequiredTools, []string{"read_file"}) || records[0].VerificationResult != SkillVerificationNotRun || records[0].UserOutcome != "completed" {
+		t.Fatalf("usage outcome = %+v, want required tools and completed not-run verification", records[0])
+	}
 }
 
 func TestInvocationToolRecordsSkillUsageOnExecutionFailure(t *testing.T) {
@@ -177,9 +181,10 @@ func TestInvocationToolRecordsSkillUsageOnExecutionFailure(t *testing.T) {
 
 	skillReg := NewRegistry()
 	skillReg.Add(&Skill{
-		Name:   "fragile",
-		Prompt: "Fail.",
-		Status: "active",
+		Name:          "fragile",
+		Prompt:        "Fail.",
+		Status:        "active",
+		RequiredTools: []string{"bash"},
 	})
 	tracker := NewTracker(t.TempDir())
 	provider := &mockProvider{
@@ -211,6 +216,9 @@ func TestInvocationToolRecordsSkillUsageOnExecutionFailure(t *testing.T) {
 	}
 	if records[0].SkillName != "fragile" || records[0].SessionID != "session-usage-failure" || records[0].Success {
 		t.Fatalf("usage record = %+v, want failed fragile invocation bound to session", records[0])
+	}
+	if !reflect.DeepEqual(records[0].RequiredTools, []string{"bash"}) || records[0].VerificationResult != SkillVerificationNotRun || records[0].UserOutcome != "failed" {
+		t.Fatalf("usage outcome = %+v, want required tools and failed not-run verification", records[0])
 	}
 }
 
