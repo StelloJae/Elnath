@@ -2023,10 +2023,10 @@ func (rt *executionRuntime) trySkillExecution(
 		UserInput:  input,
 	})
 	if err != nil {
-		rt.recordSkillUsage(sess.ID, skillName, false)
+		rt.recordSkillUsage(sess.ID, skillName, false, sk.RequiredTools, skill.SkillVerificationNotRun, "failed")
 		return nil, "", true, fmt.Errorf("skill %q: %w", skillName, err)
 	}
-	rt.recordSkillUsage(sess.ID, skillName, true)
+	rt.recordSkillUsage(sess.ID, skillName, true, result.Receipt.RequiredTools, skill.SkillVerificationNotRun, "completed")
 	// skill.ExecuteResult does not currently surface tool aggregates; pass
 	// zero counts so the tools segment is omitted (no false-zero claim).
 	if usage := llm.FormatUsageSummary(rt.wfCfg.Model, result.Usage, 0, 0); usage != "" {
@@ -2077,14 +2077,17 @@ func runtimeSkillBySlashToken(reg *skill.Registry, token string) (*skill.Skill, 
 	return nil, false
 }
 
-func (rt *executionRuntime) recordSkillUsage(sessionID, skillName string, success bool) {
+func (rt *executionRuntime) recordSkillUsage(sessionID, skillName string, success bool, requiredTools []string, verificationResult, userOutcome string) {
 	if rt == nil || rt.skillTracker == nil {
 		return
 	}
 	if err := rt.skillTracker.RecordUsage(skill.UsageRecord{
-		SkillName: skillName,
-		SessionID: sessionID,
-		Success:   success,
+		SkillName:          skillName,
+		SessionID:          sessionID,
+		Success:            success,
+		RequiredTools:      requiredTools,
+		VerificationResult: verificationResult,
+		UserOutcome:        userOutcome,
 	}); err != nil && rt.app != nil && rt.app.Logger != nil {
 		rt.app.Logger.Warn("skill usage tracking failed", "skill", skillName, "error", err)
 	}

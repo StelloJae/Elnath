@@ -1778,3 +1778,54 @@ Remaining handoff/gateway gaps:
 - No remote claimant authentication.
 - No automatic gateway watcher loop.
 - No live runtime migration.
+
+## Post-Skill-Usage-Outcome-Receipts Local Update
+
+Date: 2026-05-18 KST
+
+Branch:
+
+- `codex/skill-usage-outcomes`
+
+Artifact:
+
+- `.omc/research/skill-usage-outcome-receipts-2026-05-18.md`
+
+What changed:
+
+- Skill usage records now carry outcome-oriented fields:
+  `required_tools`, `verification_result`, `user_outcome`,
+  `promotion_candidate`, and `improvement_proposal_path`.
+- `skill_catalog action=usage` now exposes aggregated required tools,
+  verification result counts, promotion candidates, latest user outcome, and
+  latest improvement proposal path.
+- Model-callable and slash skill executions now record required tools and
+  explicit `verification_result:not_run` outcome receipts.
+- `create_skill action=propose_improvement` now writes a review artifact for a
+  proposed skill improvement instead of editing `SKILL.md`.
+
+Reference impact:
+
+- Advances Gap 6 from basic usage visibility toward Hermes-style sidecar
+  telemetry and Claude-style improvement detection, while staying safer than
+  automatic rewrite behavior.
+- Does not claim full Hermes curator lifecycle, automatic pruning, automatic
+  promotion, or full Claude Code skill-improvement hook parity.
+
+Verification:
+
+- `go test ./internal/skill -run 'TestTracker|TestInvocationToolRecordsSkillUsage|TestCatalogToolReportsUsageStats' -count=1`
+  passed.
+- `go test ./internal/skill ./internal/tools -run 'TestTracker|TestInvocationToolRecordsSkillUsage|TestCatalogToolReportsUsageStats|TestSkillToolProposeImprovement|TestSkillToolScope' -count=1`
+  passed.
+- `go test ./cmd/elnath ./internal/skill ./internal/tools -count=1`
+  passed.
+- `go vet ./...` passed.
+- `git diff --check` passed.
+
+Remaining skill feedback gaps:
+
+- No reviewed apply path for improvement proposals yet.
+- No automatic skill lifecycle curator.
+- No skill-specific verifier ownership model beyond explicit `not_run`
+  classification in usage receipts.

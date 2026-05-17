@@ -23,17 +23,23 @@ func NewSkillTool(creator any, registry any) *SkillTool {
 func (t *SkillTool) Name() string { return "create_skill" }
 
 func (t *SkillTool) Description() string {
-	return "Create, list, or delete a wiki-native skill"
+	return "Create, list, delete, or propose a safe improvement for a wiki-native skill"
 }
 
 func (t *SkillTool) Schema() json.RawMessage {
 	return Object(map[string]Property{
-		"action":         StringEnum("Action to perform.", "create", "list", "delete"),
+		"action":         StringEnum("Action to perform.", "create", "list", "delete", "propose_improvement"),
 		"name":           String("Skill name (lowercase, hyphens)."),
 		"description":    String("Short description of what the skill does."),
 		"trigger":        String("Optional trigger text, e.g. /deploy-check <env>."),
 		"required_tools": Array("Tools the skill requires.", "string"),
 		"prompt":         String("Skill prompt with {arg} placeholders."),
+		"session_id":     String("Optional session ID tied to a skill improvement proposal."),
+		"reason":         String("Reason for action=propose_improvement."),
+		"evidence":       Array("Evidence lines for action=propose_improvement.", "string"),
+		"suggested_change": String(
+			"Suggested skill change for action=propose_improvement. Writes a review artifact, not the skill file.",
+		),
 	}, []string{"action"})
 }
 
@@ -51,11 +57,19 @@ func (t *SkillTool) Scope(params json.RawMessage) ToolScope {
 		return ConservativeScope()
 	}
 	wikiDir := t.wikiDir()
-	if strings.TrimSpace(input.Action) == "list" {
+	action := strings.TrimSpace(input.Action)
+	if action == "list" {
 		if wikiDir == "" {
 			return ToolScope{}
 		}
 		return ToolScope{ReadPaths: []string{wikiDir}}
+	}
+	if action == "propose_improvement" {
+		proposalDir := t.proposalDir()
+		if proposalDir == "" {
+			return ToolScope{Persistent: true}
+		}
+		return ToolScope{WritePaths: []string{proposalDir}, Persistent: true}
 	}
 	if wikiDir == "" {
 		return ToolScope{Persistent: true}
@@ -64,12 +78,16 @@ func (t *SkillTool) Scope(params json.RawMessage) ToolScope {
 }
 
 type skillToolInput struct {
-	Action        string   `json:"action"`
-	Name          string   `json:"name"`
-	Description   string   `json:"description"`
-	Trigger       string   `json:"trigger"`
-	RequiredTools []string `json:"required_tools"`
-	Prompt        string   `json:"prompt"`
+	Action          string   `json:"action"`
+	Name            string   `json:"name"`
+	Description     string   `json:"description"`
+	Trigger         string   `json:"trigger"`
+	RequiredTools   []string `json:"required_tools"`
+	Prompt          string   `json:"prompt"`
+	SessionID       string   `json:"session_id"`
+	Reason          string   `json:"reason"`
+	Evidence        []string `json:"evidence"`
+	SuggestedChange string   `json:"suggested_change"`
 }
 
 func (t *SkillTool) Execute(_ context.Context, params json.RawMessage) (*Result, error) {
@@ -85,6 +103,8 @@ func (t *SkillTool) Execute(_ context.Context, params json.RawMessage) (*Result,
 		return t.executeList(), nil
 	case "delete":
 		return t.executeDelete(input)
+	case "propose_improvement":
+		return t.executeProposeImprovement(input)
 	default:
 		return ErrorResult(fmt.Sprintf("unknown action: %q", input.Action)), nil
 	}
@@ -171,6 +191,47 @@ func (t *SkillTool) executeDelete(input skillToolInput) (*Result, error) {
 	}
 	t.deleted[strings.TrimSpace(input.Name)] = struct{}{}
 	return SuccessResult(fmt.Sprintf("Deleted skill /%s", strings.TrimSpace(input.Name))), nil
+}
+
+func (t *SkillTool) executeProposeImprovement(input skillToolInput) (*Result, error) {
+	if strings.TrimSpace(input.Name) == "" {
+		return ErrorResult("name must not be empty"), nil
+	}
+	if strings.TrimSpace(input.Reason) == "" {
+		return ErrorResult("reason must not be empty"), nil
+	}
+	if strings.TrimSpace(input.SuggestedChange) == "" {
+		return ErrorResult("suggested_change must not be empty"), nil
+	}
+	if t == nil || t.creator == nil {
+		return ErrorResult("skill creator is not configured"), nil
+	}
+	path, err := t.proposeSkillImprovement(input)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("create_skill: %v", err)), nil
+	}
+	return SuccessResult(fmt.Sprintf("Proposed improvement for /%s: %s", strings.TrimSpace(input.Name), path)), nil
+}
+
+func (t *SkillTool) proposeSkillImprovement(input skillToolInput) (string, error) {
+	method := reflect.ValueOf(t.creator).MethodByName("ProposeImprovement")
+	if !method.IsValid() {
+		return "", fmt.Errorf("skill creator does not implement ProposeImprovement")
+	}
+	if method.Type().NumIn() != 1 || method.Type().NumOut() != 2 || method.Type().Out(0).Kind() != reflect.String {
+		return "", fmt.Errorf("skill creator ProposeImprovement signature mismatch")
+	}
+	params := reflect.New(method.Type().In(0)).Elem()
+	setStructField(params, "SkillName", strings.TrimSpace(input.Name))
+	setStructField(params, "SessionID", strings.TrimSpace(input.SessionID))
+	setStructField(params, "Reason", strings.TrimSpace(input.Reason))
+	setStructField(params, "Evidence", append([]string(nil), input.Evidence...))
+	setStructField(params, "SuggestedChange", strings.TrimSpace(input.SuggestedChange))
+	results := method.Call([]reflect.Value{params})
+	if err := reflectedError(results[1]); err != nil {
+		return "", err
+	}
+	return results[0].String(), nil
 }
 
 func (t *SkillTool) createSkill(input skillToolInput) (reflect.Value, error) {
@@ -283,6 +344,29 @@ func (t *SkillTool) wikiDir() string {
 	}
 	results := method.Call(nil)
 	return filepath.Clean(strings.TrimSpace(results[0].String()))
+}
+
+func (t *SkillTool) proposalDir() string {
+	if t == nil || t.creator == nil {
+		return ""
+	}
+	creator := indirectValue(reflect.ValueOf(t.creator))
+	if !creator.IsValid() || creator.Kind() != reflect.Struct {
+		return ""
+	}
+	tracker := unsafeField(creator.FieldByName("tracker"))
+	if !tracker.IsValid() {
+		return ""
+	}
+	tracker = indirectValue(tracker)
+	if !tracker.IsValid() || tracker.Kind() != reflect.Struct {
+		return ""
+	}
+	proposalDir := unsafeField(tracker.FieldByName("proposalDir"))
+	if !proposalDir.IsValid() || proposalDir.Kind() != reflect.String {
+		return ""
+	}
+	return filepath.Clean(strings.TrimSpace(proposalDir.String()))
 }
 
 func (t *SkillTool) removeSkillFromRegistry(name string) {

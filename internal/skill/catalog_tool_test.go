@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -176,10 +177,25 @@ func TestCatalogToolReportsUsageStats(t *testing.T) {
 	reg.Add(&Skill{Name: "review-pr", Status: "active", Source: "claude-skill"})
 	reg.Add(&Skill{Name: "deploy-check", Status: "active"})
 	tracker := NewTracker(t.TempDir())
-	if err := tracker.RecordUsage(UsageRecord{SkillName: "review-pr", SessionID: "sess-1", Success: true}); err != nil {
+	if err := tracker.RecordUsage(UsageRecord{
+		SkillName:          "review-pr",
+		SessionID:          "sess-1",
+		Success:            true,
+		RequiredTools:      []string{"bash"},
+		VerificationResult: SkillVerificationPassed,
+		UserOutcome:        "completed",
+	}); err != nil {
 		t.Fatalf("RecordUsage success error = %v", err)
 	}
-	if err := tracker.RecordUsage(UsageRecord{SkillName: "review-pr", SessionID: "sess-2", Success: false}); err != nil {
+	if err := tracker.RecordUsage(UsageRecord{
+		SkillName:          "review-pr",
+		SessionID:          "sess-2",
+		Success:            false,
+		RequiredTools:      []string{"apply_patch"},
+		VerificationResult: SkillVerificationFailed,
+		UserOutcome:        "failed",
+		PromotionCandidate: true,
+	}); err != nil {
 		t.Fatalf("RecordUsage failure error = %v", err)
 	}
 
@@ -195,10 +211,15 @@ func TestCatalogToolReportsUsageStats(t *testing.T) {
 	var out struct {
 		Action string `json:"action"`
 		Usage  []struct {
-			SkillName   string `json:"skill_name"`
-			Invocations int    `json:"invocations"`
-			Successes   int    `json:"successes"`
-			Failures    int    `json:"failures"`
+			SkillName           string   `json:"skill_name"`
+			Invocations         int      `json:"invocations"`
+			Successes           int      `json:"successes"`
+			Failures            int      `json:"failures"`
+			RequiredTools       []string `json:"required_tools"`
+			VerificationPassed  int      `json:"verification_passed"`
+			VerificationFailed  int      `json:"verification_failed"`
+			PromotionCandidates int      `json:"promotion_candidates"`
+			LastUserOutcome     string   `json:"last_user_outcome"`
 		} `json:"usage"`
 		Receipt struct {
 			Action           string `json:"action"`
@@ -216,6 +237,9 @@ func TestCatalogToolReportsUsageStats(t *testing.T) {
 	got := out.Usage[0]
 	if got.SkillName != "review-pr" || got.Invocations != 2 || got.Successes != 1 || got.Failures != 1 {
 		t.Fatalf("usage = %+v, want review-pr 2 invocations 1 success 1 failure", got)
+	}
+	if !reflect.DeepEqual(got.RequiredTools, []string{"apply_patch", "bash"}) || got.VerificationPassed != 1 || got.VerificationFailed != 1 || got.PromotionCandidates != 1 || got.LastUserOutcome != "failed" {
+		t.Fatalf("usage outcome = %+v, want tools, verification, promotion, and last outcome", got)
 	}
 	if out.Receipt.Action != "usage" || !out.Receipt.ReadOnly || !out.Receipt.TrackerAvailable || out.Receipt.ReturnedUsage != 1 {
 		t.Fatalf("receipt = %+v, want read-only usage receipt", out.Receipt)

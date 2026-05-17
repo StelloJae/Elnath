@@ -121,6 +121,13 @@ func (c *Creator) Promote(name string) error {
 	return nil
 }
 
+func (c *Creator) ProposeImprovement(proposal ImprovementProposal) (string, error) {
+	if c == nil || c.tracker == nil {
+		return "", fmt.Errorf("skill tracker is not configured")
+	}
+	return c.tracker.WriteImprovementProposal(proposal)
+}
+
 func skillPagePath(name string) string {
 	return "skills/" + name + ".md"
 }
