@@ -63,6 +63,9 @@ func TestService_RunOnceProcessesFollowupsAndTriagesSignalsWithoutEnqueue(t *tes
 	if child.Status != agentic.TaskStatusProposed || child.QueueTaskID != 0 || child.ParentID != parent.ID {
 		t.Fatalf("child task = %+v, want proposed followup task without queue link", child)
 	}
+	if len(result.ProposedTaskIDs) != 1 || result.ProposedTaskIDs[0] != child.ID {
+		t.Fatalf("proposed task ids = %+v, want child %d", result.ProposedTaskIDs, child.ID)
+	}
 	if _, err := queue.Get(ctx, child.QueueTaskID); err == nil {
 		t.Fatalf("queue lookup unexpectedly succeeded for child queue_task_id=%d", child.QueueTaskID)
 	}

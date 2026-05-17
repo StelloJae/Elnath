@@ -435,6 +435,7 @@ func activationDeliverySummary(result agenticactivation.Result, runErr error, ta
 		EnqueuePerformed: result.EnqueuePerformed,
 		Status:           status,
 		Reason:           reason,
+		ProposedTaskIDs:  append([]int64(nil), result.ProposedTaskIDs...),
 		Followups: daemon.ActivationCounts{
 			Processed: result.Followups.Processed,
 			Created:   result.Followups.Created,

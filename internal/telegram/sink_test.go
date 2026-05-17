@@ -514,6 +514,7 @@ func TestSinkNotifyActivationSendsSummary(t *testing.T) {
 		Status:           "failed",
 		Reason:           "secret-token blocked",
 		EnqueuePerformed: false,
+		ProposedTaskIDs:  []int64{12, 13},
 		Followups:        daemon.ActivationCounts{Processed: 2, Created: 1, Skipped: 1},
 		Signals:          daemon.ActivationCounts{Processed: 3, Created: 2, Linked: 1},
 	})
@@ -524,7 +525,7 @@ func TestSinkNotifyActivationSendsSummary(t *testing.T) {
 	if len(sent) != 1 {
 		t.Fatalf("sent messages = %d, want 1", len(sent))
 	}
-	if sent[0].chatID != "chat-1" || !strings.Contains(sent[0].text, "Agentic activation") || !strings.Contains(sent[0].text, "#12") || !strings.Contains(sent[0].text, "propose_only") || !strings.Contains(sent[0].text, "[REDACTED]") {
+	if sent[0].chatID != "chat-1" || !strings.Contains(sent[0].text, "Agentic activation") || !strings.Contains(sent[0].text, "#12") || !strings.Contains(sent[0].text, "propose_only") || !strings.Contains(sent[0].text, "tasks: #12, #13") || !strings.Contains(sent[0].text, "[REDACTED]") {
 		t.Fatalf("activation message = %+v", sent[0])
 	}
 }

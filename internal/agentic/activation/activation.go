@@ -20,6 +20,7 @@ type Result struct {
 	Status           string
 	Reason           string
 	CreatedAt        time.Time
+	ProposedTaskIDs  []int64
 	Followups        followup.Result
 	Signals          triage.Result
 }
@@ -53,10 +54,34 @@ func (s *Service) RunOnce(ctx context.Context, limit int) (Result, error) {
 	signals, err := triage.NewTriager(s.store).RunOnce(ctx, limit)
 	if err != nil {
 		result.Signals = signals
+		result.ProposedTaskIDs = activationTaskIDs(result.Followups, result.Signals)
 		return s.record(ctx, result, err)
 	}
 	result.Signals = signals
+	result.ProposedTaskIDs = activationTaskIDs(result.Followups, result.Signals)
 	return s.record(ctx, result, nil)
+}
+
+func activationTaskIDs(followups followup.Result, signals triage.Result) []int64 {
+	seen := make(map[int64]bool)
+	var out []int64
+	for _, id := range followups.CreatedTaskIDs {
+		if id == 0 || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	for _, ids := range [][]int64{signals.CreatedTaskIDs, signals.LinkedTaskIDs} {
+		for _, id := range ids {
+			if id == 0 || seen[id] {
+				continue
+			}
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 func (s *Service) record(ctx context.Context, result Result, runErr error) (Result, error) {

@@ -167,6 +167,12 @@ func TestTriage_RerunIsIdempotent(t *testing.T) {
 	if first.Created != 1 || second.Created != 0 || second.Linked != 0 {
 		t.Fatalf("unexpected run results: first=%+v second=%+v", first, second)
 	}
+	if len(first.CreatedTaskIDs) != 1 {
+		t.Fatalf("first created task ids = %+v, want one created task", first.CreatedTaskIDs)
+	}
+	if len(second.CreatedTaskIDs) != 0 || len(second.LinkedTaskIDs) != 0 {
+		t.Fatalf("second task ids = created %+v linked %+v, want none", second.CreatedTaskIDs, second.LinkedTaskIDs)
+	}
 	assertAgenticTaskCount(t, db, 1)
 }
 

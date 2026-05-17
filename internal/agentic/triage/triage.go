@@ -7,10 +7,12 @@ import (
 )
 
 type Result struct {
-	Processed int
-	Created   int
-	Linked    int
-	Failed    int
+	Processed      int
+	Created        int
+	Linked         int
+	Failed         int
+	CreatedTaskIDs []int64
+	LinkedTaskIDs  []int64
 }
 
 type Triager struct {
@@ -50,9 +52,15 @@ func (t *Triager) RunOnce(ctx context.Context, limit int) (Result, error) {
 		}
 		if triaged.Created {
 			result.Created++
+			if triaged.Task != nil && triaged.Task.ID != 0 {
+				result.CreatedTaskIDs = append(result.CreatedTaskIDs, triaged.Task.ID)
+			}
 		}
 		if triaged.Linked {
 			result.Linked++
+			if triaged.Task != nil && triaged.Task.ID != 0 {
+				result.LinkedTaskIDs = append(result.LinkedTaskIDs, triaged.Task.ID)
+			}
 		}
 	}
 	return result, nil

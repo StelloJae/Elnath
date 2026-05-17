@@ -314,6 +314,9 @@ func TestFollowupScheduler_DueFollowupCreatesProposedTask(t *testing.T) {
 	if child.Status != agentic.TaskStatusProposed || child.ParentID != parent.ID || child.GoalID != parent.GoalID || child.QueueTaskID != 0 {
 		t.Fatalf("unexpected proposed task: %+v", child)
 	}
+	if len(result.CreatedTaskIDs) != 1 || result.CreatedTaskIDs[0] != child.ID {
+		t.Fatalf("created task ids = %+v, want child %d", result.CreatedTaskIDs, child.ID)
+	}
 }
 
 func TestFollowupScheduler_DueFollowupRecordsSignal(t *testing.T) {

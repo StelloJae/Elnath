@@ -568,6 +568,9 @@ func TestAgenticActivate_RunOnceJSONProcessesDueFollowupWithoutEnqueue(t *testin
 	if child.Status != agentic.TaskStatusProposed || child.QueueTaskID != 0 || child.ParentID != fx.task.ID {
 		t.Fatalf("child task = %+v", child)
 	}
+	if len(view.ProposedTaskIDs) != 1 || view.ProposedTaskIDs[0] != child.ID {
+		t.Fatalf("proposed task ids = %+v, want child %d", view.ProposedTaskIDs, child.ID)
+	}
 	signal, err := fx.store.GetGoalSignal(context.Background(), child.SignalID)
 	if err != nil {
 		t.Fatalf("GetGoalSignal: %v", err)
@@ -605,6 +608,7 @@ func TestAgenticActivate_HumanOutputSummarizesPolicy(t *testing.T) {
 		"execution_policy: propose_only",
 		"enqueue_performed: false",
 		"status: succeeded",
+		"proposed_task_ids:",
 		"followups: processed=1 created=1",
 		"signals: processed=1",
 	} {

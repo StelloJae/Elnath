@@ -44,6 +44,7 @@ type agenticActivationView struct {
 	EnqueuePerformed bool                    `json:"enqueue_performed"`
 	Status           string                  `json:"status"`
 	Reason           string                  `json:"reason,omitempty"`
+	ProposedTaskIDs  []int64                 `json:"proposed_task_ids,omitempty"`
 	Followups        agenticActivationCounts `json:"followups"`
 	Signals          agenticActivationCounts `json:"signals"`
 }
@@ -1178,6 +1179,7 @@ func activationView(result agenticactivation.Result) *agenticActivationView {
 		EnqueuePerformed: result.EnqueuePerformed,
 		Status:           result.Status,
 		Reason:           bounded(result.Reason, 120),
+		ProposedTaskIDs:  append([]int64(nil), result.ProposedTaskIDs...),
 		Followups: agenticActivationCounts{
 			Processed: result.Followups.Processed,
 			Created:   result.Followups.Created,
@@ -1228,6 +1230,9 @@ func renderAgenticActivation(view *agenticActivationView) string {
 	fmt.Fprintf(&b, "  status: %s\n", view.Status)
 	if view.Reason != "" {
 		fmt.Fprintf(&b, "  reason: %s\n", view.Reason)
+	}
+	if len(view.ProposedTaskIDs) > 0 {
+		fmt.Fprintf(&b, "  proposed_task_ids: %s\n", joinInt64s(view.ProposedTaskIDs))
 	}
 	fmt.Fprintf(&b, "  followups: processed=%d created=%d skipped=%d failed=%d\n", view.Followups.Processed, view.Followups.Created, view.Followups.Skipped, view.Followups.Failed)
 	fmt.Fprintf(&b, "  signals: processed=%d created=%d linked=%d failed=%d\n", view.Signals.Processed, view.Signals.Created, view.Signals.Linked, view.Signals.Failed)
@@ -1514,6 +1519,17 @@ func intOrNone(value int64) string {
 		return "none"
 	}
 	return strconv.FormatInt(value, 10)
+}
+
+func joinInt64s(values []int64) string {
+	if len(values) == 0 {
+		return "none"
+	}
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		parts = append(parts, strconv.FormatInt(value, 10))
+	}
+	return strings.Join(parts, ",")
 }
 
 func hashIDOrNone(value int64) string {

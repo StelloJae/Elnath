@@ -2282,6 +2282,7 @@ func TestActivationDeliverySummaryMapsResult(t *testing.T) {
 		Limit:            7,
 		EnqueuePerformed: false,
 		Status:           agentic.ActivationRunStatusSucceeded,
+		ProposedTaskIDs:  []int64{101, 102},
 		Followups:        followup.Result{Processed: 3, Created: 2, Skipped: 1},
 		Signals:          triage.Result{Processed: 4, Created: 2, Linked: 1, Failed: 1},
 		CreatedAt:        createdAt,
@@ -2292,6 +2293,9 @@ func TestActivationDeliverySummaryMapsResult(t *testing.T) {
 	}
 	if len(summary.DeliveryTargets) != 1 || summary.DeliveryTargets[0].Platform != "telegram" {
 		t.Fatalf("summary targets = %+v", summary.DeliveryTargets)
+	}
+	if len(summary.ProposedTaskIDs) != 2 || summary.ProposedTaskIDs[0] != 101 || summary.ProposedTaskIDs[1] != 102 {
+		t.Fatalf("summary proposed task ids = %+v", summary.ProposedTaskIDs)
 	}
 	if summary.Followups.Processed != 3 || summary.Followups.Created != 2 || summary.Followups.Skipped != 1 {
 		t.Fatalf("summary followups = %+v", summary.Followups)

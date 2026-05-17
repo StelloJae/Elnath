@@ -56,6 +56,7 @@ type ActivationSummary struct {
 	EnqueuePerformed bool
 	Status           string
 	Reason           string
+	ProposedTaskIDs  []int64
 	Followups        ActivationCounts
 	Signals          ActivationCounts
 	CreatedAt        time.Time
