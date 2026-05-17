@@ -72,6 +72,7 @@ func (w *SingleWorkflow) Run(ctx context.Context, input WorkflowInput) (*Workflo
 		Summary:               summary,
 		Usage:                 result.Usage,
 		ToolStats:             result.ToolStats,
+		Mutations:             result.Mutations,
 		Iterations:            result.Iterations,
 		FinishReason:          string(result.FinishReason),
 		Workflow:              w.Name(),

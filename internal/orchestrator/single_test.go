@@ -178,6 +178,47 @@ func TestSingleWorkflow_PermissionPropagated(t *testing.T) {
 	}
 }
 
+func TestSingleWorkflow_PropagatesMutationReceipts(t *testing.T) {
+	reg := tools.NewRegistry()
+	reg.Register(&testTool{
+		name: "write_file",
+		executeFn: func(_ context.Context, _ json.RawMessage) (*tools.Result, error) {
+			return &tools.Result{
+				Output: "wrote file",
+				Mutation: &tools.FileMutation{
+					Operation:          "write_file",
+					Path:               "foo.go",
+					Changed:            true,
+					DiagnosticLanguage: "go",
+					DiagnosticStatus:   "diagnostic_delta_clean",
+				},
+			}, nil
+		},
+	})
+
+	provider := &scriptedSingleProvider{messages: []llm.Message{
+		{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+			llm.ToolUseBlock{ID: "write-1", Name: "write_file", Input: json.RawMessage(`{"file_path":"foo.go","content":"package main\n"}`)},
+		}},
+		llm.NewAssistantMessage("done"),
+	}}
+	result, err := NewSingleWorkflow().Run(context.Background(), WorkflowInput{
+		Message:  "write foo",
+		Tools:    reg,
+		Provider: provider,
+		Config:   WorkflowConfig{MaxIterations: 3},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if len(result.Mutations) != 1 {
+		t.Fatalf("Mutations = %+v, want one structured mutation receipt", result.Mutations)
+	}
+	if result.Mutations[0].Path != "foo.go" || result.Mutations[0].DiagnosticStatus != "diagnostic_delta_clean" {
+		t.Fatalf("mutation receipt = %+v", result.Mutations[0])
+	}
+}
+
 func TestSingleWorkflow_ReasoningEffortPropagated(t *testing.T) {
 	provider := &reasoningCaptureProvider{}
 	result, err := NewSingleWorkflow().Run(context.Background(), WorkflowInput{
