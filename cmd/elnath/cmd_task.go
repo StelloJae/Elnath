@@ -605,6 +605,9 @@ type taskMonitorCLIOutput struct {
 	NextPollSeconds    int    `json:"next_poll_seconds"`
 	ObservedAt         string `json:"observed_at"`
 	UpdatedAt          string `json:"updated_at"`
+	AgeSeconds         int64  `json:"age_seconds"`
+	RunningSeconds     int64  `json:"running_seconds"`
+	IdleSeconds        int64  `json:"idle_seconds"`
 	Progress           string `json:"progress"`
 	Summary            string `json:"summary"`
 	ResultTail         string `json:"result_tail"`
@@ -665,6 +668,13 @@ func printTaskMonitor(view taskMonitorCLIOutput) {
 	}
 	fmt.Printf("Updated:      %s\n", emptyDash(view.UpdatedAt))
 	fmt.Printf("Observed:     %s\n", emptyDash(view.ObservedAt))
+	fmt.Printf("Age:          %s\n", formatSeconds(view.AgeSeconds))
+	if view.Status == string(daemon.StatusRunning) || view.RunningSeconds > 0 {
+		fmt.Printf("Running:      %s\n", formatSeconds(view.RunningSeconds))
+	}
+	if view.Status == string(daemon.StatusRunning) || view.IdleSeconds > 0 {
+		fmt.Printf("Idle:         %s since last update\n", formatSeconds(view.IdleSeconds))
+	}
 	fmt.Printf("Next poll:    %ds\n", view.NextPollSeconds)
 	if view.Progress != "" {
 		fmt.Printf("Progress:     %s\n", daemon.RenderProgress(view.Progress))
@@ -679,6 +689,13 @@ func printTaskMonitor(view taskMonitorCLIOutput) {
 		fmt.Printf("Result tail:  %s\n", view.ResultTail)
 		fmt.Printf("Result chars: %d truncated=%t\n", view.ResultTotalChars, view.ResultTruncated)
 	}
+}
+
+func formatSeconds(seconds int64) string {
+	if seconds < 0 {
+		seconds = 0
+	}
+	return (time.Duration(seconds) * time.Second).String()
 }
 
 func printTaskOutput(view taskOutputCLIOutput) {
