@@ -12,11 +12,14 @@ import (
 
 // recordingSink captures all completions it receives.
 type recordingSink struct {
-	name     string
-	received []TaskCompletion
-	err      error
-	errs     []error
-	mu       sync.Mutex
+	name         string
+	received     []TaskCompletion
+	progresses   []TaskProgress
+	err          error
+	errs         []error
+	progressErr  error
+	progressErrs []error
+	mu           sync.Mutex
 }
 
 func (s *recordingSink) NotifyCompletion(_ context.Context, c TaskCompletion) error {
@@ -31,6 +34,18 @@ func (s *recordingSink) NotifyCompletion(_ context.Context, c TaskCompletion) er
 	return s.err
 }
 
+func (s *recordingSink) NotifyProgress(_ context.Context, progress TaskProgress) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.progresses = append(s.progresses, progress)
+	if len(s.progressErrs) > 0 {
+		err := s.progressErrs[0]
+		s.progressErrs = s.progressErrs[1:]
+		return err
+	}
+	return s.progressErr
+}
+
 func (s *recordingSink) Count() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -41,6 +56,18 @@ func (s *recordingSink) Completion(i int) TaskCompletion {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.received[i]
+}
+
+func (s *recordingSink) ProgressCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.progresses)
+}
+
+func (s *recordingSink) Progress(i int) TaskProgress {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.progresses[i]
 }
 
 func (s *recordingSink) String() string {
@@ -211,6 +238,70 @@ func TestDeliveryRouter_AllSinksFail(t *testing.T) {
 	err := router.Deliver(context.Background(), testCompletion())
 	if err == nil {
 		t.Fatal("expected error when all sinks fail, got nil")
+	}
+	if !errors.Is(err, err1) {
+		t.Errorf("error does not wrap err1: %v", err)
+	}
+	if !errors.Is(err, err2) {
+		t.Errorf("error does not wrap err2: %v", err)
+	}
+}
+
+func TestDeliveryRouter_DeliverProgressRoutesRegisteredProgressSink(t *testing.T) {
+	router := mustNewDeliveryRouter(t, nil)
+	sink := &recordingSink{name: "telegram"}
+	router.Register(sink)
+
+	ev := ToolProgressEvent("bash", "go test ./internal/daemon")
+	if err := router.DeliverProgress(context.Background(), TaskProgress{
+		TaskID: 42,
+		Event:  ev,
+		Raw:    EncodeProgressEvent(ev),
+	}); err != nil {
+		t.Fatalf("DeliverProgress: %v", err)
+	}
+	if sink.Count() != 0 {
+		t.Fatalf("completion count = %d, want 0", sink.Count())
+	}
+	if sink.ProgressCount() != 1 {
+		t.Fatalf("progress count = %d, want 1", sink.ProgressCount())
+	}
+	got := sink.Progress(0)
+	if got.TaskID != 42 || got.Event.ToolName != "bash" || got.Event.Preview != "go test ./internal/daemon" {
+		t.Fatalf("progress = %+v, want task/tool/preview", got)
+	}
+}
+
+func TestDeliveryRouter_OnProgressParsesAndRoutes(t *testing.T) {
+	router := mustNewDeliveryRouter(t, nil)
+	sink := &recordingSink{name: "telegram"}
+	router.Register(sink)
+
+	router.OnProgress(42, EncodeProgressEvent(TextProgressEvent("still working")))
+
+	if sink.ProgressCount() != 1 {
+		t.Fatalf("progress count = %d, want 1", sink.ProgressCount())
+	}
+	got := sink.Progress(0)
+	if got.TaskID != 42 || got.Event.Kind != ProgressKindText || got.Event.Message != "still working" {
+		t.Fatalf("progress = %+v, want parsed text event", got)
+	}
+}
+
+func TestDeliveryRouter_DeliverProgressAllSinksFail(t *testing.T) {
+	router := mustNewDeliveryRouter(t, nil)
+	err1 := errors.New("progress err1")
+	err2 := errors.New("progress err2")
+	router.Register(&recordingSink{name: "one", progressErr: err1})
+	router.Register(&recordingSink{name: "two", progressErr: err2})
+
+	err := router.DeliverProgress(context.Background(), TaskProgress{
+		TaskID: 42,
+		Event:  TextProgressEvent("working"),
+		Raw:    EncodeProgressEvent(TextProgressEvent("working")),
+	})
+	if err == nil {
+		t.Fatal("expected error when all progress sinks fail, got nil")
 	}
 	if !errors.Is(err, err1) {
 		t.Errorf("error does not wrap err1: %v", err)

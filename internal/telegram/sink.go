@@ -140,6 +140,17 @@ func (s *TelegramSink) OnProgress(taskID int64, progress string) {
 	}
 }
 
+// NotifyProgress implements daemon.ProgressSink so daemon progress can flow
+// through the delivery router instead of bypassing it.
+func (s *TelegramSink) NotifyProgress(_ context.Context, progress daemon.TaskProgress) error {
+	raw := progress.Raw
+	if raw == "" {
+		raw = daemon.EncodeProgressEvent(progress.Event)
+	}
+	s.OnProgress(progress.TaskID, raw)
+	return nil
+}
+
 func (s *TelegramSink) maybeSetWorkingReaction(taskID int64) {
 	s.mu.Lock()
 	task := s.active[taskID]
