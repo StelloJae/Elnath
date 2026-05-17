@@ -40,6 +40,9 @@ func TestService_RunOnceProcessesFollowupsAndTriagesSignalsWithoutEnqueue(t *tes
 	if result.ExecutionPolicy != ExecutionPolicyProposeOnly || result.EnqueuePerformed {
 		t.Fatalf("result policy/enqueue = %+v", result)
 	}
+	if result.RunID == 0 || result.Status != agentic.ActivationRunStatusSucceeded {
+		t.Fatalf("result run/status = %+v", result)
+	}
 	if result.Followups.Processed != 1 || result.Followups.Created != 1 {
 		t.Fatalf("followup result = %+v", result.Followups)
 	}
@@ -73,6 +76,13 @@ func TestService_RunOnceProcessesFollowupsAndTriagesSignalsWithoutEnqueue(t *tes
 	if signal.Status != agentic.SignalStatusTriaged {
 		t.Fatalf("signal status = %q, want triaged", signal.Status)
 	}
+	run, err := store.GetActivationRun(ctx, result.RunID)
+	if err != nil {
+		t.Fatalf("GetActivationRun: %v", err)
+	}
+	if run.FollowupProcessed != 1 || run.FollowupCreated != 1 || run.SignalProcessed != 1 || run.EnqueuePerformed {
+		t.Fatalf("activation run = %+v", run)
+	}
 }
 
 func TestService_RunOnceDefaultsLimit(t *testing.T) {
@@ -83,6 +93,29 @@ func TestService_RunOnceDefaultsLimit(t *testing.T) {
 	}
 	if result.Limit != 25 {
 		t.Fatalf("limit = %d, want default 25", result.Limit)
+	}
+}
+
+func TestService_RunOnceRecordsFailedActivation(t *testing.T) {
+	ctx := context.Background()
+	db, store := newActivationTestStore(t)
+	if _, err := db.Exec(`DROP TABLE goal_signals`); err != nil {
+		t.Fatalf("drop goal_signals: %v", err)
+	}
+
+	result, err := NewService(store).RunOnce(ctx, 3)
+	if err == nil {
+		t.Fatal("RunOnce error = nil, want failed signal listing")
+	}
+	if result.RunID == 0 || result.Status != agentic.ActivationRunStatusFailed || result.Reason == "" {
+		t.Fatalf("failed result = %+v", result)
+	}
+	run, getErr := store.GetActivationRun(ctx, result.RunID)
+	if getErr != nil {
+		t.Fatalf("GetActivationRun: %v", getErr)
+	}
+	if run.Status != agentic.ActivationRunStatusFailed || run.Reason == "" || run.Limit != 3 {
+		t.Fatalf("failed run = %+v", run)
 	}
 }
 

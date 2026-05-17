@@ -186,6 +186,23 @@ func InitSchema(db *sql.DB) error {
 			wake_agent INTEGER NOT NULL DEFAULT 0,
 			created_at INTEGER NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS activation_runs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			execution_policy TEXT NOT NULL,
+			limit_n INTEGER NOT NULL,
+			followup_processed INTEGER NOT NULL DEFAULT 0,
+			followup_created INTEGER NOT NULL DEFAULT 0,
+			followup_skipped INTEGER NOT NULL DEFAULT 0,
+			followup_failed INTEGER NOT NULL DEFAULT 0,
+			signal_processed INTEGER NOT NULL DEFAULT 0,
+			signal_created INTEGER NOT NULL DEFAULT 0,
+			signal_linked INTEGER NOT NULL DEFAULT 0,
+			signal_failed INTEGER NOT NULL DEFAULT 0,
+			enqueue_performed INTEGER NOT NULL DEFAULT 0,
+			status TEXT NOT NULL,
+			reason TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL
+		)`,
 		`CREATE INDEX IF NOT EXISTS idx_goal_signals_goal ON goal_signals(goal_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_agentic_tasks_goal ON agentic_tasks(goal_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_agentic_tasks_signal ON agentic_tasks(signal_id)`,
@@ -204,6 +221,8 @@ func InitSchema(db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_followups_goal ON followups(goal_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_followups_due ON followups(status, trigger_at)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_followups_dedupe_key ON followups(dedupe_key) WHERE dedupe_key != ''`,
+		`CREATE INDEX IF NOT EXISTS idx_activation_runs_status ON activation_runs(status)`,
+		`CREATE INDEX IF NOT EXISTS idx_activation_runs_created ON activation_runs(created_at)`,
 	}
 
 	for _, stmt := range stmts {

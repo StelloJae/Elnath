@@ -89,6 +89,7 @@ func TestAgenticSchema_TablesExist(t *testing.T) {
 		"task_enqueue_decisions",
 		"memory_updates",
 		"followups",
+		"activation_runs",
 	} {
 		t.Run(table, func(t *testing.T) {
 			var name string
@@ -140,6 +141,10 @@ func TestAgenticSchema_RoadmapColumnsExist(t *testing.T) {
 		"memory_updates": {
 			"id", "task_id", "receipt_id", "verification_run_id", "target", "operation", "payload_hash", "status", "source", "reason", "created_at", "applied_at",
 		},
+		"activation_runs": {
+			"id", "execution_policy", "limit_n", "followup_processed", "followup_created", "followup_skipped", "followup_failed",
+			"signal_processed", "signal_created", "signal_linked", "signal_failed", "enqueue_performed", "status", "reason", "created_at",
+		},
 	}
 
 	for table, columns := range required {
@@ -151,6 +156,43 @@ func TestAgenticSchema_RoadmapColumnsExist(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestActivationRunStore_CreateGetList(t *testing.T) {
+	ctx := context.Background()
+	_, store := newTestStore(t)
+	created, err := store.CreateActivationRun(ctx, ActivationRun{
+		ExecutionPolicy:   "propose_only",
+		Limit:             7,
+		FollowupProcessed: 2,
+		FollowupCreated:   1,
+		FollowupSkipped:   1,
+		SignalProcessed:   3,
+		SignalCreated:     2,
+		SignalLinked:      1,
+		EnqueuePerformed:  false,
+		Status:            ActivationRunStatusSucceeded,
+	})
+	if err != nil {
+		t.Fatalf("CreateActivationRun: %v", err)
+	}
+	if created.ID == 0 || created.Limit != 7 || created.FollowupProcessed != 2 || created.SignalLinked != 1 || created.EnqueuePerformed {
+		t.Fatalf("created activation run = %+v", created)
+	}
+	got, err := store.GetActivationRun(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetActivationRun: %v", err)
+	}
+	if got.Status != ActivationRunStatusSucceeded || got.ExecutionPolicy != "propose_only" {
+		t.Fatalf("activation run = %+v", got)
+	}
+	runs, err := store.ListActivationRuns(ctx, 10)
+	if err != nil {
+		t.Fatalf("ListActivationRuns: %v", err)
+	}
+	if len(runs) != 1 || runs[0].ID != created.ID {
+		t.Fatalf("activation runs = %+v, want created run", runs)
 	}
 }
 

@@ -37,10 +37,13 @@ type agenticStatusView struct {
 }
 
 type agenticActivationView struct {
+	RunID            int64                   `json:"run_id"`
 	AutonomyEnabled  bool                    `json:"autonomy_enabled"`
 	ExecutionPolicy  string                  `json:"execution_policy"`
 	Limit            int                     `json:"limit"`
 	EnqueuePerformed bool                    `json:"enqueue_performed"`
+	Status           string                  `json:"status"`
+	Reason           string                  `json:"reason,omitempty"`
 	Followups        agenticActivationCounts `json:"followups"`
 	Signals          agenticActivationCounts `json:"signals"`
 }
@@ -59,6 +62,24 @@ type agenticAttentionItem struct {
 	TaskID int64  `json:"task_id,omitempty"`
 	Status string `json:"status"`
 	Reason string `json:"reason,omitempty"`
+}
+
+type agenticActivationsView struct {
+	AutonomyEnabled bool                          `json:"autonomy_enabled"`
+	Limit           int                           `json:"limit"`
+	Runs            []agenticActivationRunSummary `json:"runs"`
+}
+
+type agenticActivationRunSummary struct {
+	ID               int64                   `json:"id"`
+	ExecutionPolicy  string                  `json:"execution_policy"`
+	Limit            int                     `json:"limit"`
+	EnqueuePerformed bool                    `json:"enqueue_performed"`
+	Status           string                  `json:"status"`
+	Reason           string                  `json:"reason,omitempty"`
+	Followups        agenticActivationCounts `json:"followups"`
+	Signals          agenticActivationCounts `json:"signals"`
+	CreatedAt        string                  `json:"created_at"`
 }
 
 type agenticTaskView struct {
@@ -240,6 +261,7 @@ func cmdAgentic(ctx context.Context, args []string) error {
 Subcommands:
   status [--json]                         Read-only control-plane summary
   activate --once [--limit n] [--json]    Advance due followups and new signals once
+  activations [--limit n] [--json]         Read-only activation history
   task <id> [--json]                      Read-only task status
   task --queue-task-id <id> [--json]      Resolve agentic task from daemon queue task
   lineage <task-id> [--json]              Read-only task lineage
@@ -274,6 +296,20 @@ Enqueue flags:
 			return printJSON(view)
 		}
 		fmt.Print(renderAgenticStatus(view))
+		return nil
+	case "activations":
+		limit, jsonOut, err := parseAgenticListArgs(args[1:], "elnath agentic activations [--limit n] [--json]")
+		if err != nil {
+			return err
+		}
+		view, err := cli.activations(ctx, limit)
+		if err != nil {
+			return err
+		}
+		if jsonOut {
+			return printJSON(view)
+		}
+		fmt.Print(renderAgenticActivations(view))
 		return nil
 	case "task":
 		id, jsonOut, err := cli.resolveTaskID(ctx, args[1:])
@@ -581,6 +617,31 @@ func parseAgenticIDArgs(args []string, usage string) (int64, bool, error) {
 	return id, jsonOut, nil
 }
 
+func parseAgenticListArgs(args []string, usage string) (int, bool, error) {
+	limit := 10
+	jsonOut := false
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "--json":
+			jsonOut = true
+		case "--limit":
+			i++
+			if i >= len(args) {
+				return 0, jsonOut, fmt.Errorf("usage: %s", usage)
+			}
+			parsed, err := strconv.Atoi(args[i])
+			if err != nil || parsed <= 0 {
+				return 0, jsonOut, fmt.Errorf("invalid limit %q", args[i])
+			}
+			limit = parsed
+		default:
+			return 0, jsonOut, fmt.Errorf("unknown list flag: %s", arg)
+		}
+	}
+	return limit, jsonOut, nil
+}
+
 func (c *agenticCLI) status(ctx context.Context) (*agenticStatusView, error) {
 	counts := map[string]map[string]int{}
 	specs := map[string]struct {
@@ -598,6 +659,7 @@ func (c *agenticCLI) status(ctx context.Context) (*agenticStatusView, error) {
 		"verification":     {"verification_runs", "verdict", false},
 		"memory":           {"memory_updates", "status", false},
 		"followups":        {"followups", "status", false},
+		"activation_runs":  {"activation_runs", "status", true},
 		"actors":           {"agent_actors", "status", false},
 	}
 	for key, spec := range specs {
@@ -635,6 +697,29 @@ func (c *agenticCLI) status(ctx context.Context) (*agenticStatusView, error) {
 		ProposedAwaitingEnqueue: awaitingEnqueue,
 		DueFollowups:            due,
 		Attention:               attention,
+	}, nil
+}
+
+func (c *agenticCLI) activations(ctx context.Context, limit int) (*agenticActivationsView, error) {
+	exists, err := c.tableExists(ctx, "activation_runs")
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return &agenticActivationsView{AutonomyEnabled: false, Limit: limit}, nil
+	}
+	runs, err := c.store.ListActivationRuns(ctx, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]agenticActivationRunSummary, 0, len(runs))
+	for _, run := range runs {
+		out = append(out, activationRunSummary(run))
+	}
+	return &agenticActivationsView{
+		AutonomyEnabled: false,
+		Limit:           limit,
+		Runs:            out,
 	}, nil
 }
 
@@ -1086,10 +1171,13 @@ func printJSON(v any) error {
 
 func activationView(result agenticactivation.Result) *agenticActivationView {
 	return &agenticActivationView{
+		RunID:            result.RunID,
 		AutonomyEnabled:  false,
 		ExecutionPolicy:  result.ExecutionPolicy,
 		Limit:            result.Limit,
 		EnqueuePerformed: result.EnqueuePerformed,
+		Status:           result.Status,
+		Reason:           bounded(result.Reason, 120),
 		Followups: agenticActivationCounts{
 			Processed: result.Followups.Processed,
 			Created:   result.Followups.Created,
@@ -1105,15 +1193,63 @@ func activationView(result agenticactivation.Result) *agenticActivationView {
 	}
 }
 
+func activationRunSummary(run agentic.ActivationRun) agenticActivationRunSummary {
+	return agenticActivationRunSummary{
+		ID:               run.ID,
+		ExecutionPolicy:  run.ExecutionPolicy,
+		Limit:            run.Limit,
+		EnqueuePerformed: run.EnqueuePerformed,
+		Status:           run.Status,
+		Reason:           bounded(run.Reason, 120),
+		Followups: agenticActivationCounts{
+			Processed: run.FollowupProcessed,
+			Created:   run.FollowupCreated,
+			Skipped:   run.FollowupSkipped,
+			Failed:    run.FollowupFailed,
+		},
+		Signals: agenticActivationCounts{
+			Processed: run.SignalProcessed,
+			Created:   run.SignalCreated,
+			Linked:    run.SignalLinked,
+			Failed:    run.SignalFailed,
+		},
+		CreatedAt: run.CreatedAt.Format(time.RFC3339),
+	}
+}
+
 func renderAgenticActivation(view *agenticActivationView) string {
 	var b strings.Builder
 	fmt.Fprintln(&b, "Agentic Activation")
+	fmt.Fprintf(&b, "  run_id: %d\n", view.RunID)
 	fmt.Fprintf(&b, "  autonomy_enabled: %t\n", view.AutonomyEnabled)
 	fmt.Fprintf(&b, "  execution_policy: %s\n", view.ExecutionPolicy)
 	fmt.Fprintf(&b, "  limit: %d\n", view.Limit)
 	fmt.Fprintf(&b, "  enqueue_performed: %t\n", view.EnqueuePerformed)
+	fmt.Fprintf(&b, "  status: %s\n", view.Status)
+	if view.Reason != "" {
+		fmt.Fprintf(&b, "  reason: %s\n", view.Reason)
+	}
 	fmt.Fprintf(&b, "  followups: processed=%d created=%d skipped=%d failed=%d\n", view.Followups.Processed, view.Followups.Created, view.Followups.Skipped, view.Followups.Failed)
 	fmt.Fprintf(&b, "  signals: processed=%d created=%d linked=%d failed=%d\n", view.Signals.Processed, view.Signals.Created, view.Signals.Linked, view.Signals.Failed)
+	return b.String()
+}
+
+func renderAgenticActivations(view *agenticActivationsView) string {
+	var b strings.Builder
+	fmt.Fprintln(&b, "Agentic Activations")
+	fmt.Fprintf(&b, "  autonomy_enabled: %t\n", view.AutonomyEnabled)
+	fmt.Fprintf(&b, "  limit: %d\n", view.Limit)
+	if len(view.Runs) == 0 {
+		fmt.Fprintln(&b, "  runs: none")
+		return b.String()
+	}
+	fmt.Fprintln(&b, "  runs:")
+	for _, run := range view.Runs {
+		fmt.Fprintf(&b, "  - #%d %s policy=%s followups=%d/%d signals=%d/%d enqueue=%t created_at=%s\n", run.ID, run.Status, run.ExecutionPolicy, run.Followups.Created, run.Followups.Processed, run.Signals.Created+run.Signals.Linked, run.Signals.Processed, run.EnqueuePerformed, run.CreatedAt)
+		if run.Reason != "" {
+			fmt.Fprintf(&b, "    reason: %s\n", run.Reason)
+		}
+	}
 	return b.String()
 }
 
@@ -1122,7 +1258,7 @@ func renderAgenticStatus(view *agenticStatusView) string {
 	fmt.Fprintln(&b, "Agentic Control Plane")
 	fmt.Fprintf(&b, "  autonomy_enabled: %t\n", view.AutonomyEnabled)
 	fmt.Fprintf(&b, "  proposed_awaiting_enqueue: %d\n", view.ProposedAwaitingEnqueue)
-	for _, key := range []string{"goals", "signals", "tasks", "approvals", "receipts", "completion_gates", "enqueue", "verification", "memory", "followups", "actors"} {
+	for _, key := range []string{"goals", "signals", "tasks", "approvals", "receipts", "completion_gates", "enqueue", "verification", "memory", "followups", "activation_runs", "actors"} {
 		line := formatCounts(view.Counts[key])
 		if key == "followups" {
 			line = strings.TrimSpace(line + fmt.Sprintf(" due=%d", view.DueFollowups))

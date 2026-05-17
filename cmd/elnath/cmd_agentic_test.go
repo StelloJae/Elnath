@@ -542,7 +542,7 @@ func TestAgenticActivate_RunOnceJSONProcessesDueFollowupWithoutEnqueue(t *testin
 	if err := json.Unmarshal([]byte(stdout), &view); err != nil {
 		t.Fatalf("activate JSON = %q, unmarshal: %v", stdout, err)
 	}
-	if view.AutonomyEnabled || view.ExecutionPolicy != "propose_only" || view.Limit != 10 || view.EnqueuePerformed {
+	if view.RunID == 0 || view.AutonomyEnabled || view.ExecutionPolicy != "propose_only" || view.Limit != 10 || view.EnqueuePerformed || view.Status != agentic.ActivationRunStatusSucceeded {
 		t.Fatalf("activate view = %+v", view)
 	}
 	if view.Followups.Processed != 1 || view.Followups.Created != 1 {
@@ -575,6 +575,13 @@ func TestAgenticActivate_RunOnceJSONProcessesDueFollowupWithoutEnqueue(t *testin
 	if signal.Status != agentic.SignalStatusTriaged {
 		t.Fatalf("signal status = %q, want triaged", signal.Status)
 	}
+	run, err := fx.store.GetActivationRun(context.Background(), view.RunID)
+	if err != nil {
+		t.Fatalf("GetActivationRun: %v", err)
+	}
+	if run.FollowupCreated != 1 || run.SignalProcessed != 1 || run.EnqueuePerformed {
+		t.Fatalf("activation run = %+v", run)
+	}
 }
 
 func TestAgenticActivate_RequiresExplicitOnce(t *testing.T) {
@@ -594,14 +601,68 @@ func TestAgenticActivate_HumanOutputSummarizesPolicy(t *testing.T) {
 	})
 	for _, want := range []string{
 		"Agentic Activation",
+		"run_id:",
 		"execution_policy: propose_only",
 		"enqueue_performed: false",
+		"status: succeeded",
 		"followups: processed=1 created=1",
 		"signals: processed=1",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("activate output = %q, want %q", stdout, want)
 		}
+	}
+}
+
+func TestAgenticActivations_ReadOnlyHistory(t *testing.T) {
+	fx := newAgenticCommandFixture(t)
+	captureOutput(t, func() {
+		if err := cmdAgentic(context.Background(), []string{"activate", "--once"}); err != nil {
+			t.Fatalf("activate: %v", err)
+		}
+	})
+	before := tableCounts(t, fx.db.Main, agenticSideEffectTables()...)
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdAgentic(context.Background(), []string{"activations", "--limit", "5"}); err != nil {
+			t.Fatalf("activations: %v", err)
+		}
+	})
+	after := tableCounts(t, fx.db.Main, agenticSideEffectTables()...)
+	if fmt.Sprint(after) != fmt.Sprint(before) {
+		t.Fatalf("activations mutated side-effect tables: before=%v after=%v", before, after)
+	}
+	for _, want := range []string{
+		"Agentic Activations",
+		"policy=propose_only",
+		"enqueue=false",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("activations output = %q, want %q", stdout, want)
+		}
+	}
+}
+
+func TestAgenticActivations_JSONOutputStable(t *testing.T) {
+	newAgenticCommandFixture(t)
+	captureOutput(t, func() {
+		if err := cmdAgentic(context.Background(), []string{"activate", "--once"}); err != nil {
+			t.Fatalf("activate: %v", err)
+		}
+	})
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdAgentic(context.Background(), []string{"activations", "--json"}); err != nil {
+			t.Fatalf("activations json: %v", err)
+		}
+	})
+	var view agenticActivationsView
+	if err := json.Unmarshal([]byte(stdout), &view); err != nil {
+		t.Fatalf("activations JSON = %q, unmarshal: %v", stdout, err)
+	}
+	if view.AutonomyEnabled || view.Limit != 10 || len(view.Runs) != 1 {
+		t.Fatalf("activations view = %+v", view)
+	}
+	if view.Runs[0].ExecutionPolicy != "propose_only" || view.Runs[0].Status != agentic.ActivationRunStatusSucceeded {
+		t.Fatalf("activation run summary = %+v", view.Runs[0])
 	}
 }
 
@@ -987,6 +1048,8 @@ func runAgenticCommandVariants(t *testing.T, fx *agenticCommandFixture) {
 	for _, args := range [][]string{
 		{"status"},
 		{"status", "--json"},
+		{"activations"},
+		{"activations", "--json"},
 		{"task", fmt.Sprint(fx.task.ID)},
 		{"task", fmt.Sprint(fx.task.ID), "--json"},
 		{"task", "--queue-task-id", fmt.Sprint(fx.queueTask)},
@@ -1031,6 +1094,7 @@ func agenticSideEffectTables() []string {
 		"verification_runs",
 		"memory_updates",
 		"followups",
+		"activation_runs",
 		"task_queue",
 	}
 }
