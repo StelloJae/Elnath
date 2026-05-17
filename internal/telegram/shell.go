@@ -24,8 +24,9 @@ import (
 )
 
 type Update struct {
-	ID      int64   `json:"update_id"`
-	Message Message `json:"message"`
+	ID            int64          `json:"update_id"`
+	Message       Message        `json:"message"`
+	CallbackQuery *CallbackQuery `json:"callback_query,omitempty"`
 }
 
 type Message struct {
@@ -35,12 +36,32 @@ type Message struct {
 	Text      string
 }
 
+type CallbackQuery struct {
+	ID      string
+	FromID  string
+	Data    string
+	Message Message
+}
+
+type TelegramButton struct {
+	Text string
+	Data string
+}
+
 type BotClient interface {
 	SendMessage(ctx context.Context, chatID, text string) error
 	SendMessageReturningID(ctx context.Context, chatID, text string) (int64, error)
 	EditMessage(ctx context.Context, chatID string, messageID int64, text string) error
 	SetReaction(ctx context.Context, chatID string, messageID int64, emoji string) error
 	GetUpdates(ctx context.Context, offset int64, timeoutSeconds int) ([]Update, error)
+}
+
+type buttonMessageSender interface {
+	SendMessageWithButtons(ctx context.Context, chatID, text string, buttons [][]TelegramButton) error
+}
+
+type callbackAcknowledger interface {
+	AnswerCallback(ctx context.Context, callbackID, text string) error
 }
 
 // IntentClassifier classifies user messages into intent categories.
@@ -180,6 +201,9 @@ func NewShell(queue *daemon.Queue, approvals *daemon.ApprovalStore, bot BotClien
 }
 
 func (s *Shell) HandleUpdate(ctx context.Context, update Update) error {
+	if update.CallbackQuery != nil && strings.TrimSpace(update.CallbackQuery.Data) != "" {
+		return s.handleCallbackQuery(ctx, *update.CallbackQuery)
+	}
 	if strings.TrimSpace(update.Message.Text) == "" {
 		return nil
 	}
@@ -214,6 +238,11 @@ func (s *Shell) HandleUpdate(ctx context.Context, update Update) error {
 		reply, err := s.handleCommand(ctx, text, principal, update.Message.MessageID)
 		if err != nil {
 			reply = "⚠️ " + err.Error()
+		}
+		if err == nil && (fields[0] == "/questions" || fields[0] == "/pending-questions") {
+			if sent, sendErr := s.trySendPendingQuestionsWithButtons(ctx, principal, reply); sent {
+				return sendErr
+			}
 		}
 		return s.bot.SendMessage(ctx, s.chatID, reply)
 	}
@@ -649,8 +678,8 @@ func (s *Shell) renderPendingQuestions(principal identity.Principal) (string, er
 		}
 		if len(q.Options) > 0 {
 			choices := make([]string, 0, len(q.Options))
-			for _, opt := range q.Options {
-				choices = append(choices, "<code>"+escapeHTML(opt)+"</code>")
+			for i, opt := range q.Options {
+				choices = append(choices, fmt.Sprintf("<code>%d. %s</code>", i+1, escapeHTML(opt)))
 			}
 			lines = append(lines, "  choices: "+strings.Join(choices, ", "))
 		}
@@ -660,6 +689,62 @@ func (s *Shell) renderPendingQuestions(principal identity.Principal) (string, er
 		lines = append(lines, renderPendingQuestionHandoffLines(q, directReplyAllowed && q.SessionID == directReplySessionID)...)
 	}
 	return strings.Join(lines, "\n"), nil
+}
+
+func (s *Shell) trySendPendingQuestionsWithButtons(ctx context.Context, principal identity.Principal, text string) (bool, error) {
+	sender, ok := s.bot.(buttonMessageSender)
+	if !ok {
+		return false, nil
+	}
+	buttons, err := s.pendingQuestionButtonRows(principal)
+	if err != nil {
+		return false, err
+	}
+	if len(buttons) == 0 {
+		return false, nil
+	}
+	if err := sender.SendMessageWithButtons(ctx, s.chatID, text, buttons); err != nil {
+		return true, s.bot.SendMessage(ctx, s.chatID, text)
+	}
+	return true, nil
+}
+
+func (s *Shell) pendingQuestionButtonRows(principal identity.Principal) ([][]TelegramButton, error) {
+	if s.outcomeStore == nil {
+		return nil, nil
+	}
+	records, err := s.outcomeStore.Recent(0)
+	if err != nil {
+		return nil, err
+	}
+	directReplySessionID, directReplyAllowed := s.directReplyPendingQuestionSession(records, principal)
+	pending := learning.PendingUserQuestions(records, "", 10)
+	rows := make([][]TelegramButton, 0)
+	for _, question := range pending {
+		if !question.Answerable || len(question.Options) == 0 {
+			continue
+		}
+		if directReplyAllowed && question.SessionID != directReplySessionID {
+			continue
+		}
+		for i, option := range question.Options {
+			label := fmt.Sprintf("%d. %s", i+1, strings.TrimSpace(option))
+			rows = append(rows, []TelegramButton{{
+				Text: truncateTelegramButtonLabel(label),
+				Data: fmt.Sprintf("uq:%s:%d", question.RequestID, i+1),
+			}})
+		}
+	}
+	return rows, nil
+}
+
+func truncateTelegramButtonLabel(label string) string {
+	label = strings.TrimSpace(label)
+	if len([]rune(label)) <= 60 {
+		return label
+	}
+	runes := []rune(label)
+	return string(runes[:57]) + "..."
 }
 
 func (s *Shell) directReplyPendingQuestionSession(records []learning.OutcomeRecord, principal identity.Principal) (string, bool) {
@@ -674,6 +759,53 @@ func (s *Shell) directReplyPendingQuestionSession(records []learning.OutcomeReco
 	return sessionID, len(pending) == 1
 }
 
+func (s *Shell) handleCallbackQuery(ctx context.Context, callback CallbackQuery) error {
+	if callback.Message.ChatID != "" && callback.Message.ChatID != s.chatID {
+		return nil
+	}
+	data := strings.TrimSpace(callback.Data)
+	if !strings.HasPrefix(data, "uq:") {
+		return nil
+	}
+	parts := strings.Split(data, ":")
+	if len(parts) != 3 {
+		return s.answerCallbackOrMessage(ctx, callback, "Invalid question choice.")
+	}
+	requestID := strings.TrimSpace(parts[1])
+	choice, err := strconv.Atoi(strings.TrimSpace(parts[2]))
+	if err != nil || choice <= 0 {
+		return s.answerCallbackOrMessage(ctx, callback, "Invalid question choice.")
+	}
+	question, ok, err := s.findPendingQuestionByRequest(ctx, requestID)
+	if err != nil {
+		return err
+	}
+	if !ok || choice > len(question.Options) {
+		return s.answerCallbackOrMessage(ctx, callback, "Question is no longer pending.")
+	}
+	answer := strings.TrimSpace(question.Options[choice-1])
+	principal := identity.Principal{
+		UserID:    strings.TrimSpace(callback.FromID),
+		ProjectID: "elnath",
+		Surface:   "telegram",
+	}
+	output, err := s.enqueuePendingQuestionAnswer(ctx, question.SessionID, question.RequestID, answer, principal)
+	if err != nil {
+		return err
+	}
+	if ack, ok := s.bot.(callbackAcknowledger); ok {
+		_ = ack.AnswerCallback(ctx, callback.ID, "Answer queued")
+	}
+	return s.bot.SendMessage(ctx, s.chatID, renderTelegramQuestionAnswerQueued(question.RequestID, output))
+}
+
+func (s *Shell) answerCallbackOrMessage(ctx context.Context, callback CallbackQuery, text string) error {
+	if ack, ok := s.bot.(callbackAcknowledger); ok {
+		_ = ack.AnswerCallback(ctx, callback.ID, text)
+	}
+	return s.bot.SendMessage(ctx, s.chatID, "⚠️ "+text)
+}
+
 func renderPendingQuestionHandoffLines(q learning.PendingUserQuestion, directReplyAllowed bool) []string {
 	if !q.Answerable {
 		return []string{"  not answerable: missing session binding; inspect the receipt or ask again from a bound session."}
@@ -684,16 +816,17 @@ func renderPendingQuestionHandoffLines(q learning.PendingUserQuestion, directRep
 	if directReplyAllowed {
 		if len(q.Options) > 0 && !q.AllowFreeText {
 			choices := make([]string, 0, len(q.Options))
-			for _, opt := range q.Options {
-				choices = append(choices, "<code>"+escapeHTML(opt)+"</code>")
+			for i, opt := range q.Options {
+				choices = append(choices, fmt.Sprintf("<code>%d. %s</code>", i+1, escapeHTML(opt)))
 			}
 			lines = append(lines, "  reply directly: "+strings.Join(choices, ", "))
 		} else {
 			lines = append(lines, "  reply directly with your answer in this chat.")
 		}
 	}
-	for _, opt := range q.Options {
+	for i, opt := range q.Options {
 		lines = append(lines, fmt.Sprintf("  choose <code>%s</code>: <code>/answer %s %s %s</code>", escapeHTML(opt), sessionID, requestID, escapeHTML(opt)))
+		lines = append(lines, fmt.Sprintf("  choose <code>%d</code>: <code>/answer %s %s %d</code>", i+1, sessionID, requestID, i+1))
 	}
 	if q.AllowFreeText || len(q.Options) == 0 {
 		lines = append(lines, fmt.Sprintf("  free text: <code>/answer %s %s ANSWER_TEXT</code>", sessionID, requestID))
@@ -713,6 +846,13 @@ func (s *Shell) answerPendingQuestion(ctx context.Context, raw string, principal
 	sessionID := strings.TrimSpace(parts[1])
 	requestID := strings.TrimSpace(parts[2])
 	answer := strings.TrimSpace(parts[3])
+	if question, ok, err := s.findPendingQuestion(ctx, sessionID, requestID); err != nil {
+		return "", err
+	} else if ok {
+		if normalized, allowed := normalizePendingQuestionAnswer(question, answer); allowed {
+			answer = normalized
+		}
+	}
 	output, err := s.enqueuePendingQuestionAnswer(ctx, sessionID, requestID, answer, principal)
 	if err != nil {
 		return "", err
@@ -744,30 +884,63 @@ func (s *Shell) handlePendingQuestionText(ctx context.Context, text string, prin
 		return true, "⚠️ Multiple pending questions for this session. Use /questions and answer with /answer <session_id> <request_id> <answer>.", nil
 	}
 	question := pending[0]
-	if !pendingQuestionTextAnswerAllowed(question, answer) {
+	normalizedAnswer, allowed := normalizePendingQuestionAnswer(question, answer)
+	if !allowed {
 		return true, fmt.Sprintf("⚠️ Answer does not match pending choices for <code>%s</code>. Use /questions.", escapeHTML(question.RequestID)), nil
 	}
-	output, err := s.enqueuePendingQuestionAnswer(ctx, question.SessionID, question.RequestID, answer, principal)
+	output, err := s.enqueuePendingQuestionAnswer(ctx, question.SessionID, question.RequestID, normalizedAnswer, principal)
 	if err != nil {
 		return true, "", err
 	}
 	return true, renderTelegramQuestionAnswerQueued(question.RequestID, output), nil
 }
 
-func pendingQuestionTextAnswerAllowed(question learning.PendingUserQuestion, answer string) bool {
+func normalizePendingQuestionAnswer(question learning.PendingUserQuestion, answer string) (string, bool) {
 	answer = strings.TrimSpace(answer)
 	if answer == "" {
-		return false
-	}
-	if question.AllowFreeText || len(question.Options) == 0 {
-		return true
+		return "", false
 	}
 	for _, option := range question.Options {
 		if answer == strings.TrimSpace(option) {
-			return true
+			return strings.TrimSpace(option), true
 		}
 	}
-	return false
+	if idx, err := strconv.Atoi(answer); err == nil && idx >= 1 && idx <= len(question.Options) {
+		return strings.TrimSpace(question.Options[idx-1]), true
+	}
+	if question.AllowFreeText || len(question.Options) == 0 {
+		return answer, true
+	}
+	return "", false
+}
+
+func (s *Shell) findPendingQuestion(ctx context.Context, sessionID, requestID string) (learning.PendingUserQuestion, bool, error) {
+	if s.outcomeStore == nil {
+		return learning.PendingUserQuestion{}, false, nil
+	}
+	records, err := s.outcomeStore.Recent(0)
+	if err != nil {
+		return learning.PendingUserQuestion{}, false, err
+	}
+	question, ok := learning.FindPendingUserQuestion(records, sessionID, requestID)
+	return question, ok, nil
+}
+
+func (s *Shell) findPendingQuestionByRequest(ctx context.Context, requestID string) (learning.PendingUserQuestion, bool, error) {
+	if s.outcomeStore == nil {
+		return learning.PendingUserQuestion{}, false, nil
+	}
+	records, err := s.outcomeStore.Recent(0)
+	if err != nil {
+		return learning.PendingUserQuestion{}, false, err
+	}
+	requestID = strings.TrimSpace(requestID)
+	for _, question := range learning.PendingUserQuestions(records, "", 0) {
+		if question.RequestID == requestID {
+			return question, true, nil
+		}
+	}
+	return learning.PendingUserQuestion{}, false, nil
 }
 
 func (s *Shell) enqueuePendingQuestionAnswer(ctx context.Context, sessionID, requestID, answer string, principal identity.Principal) (telegramQuestionAnswerOutput, error) {

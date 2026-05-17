@@ -492,8 +492,16 @@ func TestExplainPendingQuestionsTextShowsAnswerCommand(t *testing.T) {
 	if !strings.Contains(stdout, "answer: elnath task answer --session 'sess-1' --request 'req-1' --answer 'ANSWER_TEXT'") {
 		t.Fatalf("stdout missing answer command:\n%s", stdout)
 	}
-	if !strings.Contains(stdout, `options: "main", "new branch"`) {
+	if !strings.Contains(stdout, `options: 1. "main", 2. "new branch"`) {
 		t.Fatalf("stdout missing structured options:\n%s", stdout)
+	}
+	for _, want := range []string{
+		"choose 1: elnath task answer --session 'sess-1' --request 'req-1' --answer '1'",
+		"choose 2: elnath task answer --session 'sess-1' --request 'req-1' --answer '2'",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout missing numeric choice command %q:\n%s", want, stdout)
+		}
 	}
 }
 

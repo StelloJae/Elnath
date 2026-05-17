@@ -193,6 +193,46 @@ func TestUserQuestionAnswerToolValidatesPendingRequest(t *testing.T) {
 	}
 }
 
+func TestUserQuestionAnswerToolNormalizesNumericStructuredChoice(t *testing.T) {
+	ctx := context.Background()
+	queue := newTaskToolTestQueue(t)
+	validator := &fakeUserQuestionAnswerValidator{validation: UserQuestionAnswerValidation{
+		Found:         true,
+		Question:      "Which branch?",
+		QuestionChars: len("Which branch?"),
+		Options:       []string{"main", "new branch"},
+		AllowFreeText: false,
+	}}
+
+	result, err := NewUserQuestionAnswerToolWithValidator(queue, validator).Execute(ctx, json.RawMessage(`{
+		"session_id": "sess-123",
+		"request_id": "req-123",
+		"answer": "2"
+	}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute returned error result: %s", result.Output)
+	}
+
+	var output userQuestionAnswerToolOutput
+	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if output.AnswerChars != len("new branch") || output.Receipt.AnswerChars != len("new branch") {
+		t.Fatalf("answer chars = output %d receipt %d, want normalized option length", output.AnswerChars, output.Receipt.AnswerChars)
+	}
+
+	task, err := queue.Get(ctx, output.TaskID)
+	if err != nil {
+		t.Fatalf("Get created task: %v", err)
+	}
+	if !strings.Contains(ParseTaskPayload(task.Payload).Prompt, "Answer:\nnew branch") {
+		t.Fatalf("payload = %q, want numeric answer normalized to option text", task.Payload)
+	}
+}
+
 func TestUserQuestionAnswerToolRejectsAnswerOutsideStructuredChoices(t *testing.T) {
 	ctx := context.Background()
 	queue := newTaskToolTestQueue(t)
