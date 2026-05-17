@@ -196,7 +196,7 @@ func (a *Agent) executeToolBatch(ctx context.Context, batch []scheduledToolCall,
 					result = tools.ErrorResult("tool result finalizer error: " + finalizeErr.Error())
 				}
 			}
-			results[call.index] = toolExecResult{id: call.call.ID, name: call.call.Name, output: result.Output, isError: result.IsError, duration: duration}
+			results[call.index] = toolExecResult{id: call.call.ID, name: call.call.Name, output: result.Output, isError: result.IsError, duration: duration, mutation: result.Mutation}
 		}()
 	}
 

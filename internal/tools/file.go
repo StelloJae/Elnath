@@ -179,7 +179,9 @@ func (t *WriteTool) Execute(ctx context.Context, params json.RawMessage) (*Resul
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 		return ErrorResult(fmt.Sprintf("write_file mkdir: %v", err)), nil
 	}
-	if existing, err := os.ReadFile(abs); err == nil && string(existing) == p.Content {
+	before, beforeErr := os.ReadFile(abs)
+	beforeExists := beforeErr == nil
+	if beforeExists && string(before) == p.Content {
 		return ErrorResult(fmt.Sprintf("write_file: content already matches %s", p.FilePath)), nil
 	}
 
@@ -200,7 +202,27 @@ func (t *WriteTool) Execute(ctx context.Context, params json.RawMessage) (*Resul
 		return ErrorResult(fmt.Sprintf("write_file rename: %v", err)), nil
 	}
 	t.tracker.RefreshPath(abs)
-	return SuccessResult(fmt.Sprintf("wrote %s", p.FilePath)), nil
+	result := SuccessResult(fmt.Sprintf("wrote %s", p.FilePath))
+	result.Mutation = NewFileMutation(
+		"write_file",
+		MutationDisplayPath(ctx, t.guard, abs, p.FilePath),
+		before,
+		beforeExists,
+		[]byte(p.Content),
+		true,
+	)
+	AnnotateGoMutationDiagnostics(result.Mutation, abs, mutationDiagnosticsBasePath(ctx, t.guard), before, beforeExists, []byte(p.Content), true)
+	return result, nil
+}
+
+func mutationDiagnosticsBasePath(ctx context.Context, guard *PathGuard) string {
+	if guard == nil {
+		return ""
+	}
+	if base, err := SessionWorkDirFromContext(ctx, guard); err == nil && strings.TrimSpace(base) != "" {
+		return base
+	}
+	return guard.WorkDir()
 }
 
 func firstErr(a, b error) error {
@@ -290,7 +312,17 @@ func (t *EditTool) Execute(ctx context.Context, params json.RawMessage) (*Result
 				return ErrorResult(fmt.Sprintf("edit_file write: %v", err)), nil
 			}
 			t.tracker.RefreshPath(abs)
-			return SuccessResult(fmt.Sprintf("edited %s (indent-insensitive match)", p.FilePath)), nil
+			result := SuccessResult(fmt.Sprintf("edited %s (indent-insensitive match)", p.FilePath))
+			result.Mutation = NewFileMutation(
+				"edit_file",
+				MutationDisplayPath(ctx, t.guard, abs, p.FilePath),
+				[]byte(original),
+				true,
+				[]byte(updated),
+				true,
+			)
+			AnnotateGoMutationDiagnostics(result.Mutation, abs, mutationDiagnosticsBasePath(ctx, t.guard), []byte(original), true, []byte(updated), true)
+			return result, nil
 		}
 		if errMsg != "" {
 			return ErrorResult(fmt.Sprintf("edit_file: %s in %s", errMsg, p.FilePath)), nil
@@ -314,7 +346,17 @@ func (t *EditTool) Execute(ctx context.Context, params json.RawMessage) (*Result
 		return ErrorResult(fmt.Sprintf("edit_file write: %v", err)), nil
 	}
 	t.tracker.RefreshPath(abs)
-	return SuccessResult(fmt.Sprintf("edited %s", p.FilePath)), nil
+	result := SuccessResult(fmt.Sprintf("edited %s", p.FilePath))
+	result.Mutation = NewFileMutation(
+		"edit_file",
+		MutationDisplayPath(ctx, t.guard, abs, p.FilePath),
+		[]byte(original),
+		true,
+		[]byte(updated),
+		true,
+	)
+	AnnotateGoMutationDiagnostics(result.Mutation, abs, mutationDiagnosticsBasePath(ctx, t.guard), []byte(original), true, []byte(updated), true)
+	return result, nil
 }
 
 func indentInsensitiveReplacement(original, oldString, newString string, replaceAll bool) (string, string, bool) {

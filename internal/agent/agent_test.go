@@ -694,6 +694,80 @@ func TestAgentSearchFirstLoadsSelectedDeferredToolNextTurn(t *testing.T) {
 	}
 }
 
+func TestAgentInjectsMutationVerifierFooter(t *testing.T) {
+	reg := tools.NewRegistry()
+	reg.Register(&mockTool{
+		name:        "write_file",
+		description: "write",
+		schema:      json.RawMessage(`{"type":"object"}`),
+		executeFn: func(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
+			return &tools.Result{
+				Output: "wrote foo.go",
+				Mutation: &tools.FileMutation{
+					Operation:          "write_file",
+					Path:               "foo.go",
+					Changed:            true,
+					BeforeExists:       false,
+					AfterExists:        true,
+					AfterHash:          "sha256:after",
+					BeforeLines:        0,
+					AfterLines:         3,
+					LineDelta:          3,
+					DiagnosticLanguage: "go",
+					DiagnosticStatus:   "new_diagnostics_found",
+					NewDiagnosticCount: 1,
+					NewDiagnostics: []tools.FileMutationDiagnostic{
+						{Line: 3, Column: 1, Error: "expected declaration, found EOF", Source: "go/parser"},
+					},
+				},
+			}, nil
+		},
+	})
+
+	var requests []llm.ChatRequest
+	provider := &mockProvider{
+		streamFn: func(_ context.Context, req llm.ChatRequest, cb func(llm.StreamEvent)) error {
+			requests = append(requests, req)
+			switch len(requests) {
+			case 1:
+				cb(llm.StreamEvent{Type: llm.EventToolUseStart, ToolCall: &llm.ToolUseEvent{ID: "write-1", Name: "write_file"}})
+				cb(llm.StreamEvent{Type: llm.EventToolUseDone, ToolCall: &llm.ToolUseEvent{ID: "write-1", Name: "write_file", Input: `{"file_path":"foo.go","content":"package main\n"}`}})
+			default:
+				cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: "done"})
+			}
+			cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{InputTokens: 1, OutputTokens: 1}})
+			return nil
+		},
+	}
+
+	result, err := New(provider, reg, WithMaxIterations(3)).Run(context.Background(), []llm.Message{llm.NewUserMessage("write file")}, nil)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if result.FinishReason != FinishReasonStop {
+		t.Fatalf("FinishReason = %q, want stop", result.FinishReason)
+	}
+	if len(requests) < 2 {
+		t.Fatalf("requests = %d, want at least 2", len(requests))
+	}
+
+	footer := ""
+	for _, msg := range requests[1].Messages {
+		if strings.Contains(msg.Text(), "Filesystem mutation verifier") {
+			footer = msg.Text()
+			break
+		}
+	}
+	if footer == "" {
+		t.Fatalf("second request missing filesystem mutation verifier footer: %+v", requests[1].Messages)
+	}
+	for _, want := range []string{"write_file", "foo.go", "changed=true", "line_delta=+3", "diagnostics=new_diagnostics_found", "new=1", "new_diag_1=go/parser:3:1:expected declaration"} {
+		if !strings.Contains(footer, want) {
+			t.Fatalf("footer %q missing %q", footer, want)
+		}
+	}
+}
+
 func TestBuildToolDefsSearchFirstFallsBackWithoutToolSearch(t *testing.T) {
 	reg := tools.NewRegistry()
 	reg.Register(&mockTool{
