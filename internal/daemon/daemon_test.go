@@ -2044,6 +2044,50 @@ func TestDaemonCancelRunningTask(t *testing.T) {
 	assertFailureReceipt(t, task, "task_canceled", false, "", "operator_cancelled")
 }
 
+func TestDaemonStopMarksRunningTaskFailed(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+
+	runnerEntered := make(chan struct{})
+	cancelAwareRunner := func(ctx context.Context, _ string, _ event.Sink) (TaskResult, error) {
+		close(runnerEntered)
+		<-ctx.Done()
+		return TaskResult{}, ctx.Err()
+	}
+
+	socketPath := filepath.Join(t.TempDir(), "s")
+	startDaemon(t, q, socketPath, cancelAwareRunner, 1)
+
+	resp := sendIPC(t, socketPath, IPCRequest{
+		Command: "submit",
+		Payload: mustMarshalString(t, "stop daemon while task running"),
+	})
+	if !resp.OK {
+		t.Fatalf("submit: %s", resp.Err)
+	}
+	taskID := extractTaskID(t, resp)
+
+	select {
+	case <-runnerEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("runner did not start")
+	}
+
+	stopResp := sendIPC(t, socketPath, IPCRequest{Command: "stop"})
+	if !stopResp.OK {
+		t.Fatalf("stop: %s", stopResp.Err)
+	}
+
+	task := pollTaskStatus(t, q, taskID, StatusFailed, 5*time.Second)
+	if !strings.Contains(task.Result, "daemon shutdown") {
+		t.Fatalf("result = %q, want daemon shutdown cancellation", task.Result)
+	}
+	assertFailureReceipt(t, task, "task_canceled", false, "", "operator_cancelled")
+}
+
 // TestDaemonWallClockTimeout verifies that a task exceeding the wall-clock
 // deadline is cancelled even if it reports progress.
 func TestDaemonWallClockTimeout(t *testing.T) {
