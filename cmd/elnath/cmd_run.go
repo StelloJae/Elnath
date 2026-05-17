@@ -181,10 +181,16 @@ func cmdRun(ctx context.Context, args []string) error {
 		app.Logger.Info("session started", "id", sess.ID)
 	}
 
+	pendingResumeHandoffContext, err := taskResumeHandoffContextFromArgs(ctx, db.Main, cfg.DataDir, os.Args)
+	if err != nil {
+		return fmt.Errorf("task resume handoff context: %w", err)
+	}
+
 	// Parse optional initial prompt from args.
 	if promptArgs := runPromptArgs(args); len(promptArgs) > 0 {
 		prompt := strings.Join(promptArgs, " ")
-		messages, _, err = rt.runTask(ctx, sess, messages, prompt, cliOrchestrationOutput())
+		runCtx := consumeTaskResumeHandoffContext(ctx, &pendingResumeHandoffContext)
+		messages, _, err = rt.runTask(runCtx, sess, messages, prompt, cliOrchestrationOutput())
 		if err != nil {
 			return err
 		}
@@ -205,7 +211,8 @@ func cmdRun(ctx context.Context, args []string) error {
 			}
 			prompt := strings.TrimSpace(string(raw))
 			if prompt != "" {
-				messages, _, err = rt.runTask(ctx, sess, messages, prompt, cliOrchestrationOutput())
+				runCtx := consumeTaskResumeHandoffContext(ctx, &pendingResumeHandoffContext)
+				messages, _, err = rt.runTask(runCtx, sess, messages, prompt, cliOrchestrationOutput())
 				if err != nil {
 					return err
 				}
@@ -227,7 +234,8 @@ func cmdRun(ctx context.Context, args []string) error {
 				break
 			}
 
-			messages, _, err = rt.runTask(ctx, sess, messages, line, cliOrchestrationOutput())
+			runCtx := consumeTaskResumeHandoffContext(ctx, &pendingResumeHandoffContext)
+			messages, _, err = rt.runTask(runCtx, sess, messages, line, cliOrchestrationOutput())
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
 				continue
@@ -281,6 +289,10 @@ func runPromptArgs(args []string) []string {
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--config", "--persona", "--session", "--continue-task", "--principal", "--project-id":
+			if i+1 < len(args) {
+				i++
+			}
+		case taskResumeHandoffContextFlag:
 			if i+1 < len(args) {
 				i++
 			}

@@ -1985,6 +1985,31 @@ func TestExecutionRuntimePromptSessionSummaryUsesPriorPreparedHistory(t *testing
 	}
 }
 
+func TestExecutionRuntimeAddsResumeHandoffContextToSystemPrompt(t *testing.T) {
+	provider := &countingProvider{streamText: "runtime answer"}
+	rt := newTestExecutionRuntime(t, provider)
+
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	ctx := withTaskResumeHandoffContext(context.Background(), "task_id: 42\nsummary: continue the milestone")
+	_, _, err = rt.runTask(ctx, sess, nil, "continue now", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask: %v", err)
+	}
+	for _, want := range []string{
+		"Task resume handoff context:",
+		"task_id: 42",
+		"summary: continue the milestone",
+	} {
+		if !strings.Contains(provider.lastSystem, want) {
+			t.Fatalf("system prompt missing %q\n%s", want, provider.lastSystem)
+		}
+	}
+}
+
 func TestExecutionRuntimeRunTaskDoesNotDuplicateCurrentUserTurn(t *testing.T) {
 	provider := &countingProvider{streamText: "runtime answer"}
 	rt := newTestExecutionRuntime(t, provider)

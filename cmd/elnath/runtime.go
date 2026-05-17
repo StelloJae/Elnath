@@ -791,6 +791,7 @@ func buildExecutionRuntime(
 	b.Register(prompt.NewProjectContextNode(50))
 	b.Register(prompt.NewBrownfieldNode(40))
 	b.Register(prompt.NewGreenfieldNode(40))
+	b.Register(prompt.NewResumeContextNode(35))
 	b.Register(prompt.NewSessionSummaryNode(30, 5, 800))
 	b.Register(&prompt.LocaleInstructionNode{})
 
@@ -1197,6 +1198,7 @@ func (rt *executionRuntime) runTask(
 		DaemonMode:     rt.daemonMode,
 		MessageCount:   len(prepared),
 		ProjectID:      routeCtx.ProjectID,
+		ResumeContext:  taskResumeHandoffContextFromContext(ctx),
 	}
 	systemPrompt, err := rt.promptBuilder.Build(ctx, renderState)
 	if err != nil {

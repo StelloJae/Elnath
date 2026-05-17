@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -467,6 +468,124 @@ func TestCmdTaskHandoffWithQueueJSONIncludesRetirement(t *testing.T) {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("stdout = %q, want %q", stdout, want)
 		}
+	}
+}
+
+func TestCmdTaskHandoffWithQueueMarkdownOutput(t *testing.T) {
+	ctx := context.Background()
+	queue := newCmdTaskTestQueue(t)
+	dataDir := t.TempDir()
+	sess, taskID := seedTaskHandoffFixture(t, ctx, queue, dataDir)
+
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdTaskHandoffWithQueue(ctx, queue, dataDir, []string{fmt.Sprint(taskID), "--markdown"}); err != nil {
+			t.Fatalf("cmdTaskHandoffWithQueue: %v", err)
+		}
+	})
+	for _, want := range []string{
+		"# Task Handoff",
+		"- Task ID: " + fmt.Sprint(taskID),
+		"- Session: " + sess.ID,
+		"## Last Messages",
+		"- user: finish product runtime milestone",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout = %q, want %q", stdout, want)
+		}
+	}
+}
+
+func TestCmdTaskHandoffWithQueueSaveWritesMarkdown(t *testing.T) {
+	ctx := context.Background()
+	queue := newCmdTaskTestQueue(t)
+	dataDir := t.TempDir()
+	_, taskID := seedTaskHandoffFixture(t, ctx, queue, dataDir)
+
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdTaskHandoffWithQueue(ctx, queue, dataDir, []string{fmt.Sprint(taskID), "--save"}); err != nil {
+			t.Fatalf("cmdTaskHandoffWithQueue: %v", err)
+		}
+	})
+	if !strings.Contains(stdout, "Saved handoff:") {
+		t.Fatalf("stdout = %q, want saved path", stdout)
+	}
+	path := strings.TrimSpace(strings.TrimPrefix(stdout, "Saved handoff:"))
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile saved handoff: %v", err)
+	}
+	if !strings.Contains(string(body), "# Task Handoff") || !strings.Contains(string(body), "finish product runtime milestone") {
+		t.Fatalf("saved body = %q, want markdown handoff", string(body))
+	}
+}
+
+func seedTaskHandoffFixture(t *testing.T, ctx context.Context, queue *daemon.Queue, dataDir string) (*agent.Session, int64) {
+	t.Helper()
+	sess, err := agent.NewSession(dataDir, identity.Principal{UserID: "tg-77", ProjectID: "elnath", Surface: "telegram"})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if err := sess.AppendMessages([]llm.Message{
+		llm.NewUserMessage("finish product runtime milestone"),
+		llm.NewAssistantMessage("created handoff recap command"),
+	}); err != nil {
+		t.Fatalf("AppendMessages: %v", err)
+	}
+
+	id, _, err := queue.Enqueue(ctx, "handoff me", "")
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if task, err := queue.Next(ctx); err != nil {
+		t.Fatalf("Next: %v", err)
+	} else if task == nil {
+		t.Fatal("Next returned nil")
+	}
+	if err := queue.BindSession(ctx, id, sess.ID); err != nil {
+		t.Fatalf("BindSession: %v", err)
+	}
+	if err := queue.MarkDone(ctx, id, "finished result", "done summary"); err != nil {
+		t.Fatalf("MarkDone: %v", err)
+	}
+	return sess, id
+}
+
+func TestBuildTaskResumeHandoffContextIncludesCompactRecap(t *testing.T) {
+	ctx := context.Background()
+	queue := newCmdTaskTestQueue(t)
+	dataDir := t.TempDir()
+	sess, id := seedTaskHandoffFixture(t, ctx, queue, dataDir)
+
+	got, err := buildTaskResumeHandoffContext(ctx, queue, dataDir, id)
+	if err != nil {
+		t.Fatalf("buildTaskResumeHandoffContext: %v", err)
+	}
+	for _, want := range []string{
+		"task_id: 1",
+		"status: done",
+		"session_id: " + sess.ID,
+		"summary: done summary",
+		"user: finish product runtime milestone",
+		"assistant: created handoff recap command",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("context = %q, want %q", got, want)
+		}
+	}
+}
+
+func TestConsumeTaskResumeHandoffContextOnlyOnce(t *testing.T) {
+	pending := "task_id: 42"
+	ctx := consumeTaskResumeHandoffContext(context.Background(), &pending)
+	if got := taskResumeHandoffContextFromContext(ctx); got != "task_id: 42" {
+		t.Fatalf("first context = %q, want handoff", got)
+	}
+	if pending != "" {
+		t.Fatalf("pending = %q, want consumed", pending)
+	}
+	ctx = consumeTaskResumeHandoffContext(context.Background(), &pending)
+	if got := taskResumeHandoffContextFromContext(ctx); got != "" {
+		t.Fatalf("second context = %q, want empty", got)
 	}
 }
 
