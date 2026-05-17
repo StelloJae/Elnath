@@ -167,10 +167,11 @@ func quotedPendingQuestionOptions(options []string) string {
 }
 
 type controlSurfacePolicyView struct {
-	ProductComplete   bool                        `json:"product_complete"`
-	Surfaces          []controlSurfacePolicyEntry `json:"surfaces"`
-	RemainingGaps     []string                    `json:"remaining_gaps"`
-	ProductBoundaries []string                    `json:"product_boundaries,omitempty"`
+	ProductComplete    bool                                        `json:"product_complete"`
+	Surfaces           []controlSurfacePolicyEntry                 `json:"surfaces"`
+	DiagnosticAdapters []basetools.MutationDiagnosticAdapterPolicy `json:"diagnostic_adapters,omitempty"`
+	RemainingGaps      []string                                    `json:"remaining_gaps"`
+	ProductBoundaries  []string                                    `json:"product_boundaries,omitempty"`
 }
 
 type controlSurfacePolicyEntry struct {
@@ -224,6 +225,19 @@ func explainControlSurfaces(args []string) error {
 			surface.ReceiptBacked,
 		)
 	}
+	if len(view.DiagnosticAdapters) > 0 {
+		fmt.Fprintln(os.Stdout, "Diagnostic adapters:")
+		for _, adapter := range view.DiagnosticAdapters {
+			fmt.Fprintf(os.Stdout, "  - %s: %s adapter=%s command=%s timeout_ms=%d scope=%s\n",
+				adapter.Language,
+				adapter.Status,
+				adapter.Adapter,
+				adapter.Command,
+				adapter.TimeoutMS,
+				adapter.Scope,
+			)
+		}
+	}
 	fmt.Fprintln(os.Stdout, "Remaining gaps:")
 	if len(view.RemainingGaps) == 0 {
 		fmt.Fprintln(os.Stdout, "  - none")
@@ -264,10 +278,11 @@ func controlSurfacePolicyViewForRuntime() controlSurfacePolicyView {
 	boundaries := controlSurfaceBoundaryReasons()
 	productBoundaries = append(productBoundaries, boundaries["self_correction"], boundaries["status"])
 	return controlSurfacePolicyView{
-		ProductComplete:   true,
-		Surfaces:          surfaces,
-		RemainingGaps:     []string{},
-		ProductBoundaries: productBoundaries,
+		ProductComplete:    true,
+		Surfaces:           surfaces,
+		DiagnosticAdapters: basetools.MutationDiagnosticAdapterPolicies(),
+		RemainingGaps:      []string{},
+		ProductBoundaries:  productBoundaries,
 	}
 }
 
@@ -275,7 +290,7 @@ func controlSurfaceBoundaryReasons() map[string]string {
 	return map[string]string{
 		"user_input":        "UI-level modal answer collection is outside the Go runtime boundary; runtime/CLI/gateway request, list, wait, answer, cancel, timeout, and receipt paths are implemented.",
 		"process":           "process_wait intentionally supports literal watch_text; full async line-watch is deferred to a future streaming UX layer.",
-		"code_intelligence": "full multi-language LSP lifecycle is product-excluded for this runtime closeout; Go-native code_symbols plus diagnostic deltas are the replacement path.",
+		"code_intelligence": "full multi-language LSP lifecycle is product-excluded for this runtime closeout; Go-native code_symbols plus mutation diagnostic adapters are the replacement path.",
 		"self_correction":   "bounded self-correction is intentionally closed-enum and receipt-backed; broad silent self-healing is product-excluded.",
 		"status":            "runtime /status reports registry/control-surface coverage; deeper registry diagnostics are future polish, not a product-runtime gate.",
 	}
@@ -301,6 +316,7 @@ func controlSurfaceReplacementPaths() map[string][]string {
 			"code_symbols document_symbols/workspace_symbols",
 			"code_symbols definition/references/hover",
 			"code_symbols diagnostics/diagnostics_delta",
+			"structured mutation diagnostics for Go and Python syntax",
 			"future plugin/provider adapters for non-Go language servers",
 		},
 	}
@@ -389,7 +405,7 @@ func controlSurfaceManifest() []controlSurfaceManifestEntry {
 			ReceiptBacked:   true,
 			ProductBoundary: controlSurfaceBoundaryReasons()["code_intelligence"],
 			ReplacementPath: controlSurfaceReplacementPaths()["code_intelligence"],
-			Notes:           "Go-native symbols, definitions, references, hover signatures, syntax diagnostics, and edit-aware diagnostic deltas",
+			Notes:           "Go-native symbols, definitions, references, hover signatures, syntax diagnostics, edit-aware diagnostic deltas, and Python syntax mutation diagnostics",
 		},
 	}
 }

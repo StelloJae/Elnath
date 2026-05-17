@@ -193,6 +193,13 @@ func TestExplainControlSurfacesJSON(t *testing.T) {
 			ReplacementPath        []string `json:"replacement_path"`
 			Notes                  string   `json:"notes"`
 		} `json:"surfaces"`
+		DiagnosticAdapters []struct {
+			Language  string `json:"language"`
+			Status    string `json:"status"`
+			Adapter   string `json:"adapter"`
+			Command   string `json:"command"`
+			TimeoutMS int    `json:"timeout_ms"`
+		} `json:"diagnostic_adapters"`
 		RemainingGaps     []string `json:"remaining_gaps"`
 		ProductBoundaries []string `json:"product_boundaries"`
 	}
@@ -271,6 +278,40 @@ func TestExplainControlSurfacesJSON(t *testing.T) {
 	}
 	if !strings.Contains(codeIntelligence.notes, "diagnostic deltas") {
 		t.Fatalf("code_intelligence notes = %q, want diagnostic delta capability", codeIntelligence.notes)
+	}
+	adaptersByLanguage := make(map[string]struct {
+		status    string
+		adapter   string
+		command   string
+		timeoutMS int
+	})
+	for _, adapter := range out.DiagnosticAdapters {
+		adaptersByLanguage[adapter.Language] = struct {
+			status    string
+			adapter   string
+			command   string
+			timeoutMS int
+		}{
+			status:    adapter.Status,
+			adapter:   adapter.Adapter,
+			command:   adapter.Command,
+			timeoutMS: adapter.TimeoutMS,
+		}
+	}
+	goAdapter, ok := adaptersByLanguage["go"]
+	if !ok || goAdapter.status != "available" || goAdapter.adapter != "go/parser" {
+		t.Fatalf("go diagnostic adapter = %+v, ok=%t, want available go/parser", goAdapter, ok)
+	}
+	pythonAdapter, ok := adaptersByLanguage["python"]
+	if !ok || pythonAdapter.adapter != "python/py_compile" || pythonAdapter.command != "python3" || pythonAdapter.timeoutMS != 2000 {
+		t.Fatalf("python diagnostic adapter = %+v, ok=%t, want py_compile command with 2000ms timeout", pythonAdapter, ok)
+	}
+	if pythonAdapter.status != "available" && pythonAdapter.status != "diagnostics_not_configured" {
+		t.Fatalf("python diagnostic adapter status = %q, want available or diagnostics_not_configured", pythonAdapter.status)
+	}
+	tsAdapter, ok := adaptersByLanguage["typescript"]
+	if !ok || tsAdapter.status != "diagnostics_not_configured" {
+		t.Fatalf("typescript diagnostic adapter = %+v, ok=%t, want diagnostics_not_configured", tsAdapter, ok)
 	}
 	scratchpad, ok := byName["scratchpad"]
 	if !ok {
