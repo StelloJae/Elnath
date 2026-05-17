@@ -808,6 +808,47 @@ func TestShellHandoffCommandRecordsLifecycleState(t *testing.T) {
 	}
 }
 
+func TestShellHandoffsCommandListsPendingOnly(t *testing.T) {
+	dataDir := t.TempDir()
+	shell, queue, _, bot := newTestShellWithOptions(t, nil, WithShellDataDir(dataDir))
+	pendingSess, pendingID := seedTelegramHandoffTask(t, dataDir, queue)
+	if err := pendingSess.RecordHandoff("requested", "telegram", identity.Principal{}, "phone takeover"); err != nil {
+		t.Fatalf("RecordHandoff(pending): %v", err)
+	}
+	runningSess, runningID := seedTelegramHandoffTask(t, dataDir, queue)
+	if err := runningSess.RecordHandoff("requested", "telegram", identity.Principal{}, "already claimed"); err != nil {
+		t.Fatalf("RecordHandoff(running requested): %v", err)
+	}
+	if err := runningSess.RecordHandoff("running", "telegram", identity.Principal{}, "claimed"); err != nil {
+		t.Fatalf("RecordHandoff(running): %v", err)
+	}
+
+	if err := shell.HandleUpdate(context.Background(), Update{
+		ID:      1,
+		Message: Message{ChatID: "chat-1", UserID: "77", MessageID: 11, Text: "/handoffs"},
+	}); err != nil {
+		t.Fatalf("HandleUpdate: %v", err)
+	}
+
+	if len(bot.sent) != 1 {
+		t.Fatalf("sent = %+v, want one handoffs reply", bot.sent)
+	}
+	for _, want := range []string{
+		"Pending handoffs",
+		fmt.Sprintf("#%d", pendingID),
+		pendingSess.ID[:8],
+		"phone takeover",
+		fmt.Sprintf("/handoff %d claimed", pendingID),
+	} {
+		if !strings.Contains(bot.sent[0].text, want) {
+			t.Fatalf("handoffs reply = %q, want %q", bot.sent[0].text, want)
+		}
+	}
+	if strings.Contains(bot.sent[0].text, fmt.Sprintf("#%d", runningID)) {
+		t.Fatalf("handoffs reply = %q, want running handoff excluded", bot.sent[0].text)
+	}
+}
+
 func TestShellPlainTextQuestionAnswerRejectsUnexpectedChoice(t *testing.T) {
 	store := learning.NewOutcomeStore(filepath.Join(t.TempDir(), "outcomes.jsonl"))
 	if err := store.Append(learning.OutcomeRecord{

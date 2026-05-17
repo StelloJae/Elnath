@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -65,6 +66,26 @@ type taskHandoffRetirement struct {
 	At           string `json:"at,omitempty"`
 }
 
+type taskPendingHandoffsCLIOutput struct {
+	Count   int                  `json:"count"`
+	Pending []taskPendingHandoff `json:"pending"`
+}
+
+type taskPendingHandoff struct {
+	TaskID       int64  `json:"task_id"`
+	Status       string `json:"status"`
+	SessionID    string `json:"session_id"`
+	ClaimCommand string `json:"claim_command"`
+	State        string `json:"state"`
+	Surface      string `json:"surface,omitempty"`
+	Principal    string `json:"principal,omitempty"`
+	Reason       string `json:"reason,omitempty"`
+	Summary      string `json:"summary,omitempty"`
+	CreatedAt    string `json:"created_at,omitempty"`
+	CompletedAt  string `json:"completed_at,omitempty"`
+	HandoffAt    string `json:"handoff_at,omitempty"`
+}
+
 func cmdTaskHandoff(ctx context.Context, args []string) error {
 	cfg, db, err := openTaskDB()
 	if err != nil {
@@ -77,6 +98,46 @@ func cmdTaskHandoff(ctx context.Context, args []string) error {
 		return fmt.Errorf("open queue: %w", err)
 	}
 	return cmdTaskHandoffWithQueue(ctx, queue, cfg.DataDir, args)
+}
+
+func cmdTaskHandoffs(ctx context.Context, args []string) error {
+	cfg, db, err := openTaskDB()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	queue, err := daemon.NewQueue(db.Main)
+	if err != nil {
+		return fmt.Errorf("open queue: %w", err)
+	}
+	return cmdTaskHandoffsWithQueue(ctx, queue, cfg.DataDir, args)
+}
+
+func cmdTaskHandoffsWithQueue(ctx context.Context, queue *daemon.Queue, dataDir string, args []string) error {
+	jsonOut := false
+	for _, arg := range args {
+		switch arg {
+		case "--json":
+			jsonOut = true
+		default:
+			return fmt.Errorf("unknown task handoffs flag: %s", arg)
+		}
+	}
+	view, err := buildTaskPendingHandoffs(ctx, queue, dataDir)
+	if err != nil {
+		return err
+	}
+	if jsonOut {
+		raw, err := json.MarshalIndent(view, "", "  ")
+		if err != nil {
+			return fmt.Errorf("task handoffs: marshal output: %w", err)
+		}
+		fmt.Println(string(raw))
+		return nil
+	}
+	printTaskPendingHandoffs(view)
+	return nil
 }
 
 func cmdTaskHandoffWithQueue(ctx context.Context, queue *daemon.Queue, dataDir string, args []string) error {
@@ -185,6 +246,57 @@ func cmdTaskHandoffWithQueue(ctx context.Context, queue *daemon.Queue, dataDir s
 	}
 	printTaskHandoff(view)
 	return nil
+}
+
+func buildTaskPendingHandoffs(ctx context.Context, queue *daemon.Queue, dataDir string) (taskPendingHandoffsCLIOutput, error) {
+	if queue == nil {
+		return taskPendingHandoffsCLIOutput{}, fmt.Errorf("task handoffs: queue is required")
+	}
+	tasks, err := queue.List(ctx)
+	if err != nil {
+		return taskPendingHandoffsCLIOutput{}, fmt.Errorf("task handoffs: list tasks: %w", err)
+	}
+	view := taskPendingHandoffsCLIOutput{}
+	for _, task := range tasks {
+		sessionID := taskHandoffSessionID(task)
+		if sessionID == "" {
+			continue
+		}
+		status, err := agent.LoadSessionHandoffStatus(dataDir, sessionID)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return taskPendingHandoffsCLIOutput{}, fmt.Errorf("task handoffs: load handoff status %s: %w", sessionID, err)
+		}
+		if status == nil || status.State != "requested" {
+			continue
+		}
+		view.Pending = append(view.Pending, taskPendingHandoff{
+			TaskID:       task.ID,
+			Status:       string(task.Status),
+			SessionID:    sessionID,
+			ClaimCommand: fmt.Sprintf("elnath task handoff %d --state claimed --surface cli", task.ID),
+			State:        status.State,
+			Surface:      status.Surface,
+			Principal:    status.Principal.SurfaceIdentity(),
+			Reason:       status.Reason,
+			Summary:      task.Summary,
+			CreatedAt:    formatTaskHandoffTime(task.CreatedAt),
+			CompletedAt:  formatTaskHandoffTime(task.CompletedAt),
+			HandoffAt:    formatTaskHandoffTime(status.At),
+		})
+	}
+	view.Count = len(view.Pending)
+	return view, nil
+}
+
+func taskHandoffSessionID(task daemon.Task) string {
+	sessionID := strings.TrimSpace(task.SessionID)
+	if task.Completion != nil && strings.TrimSpace(task.Completion.SessionID) != "" {
+		sessionID = strings.TrimSpace(task.Completion.SessionID)
+	}
+	return sessionID
 }
 
 func buildTaskHandoff(ctx context.Context, queue *daemon.Queue, dataDir string, taskID int64, maxMessages int) (taskHandoffCLIOutput, error) {
@@ -371,6 +483,25 @@ func printTaskHandoff(view taskHandoffCLIOutput) {
 		for _, msg := range view.LastMessages {
 			fmt.Printf("  - %s: %s\n", msg.Role, msg.Text)
 		}
+	}
+}
+
+func printTaskPendingHandoffs(view taskPendingHandoffsCLIOutput) {
+	if len(view.Pending) == 0 {
+		fmt.Println("No pending handoffs.")
+		return
+	}
+	fmt.Println("Pending handoffs")
+	for _, item := range view.Pending {
+		line := fmt.Sprintf("#%d session=%s surface=%s", item.TaskID, truncate(item.SessionID, 12), emptyDash(item.Surface))
+		if item.Reason != "" {
+			line += " reason=" + truncate(item.Reason, 120)
+		}
+		if item.Summary != "" {
+			line += " summary=" + truncate(item.Summary, 120)
+		}
+		line += " claim=" + item.ClaimCommand
+		fmt.Println(line)
 	}
 }
 

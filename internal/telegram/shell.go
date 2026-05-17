@@ -468,6 +468,8 @@ func (s *Shell) handleCommand(ctx context.Context, text string, principal identi
 		return s.enqueueFollowUp(ctx, text, principal, userMsgID)
 	case "/handoff":
 		return s.handleHandoff(ctx, fields, principal)
+	case "/handoffs":
+		return s.renderPendingHandoffs(ctx)
 	case "/submit":
 		return s.enqueueNewTask(ctx, text, principal)
 	case "/questions", "/pending-questions":
@@ -580,6 +582,7 @@ func (s *Shell) handleCommand(ctx context.Context, text string, principal identi
 			"• <code>/answer &lt;sid&gt; &lt;rid&gt; &lt;text&gt;</code> — answer pending question\n" +
 			"• <code>/cancel-question &lt;sid&gt; &lt;rid&gt; [reason]</code> — cancel pending question\n" +
 			"• <code>/handoff &lt;task&gt; [state] [reason]</code> — session handoff recap/state\n" +
+			"• <code>/handoffs</code> — pending session handoffs\n" +
 			"• <code>/skill-list</code> — registered skills\n" +
 			"• <code>/skill-create</code> — create draft skill\n" +
 			"• <code>/followup &lt;sid&gt; &lt;msg&gt;</code> — follow-up\n" +
@@ -753,6 +756,46 @@ func (s *Shell) renderTaskHandoff(ctx context.Context, taskID int64) (string, er
 	return strings.Join(lines, "\n"), nil
 }
 
+func (s *Shell) renderPendingHandoffs(ctx context.Context) (string, error) {
+	if strings.TrimSpace(s.dataDir) == "" {
+		return "Handoffs unavailable: data dir is not configured.", nil
+	}
+	tasks, err := s.queue.List(ctx)
+	if err != nil {
+		return "", err
+	}
+	lines := []string{"🔁 <b>Pending handoffs</b>"}
+	for _, task := range tasks {
+		sessionID := telegramTaskSessionID(task)
+		if sessionID == "" {
+			continue
+		}
+		handoff, err := agent.LoadSessionHandoffStatus(s.dataDir, sessionID)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return "", fmt.Errorf("telegram handoffs: load handoff status %s: %w", sessionID, err)
+		}
+		if handoff == nil || handoff.State != "requested" {
+			continue
+		}
+		line := fmt.Sprintf("• <code>#%d</code> session=<code>%s</code>", task.ID, escapeHTML(truncateSessionID(sessionID)))
+		if handoff.Surface != "" {
+			line += " via <code>" + escapeHTML(handoff.Surface) + "</code>"
+		}
+		if handoff.Reason != "" {
+			line += " — " + escapeHTML(truncateTelegramText(handoff.Reason, 100))
+		}
+		line += fmt.Sprintf("\n  claim: <code>/handoff %d claimed</code>", task.ID)
+		lines = append(lines, line)
+	}
+	if len(lines) == 1 {
+		return "No pending handoffs.", nil
+	}
+	return strings.Join(lines, "\n"), nil
+}
+
 func (s *Shell) taskSessionID(ctx context.Context, taskID int64) (string, error) {
 	task, err := s.queue.Get(ctx, taskID)
 	if err != nil {
@@ -766,6 +809,14 @@ func (s *Shell) taskSessionID(ctx context.Context, taskID int64) (string, error)
 		return "", fmt.Errorf("telegram handoff: task %d has no session bound", taskID)
 	}
 	return sessionID, nil
+}
+
+func telegramTaskSessionID(task daemon.Task) string {
+	sessionID := strings.TrimSpace(task.SessionID)
+	if task.Completion != nil && strings.TrimSpace(task.Completion.SessionID) != "" {
+		sessionID = strings.TrimSpace(task.Completion.SessionID)
+	}
+	return sessionID
 }
 
 func telegramHandoffMessages(messages []llm.Message, limit int) []string {
