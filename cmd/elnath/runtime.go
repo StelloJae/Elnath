@@ -218,6 +218,7 @@ func (o legacyCallbackObserver) OnEvent(e event.Event) {
 
 type executionRuntime struct {
 	app                *core.App
+	cfg                *config.Config
 	db                 *core.DB
 	provider           llm.Provider
 	mgr                *conversation.Manager
@@ -798,6 +799,7 @@ func buildExecutionRuntime(
 
 	rt = &executionRuntime{
 		app:                app,
+		cfg:                cfg,
 		db:                 db,
 		provider:           provider,
 		mgr:                mgr,
@@ -1041,7 +1043,11 @@ func (rt *executionRuntime) newAgenticGatewayExecutor(base tools.Executor) (tool
 		return nil, fmt.Errorf("agentic gateway approval store: %w", err)
 	}
 	approvalBridge := agenticapprovals.NewBridge(rt.db.Main, rt.agenticStore, approvalStore)
-	return agentictools.NewGateway(base, rt.agenticStore, agenticpolicy.NewEvaluator(), approvalBridge), nil
+	gateway := agentictools.NewGateway(base, rt.agenticStore, agenticpolicy.NewEvaluator(), approvalBridge)
+	if rt.cfg != nil && rt.cfg.Agentic.Approval.WaitTimeoutSeconds > 0 {
+		gateway.WithApprovalWait(time.Duration(rt.cfg.Agentic.Approval.WaitTimeoutSeconds)*time.Second, 500*time.Millisecond)
+	}
+	return gateway, nil
 }
 
 func agenticGatewayConfigPermitted(cfg *config.Config) bool {

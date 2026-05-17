@@ -198,6 +198,8 @@ func TestApprovalStore_MigratesProvenanceColumns(t *testing.T) {
 		"policy_version",
 		"expires_at",
 		"decided_by",
+		"consumed_at",
+		"consumed_by_receipt_id",
 	} {
 		if !approvalColumnExists(t, db, column) {
 			t.Fatalf("approval_requests.%s missing after migration", column)
@@ -208,7 +210,7 @@ func TestApprovalStore_MigratesProvenanceColumns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get legacy approval: %v", err)
 	}
-	if req.ToolName != "bash" || !strings.Contains(req.Input, "git status") || req.TaskID != 0 || req.PolicyDecisionID != 0 || req.DecidedBy != "" {
+	if req.ToolName != "bash" || !strings.Contains(req.Input, "git status") || req.TaskID != 0 || req.PolicyDecisionID != 0 || req.DecidedBy != "" || req.ConsumedAt.Valid || req.ConsumedByReceiptID != 0 {
 		t.Fatalf("legacy approval after migration = %+v", req)
 	}
 }

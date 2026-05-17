@@ -173,6 +173,7 @@ const (
 type AgenticConfig struct {
 	Enforcement    AgenticEnforcementConfig    `yaml:"enforcement"`
 	CompletionGate AgenticCompletionGateConfig `yaml:"completion_gate"`
+	Approval       AgenticApprovalConfig       `yaml:"approval"`
 	Activation     AgenticActivationConfig     `yaml:"activation"`
 }
 
@@ -182,6 +183,10 @@ type AgenticEnforcementConfig struct {
 
 type AgenticCompletionGateConfig struct {
 	Mode string `yaml:"mode"`
+}
+
+type AgenticApprovalConfig struct {
+	WaitTimeoutSeconds int `yaml:"wait_timeout_seconds"`
 }
 
 type AgenticActivationConfig struct {
@@ -518,6 +523,9 @@ func validate(cfg *Config) error {
 	case "", AgenticCompletionGateModeObserve, AgenticCompletionGateModeVerification:
 	default:
 		return fmt.Errorf("unsupported agentic.completion_gate.mode: %q (supported: observe, verification)", cfg.Agentic.CompletionGate.Mode)
+	}
+	if cfg.Agentic.Approval.WaitTimeoutSeconds < 0 {
+		return fmt.Errorf("agentic.approval.wait_timeout_seconds must be >= 0")
 	}
 	if cfg.Agentic.Activation.Enabled {
 		if cfg.Agentic.Activation.IntervalSeconds < 0 {

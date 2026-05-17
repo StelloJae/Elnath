@@ -1,0 +1,1187 @@
+# Elnath Convergence Gap Map
+
+Date: 2026-05-17 KST
+
+Status: fresh gap map
+
+Goal source:
+
+- `/Users/stello/elnath/.omc/research/elnath-ultimate-goal-codex-claude-hermes-convergence-2026-05-17.md`
+
+Primary conclusion:
+
+> Elnath already has much of the control-surface substrate. The next gap is not
+> "add more named tools." The next gap is making runtime supervision see and
+> feed back real post-action evidence: actual file mutations, diagnostics after
+> writes, user-visible progress, and session continuity.
+
+Strategic order:
+
+1. Product/runtime quality first.
+2. Benchmark proof second.
+3. Do not use v8 reruns as the roadmap.
+
+## Current Repo State
+
+Checked on 2026-05-17:
+
+- Repo: `/Users/stello/elnath`
+- Branch: `main`
+- HEAD: `ff399bc7d8764825b4189532f50d8595a6165c28`
+- origin/main: `ff399bc7d8764825b4189532f50d8595a6165c28`
+- Open PRs: none from `gh pr list`
+
+Pre-existing dirty/untracked files observed before this artifact:
+
+- modified: `.omc/research/elnath-final-autonomous-runtime-goal-2026-05-13.md`
+- modified: `scripts/run_current_benchmark_wrapper.sh`
+- modified: `scripts/test_benchmark_wrapper_v8_task_guidance.sh`
+- modified: `scripts/test_current_benchmark_wrapper_completion_guards.sh`
+- untracked: `.claude/`
+- untracked: `docs/superpowers/plans/2026-04-30-elnath-local-managed-runtime.md`
+
+This artifact is under `.omc/research` and may be ignored by git.
+
+## Sources Inspected
+
+### Elnath
+
+Repo structure:
+
+- `cmd/elnath`
+- `internal/agent`
+- `internal/tools`
+- `internal/daemon`
+- `internal/scheduler`
+- `internal/worktree`
+- `internal/skill`
+- `internal/llm`
+- `internal/providerproxy`
+- `internal/agentic`
+- `internal/conversation`
+- `internal/orchestrator`
+
+Specific files inspected or searched:
+
+- `cmd/elnath/cmd_explain.go`
+- `cmd/elnath/runtime.go`
+- `cmd/elnath/commands.go`
+- `cmd/elnath/runtime_status.go`
+- `cmd/elnath/runtime_completion_observability.go`
+- `cmd/elnath/runtime_completion_gate_context.go`
+- `cmd/elnath/runtime_completion_retry.go`
+- `cmd/elnath/cmd_provider.go`
+- `cmd/elnath/cmd_proxy.go`
+- `internal/agent/agent.go`
+- `internal/agent/user_question_tool.go`
+- `internal/tools/registry.go`
+- `internal/tools/tool_search.go`
+- `internal/tools/file.go`
+- `internal/tools/code_symbols.go`
+- `internal/tools/process_tools.go`
+- `internal/skill/claude_compat.go`
+- `internal/llm/provider.go`
+- `internal/llm/openai.go`
+- `internal/llm/responses_test.go`
+- `internal/config/config_test.go`
+- `docs/roadmap.md`
+- `/Users/stello/llm_memory/Claude Valut/wiki/entities/elnath-progress-2026-05-15.md`
+
+### Claude Code Source
+
+Reference root:
+
+- `/Users/stello/claude-code-src/src`
+
+Specific surfaces inspected or mapped:
+
+- `tools/ToolSearchTool/ToolSearchTool.ts`
+- `tools/ToolSearchTool/prompt.ts`
+- `tools/AskUserQuestionTool/AskUserQuestionTool.tsx`
+- `tools/AskUserQuestionTool/prompt.ts`
+- `tools/FileEditTool/FileEditTool.ts`
+- `tools/FileEditTool/utils.ts`
+- `tools/FileEditTool/UI.tsx`
+- `tools/LSPTool/LSPTool.ts`
+- `tools/LSPTool/formatters.ts`
+- `components/LspRecommendation/LspRecommendationMenu.tsx`
+- `services/lsp/*`
+- `services/tools/*`
+- `services/compact/*`
+- `services/SessionMemory/*`
+- `utils/permissions/*`
+- `utils/hooks/fileChangedWatcher.ts`
+- `utils/hooks/skillImprovement.ts`
+- `types/hooks.ts`
+- `components/StructuredDiff*`
+- `components/permissions/*`
+- task, cron, plan, worktree, todo tool directories
+
+Use boundary:
+
+- Flow and architecture reference only.
+- No proprietary source, prompt, or error text copied.
+
+### Hermes
+
+Local reference root:
+
+- `/Users/stello/.hermes/hermes-agent`
+
+Local files inspected or mapped:
+
+- `gateway/stream_consumer.py`
+- `tools/clarify_gateway.py`
+- `tools/managed_tool_gateway.py`
+- `cron/scheduler.py`
+- `cron/jobs.py`
+- `tools/skills_tool.py`
+- `tools/skills_guard.py`
+- `tools/skill_usage.py`
+- `agent/memory_manager.py`
+- `agent/memory_provider.py`
+- `tests/hermes_cli/test_session_handoff.py`
+- `tests/gateway/test_stream_consumer*.py`
+- `tests/tools/test_clarify_gateway.py`
+- `tests/tools/test_skills_guard.py`
+- `tests/tools/test_skill_usage.py`
+- `tests/cron/test_cron_prompt_injection_skill.py`
+
+Public Hermes v0.14.0 release inspected:
+
+- `https://raw.githubusercontent.com/NousResearch/hermes-agent/main/RELEASE_v0.14.0.md`
+
+High-value v0.14 references:
+
+- OpenAI-compatible local proxy for OAuth providers.
+- `x_search`.
+- Microsoft Teams end-to-end stack.
+- lazy installs / cold-start performance.
+- `/handoff` live session transfer.
+- native button UI for `clarify`.
+- Discord channel history backfill.
+- per-turn file-mutation verifier footer.
+- LSP semantic diagnostics on every write.
+- `computer_use` cua-driver backend for non-Anthropic providers.
+- OpenRouter Pareto Code router.
+- Codex app-server runtime with session reuse and retirement.
+- trusted skills tap.
+- API stream approval events.
+- `tool_override` plugin surface.
+- dangerous-command bypass closures and tool-error sanitization.
+- `/subgoal` for active goal criteria.
+
+### Codex
+
+Official docs checked:
+
+- `https://developers.openai.com/codex/cli`
+- `https://developers.openai.com/codex/concepts/sandboxing`
+- `https://developers.openai.com/codex/skills`
+- `https://developers.openai.com/codex/app/features`
+
+Codex reference points:
+
+- Local coding agent, not model weights.
+- Tool, shell, apply-patch, skill, tool-search, and reasoning-control surfaces.
+- Sandbox and approval as separate but coupled controls.
+- Skills use progressive disclosure.
+- App supports local/worktree/cloud modes, built-in Git, terminal, PR flow.
+
+## Current Elnath Strengths
+
+### 1. Agent Loop
+
+Evidence:
+
+- `internal/agent/agent.go`
+
+Current shape:
+
+- message array is the primary state.
+- provider streams events.
+- tool calls are extracted from assistant messages.
+- tools execute through registry/executor.
+- tool results are fed back into the next model iteration.
+- max iteration cap exists.
+- ack-only continuation guard exists.
+- provider retry/backoff exists.
+- proactive context compaction exists.
+- `RunResult` carries finish reason, usage, tool stats, reasoning effort, and loaded deferred tools.
+
+Position:
+
+- Strong foundation.
+- Comparable to Codex/Claude style model-tool loop at a substrate level.
+- Main gap is not loop existence. Main gap is richer post-action evidence injected into the loop.
+
+### 2. Tool Registry and ToolSearch
+
+Evidence:
+
+- `internal/tools/registry.go`
+- `internal/tools/tool_search.go`
+- `cmd/elnath/runtime.go`
+- `cmd/elnath/commands.go`
+
+Current shape:
+
+- tool registry has named tool dispatch.
+- `ToolDefs()` exposes model-callable definitions.
+- `tool_search` supports search and `select:` query.
+- metadata includes category, surface, schema preview, deferred status, execution policy, concurrency, reversibility, and receipt.
+- some tools can defer initial schema.
+
+Position:
+
+- Strong.
+- This is already close to Claude Code ToolSearch and Codex skill/tool progressive disclosure intent.
+- Remaining gap is not discovery. Remaining gap is "after tool use, what did the filesystem/runtime actually do?"
+
+### 3. Control Surfaces
+
+Evidence:
+
+- `cmd/elnath/cmd_explain.go`
+- `cmd/elnath/runtime.go`
+- `cmd/elnath/runtime_command_execute_tool.go`
+- `internal/daemon/task_tools.go`
+- `internal/scheduler/task_tools.go`
+- `internal/worktree/tools.go`
+- `internal/tools/process_tools.go`
+- `internal/agent/user_question_tool.go`
+
+Current shape:
+
+- discovery: `tool_search`
+- task: `task_create`, `task_list`, `task_get`, `task_stop`, `task_output`, `task_monitor`, `task_update`
+- user input: `ask_user_question`, `user_question_list`, `user_question_wait`, `user_question_answer`, `user_question_cancel`
+- schedule: `schedule_create`, `schedule_list`, `schedule_delete`
+- plan: `enter_plan_mode`, `exit_plan_mode`
+- worktree: `enter_worktree`, `worktree_list`, `worktree_run`, `worktree_prune`, `exit_worktree`
+- process: `process_start`, `process_monitor`, `process_wait`, `process_stop`
+- skill: `skill_catalog`, `skill`, `create_skill`
+- command: `command_catalog`, `runtime_command`
+- scratchpad: `todo_write`
+- code intelligence: `code_symbols`
+
+Position:
+
+- Broadly implemented.
+- Product-boundary closeout is accurate for "named surfaces exist."
+- But Claude/Hermes/Codex convergence requires more than naming tools. It requires native UX, automatic supervision, and feedback loops.
+
+### 4. Skills and Compatibility
+
+Evidence:
+
+- `internal/skill/claude_compat.go`
+- `internal/skill/catalog_tool.go`
+- `internal/skill/invocation_tool.go`
+- `internal/skill/creator.go`
+- `internal/prompt/skill_catalog_node.go`
+- `internal/prompt/skill_guidance_node.go`
+
+Current shape:
+
+- loads Claude-style `.claude/skills/**/SKILL.md`.
+- loads Codex-style `.codex/skills`.
+- loads `.agents/skills`.
+- loads Claude commands as compatible command skills.
+- maps Claude tool names to Elnath tool names.
+- supports plugin-cache skill roots.
+- has skill catalog, invocation, creation, trust/filtering tests.
+
+Position:
+
+- Strong compatibility layer.
+- Next convergence point is Hermes-style skill usage feedback and safe skill improvement, not basic loading.
+
+### 5. Provider / Model / Effort
+
+Evidence:
+
+- `internal/llm/provider.go`
+- `internal/llm/responses_test.go`
+- `cmd/elnath/commands.go`
+- `cmd/elnath/cmd_provider.go`
+- `cmd/elnath/runtime_provider.go`
+- `cmd/elnath/runtime_status.go`
+- `cmd/elnath/runtime_test.go`
+
+Current shape:
+
+- provider interface supports `Chat`, `Stream`, `Name`, `Models`.
+- OpenAI Responses-compatible provider exists as `openai-responses`.
+- config and env support `openai_responses` / generic responses keys.
+- base URL, model, timeout, and reasoning effort are configurable.
+- Codex OAuth can route into Responses provider path.
+- `/provider`, `/model`, `/effort`, `/status` expose runtime state.
+- auto effort routing exists and is tested.
+- provider capabilities expose reasoning effort compatibility and fallback.
+
+Position:
+
+- Strong.
+- Good enough for Kimi/Moonshot, MiniMax, OpenAI/Codex-style Responses endpoints if endpoint compatibility holds.
+- Gap is cost/quality routing beyond simple effort routing: Hermes Pareto-style coding quality threshold, provider cost policy, and no-silent-fallback enforcement across all paths.
+
+### 6. Process / Long-Running Work
+
+Evidence:
+
+- `internal/tools/process_tools.go`
+- `cmd/elnath/cmd_explain.go`
+
+Current shape:
+
+- process manager supports start, monitor, wait, stop.
+- default timeout: 10 minutes.
+- max timeout: 60 minutes.
+- bounded wait, tail limits, kill grace.
+- literal `watch_text` support.
+
+Position:
+
+- Good substrate.
+- Gap is user-visible async progress bridge: Codex event queue / Hermes gateway stream consumer style status surface.
+
+### 7. Code Intelligence
+
+Evidence:
+
+- `internal/tools/code_symbols.go`
+- `cmd/elnath/cmd_explain.go`
+
+Current shape:
+
+- Go-native symbol listing.
+- workspace symbols.
+- definition/references/hover.
+- syntax diagnostics.
+- edit-aware diagnostic deltas.
+
+Position:
+
+- Strong Go-native path.
+- Gap is automatic post-write diagnostic routing and non-Go adapter strategy.
+
+### 8. User Input
+
+Evidence:
+
+- `internal/agent/user_question_tool.go`
+- `internal/learning/user_question_tools.go`
+- `internal/learning/pending_questions.go`
+- `cmd/elnath/cmd_task.go`
+- `cmd/elnath/cmd_explain.go`
+
+Current shape:
+
+- `ask_user_question` emits structured question, options, timeout, request ID, session ID, answer command, receipt.
+- pending question list/wait/answer/cancel paths exist.
+- CLI answer path exists.
+- Telegram/operator gateway answer path documented as product boundary replacement.
+
+Position:
+
+- Strong runtime path.
+- Gap is native operator UX: Hermes-style buttons/text-capture and Claude Code-style integrated AskUserQuestion presentation.
+
+## Major Gaps
+
+### Gap 1: Per-Turn File Mutation Verifier
+
+Status:
+
+- Missing as a first-class automatic supervisor layer.
+
+Evidence:
+
+- `internal/tools/file.go` read/write/edit tools are direct filesystem tools.
+- `write_file` detects identical full content.
+- `edit_file` detects identical old/new strings and missing/duplicate matches.
+- tools refresh read tracker after writes.
+- no structured mutation receipt with before/after hash, line delta, operation, expected intent, unexpected churn.
+- no per-turn footer summarizing actual file mutations injected into the next model turn.
+
+Reference:
+
+- Hermes v0.14 per-turn file-mutation verifier footer.
+- Claude Code structured diff UX and file-change watcher references.
+- Codex final report discipline and tool execution event model.
+
+Why it matters:
+
+- Elnath can know a tool returned success, but the model does not automatically get a compact verified disk-delta summary after the write.
+- This is the key missing self-correction substrate.
+- Without it, no-op/wrong-file/silent-overwrite cases rely too much on model behavior or later tests.
+
+Recommended milestone:
+
+- Implement mutation recorder for `write_file` and `edit_file`.
+- Add structured mutation receipt fields:
+  - `path`
+  - `operation`
+  - `changed`
+  - `before_hash`
+  - `after_hash`
+  - `before_lines`
+  - `after_lines`
+  - `line_delta`
+  - `failure_family`
+- Accumulate per-run mutation summaries.
+- Inject a concise footer after mutating tools before the next LLM iteration.
+- Add completion gate signal when edit intent exists but mutation summary has no changed files.
+
+Priority:
+
+- P0.
+
+### Gap 2: Automatic Diagnostics on Write
+
+Status:
+
+- Partially implemented.
+
+Evidence:
+
+- `code_symbols diagnostics` and `diagnostics_delta` exist.
+- They are model-callable, not automatically triggered after every write.
+- current product boundary excludes full multi-language LSP lifecycle.
+
+Reference:
+
+- Hermes v0.14 LSP semantic diagnostics on every write.
+- Claude Code LSPTool and LspRecommendation UX.
+
+Why it matters:
+
+- Code intelligence exists, but the loop does not consistently force diagnostics into the next turn after mutation.
+- Elnath can miss "I edited code, introduced syntax/semantic issue, then confidently final-answer" unless verification catches it later.
+
+Recommended milestone:
+
+- Start with Go automatic diagnostics after changed `.go` files.
+- Use existing `code_symbols diagnostics_delta` logic or extracted internal helper.
+- Feed diagnostic delta into mutation footer.
+- For TypeScript/Python, add explicit policy first:
+  - unsupported automatic diagnostics
+  - available if local command/tool adapter configured
+  - not full LSP parity claim
+
+Priority:
+
+- P0 after Gap 1 or bundled as a narrow extension if easy.
+
+### Gap 3: User-Visible Async Progress Bridge
+
+Status:
+
+- Partially implemented.
+
+Evidence:
+
+- event sink exists.
+- process tools can monitor/wait.
+- daemon queue stores progress/summary.
+- Telegram completion notifier exists.
+- no Hermes-style streaming bridge from sync runtime callbacks to async platform delivery.
+
+Reference:
+
+- Hermes `gateway/stream_consumer.py`
+- Codex app terminal/event queue model.
+- Claude Code streaming tool progress and TUI surfaces.
+
+Why it matters:
+
+- Long autonomous tasks feel wedged even when alive.
+- User frustration came from long runs without clear "why still going" signals.
+
+Recommended milestone:
+
+- Add runtime progress heartbeat/phase events around:
+  - reference inspection
+  - edit attempt
+  - verification
+  - retry
+  - artifact write
+- Surface through CLI first.
+- Keep Telegram bridge thin.
+
+Priority:
+
+- P1.
+
+### Gap 4: Native User Input UX
+
+Status:
+
+- Runtime path implemented, UX not complete.
+
+Evidence:
+
+- `ask_user_question` and pending question tools exist.
+- CLI answer command exists.
+- Product boundary says UI modal/native answer collection is outside current Go runtime boundary.
+
+Reference:
+
+- Hermes `tools/clarify_gateway.py` with pending entry, timeout, text fallback, native buttons.
+- Claude Code `AskUserQuestionTool`.
+
+Why it matters:
+
+- A personal assistant must ask and resume naturally.
+- Current runtime receipts are correct but not delightful.
+
+Recommended milestone:
+
+- Add Telegram inline button path for structured options.
+- Preserve CLI answer path.
+- Add duplicate final-send suppression and answer receipt.
+
+Priority:
+
+- P1.
+
+### Gap 5: Session Handoff / Resume Recap
+
+Status:
+
+- Partially implemented through sessions, compaction, and history, but not Hermes-like handoff product.
+
+Reference:
+
+- Hermes `/handoff` live session transfer.
+- Hermes session DB handoff state machine.
+- Codex session/thread and worktree model.
+- Claude Code remote session manager / session memory.
+
+Why it matters:
+
+- Elnath wants persistent personal assistant and swarm.
+- That needs "pause here, resume there, pass to stronger model" semantics.
+
+Recommended milestone:
+
+- Add explicit session handoff state:
+  - requested
+  - claimed
+  - running
+  - completed
+  - failed
+- Add human-readable resume recap from receipts/tool stats/memory.
+- Add stale/wedged session retirement reason.
+
+Priority:
+
+- P1.
+
+### Gap 6: Skills Feedback and Self-Improvement
+
+Status:
+
+- Partially implemented.
+
+Evidence:
+
+- SKILL.md compatibility exists.
+- skill invocation receipts exist.
+- skill creation exists.
+
+Reference:
+
+- Codex skills progressive disclosure.
+- Hermes skill usage, trusted taps, skill guards, skill improvement tests.
+- Claude Code skill hooks.
+
+Why it matters:
+
+- Skills should not only run. They should become durable, trusted, pruned, improved, and measured.
+
+Recommended milestone:
+
+- Record skill use outcome:
+  - selected skill
+  - required tools
+  - verification result
+  - user-visible outcome
+  - promotion candidate
+- Add safe improvement proposal artifact, not automatic overwrite.
+
+Priority:
+
+- P2.
+
+### Gap 7: Provider Cost / Quality Router
+
+Status:
+
+- Partially implemented.
+
+Evidence:
+
+- OpenAI Responses provider exists.
+- base URL/model/effort/timeouts configurable.
+- auto effort routing exists.
+- provider status/check commands exist.
+
+Reference:
+
+- Hermes OpenRouter Pareto Code router and provider switching.
+- Codex model/reasoning controls.
+
+Why it matters:
+
+- User wants automatic token/cost savings while preserving hard-task quality.
+- Current auto effort is useful but simple.
+
+Recommended milestone:
+
+- Add explicit `routing policy` object:
+  - task class
+  - minimum quality tier
+  - max cost tier
+  - effort default
+  - fallback allowed or forbidden
+- Keep current simple heuristic as default.
+- Expose `elnath provider route --explain` or extend existing provider status.
+
+Priority:
+
+- P2.
+
+### Gap 8: Gateway / Delivery Router
+
+Status:
+
+- Partially implemented.
+
+Evidence:
+
+- Telegram/operator path exists.
+- provider proxy exists.
+- daemon status/queue exists.
+- no broad Hermes-like multi-platform gateway abstraction as product target.
+
+Reference:
+
+- Hermes gateway/platform adapters, stream consumer, Teams/LINE/SimpleX expansions.
+
+Why it matters:
+
+- Elnath target is personal assistant across surfaces, but Telegram should remain thin until product UX stabilizes.
+
+Recommended milestone:
+
+- Define delivery-router interface:
+  - message origin
+  - home channel
+  - delivery receipt
+  - progress update
+  - user answer
+  - completion notification
+- Do not add many platforms first.
+
+Priority:
+
+- P2.
+
+### Gap 9: Sandbox / Approval Depth
+
+Status:
+
+- Implemented in Elnath terms, but not Codex-level OS sandbox parity.
+
+Evidence:
+
+- Elnath has permissions modes, command safety analysis, sandbox/net proxy work, tool scopes.
+- Codex official docs emphasize OS-enforced sandbox + approval policy.
+
+Reference:
+
+- Codex sandboxing: workspace-write/default, approvals on-request, danger-full-access/never.
+- Claude Code permissions and dangerous command patterns.
+- Hermes dangerous-command bypass closures and tool-error sanitization.
+
+Why it matters:
+
+- Strong autonomy requires enforced boundaries, not only model instruction.
+
+Recommended milestone:
+
+- Keep current Elnath sandbox policy explicit.
+- Add command error sanitization review.
+- Add denial reason receipts.
+- Do not claim Codex OS sandbox parity unless implemented/tested.
+
+Priority:
+
+- P2/P3 depending on risk lane.
+
+### Gap 10: Benchmark/Public Proof
+
+Status:
+
+- Deferred.
+
+Evidence:
+
+- benchmark readiness is separate from product/runtime.
+- existing memory warns not to overclaim v8 or superiority.
+
+Reference:
+
+- Elnath benchmark artifacts and memory.
+
+Why it matters:
+
+- Benchmark proof should validate runtime, not drive runtime design.
+
+Recommended milestone:
+
+- Resume only after P0/P1 product milestones improve the runtime.
+- Start with small dogfood/control smoke, not full v8.
+
+Priority:
+
+- Later.
+
+## Rank: Next Five Milestones
+
+### 1. P0: Per-Turn File Mutation Verifier
+
+Reason:
+
+- Highest leverage.
+- Directly addresses repeated "model said it changed something, evidence weak" pain.
+- Enables better self-correction without benchmark loops.
+
+Acceptance:
+
+- write/edit tools emit structured mutation receipts.
+- agent loop gathers mutation summaries for one turn.
+- next model turn receives compact mutation footer.
+- completion summary can mention verified changed files.
+- tests cover:
+  - write changes file and records hash/line delta
+  - edit changes file and records hash/line delta
+  - no-op write/edit is classified
+  - mutation footer appears after mutating tool call
+  - no mutation footer for read-only tools
+
+Likely files:
+
+- `internal/tools/file.go`
+- new `internal/tools/mutation*.go` or `internal/agent/mutation*.go`
+- `internal/agent/agent.go`
+- `cmd/elnath/runtime_completion_observability.go`
+- focused tests in `internal/tools` and `internal/agent` or `cmd/elnath`
+
+### 2. P0: Automatic Go Diagnostics After Mutation
+
+Reason:
+
+- `code_symbols diagnostics_delta` already exists.
+- Glue is missing.
+- This makes Elnath catch errors more like Claude/Hermes.
+
+Acceptance:
+
+- changed `.go` file can produce diagnostic delta without model explicitly calling `code_symbols`.
+- footer says whether diagnostics were skipped, clean, or new errors found.
+- no full multi-language LSP parity claim.
+
+Likely files:
+
+- `internal/tools/code_symbols.go`
+- new reusable diagnostic helper
+- mutation footer integration
+- focused tests with broken/fixed Go snippets
+
+### 3. P1: Progress Bridge / Alive Status
+
+Reason:
+
+- Long work currently causes user anxiety.
+- Product quality needs "what is happening now" visibility.
+
+Acceptance:
+
+- CLI/event sink exposes coarse phases.
+- process wait and verification phases visible.
+- no Telegram feature explosion.
+
+Likely files:
+
+- `internal/event`
+- `internal/tools/process_tools.go`
+- `cmd/elnath/runtime.go`
+- `cmd/elnath/runtime_completion_observability.go`
+
+### 4. P1: Native User Input UX
+
+Reason:
+
+- Runtime path exists; UX gap remains.
+- Hermes `clarify` button flow is strong reference.
+
+Acceptance:
+
+- Telegram structured options can render as native buttons or explicit equivalent.
+- answer receipts still bind to request/session.
+- timeout/cancel path documented and tested.
+
+Likely files:
+
+- `internal/telegram`
+- `internal/agent/user_question_tool.go`
+- `internal/learning/user_question_tools.go`
+- `cmd/elnath/cmd_task.go`
+
+### 5. P1/P2: Session Handoff / Resume Recap
+
+Reason:
+
+- Personal assistant/swarm target needs continuity beyond one terminal.
+- Hermes v0.14 `/handoff` is strong reference.
+
+Acceptance:
+
+- session handoff state exists.
+- resume recap artifact generated.
+- stale/wedged session can retire with reason.
+
+Likely files:
+
+- `internal/agent/session.go`
+- `internal/conversation`
+- `internal/daemon`
+- `cmd/elnath`
+
+## First Milestone Chosen
+
+Chosen:
+
+> P0: Per-Turn File Mutation Verifier
+
+Why:
+
+- Highest leverage product/runtime improvement.
+- Directly improves Claude/Codex-like coding execution quality.
+- Uses Hermes v0.14's strongest new coding reliability idea.
+- Does not require benchmark reruns.
+- Builds substrate for automatic diagnostics, self-correction, and trustworthy final claims.
+
+Implementation style:
+
+- Elnath-native Go.
+- No proprietary source copying.
+- Start with `write_file` and `edit_file`.
+- Keep patch small.
+- Add tests first where practical.
+
+Non-goals for first milestone:
+
+- no full multi-language LSP lifecycle.
+- no benchmark run.
+- no baseline.
+- no Codex/Claude comparison.
+- no Telegram UX changes.
+- no broad self-healing promise.
+
+## Post-PR251 Update
+
+Date: 2026-05-17 KST
+
+PR #251 shipped after the original gap map:
+
+- delivery target routing for daemon tasks;
+- bounded agentic activation command and loop;
+- durable activation history;
+- proposed task reference tracking;
+- opt-in low-risk activation auto-enqueue;
+- activation summaries through the delivery router;
+- long-running tool progress heartbeats;
+- compact agentic evidence CLI;
+- session handoff state markers;
+- agentic control-surface manifest visibility;
+- truthful auto-enqueue autonomy status reporting.
+
+Implication:
+
+- Gap 3 user-visible async progress bridge is materially improved for tool
+  progress and daemon delivery routing.
+- Gap 5 session handoff / resume recap is improved by handoff recap, resume
+  context, retired-session explicit resume, and session handoff state markers,
+  but full Hermes-style atomic live transfer remains open.
+- Gap 8 gateway / delivery router is improved by target-aware delivery routing,
+  but broad multi-platform gateway parity remains open.
+- Standing-goal activation is improved by bounded activation and opt-in
+  low-risk auto-enqueue, but product dogfood with real controlled goals remains
+  the next proof step.
+
+Do not return to benchmark loops after PR #251. The next structural blocker
+should be selected from product/runtime evidence. Current best candidates:
+
+1. local controlled dogfood of activation auto-enqueue using temporary config
+   and explicit evidence;
+2. Hermes-style handoff claim/complete/fail lifecycle if cross-surface transfer
+   is needed now;
+3. operator-facing status polish for hidden runtime capabilities.
+
+## Post-PR252 Update
+
+Date: 2026-05-17 KST
+
+PR #252 shipped after PR #251:
+
+- `elnath agentic goal create`
+- `elnath agentic goals`
+- `elnath agentic signal create`
+- `elnath agentic tasks`
+- `Store.ListStandingGoals`
+- `Store.ListAgenticTasks`
+- fresh agentic DB optional approval-table handling for `agentic status` and
+  task/lineage approval lookup.
+
+Dogfood evidence:
+
+- temporary config created one standing goal through CLI;
+- manual signal CLI created one new goal signal;
+- `agentic activate --once --json` triaged the signal and produced
+  `proposed_task_ids=[1]`;
+- `agentic task 1 --json` rendered the proposed task;
+- `agentic tasks --status proposed --limit 5 --json` recovered task `#1`.
+
+Implication:
+
+- Gap 8 operator/control gateway improves materially: there is now a
+  product-facing path for `standing goal -> manual signal -> activation ->
+  proposed task -> task list`.
+- Standing-goal activation is no longer only fixture/test backed for the
+  manual operator path.
+- Remaining gap: watcher/scheduler creation is not yet a CLI surface; it
+  remains a separate product decision rather than a blocker for manual alpha
+  dogfood.
+
+Next best candidate:
+
+1. Dogfood explicit `agentic enqueue` from the proposed task path using a
+   temporary config and bounded flags.
+2. If enqueue dogfood is clean, move to runtime/task lifecycle polish rather
+   than benchmark.
+3. If enqueue dogfood exposes missing daemon setup or operator status, patch
+   that narrow product/runtime blocker.
+
+## Post-Agentic-Approval-CLI Update
+
+Date: 2026-05-17 KST
+
+Dogfood after PR #252 exposed a concrete product/runtime gap:
+
+- daemon execution reached `approval_required` for a high-risk `bash` call;
+- `agentic status --json` and `agentic task 1 --json` showed the pending
+  approval;
+- terminal operator had no direct CLI to decide the request.
+
+Patch on branch `codex/agentic-approval-cli` adds:
+
+- `elnath agentic approvals [--limit n] [--json]`;
+- `elnath agentic approve <approval-id> [--json]`;
+- `elnath agentic deny <approval-id> [--json]`;
+- help/i18n/test coverage for those surfaces.
+
+Evidence artifact:
+
+- `.omc/research/agentic-approval-cli-2026-05-17.md`
+
+Implication:
+
+- Gap 8 operator/control gateway is improved: pending approval attention can
+  now be resolved by terminal CLI, not only by direct DB mutation or Telegram
+  shell.
+- A deeper gap remains: approved gateway requests are not yet continued or
+  replayed through a bounded executor path.
+- Another concrete daemon lifecycle gap remains: stopping the daemon while a
+  worker is blocked can leave the queue task stuck as `running`.
+
+Next best candidate:
+
+1. graceful daemon shutdown / running-task retirement;
+2. approved-request continuation or explicit approval-resume command;
+3. daemon timeout config visibility/loader verification.
+
+## Post-Daemon-Shutdown-Retirement Update
+
+Date: 2026-05-17 KST
+
+PR #253 shipped and merged:
+
+- PR: `https://github.com/StelloJae/Elnath/pull/253`
+- Merge commit: `66aa039f817e9a4be26a80c5bf01e82b50ed3887`
+
+It adds daemon finalization protection:
+
+- execution context cancellation no longer cancels the terminal queue write;
+- running task stopped by daemon shutdown is classified as `task_canceled`;
+- queue mark/delivery/envelope finalization use a short independent context.
+
+Evidence artifact:
+
+- `.omc/research/agentic-daemon-shutdown-retirement-2026-05-17.md`
+- `.omc/research/pr253-agentic-approval-daemon-shutdown-closure-2026-05-17.md`
+
+Implication:
+
+- Gap 3 async progress/lifecycle bridge is improved: stopped daemon tasks should
+  become operator-visible terminal failures rather than stuck `running` tasks.
+- Gap 8 gateway/control operator loop is more durable after approval waits and
+  stop requests.
+- Approved-request continuation remains open.
+
+Next best candidate:
+
+1. approved-request continuation or explicit approval-resume command;
+2. daemon timeout config visibility/loader verification;
+3. fresh temp-DB operator-loop dogfood after merge/PR-ready verification.
+
+## Post-Approval-Continuation Local Update
+
+Date: 2026-05-17 KST
+
+Local branch:
+
+- `codex/approval-consumption`
+
+Local commits after `origin/main`:
+
+- `abc2cc6 feat(agentic): consume approved approvals once`
+- `017f436 feat(agentic): wait for approved tool requests`
+
+Artifacts:
+
+- `.omc/research/approval-consumption-milestone-2026-05-17.md`
+- `.omc/research/approval-live-wait-design-2026-05-17.md`
+
+What changed:
+
+- approved gateway requests can be consumed exactly once;
+- consumed approval records link to the executing receipt;
+- denied/different-actor approvals do not execute;
+- optional live wait exists through `agentic.approval.wait_timeout_seconds`;
+- default remains `0`, so existing non-blocking behavior is preserved;
+- live wait approved path can continue the same tool request and execute it;
+- denied and timeout paths stay receipt-backed and non-executing.
+
+Why `approve --resume` was not the first implementation:
+
+- current agentic task lineage has one queue-task linkage;
+- re-enqueueing the same task would require broader queue/task lineage
+  semantics;
+- a fresh follow-up task would not naturally consume the original approval
+  request without adding resume-envelope semantics;
+- bounded live wait solves same-session approval continuation with smaller
+  product/runtime risk.
+
+Verification:
+
+- `go test ./cmd/elnath -count=1` passed;
+- `go test ./internal/agentic/... ./internal/daemon ./internal/config -count=1`
+  passed;
+- `go vet ./...` passed;
+- focused approval-consumption and live-wait tests passed;
+- `git diff --check` on touched milestone files passed.
+
+Implication:
+
+- The "approved-request continuation" gap is no longer the next product/runtime
+  blocker for opt-in live sessions.
+- Offline/after-the-fact `approve --resume` remains an intentional later design,
+  not a blocker for the current convergence lane.
+
+## Post-Gap-Map Reality Correction
+
+Date: 2026-05-17 KST
+
+After re-reading current `origin/main`, the original Gap 1 and Gap 2 entries are
+now stale as "next" milestones. They were valid when the gap map was first
+written, but current code already contains the mutation/diagnostic substrate:
+
+- `internal/tools/mutation.go`
+- `internal/tools/file.go`
+- `internal/agent/mutation_footer.go`
+- `internal/agent/agent.go`
+- `cmd/elnath/runtime_completion_observability.go`
+
+Evidence artifacts already present:
+
+- `.omc/research/elnath-mutation-verifier-milestone-2026-05-17.md`
+- `.omc/research/elnath-go-diagnostics-after-mutation-milestone-2026-05-17.md`
+- `.omc/research/pr234-convergence-mutation-verifier-closure-2026-05-17.md`
+- `.omc/research/pr239-completion-mutation-diagnostics-closure-2026-05-17.md`
+- `.omc/research/pr240-structured-mutation-receipts-closure-2026-05-17.md`
+- `.omc/research/pr241-composite-mutation-receipts-closure-2026-05-17.md`
+- `.omc/research/pr242-non-go-diagnostic-policy-closure-2026-05-17.md`
+- `.omc/research/pr243-python-diagnostic-adapter-closure-2026-05-17.md`
+
+Current implementation facts:
+
+- `write_file` and `edit_file` attach structured `FileMutation` receipts;
+- mutation receipts include path, operation, changed flag, hash, line counts,
+  line delta, diagnostic language/status/counts, and failure family;
+- the agent loop appends a `[Filesystem mutation verifier]` footer after
+  mutating tools before the next model turn;
+- Go parser diagnostic deltas run automatically after `.go` mutations;
+- Python syntax diagnostics and TypeScript/JavaScript conditional syntax
+  diagnostics are represented through explicit adapter policies;
+- completion observability can derive diagnostic receipts from structured
+  mutation receipts and trusted mutation verifier text.
+
+Updated next candidates:
+
+1. PR-ready closeout for local approval continuation work on
+   `codex/approval-consumption`.
+2. Native user-input/operator UX: make `ask_user_question` and pending-answer
+   flows feel like a first-class Hermes/Claude-style operator path, within the
+   existing Go/Telegram boundary.
+3. Session handoff/resume recap: improve continuity and stale-session recovery
+   beyond substrate markers.
+4. Async progress/alive-status polish after the approval continuation PR is
+   either merged or parked.
+
+## Claim Boundary
+
+Allowed after this gap map:
+
+- Elnath has a current convergence gap map.
+- The post-PR252 operator dogfood has identified and patched a missing terminal
+  approval-decision surface.
+- The daemon shutdown retirement patch is locally verified.
+- Approved-request continuation has a local, tested opt-in live-wait milestone
+  on `codex/approval-consumption`.
+- Per-turn file mutation verifier and automatic diagnostics-after-mutation are
+  no longer the next product blockers; current code already contains those
+  substrates.
+- The next highest-leverage product/runtime candidates are approval
+  continuation closeout, user-input/operator UX, session handoff/recap, and
+  progress/alive-status polish.
+- Benchmark remains downstream.
+
+Forbidden:
+
+- Elnath is complete as a daily-driver assistant.
+- Elnath beats Codex or Claude Code.
+- Elnath matches Hermes continuity/companion UX fully.
+- Full v8 benchmark success.
+- Full Codex/Claude/Hermes parity.
+
+## Verification for This Artifact
+
+Commands planned:
+
+- `test -f /Users/stello/elnath/.omc/research/elnath-convergence-gap-map-2026-05-17.md`
+- `wc -l /Users/stello/elnath/.omc/research/elnath-convergence-gap-map-2026-05-17.md`
+- `rg -n "First Milestone Chosen|Per-Turn File Mutation Verifier|Claim Boundary" /Users/stello/elnath/.omc/research/elnath-convergence-gap-map-2026-05-17.md`

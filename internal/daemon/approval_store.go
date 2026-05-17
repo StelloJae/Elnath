@@ -15,6 +15,8 @@ CREATE TABLE IF NOT EXISTS approval_requests (
 	tool_name  TEXT NOT NULL,
 	input      TEXT NOT NULL DEFAULT '',
 	decision   TEXT NOT NULL DEFAULT 'pending',
+	consumed_at INTEGER NOT NULL DEFAULT 0,
+	consumed_by_receipt_id INTEGER NOT NULL DEFAULT 0,
 	created_at INTEGER NOT NULL,
 	updated_at INTEGER NOT NULL
 );
@@ -23,7 +25,7 @@ CREATE INDEX IF NOT EXISTS approval_requests_decision ON approval_requests(decis
 
 const approvalRequestColumns = `
 	id, tool_name, input, decision, task_id, policy_decision_id, actor_id, action_kind,
-	risk_level, reason, policy_version, expires_at, decided_by, created_at, updated_at
+	risk_level, reason, policy_version, expires_at, decided_by, consumed_at, consumed_by_receipt_id, created_at, updated_at
 `
 
 type ApprovalDecision string
@@ -35,21 +37,23 @@ const (
 )
 
 type ApprovalRequest struct {
-	ID               int64
-	ToolName         string
-	Input            string
-	Decision         ApprovalDecision
-	TaskID           int64
-	PolicyDecisionID int64
-	ActorID          int64
-	ActionKind       string
-	RiskLevel        string
-	Reason           string
-	PolicyVersion    string
-	ExpiresAt        sql.NullTime
-	DecidedBy        string
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	ID                  int64
+	ToolName            string
+	Input               string
+	Decision            ApprovalDecision
+	TaskID              int64
+	PolicyDecisionID    int64
+	ActorID             int64
+	ActionKind          string
+	RiskLevel           string
+	Reason              string
+	PolicyVersion       string
+	ExpiresAt           sql.NullTime
+	DecidedBy           string
+	ConsumedAt          sql.NullTime
+	ConsumedByReceiptID int64
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
 }
 
 func (r ApprovalRequest) IDString() string {
@@ -290,6 +294,8 @@ func ensureApprovalProvenanceSchema(db *sql.DB) error {
 		{"policy_version", "TEXT NOT NULL DEFAULT ''"},
 		{"expires_at", "INTEGER"},
 		{"decided_by", "TEXT NOT NULL DEFAULT ''"},
+		{"consumed_at", "INTEGER NOT NULL DEFAULT 0"},
+		{"consumed_by_receipt_id", "INTEGER NOT NULL DEFAULT 0"},
 	}
 	for _, column := range columns {
 		exists, err := approvalSchemaHasColumn(db, column.name)
@@ -309,6 +315,7 @@ func ensureApprovalProvenanceSchema(db *sql.DB) error {
 	for _, stmt := range []string{
 		`CREATE INDEX IF NOT EXISTS approval_requests_task_id ON approval_requests(task_id)`,
 		`CREATE INDEX IF NOT EXISTS approval_requests_policy_decision_id ON approval_requests(policy_decision_id)`,
+		`CREATE INDEX IF NOT EXISTS approval_requests_decision_consumed ON approval_requests(decision, consumed_at)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS approval_requests_policy_decision_pending ON approval_requests(policy_decision_id) WHERE policy_decision_id IS NOT NULL AND decision = 'pending'`,
 	} {
 		if _, err := db.Exec(stmt); err != nil {
@@ -386,7 +393,7 @@ func approvalSchemaHasColumn(db *sql.DB, column string) (bool, error) {
 func scanApprovalRequest(scanner approvalScanner) (*ApprovalRequest, error) {
 	var req ApprovalRequest
 	var decision string
-	var taskID, policyDecisionID, actorID, expiresAt sql.NullInt64
+	var taskID, policyDecisionID, actorID, expiresAt, consumedAt, consumedByReceiptID sql.NullInt64
 	var createdAt, updatedAt int64
 	if err := scanner.Scan(
 		&req.ID,
@@ -402,6 +409,8 @@ func scanApprovalRequest(scanner approvalScanner) (*ApprovalRequest, error) {
 		&req.PolicyVersion,
 		&expiresAt,
 		&req.DecidedBy,
+		&consumedAt,
+		&consumedByReceiptID,
 		&createdAt,
 		&updatedAt,
 	); err != nil {
@@ -412,6 +421,8 @@ func scanApprovalRequest(scanner approvalScanner) (*ApprovalRequest, error) {
 	req.PolicyDecisionID = approvalIntFromNull(policyDecisionID)
 	req.ActorID = approvalIntFromNull(actorID)
 	req.ExpiresAt = approvalTimeFromNull(expiresAt)
+	req.ConsumedAt = approvalTimeFromNull(consumedAt)
+	req.ConsumedByReceiptID = approvalIntFromNull(consumedByReceiptID)
 	req.CreatedAt = time.UnixMilli(createdAt)
 	req.UpdatedAt = time.UnixMilli(updatedAt)
 	return &req, nil
@@ -439,7 +450,7 @@ func nullableApprovalTime(value sql.NullTime) any {
 }
 
 func approvalTimeFromNull(value sql.NullInt64) sql.NullTime {
-	if !value.Valid {
+	if !value.Valid || value.Int64 == 0 {
 		return sql.NullTime{}
 	}
 	return sql.NullTime{Time: time.UnixMilli(value.Int64), Valid: true}
