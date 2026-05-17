@@ -144,6 +144,33 @@ func TestCmdTaskMonitorWithQueueShowsSnapshot(t *testing.T) {
 	}
 }
 
+func TestCmdTaskMonitorWithQueueShowsRunningAndIdleAge(t *testing.T) {
+	ctx := context.Background()
+	queue := newCmdTaskTestQueue(t)
+	id, _, err := queue.Enqueue(ctx, "monitor age", "")
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	task, err := queue.Next(ctx)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if task == nil {
+		t.Fatal("Next returned nil")
+	}
+
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdTaskMonitorWithQueue(ctx, queue, []string{fmt.Sprint(id)}); err != nil {
+			t.Fatalf("cmdTaskMonitorWithQueue: %v", err)
+		}
+	})
+	for _, want := range []string{"Age:          ", "Running:      ", "Idle:         "} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout = %q, want %q", stdout, want)
+		}
+	}
+}
+
 func TestCmdTaskMonitorWithQueueRendersStructuredProgress(t *testing.T) {
 	ctx := context.Background()
 	queue := newCmdTaskTestQueue(t)
