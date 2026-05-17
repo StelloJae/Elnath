@@ -246,6 +246,10 @@ func TestExplainControlSurfacesJSON(t *testing.T) {
 			t.Fatalf("surface %s = %+v, want implemented ToolSearch-discoverable receipt-backed with tools", name, entry)
 		}
 	}
+	commandSurface := byName["command"]
+	if !strings.Contains(commandSurface.notes, "provider route") {
+		t.Fatalf("command surface notes = %q, want provider route explainability", commandSurface.notes)
+	}
 	userInput, ok := byName["user_input"]
 	if !ok {
 		t.Fatalf("missing control surface user_input in %+v", byName)
@@ -350,6 +354,18 @@ func TestExplainControlSurfacesJSON(t *testing.T) {
 	if len(out.ProductBoundaries) < 5 {
 		t.Fatalf("product_boundaries = %+v, want explicit boundary list", out.ProductBoundaries)
 	}
+	if !stringSliceContainsSubstring(out.ProductBoundaries, "Provider route") {
+		t.Fatalf("product_boundaries = %+v, want provider route planning-only boundary", out.ProductBoundaries)
+	}
+}
+
+func stringSliceContainsSubstring(values []string, want string) bool {
+	for _, value := range values {
+		if strings.Contains(value, want) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestControlSurfaceManifestMatchesToolSearchRouting(t *testing.T) {

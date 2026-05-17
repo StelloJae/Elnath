@@ -276,7 +276,7 @@ func controlSurfacePolicyViewForRuntime() controlSurfacePolicyView {
 		}
 	}
 	boundaries := controlSurfaceBoundaryReasons()
-	productBoundaries = append(productBoundaries, boundaries["self_correction"], boundaries["status"])
+	productBoundaries = append(productBoundaries, boundaries["self_correction"], boundaries["status"], boundaries["provider_routing"])
 	return controlSurfacePolicyView{
 		ProductComplete:    true,
 		Surfaces:           surfaces,
@@ -293,6 +293,7 @@ func controlSurfaceBoundaryReasons() map[string]string {
 		"code_intelligence": "full multi-language LSP lifecycle is product-excluded for this runtime closeout; Go-native code_symbols plus mutation diagnostic adapters are the replacement path.",
 		"self_correction":   "bounded self-correction is intentionally closed-enum and receipt-backed; broad silent self-healing is product-excluded.",
 		"status":            "runtime /status reports registry/control-surface coverage; deeper registry diagnostics are future polish, not a product-runtime gate.",
+		"provider_routing":  "Provider route explains active provider/model/effort/fallback boundaries; automatic provider fallback remains planning-only until a closed-enum policy enables it.",
 	}
 }
 
@@ -389,7 +390,7 @@ func controlSurfaceManifest() []controlSurfaceManifestEntry {
 			Status:        "implemented",
 			Tools:         []string{"command_catalog", "runtime_command"},
 			ReceiptBacked: true,
-			Notes:         "read-only command catalog and safe runtime slash execution",
+			Notes:         "read-only command catalog and safe runtime slash execution, including provider route explainability",
 		},
 		{
 			Name:          "scratchpad",

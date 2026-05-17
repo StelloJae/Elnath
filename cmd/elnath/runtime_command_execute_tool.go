@@ -201,7 +201,7 @@ func runtimeProviderCommandReadOnlyArgs(args []string) bool {
 	switch strings.ToLower(args[0]) {
 	case "help", "-h", "--help", "--json":
 		return len(args) == 1
-	case "current", "status", "candidates":
+	case "current", "status", "route", "candidates":
 		return len(args) == 1 || (len(args) == 2 && strings.EqualFold(args[1], "--json"))
 	case "check":
 		return len(args) == 2 || (len(args) == 3 && strings.EqualFold(args[2], "--json"))

@@ -2725,6 +2725,58 @@ func TestExecutionRuntimeRunTaskProviderSlashCommandJSONUsesSessionEffortOverrid
 	}
 }
 
+func TestExecutionRuntimeRunTaskProviderRouteJSONExplainsRuntimeRoute(t *testing.T) {
+	provider := &capabilityCountingProvider{}
+	rt := newTestExecutionRuntimeWithConfig(t, provider, false, func(cfg *config.Config) {
+		cfg.SelfHealing.Enabled = true
+		cfg.Reasoning.EffortMode = "auto"
+		cfg.Reasoning.Effort = "medium"
+		cfg.OpenAIResponses.APIKey = "sk-test"
+		cfg.OpenAIResponses.Model = "kimi-k2"
+		cfg.OpenAIResponses.BaseURL = "https://api.moonshot.ai/v1"
+		cfg.OpenAIResponses.ReasoningEffort = "high"
+		cfg.OpenAIResponses.Timeout = 120
+		cfg.Anthropic.APIKey = "anthropic-test"
+		cfg.Anthropic.Model = "claude-sonnet-4-6"
+		cfg.Anthropic.Timeout = 90
+	})
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	_, summary, err := rt.runTask(context.Background(), sess, nil, "/provider route --json", orchestrationOutput{})
+	if err != nil {
+		t.Fatalf("runTask /provider route --json: %v", err)
+	}
+	if provider.streamCalls != 0 || provider.chatCalls != 0 {
+		t.Fatalf("provider calls = chat:%d stream:%d, want none for local provider route", provider.chatCalls, provider.streamCalls)
+	}
+
+	var out providerRouteView
+	if err := json.Unmarshal([]byte(summary), &out); err != nil {
+		t.Fatalf("summary is not JSON: %v\n%s", err, summary)
+	}
+	if out.ActiveProvider != "openai-responses" || out.ActiveModel != "mock-model" {
+		t.Fatalf("route = %+v, want current runtime openai-responses/mock-model", out)
+	}
+	if out.SelectionReason != "active_provider_from_running_session" {
+		t.Fatalf("selection reason = %q", out.SelectionReason)
+	}
+	if out.ReasoningEffortMode != "auto" || out.ConfiguredEffort != "medium" || len(out.AutoEffortPolicy) < 4 {
+		t.Fatalf("route effort = %+v, want auto effort policy", out)
+	}
+	if out.RuntimeProviderSwitchAvailable || !containsString(out.ProviderSwitchBoundaries, "reflection_provider_startup_bound") {
+		t.Fatalf("route switch = available:%t boundaries:%+v, want reflection startup boundary", out.RuntimeProviderSwitchAvailable, out.ProviderSwitchBoundaries)
+	}
+	if len(out.ConfiguredProviders) != 2 || len(out.ClaimBoundary) == 0 || len(out.NextSafeActions) == 0 {
+		t.Fatalf("route metadata = %+v, want candidates, claim boundary, next actions", out)
+	}
+	if out.FallbackPolicy.Mode != "planning_only" || out.FallbackPolicy.AutomaticProviderSwitch {
+		t.Fatalf("fallback policy = %+v, want planning-only without automatic provider switch", out.FallbackPolicy)
+	}
+}
+
 func TestExecutionRuntimeRunTaskProviderSlashCommandListsCandidates(t *testing.T) {
 	provider := &capabilityCountingProvider{}
 	rt := newTestExecutionRuntimeWithConfig(t, provider, false, func(cfg *config.Config) {

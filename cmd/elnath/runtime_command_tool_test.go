@@ -478,7 +478,7 @@ func TestCommandCatalogToolShowsRuntimeControlArgumentHints(t *testing.T) {
 	if out.Command == nil {
 		t.Fatalf("output = %+v, want /provider command metadata", out)
 	}
-	if out.Command.ArgumentHint != "status|candidates|check <provider>|use <provider> [--json]" {
+	if out.Command.ArgumentHint != "status|route|candidates|check <provider>|use <provider> [--json]" {
 		t.Fatalf("ArgumentHint = %q, want provider usage hint", out.Command.ArgumentHint)
 	}
 }
@@ -633,6 +633,53 @@ func TestRuntimeCommandToolExecutesStatusReadOnly(t *testing.T) {
 	}
 	if out.Receipt.Command != "/status" || len(out.Receipt.Args) != 1 || out.Receipt.Args[0] != "--json" || out.Receipt.StateMutation {
 		t.Fatalf("receipt command bounds = %+v", out.Receipt)
+	}
+}
+
+func TestRuntimeCommandToolExecutesProviderRouteReadOnly(t *testing.T) {
+	rt := newTestExecutionRuntime(t, &capabilityCountingProvider{})
+	tool, ok := rt.reg.Get("runtime_command")
+	if !ok {
+		t.Fatal("runtime_command tool missing")
+	}
+
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"/provider","args":["route","--json"]}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("Execute returned error result: %s", res.Output)
+	}
+
+	var out struct {
+		Command string `json:"command"`
+		Output  string `json:"output"`
+		Receipt struct {
+			Tool          string   `json:"tool"`
+			Command       string   `json:"command"`
+			Args          []string `json:"args"`
+			ReadOnly      bool     `json:"read_only"`
+			StateMutation bool     `json:"state_mutation"`
+		} `json:"receipt"`
+	}
+	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, res.Output)
+	}
+	var route providerRouteView
+	if err := json.Unmarshal([]byte(out.Output), &route); err != nil {
+		t.Fatalf("provider route output is not JSON: %v\n%s", err, out.Output)
+	}
+	if route.ActiveProvider != "openai-responses" || route.SelectionReason != "active_provider_from_running_session" {
+		t.Fatalf("route = %+v, want runtime provider route", route)
+	}
+	if route.FallbackPolicy.Mode != "planning_only" || route.FallbackPolicy.AutomaticProviderSwitch {
+		t.Fatalf("fallback policy = %+v, want planning-only without automatic provider switch", route.FallbackPolicy)
+	}
+	if out.Receipt.Tool != "runtime_command" || out.Receipt.Command != "/provider" || !out.Receipt.ReadOnly || out.Receipt.StateMutation {
+		t.Fatalf("receipt = %+v, want read-only provider command receipt", out.Receipt)
+	}
+	if len(out.Receipt.Args) != 2 || out.Receipt.Args[0] != "route" || out.Receipt.Args[1] != "--json" {
+		t.Fatalf("receipt args = %+v, want route --json", out.Receipt.Args)
 	}
 }
 
