@@ -70,6 +70,37 @@ func (s *Store) GetStandingGoal(ctx context.Context, id int64) (*StandingGoal, e
 	return &goal, nil
 }
 
+func (s *Store) ListStandingGoals(ctx context.Context, limit int) ([]StandingGoal, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, title, description, status, priority, autonomy_level, risk_budget, created_at, updated_at
+		FROM standing_goals
+		ORDER BY updated_at DESC, id DESC
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []StandingGoal
+	for rows.Next() {
+		var goal StandingGoal
+		var createdAt, updatedAt int64
+		if err := rows.Scan(&goal.ID, &goal.Title, &goal.Description, &goal.Status, &goal.Priority, &goal.AutonomyLevel, &goal.RiskBudget, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+		goal.CreatedAt = millisTime(createdAt)
+		goal.UpdatedAt = millisTime(updatedAt)
+		out = append(out, goal)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (s *Store) CreateSignalWatcher(ctx context.Context, watcher SignalWatcher) (*SignalWatcher, error) {
 	now := nowTime()
 	if watcher.CreatedAt.IsZero() {
@@ -337,6 +368,49 @@ func (s *Store) GetAgenticTask(ctx context.Context, id int64) (*AgenticTask, err
 	task.UpdatedAt = millisTime(updatedAt)
 	task.DueAt = nullTimeFromMillis(dueAt)
 	return &task, nil
+}
+
+func (s *Store) ListAgenticTasks(ctx context.Context, status string, limit int) ([]AgenticTask, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	query := `
+		SELECT id, goal_id, signal_id, parent_id, queue_task_id, title, prompt, status, priority, risk_level, autonomy_decision, approval_request_id, verification_status, created_at, updated_at, due_at
+		FROM agentic_tasks
+	`
+	var args []any
+	if strings.TrimSpace(status) != "" {
+		query += ` WHERE status = ?`
+		args = append(args, status)
+	}
+	query += ` ORDER BY updated_at DESC, id DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AgenticTask
+	for rows.Next() {
+		var task AgenticTask
+		var goalID, signalID, parentID, queueTaskID, dueAt sql.NullInt64
+		var createdAt, updatedAt int64
+		if err := rows.Scan(&task.ID, &goalID, &signalID, &parentID, &queueTaskID, &task.Title, &task.Prompt, &task.Status, &task.Priority, &task.RiskLevel, &task.AutonomyDecision, &task.ApprovalRequestID, &task.VerificationStatus, &createdAt, &updatedAt, &dueAt); err != nil {
+			return nil, err
+		}
+		task.GoalID = intFromNull(goalID)
+		task.SignalID = intFromNull(signalID)
+		task.ParentID = intFromNull(parentID)
+		task.QueueTaskID = intFromNull(queueTaskID)
+		task.CreatedAt = millisTime(createdAt)
+		task.UpdatedAt = millisTime(updatedAt)
+		task.DueAt = nullTimeFromMillis(dueAt)
+		out = append(out, task)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (s *Store) GetAgenticTaskByQueueTaskID(ctx context.Context, queueTaskID int64) (*AgenticTask, error) {

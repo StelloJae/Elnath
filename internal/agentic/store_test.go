@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/daemon"
@@ -476,6 +477,32 @@ func TestAgenticStore_InsertReadStandingGoal(t *testing.T) {
 	}
 }
 
+func TestAgenticStore_ListStandingGoalsOrdersByUpdatedAt(t *testing.T) {
+	ctx := context.Background()
+	_, store := newTestStore(t)
+	base := time.Unix(1714478400, 0)
+	for _, goal := range []StandingGoal{
+		{Title: "older goal", Status: GoalStatusActive, Priority: 1, AutonomyLevel: AutonomyLevelObserve, RiskBudget: "low", CreatedAt: base, UpdatedAt: base},
+		{Title: "newest goal", Status: GoalStatusActive, Priority: 3, AutonomyLevel: AutonomyLevelObserve, RiskBudget: "low", CreatedAt: base, UpdatedAt: base.Add(2 * time.Hour)},
+		{Title: "middle goal", Status: GoalStatusActive, Priority: 2, AutonomyLevel: AutonomyLevelObserve, RiskBudget: "low", CreatedAt: base, UpdatedAt: base.Add(time.Hour)},
+	} {
+		if _, err := store.CreateStandingGoal(ctx, goal); err != nil {
+			t.Fatalf("CreateStandingGoal(%q): %v", goal.Title, err)
+		}
+	}
+
+	got, err := store.ListStandingGoals(ctx, 2)
+	if err != nil {
+		t.Fatalf("ListStandingGoals: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len(goals) = %d, want 2", len(got))
+	}
+	if got[0].Title != "newest goal" || got[1].Title != "middle goal" {
+		t.Fatalf("goal order = %q, %q; want newest, middle", got[0].Title, got[1].Title)
+	}
+}
+
 func TestAgenticStore_InsertReadSignalWatcher(t *testing.T) {
 	ctx := context.Background()
 	_, store := newTestStore(t)
@@ -932,6 +959,32 @@ func TestAgenticStore_InsertReadAgenticTask(t *testing.T) {
 	}
 	if got.GoalID != goal.ID || got.SignalID != signal.ID || got.QueueTaskID != 42 || got.ApprovalRequestID != "approval-123" || got.Status != TaskStatusPending {
 		t.Fatalf("unexpected task: %+v", got)
+	}
+}
+
+func TestAgenticStore_ListAgenticTasksFiltersStatusAndOrdersByUpdatedAt(t *testing.T) {
+	ctx := context.Background()
+	_, store := newTestStore(t)
+	base := time.Unix(1714478400, 0)
+	for _, task := range []AgenticTask{
+		{Title: "older proposed", Prompt: "older", Status: TaskStatusProposed, RiskLevel: RiskLevelLow, AutonomyDecision: PolicyDecisionObserve, VerificationStatus: VerificationStatusPending, CreatedAt: base, UpdatedAt: base},
+		{Title: "running task", Prompt: "running", Status: TaskStatusRunning, RiskLevel: RiskLevelLow, AutonomyDecision: PolicyDecisionObserve, VerificationStatus: VerificationStatusPending, CreatedAt: base, UpdatedAt: base.Add(time.Hour)},
+		{Title: "newer proposed", Prompt: "newer", Status: TaskStatusProposed, RiskLevel: RiskLevelLow, AutonomyDecision: PolicyDecisionObserve, VerificationStatus: VerificationStatusPending, CreatedAt: base, UpdatedAt: base.Add(2 * time.Hour)},
+	} {
+		if _, err := store.CreateAgenticTask(ctx, task); err != nil {
+			t.Fatalf("CreateAgenticTask(%q): %v", task.Title, err)
+		}
+	}
+
+	got, err := store.ListAgenticTasks(ctx, TaskStatusProposed, 2)
+	if err != nil {
+		t.Fatalf("ListAgenticTasks: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len(tasks) = %d, want 2", len(got))
+	}
+	if got[0].Title != "newer proposed" || got[1].Title != "older proposed" {
+		t.Fatalf("task order = %q, %q; want newer, older proposed", got[0].Title, got[1].Title)
 	}
 }
 

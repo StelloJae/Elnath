@@ -902,6 +902,38 @@ func TestAgenticCommand_CompletionGateViewsHandleMissingTable(t *testing.T) {
 	}
 }
 
+func TestAgenticCommand_StatusHandlesMissingApprovalTable(t *testing.T) {
+	fx := newAgenticCommandFixture(t)
+	if _, err := fx.db.Main.Exec(`DROP TABLE approval_requests`); err != nil {
+		t.Fatalf("drop approval_requests: %v", err)
+	}
+
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdAgentic(context.Background(), []string{"status"}); err != nil {
+			t.Fatalf("cmdAgentic status with missing approval_requests: %v", err)
+		}
+	})
+	if !strings.Contains(stdout, "approvals: none") {
+		t.Fatalf("status output = %q, want missing approvals rendered as none", stdout)
+	}
+}
+
+func TestAgenticCommand_TaskHandlesMissingApprovalTable(t *testing.T) {
+	fx := newAgenticCommandFixture(t)
+	if _, err := fx.db.Main.Exec(`DROP TABLE approval_requests`); err != nil {
+		t.Fatalf("drop approval_requests: %v", err)
+	}
+
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdAgentic(context.Background(), []string{"task", fmt.Sprint(fx.task.ID)}); err != nil {
+			t.Fatalf("cmdAgentic task with missing approval_requests: %v", err)
+		}
+	})
+	if !strings.Contains(stdout, "approval: none") {
+		t.Fatalf("task output = %q, want missing approval rendered as none", stdout)
+	}
+}
+
 func TestAgenticCommand_TaskShowsCoreTaskLinks(t *testing.T) {
 	fx := newAgenticCommandFixture(t)
 	stdout, _ := captureOutput(t, func() {
@@ -1176,6 +1208,184 @@ func TestAgenticCommand_TaskCanResolveByQueueTaskIDIfFlagged(t *testing.T) {
 	}
 }
 
+func TestAgenticCommand_GoalCreateJSONCreatesActiveGoal(t *testing.T) {
+	fx := newAgenticCommandFixture(t)
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdAgentic(context.Background(), []string{
+			"goal", "create",
+			"--title", "Dogfood activation",
+			"--description", "Create operator-visible standing goals",
+			"--priority", "9",
+			"--risk-budget", "medium",
+			"--json",
+		}); err != nil {
+			t.Fatalf("cmdAgentic goal create json: %v", err)
+		}
+	})
+	var view struct {
+		AutonomyEnabled bool `json:"autonomy_enabled"`
+		Goal            struct {
+			ID            int64  `json:"id"`
+			Title         string `json:"title"`
+			Description   string `json:"description"`
+			Status        string `json:"status"`
+			Priority      int    `json:"priority"`
+			AutonomyLevel string `json:"autonomy_level"`
+			RiskBudget    string `json:"risk_budget"`
+		} `json:"goal"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &view); err != nil {
+		t.Fatalf("goal create JSON = %q, unmarshal: %v", stdout, err)
+	}
+	if view.AutonomyEnabled {
+		t.Fatal("autonomy_enabled = true, want false")
+	}
+	if view.Goal.ID == 0 || view.Goal.Title != "Dogfood activation" || view.Goal.Description != "Create operator-visible standing goals" {
+		t.Fatalf("created goal = %+v, want requested fields", view.Goal)
+	}
+	if view.Goal.Status != agentic.GoalStatusActive || view.Goal.AutonomyLevel != agentic.AutonomyLevelObserve || view.Goal.Priority != 9 || view.Goal.RiskBudget != "medium" {
+		t.Fatalf("created goal defaults = %+v, want active/observe/priority/risk", view.Goal)
+	}
+	got, err := fx.store.GetStandingGoal(context.Background(), view.Goal.ID)
+	if err != nil {
+		t.Fatalf("GetStandingGoal(created): %v", err)
+	}
+	if got.Title != view.Goal.Title || got.Status != agentic.GoalStatusActive {
+		t.Fatalf("stored goal = %+v, want created JSON goal", got)
+	}
+}
+
+func TestAgenticCommand_GoalsJSONListsStandingGoals(t *testing.T) {
+	fx := newAgenticCommandFixture(t)
+	if _, err := fx.store.CreateStandingGoal(context.Background(), agentic.StandingGoal{
+		Title:         "Second goal",
+		Description:   "Newer visible goal",
+		Status:        agentic.GoalStatusActive,
+		Priority:      8,
+		AutonomyLevel: agentic.AutonomyLevelObserve,
+		RiskBudget:    "medium",
+		CreatedAt:     time.Unix(1714482000, 0),
+		UpdatedAt:     time.Unix(1714482000, 0),
+	}); err != nil {
+		t.Fatalf("CreateStandingGoal(second): %v", err)
+	}
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdAgentic(context.Background(), []string{"goals", "--limit", "1", "--json"}); err != nil {
+			t.Fatalf("cmdAgentic goals json: %v", err)
+		}
+	})
+	var view struct {
+		AutonomyEnabled bool `json:"autonomy_enabled"`
+		Limit           int  `json:"limit"`
+		Goals           []struct {
+			Title         string `json:"title"`
+			AutonomyLevel string `json:"autonomy_level"`
+			RiskBudget    string `json:"risk_budget"`
+		} `json:"goals"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &view); err != nil {
+		t.Fatalf("goals JSON = %q, unmarshal: %v", stdout, err)
+	}
+	if view.AutonomyEnabled || view.Limit != 1 || len(view.Goals) != 1 {
+		t.Fatalf("goals view = %+v, want one read-only goal", view)
+	}
+	if view.Goals[0].Title != "Second goal" || view.Goals[0].AutonomyLevel != agentic.AutonomyLevelObserve || view.Goals[0].RiskBudget != "medium" {
+		t.Fatalf("listed goal = %+v, want newest goal details", view.Goals[0])
+	}
+}
+
+func TestAgenticCommand_SignalCreateJSONCreatesNewSignal(t *testing.T) {
+	fx := newAgenticCommandFixture(t)
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdAgentic(context.Background(), []string{
+			"signal", "create",
+			"--goal-id", fmt.Sprint(fx.goal.ID),
+			"--source", "manual",
+			"--type", "operator_signal",
+			"--payload-json", `{"topic":"activation-dogfood"}`,
+			"--severity", "6",
+			"--dedupe-key", "manual-activation-dogfood",
+			"--json",
+		}); err != nil {
+			t.Fatalf("cmdAgentic signal create json: %v", err)
+		}
+	})
+	var view struct {
+		AutonomyEnabled bool `json:"autonomy_enabled"`
+		Signal          struct {
+			ID        int64  `json:"id"`
+			GoalID    int64  `json:"goal_id"`
+			Source    string `json:"source"`
+			Type      string `json:"type"`
+			Status    string `json:"status"`
+			Severity  int    `json:"severity"`
+			DedupeKey string `json:"dedupe_key"`
+		} `json:"signal"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &view); err != nil {
+		t.Fatalf("signal create JSON = %q, unmarshal: %v", stdout, err)
+	}
+	if view.AutonomyEnabled {
+		t.Fatal("autonomy_enabled = true, want false")
+	}
+	if view.Signal.ID == 0 || view.Signal.GoalID != fx.goal.ID || view.Signal.Status != agentic.SignalStatusNew {
+		t.Fatalf("created signal = %+v, want new signal for goal", view.Signal)
+	}
+	if view.Signal.Source != "manual" || view.Signal.Type != "operator_signal" || view.Signal.Severity != 6 || view.Signal.DedupeKey != "manual-activation-dogfood" {
+		t.Fatalf("created signal fields = %+v, want requested fields", view.Signal)
+	}
+	got, err := fx.store.GetGoalSignal(context.Background(), view.Signal.ID)
+	if err != nil {
+		t.Fatalf("GetGoalSignal(created): %v", err)
+	}
+	if got.PayloadJSON != `{"topic":"activation-dogfood"}` || got.Fingerprint == "" {
+		t.Fatalf("stored signal = %+v, want payload and fingerprint", got)
+	}
+}
+
+func TestAgenticCommand_SignalCreateRejectsInvalidPayloadJSON(t *testing.T) {
+	fx := newAgenticCommandFixture(t)
+	err := cmdAgentic(context.Background(), []string{
+		"signal", "create",
+		"--goal-id", fmt.Sprint(fx.goal.ID),
+		"--source", "manual",
+		"--type", "operator_signal",
+		"--payload-json", `{bad`,
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid signal payload JSON") {
+		t.Fatalf("cmdAgentic invalid signal payload error = %v, want JSON validation error", err)
+	}
+}
+
+func TestAgenticCommand_TasksJSONListsTasksByStatus(t *testing.T) {
+	fx := newAgenticCommandFixture(t)
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdAgentic(context.Background(), []string{"tasks", "--status", agentic.TaskStatusProposed, "--limit", "1", "--json"}); err != nil {
+			t.Fatalf("cmdAgentic tasks json: %v", err)
+		}
+	})
+	var view struct {
+		AutonomyEnabled bool   `json:"autonomy_enabled"`
+		Limit           int    `json:"limit"`
+		Status          string `json:"status"`
+		Tasks           []struct {
+			ID     int64  `json:"id"`
+			Title  string `json:"title"`
+			Status string `json:"status"`
+		} `json:"tasks"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &view); err != nil {
+		t.Fatalf("tasks JSON = %q, unmarshal: %v", stdout, err)
+	}
+	if view.AutonomyEnabled || view.Limit != 1 || view.Status != agentic.TaskStatusProposed || len(view.Tasks) != 1 {
+		t.Fatalf("tasks view = %+v, want one proposed task", view)
+	}
+	if view.Tasks[0].ID != fx.task.ID || view.Tasks[0].Title != "Investigate blocked receipt" || view.Tasks[0].Status != agentic.TaskStatusProposed {
+		t.Fatalf("listed task = %+v, want fixture task", view.Tasks[0])
+	}
+	assertNoRawSecrets(t, stdout, fx.rawSecrets)
+}
+
 func TestExistingTaskAndDaemonStatusCommandsUnchanged(t *testing.T) {
 	fx := newAgenticCommandFixture(t)
 	stdout, _ := captureOutput(t, func() {
@@ -1202,6 +1412,10 @@ func runAgenticCommandVariants(t *testing.T, fx *agenticCommandFixture) {
 		{"status", "--json"},
 		{"activations"},
 		{"activations", "--json"},
+		{"goals"},
+		{"goals", "--json"},
+		{"tasks"},
+		{"tasks", "--status", agentic.TaskStatusProposed, "--json"},
 		{"task", fmt.Sprint(fx.task.ID)},
 		{"task", fmt.Sprint(fx.task.ID), "--json"},
 		{"task", "--queue-task-id", fmt.Sprint(fx.queueTask)},
