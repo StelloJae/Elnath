@@ -245,6 +245,37 @@ func TestCmdTaskMonitorWithQueueJSONWaitsForUpdate(t *testing.T) {
 	}
 }
 
+func TestCmdTaskMonitorWithQueueJSONIncludesParsedProgressEvent(t *testing.T) {
+	ctx := context.Background()
+	queue := newCmdTaskTestQueue(t)
+	id, _, err := queue.Enqueue(ctx, "json structured progress", "")
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	task, err := queue.Next(ctx)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if task == nil {
+		t.Fatal("Next returned nil")
+	}
+	rawProgress := daemon.EncodeProgressEvent(daemon.RuntimeProgressEvent("completion_check", "checking completion contract"))
+	if _, err := queue.UpdateAnnotation(ctx, task.ID, rawProgress, "checking"); err != nil {
+		t.Fatalf("UpdateAnnotation: %v", err)
+	}
+
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdTaskMonitorWithQueue(ctx, queue, []string{fmt.Sprint(id), "--json"}); err != nil {
+			t.Fatalf("cmdTaskMonitorWithQueue: %v", err)
+		}
+	})
+	for _, want := range []string{`"progress_event"`, `"kind":"runtime"`, `"phase":"completion_check"`, `"message":"checking completion contract"`} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout = %q, want %q", stdout, want)
+		}
+	}
+}
+
 func TestCmdTaskOutputWithQueueReturnsTail(t *testing.T) {
 	ctx := context.Background()
 	queue := newCmdTaskTestQueue(t)
@@ -465,6 +496,50 @@ func TestCmdTaskAnswerWithQueueAcceptsChoiceFlag(t *testing.T) {
 	payload := daemon.ParseTaskPayload(tasks[0].Payload)
 	if !strings.Contains(payload.Prompt, "Answer:\nnew") {
 		t.Fatalf("payload = %+v, want choice normalized to option text", payload)
+	}
+}
+
+func TestCmdTaskAnswerWithQueueInteractiveChoice(t *testing.T) {
+	ctx := context.Background()
+	queue := newCmdTaskTestQueue(t)
+	store := learning.NewOutcomeStore(filepath.Join(t.TempDir(), "outcomes.jsonl"))
+	if err := store.Append(learning.OutcomeRecord{
+		Timestamp: time.Date(2026, 5, 13, 7, 0, 0, 0, time.UTC),
+		ControlToolReceipts: []learning.ControlToolReceipt{{
+			Tool:          "ask_user_question",
+			Action:        "request",
+			RequestID:     "req-123",
+			SessionID:     "sess-123",
+			Question:      "Which branch?",
+			Options:       []string{"main", "new"},
+			AllowFreeText: false,
+		}},
+	}); err != nil {
+		t.Fatalf("Append outcome: %v", err)
+	}
+
+	withStdin(t, "2\n")
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdTaskAnswerWithQueue(ctx, queue, store, []string{"--interactive", "--session", "sess-123"}); err != nil {
+			t.Fatalf("cmdTaskAnswerWithQueue: %v", err)
+		}
+	})
+	for _, want := range []string{"Which branch?", "1. main", "2. new", "Answer task:"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout = %q, want %q", stdout, want)
+		}
+	}
+
+	tasks, err := queue.List(ctx)
+	if err != nil {
+		t.Fatalf("List tasks: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("tasks = %+v, want one answer resume task", tasks)
+	}
+	payload := daemon.ParseTaskPayload(tasks[0].Payload)
+	if payload.SessionID != "sess-123" || !strings.Contains(payload.Prompt, "Request ID:\nreq-123") || !strings.Contains(payload.Prompt, "Answer:\nnew") {
+		t.Fatalf("payload = %+v, want interactive choice normalized to option text", payload)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 // TextDeltaEvent → forwards content string directly
 // ToolProgressEvent → JSON-encodes as daemon.ProgressEvent compat
 // WorkflowProgressEvent → JSON-encodes
+// RuntimeProgressEvent → JSON-encodes
 // UsageProgressEvent → JSON-encodes
 // ResearchProgressEvent → forwards Message string
 // Other events → silently dropped
@@ -33,6 +34,8 @@ func (a *onTextSinkAdapter) Emit(e Event) {
 	case WorkflowProgressEvent:
 		msg := strings.TrimSpace(ev.Intent + " → " + ev.Workflow)
 		a.fn(encodeProgressCompat("workflow", msg, ""))
+	case RuntimeProgressEvent:
+		a.fn(encodeRuntimeProgressCompat(ev))
 	case UsageProgressEvent:
 		a.fn(encodeProgressCompat("usage", ev.Summary, ""))
 	case ResearchProgressEvent:
@@ -80,6 +83,26 @@ func encodeToolProgressCompat(ev ToolProgressEvent) string {
 	}
 	if ev.IsError {
 		m["is_error"] = true
+	}
+	data, err := json.Marshal(m)
+	if err != nil {
+		return msg
+	}
+	return string(data)
+}
+
+func encodeRuntimeProgressCompat(ev RuntimeProgressEvent) string {
+	msg := strings.TrimSpace(ev.Message)
+	if msg == "" {
+		msg = strings.TrimSpace(ev.Phase)
+	}
+	m := map[string]string{
+		"version": "elnath.progress.v1",
+		"kind":    "runtime",
+		"message": msg,
+	}
+	if phase := strings.TrimSpace(ev.Phase); phase != "" {
+		m["phase"] = phase
 	}
 	data, err := json.Marshal(m)
 	if err != nil {

@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/stello/elnath/internal/config"
+	"github.com/stello/elnath/internal/scheduler"
 	"github.com/stello/elnath/internal/skill"
 	"github.com/stello/elnath/internal/wiki"
 )
@@ -52,6 +53,39 @@ type skillProposalEntry struct {
 	ModTime         string   `json:"mod_time,omitempty"`
 }
 
+type skillCuratorTaskEntry struct {
+	Name            string   `json:"name"`
+	Type            string   `json:"type"`
+	Prompt          string   `json:"prompt"`
+	Interval        string   `json:"interval"`
+	RunOnStart      bool     `json:"run_on_start"`
+	Enabled         bool     `json:"enabled"`
+	DeliveryTargets []string `json:"delivery_targets,omitempty"`
+}
+
+type skillCuratorRuntimeStatus struct {
+	HotReloadSupported bool   `json:"hot_reload_supported"`
+	EffectiveWhen      string `json:"effective_when"`
+}
+
+type skillCuratorStatusOutput struct {
+	SchedulePath  string                    `json:"schedule_path"`
+	Scheduled     bool                      `json:"scheduled"`
+	Task          *skillCuratorTaskEntry    `json:"task,omitempty"`
+	Runtime       skillCuratorRuntimeStatus `json:"runtime"`
+	DraftCount    int                       `json:"draft_count"`
+	ProposalCount int                       `json:"proposal_count"`
+	UsageSkills   int                       `json:"usage_skills"`
+	UsageTotal    int                       `json:"usage_total"`
+}
+
+const (
+	skillCuratorDefaultName     = "skill-curator"
+	skillCuratorDefaultPrompt   = "promote queued skill drafts"
+	skillCuratorDefaultInterval = "24h"
+	skillCuratorTaskType        = "skill-promote"
+)
+
 func cmdSkill(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return cmdSkillList(ctx, nil)
@@ -75,8 +109,10 @@ func cmdSkill(ctx context.Context, args []string) error {
 		return cmdSkillStats(ctx, args[1:])
 	case "proposals":
 		return cmdSkillProposals(ctx, args[1:])
+	case "curator":
+		return cmdSkillCurator(ctx, args[1:])
 	default:
-		return fmt.Errorf("unknown skill subcommand: %q (try: list, show, create, delete, edit, stats, proposals)", args[0])
+		return fmt.Errorf("unknown skill subcommand: %q (try: list, show, create, delete, edit, stats, proposals, curator)", args[0])
 	}
 }
 
@@ -90,7 +126,8 @@ Subcommands:
   delete <name>                         Delete a skill
   edit <name>                           Open a skill in $EDITOR
   stats                                 Show skill registry stats
-  proposals <list|show|apply>           Review skill improvement proposals`
+  proposals <list|show|apply>           Review skill improvement proposals
+  curator <status|install>              Inspect or install skill lifecycle curator`
 }
 
 func cmdSkillList(_ context.Context, args []string) error {
@@ -536,6 +573,225 @@ func cmdSkillProposalsApply(_ context.Context, args []string) error {
 	}
 	fmt.Printf("Applied proposal %s to /%s\n", filepath.Base(path), sk.Name)
 	return nil
+}
+
+func cmdSkillCurator(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		return cmdSkillCuratorStatus(ctx, nil)
+	}
+	switch args[0] {
+	case "status":
+		return cmdSkillCuratorStatus(ctx, args[1:])
+	case "install":
+		return cmdSkillCuratorInstall(ctx, args[1:])
+	default:
+		return fmt.Errorf("unknown skill curator subcommand: %q (try: status, install)", args[0])
+	}
+}
+
+func cmdSkillCuratorStatus(ctx context.Context, args []string) error {
+	asJSON := hasFlag(args, "--json")
+	status, err := buildSkillCuratorStatus(ctx)
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		raw, err := json.MarshalIndent(status, "", "  ")
+		if err != nil {
+			return fmt.Errorf("skill curator status: marshal JSON: %w", err)
+		}
+		fmt.Println(string(raw))
+		return nil
+	}
+	printSkillCuratorStatus(status)
+	return nil
+}
+
+func cmdSkillCuratorInstall(ctx context.Context, args []string) error {
+	asJSON := hasFlag(args, "--json")
+	name := skillCuratorDefaultName
+	interval := skillCuratorDefaultInterval
+	runOnStart := false
+	for i := 0; i < len(args); {
+		switch args[i] {
+		case "--json":
+			i++
+		case "--run-on-start":
+			runOnStart = true
+			i++
+		case "--name":
+			value, next, err := parseStringFlag(args, i, "--name")
+			if err != nil {
+				return err
+			}
+			name = value
+			i = next + 1
+		case "--interval":
+			value, next, err := parseStringFlag(args, i, "--interval")
+			if err != nil {
+				return err
+			}
+			interval = value
+			i = next + 1
+		default:
+			return fmt.Errorf("unknown skill curator install flag: %s", args[i])
+		}
+	}
+
+	cfg, err := loadSkillConfig()
+	if err != nil {
+		return err
+	}
+	path := resolveRuntimeScheduledTasksPath(cfg)
+	status, err := buildSkillCuratorStatusFromConfig(ctx, cfg, path)
+	if err != nil {
+		return err
+	}
+	if status.Scheduled && status.Task != nil && status.Task.Name == name {
+		if asJSON {
+			raw, err := json.MarshalIndent(status, "", "  ")
+			if err != nil {
+				return fmt.Errorf("skill curator install: marshal JSON: %w", err)
+			}
+			fmt.Println(string(raw))
+			return nil
+		}
+		fmt.Printf("Skill curator schedule already installed: %s (%s)\n", status.Task.Name, status.Task.Interval)
+		return nil
+	}
+
+	params, err := json.Marshal(map[string]any{
+		"name":         name,
+		"type":         skillCuratorTaskType,
+		"prompt":       skillCuratorDefaultPrompt,
+		"interval":     interval,
+		"run_on_start": runOnStart,
+	})
+	if err != nil {
+		return fmt.Errorf("skill curator install: marshal params: %w", err)
+	}
+	result, err := scheduler.NewScheduleCreateTool(path).Execute(ctx, params)
+	if err != nil {
+		return err
+	}
+	if result == nil {
+		return fmt.Errorf("skill curator install: empty schedule_create result")
+	}
+	if result.IsError {
+		return fmt.Errorf("%s", strings.TrimSpace(result.Output))
+	}
+	status, err = buildSkillCuratorStatusFromConfig(ctx, cfg, path)
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		raw, err := json.MarshalIndent(status, "", "  ")
+		if err != nil {
+			return fmt.Errorf("skill curator install: marshal JSON: %w", err)
+		}
+		fmt.Println(string(raw))
+		return nil
+	}
+	if status.Task != nil {
+		fmt.Printf("Installed skill curator schedule: %s (%s)\n", status.Task.Name, status.Task.Interval)
+		return nil
+	}
+	fmt.Println("Installed skill curator schedule.")
+	return nil
+}
+
+func buildSkillCuratorStatus(ctx context.Context) (skillCuratorStatusOutput, error) {
+	cfg, err := loadSkillConfig()
+	if err != nil {
+		return skillCuratorStatusOutput{}, err
+	}
+	return buildSkillCuratorStatusFromConfig(ctx, cfg, resolveRuntimeScheduledTasksPath(cfg))
+}
+
+func buildSkillCuratorStatusFromConfig(ctx context.Context, cfg *config.Config, schedulePath string) (skillCuratorStatusOutput, error) {
+	tracker := skill.NewTracker(cfg.DataDir)
+	proposals, err := tracker.ListImprovementProposals()
+	if err != nil {
+		return skillCuratorStatusOutput{}, err
+	}
+	stats, err := tracker.UsageStats()
+	if err != nil {
+		return skillCuratorStatusOutput{}, err
+	}
+	store, err := wiki.NewStore(cfg.WikiDir)
+	if err != nil {
+		return skillCuratorStatusOutput{}, err
+	}
+	skills, err := skill.ListAllFromStore(store)
+	if err != nil {
+		return skillCuratorStatusOutput{}, err
+	}
+	draftCount := 0
+	for _, sk := range skills {
+		if sk != nil && sk.Status == "draft" {
+			draftCount++
+		}
+	}
+	usageTotal := 0
+	for _, count := range stats {
+		usageTotal += count
+	}
+	task, err := loadSkillCuratorScheduledTask(ctx, schedulePath)
+	if err != nil {
+		return skillCuratorStatusOutput{}, err
+	}
+	return skillCuratorStatusOutput{
+		SchedulePath: schedulePath,
+		Scheduled:    task != nil,
+		Task:         task,
+		Runtime: skillCuratorRuntimeStatus{
+			HotReloadSupported: false,
+			EffectiveWhen:      "after_daemon_restart",
+		},
+		DraftCount:    draftCount,
+		ProposalCount: len(proposals),
+		UsageSkills:   len(stats),
+		UsageTotal:    usageTotal,
+	}, nil
+}
+
+func loadSkillCuratorScheduledTask(ctx context.Context, schedulePath string) (*skillCuratorTaskEntry, error) {
+	result, err := scheduler.NewScheduleListTool(schedulePath).Execute(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return nil, fmt.Errorf("skill curator status: empty schedule_list result")
+	}
+	if result.IsError {
+		return nil, fmt.Errorf("%s", strings.TrimSpace(result.Output))
+	}
+	var output struct {
+		Tasks []skillCuratorTaskEntry `json:"tasks"`
+	}
+	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
+		return nil, fmt.Errorf("skill curator status: parse schedule_list output: %w", err)
+	}
+	for _, task := range output.Tasks {
+		if task.Type == skillCuratorTaskType {
+			t := task
+			return &t, nil
+		}
+	}
+	return nil, nil
+}
+
+func printSkillCuratorStatus(status skillCuratorStatusOutput) {
+	fmt.Println("Skill curator:")
+	fmt.Printf("  scheduled: %t\n", status.Scheduled)
+	fmt.Printf("  schedule:  %s\n", status.SchedulePath)
+	if status.Task != nil {
+		fmt.Printf("  task:      %s type=%s interval=%s run_on_start=%t enabled=%t\n", status.Task.Name, status.Task.Type, status.Task.Interval, status.Task.RunOnStart, status.Task.Enabled)
+	}
+	fmt.Printf("  drafts:    %d\n", status.DraftCount)
+	fmt.Printf("  proposals: %d\n", status.ProposalCount)
+	fmt.Printf("  usage:     skills=%d total=%d\n", status.UsageSkills, status.UsageTotal)
+	fmt.Printf("  runtime:   effective=%s hot_reload=%t\n", status.Runtime.EffectiveWhen, status.Runtime.HotReloadSupported)
 }
 
 func skillProposalEntries(files []skill.ImprovementProposalFile) []skillProposalEntry {

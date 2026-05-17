@@ -930,6 +930,44 @@ func TestTaskMonitorToolReturnsRunningSnapshot(t *testing.T) {
 	}
 }
 
+func TestTaskMonitorToolReturnsParsedProgressEvent(t *testing.T) {
+	ctx := context.Background()
+	queue := newTaskToolTestQueue(t)
+	if _, _, err := queue.Enqueue(ctx, "structured progress", ""); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	task, err := queue.Next(ctx)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if task == nil {
+		t.Fatal("Next returned nil")
+	}
+	progress := EncodeProgressEvent(RuntimeProgressEvent("workflow_running", "running single workflow"))
+	if _, err := queue.UpdateAnnotation(ctx, task.ID, progress, "running"); err != nil {
+		t.Fatalf("UpdateAnnotation: %v", err)
+	}
+
+	result, err := NewTaskMonitorTool(queue).Execute(ctx, json.RawMessage(`{"id":`+jsonInt(task.ID)+`}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute returned error result: %s", result.Output)
+	}
+
+	var output taskMonitorToolOutput
+	if err := json.Unmarshal([]byte(result.Output), &output); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if output.ProgressEvent == nil || output.ProgressEvent.Kind != ProgressKindRuntime || output.ProgressEvent.Phase != "workflow_running" {
+		t.Fatalf("progress_event = %+v, want parsed runtime workflow_running event", output.ProgressEvent)
+	}
+	if output.ProgressEvent.Message != "running single workflow" {
+		t.Fatalf("progress_event message = %q", output.ProgressEvent.Message)
+	}
+}
+
 func TestTaskMonitorToolReportsTimingAndTimeoutMetadata(t *testing.T) {
 	ctx := context.Background()
 	queue := newTaskToolTestQueue(t)

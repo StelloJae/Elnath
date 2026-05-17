@@ -996,6 +996,7 @@ type taskMonitorToolOutput struct {
 	RunningSeconds     int64                  `json:"running_seconds,omitempty"`
 	IdleSeconds        int64                  `json:"idle_seconds,omitempty"`
 	Progress           string                 `json:"progress,omitempty"`
+	ProgressEvent      *ProgressEvent         `json:"progress_event,omitempty"`
 	Summary            string                 `json:"summary,omitempty"`
 	ResultTail         string                 `json:"result_tail,omitempty"`
 	ResultTotalChars   int                    `json:"result_total_chars"`
@@ -1063,6 +1064,10 @@ func (t *TaskMonitorTool) Execute(ctx context.Context, params json.RawMessage) (
 	if terminal {
 		nextPollSeconds = 0
 	}
+	var progressEvent *ProgressEvent
+	if ev, ok := ParseProgressEvent(task.Progress); ok {
+		progressEvent = &ev
+	}
 
 	output := taskMonitorToolOutput{
 		TaskID:          task.ID,
@@ -1086,6 +1091,7 @@ func (t *TaskMonitorTool) Execute(ctx context.Context, params json.RawMessage) (
 		RunningSeconds:     taskRunningSeconds(*task, now),
 		IdleSeconds:        taskIdleSeconds(*task, now),
 		Progress:           task.Progress,
+		ProgressEvent:      progressEvent,
 		Summary:            task.Summary,
 		ResultTail:         tail,
 		ResultTotalChars:   total,

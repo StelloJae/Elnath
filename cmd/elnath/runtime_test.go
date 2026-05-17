@@ -658,29 +658,67 @@ func TestProgressObserverDispatchesRepresentativeEventTypesAndIgnoresUnknown(t *
 	}}
 
 	observer.OnEvent(event.WorkflowProgressEvent{Intent: "question", Workflow: "single"})
+	observer.OnEvent(event.RuntimeProgressEvent{Phase: "workflow_running", Message: "running single workflow"})
 	observer.OnEvent(event.ToolProgressEvent{ToolName: "wiki_search", Preview: "looking up docs", Phase: "running", DurationMS: 42})
 	observer.OnEvent(event.TextDeltaEvent{Content: "partial output"})
 	observer.OnEvent(event.UsageProgressEvent{Summary: "tokens: 42"})
 	observer.OnEvent(event.ResearchProgressEvent{Message: "researching"})
 	observer.OnEvent(event.IterationStartEvent{})
 
-	if len(got) != 5 {
-		t.Fatalf("progress events = %d, want 5", len(got))
+	if len(got) != 6 {
+		t.Fatalf("progress events = %d, want 6", len(got))
 	}
 	if got[0].Kind != daemon.ProgressKindWorkflow || got[0].Intent != "question" || got[0].Workflow != "single" {
 		t.Fatalf("workflow event = %+v, want workflow/question/single", got[0])
 	}
-	if got[1].Kind != daemon.ProgressKindTool || got[1].ToolName != "wiki_search" || got[1].Preview != "looking up docs" || got[1].Phase != "running" || got[1].DurationMS != 42 {
-		t.Fatalf("tool event = %+v, want tool/wiki_search/looking up docs/running", got[1])
+	if got[1].Kind != daemon.ProgressKindRuntime || got[1].Phase != "workflow_running" || got[1].Message != "running single workflow" {
+		t.Fatalf("runtime event = %+v, want runtime/workflow_running", got[1])
 	}
-	if got[2].Kind != daemon.ProgressKindText || got[2].Message == "" {
-		t.Fatalf("text event = %+v, want text with non-empty message", got[2])
+	if got[2].Kind != daemon.ProgressKindTool || got[2].ToolName != "wiki_search" || got[2].Preview != "looking up docs" || got[2].Phase != "running" || got[2].DurationMS != 42 {
+		t.Fatalf("tool event = %+v, want tool/wiki_search/looking up docs/running", got[2])
 	}
-	if got[3].Kind != daemon.ProgressKindUsage || got[3].Message != "tokens: 42" {
-		t.Fatalf("usage event = %+v, want usage/tokens: 42", got[3])
+	if got[3].Kind != daemon.ProgressKindText || got[3].Message == "" {
+		t.Fatalf("text event = %+v, want text with non-empty message", got[3])
 	}
-	if got[4].Kind != daemon.ProgressKindText || got[4].Message == "" {
-		t.Fatalf("research event = %+v, want text with non-empty message", got[4])
+	if got[4].Kind != daemon.ProgressKindUsage || got[4].Message != "tokens: 42" {
+		t.Fatalf("usage event = %+v, want usage/tokens: 42", got[4])
+	}
+	if got[5].Kind != daemon.ProgressKindText || got[5].Message == "" {
+		t.Fatalf("research event = %+v, want text with non-empty message", got[5])
+	}
+}
+
+func TestExecutionRuntimeRunTaskEmitsRuntimePhaseProgress(t *testing.T) {
+	rt := newTestExecutionRuntime(t, &countingProvider{})
+	rt.router = orchestrator.NewRouter(map[string]orchestrator.Workflow{
+		"single": &stubWorkflow{name: "single"},
+	})
+
+	sess, err := rt.mgr.NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	var events []daemon.ProgressEvent
+	_, _, err = rt.runTask(context.Background(), sess, nil, "what changed in Stella?", orchestrationOutput{
+		OnProgress: func(ev daemon.ProgressEvent) {
+			events = append(events, ev)
+		},
+	})
+	if err != nil {
+		t.Fatalf("runTask: %v", err)
+	}
+
+	phases := map[string]bool{}
+	for _, ev := range events {
+		if ev.Kind == daemon.ProgressKindRuntime {
+			phases[ev.Phase] = true
+		}
+	}
+	for _, want := range []string{"prompt_build", "workflow_running", "completion_check", "session_persist"} {
+		if !phases[want] {
+			t.Fatalf("runtime progress phases = %#v, missing %q", phases, want)
+		}
 	}
 }
 
@@ -706,6 +744,7 @@ func TestLegacyCallbackObserverDispatchesRepresentativeEventTypesAndIgnoresUnkno
 
 	observer.OnEvent(event.WorkflowProgressEvent{Intent: "question", Workflow: "single"})
 	observer.OnEvent(event.TextDeltaEvent{Content: "hello"})
+	observer.OnEvent(event.RuntimeProgressEvent{Phase: "workflow_running", Message: "running single workflow"})
 	observer.OnEvent(event.ResearchProgressEvent{Message: "from research"})
 	observer.OnEvent(event.UsageProgressEvent{Summary: "tokens: 42"})
 	observer.OnEvent(event.IterationStartEvent{})
@@ -713,8 +752,8 @@ func TestLegacyCallbackObserverDispatchesRepresentativeEventTypesAndIgnoresUnkno
 	if gotIntent != conversation.Intent("question") || gotWorkflow != "single" {
 		t.Fatalf("workflow callback = (%q, %q), want (question, single)", gotIntent, gotWorkflow)
 	}
-	if len(gotText) != 2 || gotText[0] != "hello" || gotText[1] != "from research" {
-		t.Fatalf("text callbacks = %#v, want [hello from research]", gotText)
+	if len(gotText) != 3 || gotText[0] != "hello" || !strings.Contains(gotText[1], "workflow_running") || gotText[2] != "from research" {
+		t.Fatalf("text callbacks = %#v, want hello/runtime/from research", gotText)
 	}
 	if gotUsage != "tokens: 42" {
 		t.Fatalf("usage callback = %q, want tokens: 42", gotUsage)

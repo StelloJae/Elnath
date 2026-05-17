@@ -84,6 +84,22 @@ func TestWorkflowProgressEvent(t *testing.T) {
 	var _ Event = e
 }
 
+func TestRuntimeProgressEvent(t *testing.T) {
+	e := RuntimeProgressEvent{
+		Base:    NewBase(),
+		Phase:   "completion_check",
+		Message: "checking completion contract",
+	}
+
+	if e.EventType() != "runtime_progress" {
+		t.Fatalf("expected runtime_progress, got %q", e.EventType())
+	}
+	if e.Phase != "completion_check" || e.Message != "checking completion contract" {
+		t.Fatalf("unexpected fields: %+v", e)
+	}
+	var _ Event = e
+}
+
 func TestResearchProgressEvent(t *testing.T) {
 	ts := time.Date(2026, 4, 16, 12, 0, 0, 0, time.UTC)
 	e := ResearchProgressEvent{

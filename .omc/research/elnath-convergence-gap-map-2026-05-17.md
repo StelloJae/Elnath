@@ -1920,3 +1920,178 @@ Remaining skill feedback gaps:
 - Apply path is mechanical append, not natural skill rewrite.
 - No automatic lifecycle curator.
 - No Telegram/operator proposal review surface.
+
+## Post-PR261 Runtime Progress / Alive Status Milestone Update
+
+Date: 2026-05-18 KST
+
+Branch:
+
+- `codex/runtime-progress-status`
+
+Artifact:
+
+- `.omc/research/runtime-progress-alive-status-2026-05-18.md`
+
+What changed:
+
+- Added typed `event.RuntimeProgressEvent`.
+- Added daemon progress kind `runtime`.
+- Added runtime phase progress forwarding to CLI, daemon progress observers,
+  and legacy CLI callbacks.
+- Added phase events for prompt build, workflow run, completion check,
+  session persistence, completion retry, and verification retry.
+- Added parsed `progress_event` metadata to `task_monitor` tool output and
+  `elnath task monitor --json` output.
+
+Reference impact:
+
+- Moves Elnath closer to Hermes-style "the run is alive" visibility without
+  adding a separate streaming subsystem.
+- Moves Elnath closer to Claude Code-style progress grouping at the substrate
+  level while not claiming TUI parity.
+
+Verification:
+
+- `go test ./internal/event ./internal/daemon ./cmd/elnath -run 'TestRuntimeProgressEvent|TestOnTextToSinkRuntimeProgressEncodesJSON|TestProgressObserverDispatchesRepresentativeEventTypesAndIgnoresUnknown|TestLegacyCallbackObserverDispatchesRepresentativeEventTypesAndIgnoresUnknown|TestExecutionRuntimeRunTaskEmitsRuntimePhaseProgress|TestDeliveryRouter_OnProgressParsesAndRoutes|TestCmdDaemonStatusRendersStructuredProgressEnvelope' -count=1`
+  passed.
+- `go test ./internal/event ./internal/daemon ./cmd/elnath -run 'TestRuntimeProgressEvent|TestOnTextToSinkRuntimeProgressEncodesJSON|TestProgressObserverDispatchesRepresentativeEventTypesAndIgnoresUnknown|TestLegacyCallbackObserverDispatchesRepresentativeEventTypesAndIgnoresUnknown|TestExecutionRuntimeRunTaskEmitsRuntimePhaseProgress|TestDeliveryRouter_OnProgressParsesAndRoutes|TestCmdDaemonStatusRendersStructuredProgressEnvelope|TestTaskMonitorToolReturnsParsedProgressEvent|TestCmdTaskMonitorWithQueueJSONIncludesParsedProgressEvent' -count=1`
+  passed.
+- `go test ./cmd/elnath ./internal/event ./internal/daemon -count=1`
+  passed.
+- `go vet ./...` passed.
+- `git diff --check` passed.
+
+Remaining progress/UX gaps:
+
+- Runtime progress is phase-level, not a rich timeline.
+- Telegram uses existing progress delivery; no new native transcript UI.
+- No Claude Code-style condensed terminal transcript grouping yet.
+
+## Post-PR261 Skill Curator CLI Status / Install Milestone Update
+
+Date: 2026-05-18 KST
+
+Branch:
+
+- `codex/runtime-progress-status`
+
+Artifact:
+
+- `.omc/research/skill-curator-cli-status-install-2026-05-18.md`
+
+What changed:
+
+- Added `elnath skill curator status`.
+- Added `elnath skill curator status --json`.
+- Added `elnath skill curator install`.
+- Added `elnath skill curator install --interval DURATION`.
+- Added `elnath skill curator install --run-on-start`.
+- Added `elnath skill curator install --json`.
+- Curator status reports schedule, draft count, proposal count, usage-tracked
+  skill count, total usage count, and static scheduler runtime semantics.
+- Curator install writes a recurring static scheduled task with type
+  `skill-promote`.
+
+Reference impact:
+
+- Makes the existing skill consolidator / `skill-promote` substrate visible as
+  a product surface.
+- Moves Elnath closer to Hermes-style self-improving skill lifecycle while
+  preserving explicit operator installation and schedule restart semantics.
+- Does not claim automatic skill rewrite quality or full Hermes curator parity.
+
+Verification:
+
+- `go test ./cmd/elnath -run TestCmdSkillCuratorStatusAndInstall -count=1`
+  passed.
+- `go test ./cmd/elnath -run 'TestCmdSkill(Curator|Proposals)' -count=1`
+  passed.
+- `go test ./cmd/elnath ./internal/skill ./internal/scheduler -count=1`
+  passed.
+- `go vet ./...` passed.
+- `git diff --check` passed.
+
+Remaining skill feedback gaps:
+
+- Installed curator schedules take effect after daemon restart; no hot reload.
+- Curator still uses existing draft promotion/cleanup thresholds only.
+- Proposal application remains review/approval driven.
+
+## Post-PR261 Terminal User Question Interactive Answer Milestone Update
+
+Date: 2026-05-18 KST
+
+Branch:
+
+- `codex/runtime-progress-status`
+
+Artifact:
+
+- `.omc/research/terminal-user-question-interactive-answer-2026-05-18.md`
+
+What changed:
+
+- Added `elnath task answer --interactive`.
+- Added interactive pending-question lookup by optional `--session` and
+  `--request`.
+- Added terminal question display with numbered options.
+- Interactive answers reuse the existing `user_question_answer` validation and
+  queue-backed resume path.
+
+Reference impact:
+
+- Moves Elnath closer to Claude Code-style interactive choice UX for
+  AskUserQuestion flows.
+- Moves Elnath closer to Hermes-style clarify fallback while staying
+  CLI-native.
+- Does not claim full TUI modal parity or multi-select support.
+
+Verification:
+
+- `go test ./cmd/elnath -run TestCmdTaskAnswerWithQueueInteractiveChoice -count=1`
+  passed.
+- `go test ./cmd/elnath -run 'TestCmdTaskAnswerWithQueue(InteractiveChoice|AcceptsChoiceFlag|EnqueuesBoundAnswer|RejectsStaleRequest|RejectsTimedOutRequest)' -count=1`
+  passed.
+- `go test ./cmd/elnath -count=1` passed.
+- `go vet ./...` passed.
+- `git diff --check` passed.
+
+Remaining user-input UX gaps:
+
+- Interactive prompt is simple stdin/stdout, not a full TUI modal.
+- Multi-select questions remain outside scope.
+- No fuzzy search/filtering for many pending questions.
+
+## Runtime / Operator UX Batch Readiness Update
+
+Date: 2026-05-18 KST
+
+Branch:
+
+- `codex/runtime-progress-status`
+
+Artifact:
+
+- `.omc/research/runtime-operator-ux-batch-readiness-2026-05-18.md`
+
+Batch commits:
+
+- `9aa818d` `feat(runtime): surface runtime progress phases`
+- `6d6ba9d` `feat(skill): expose curator schedule status`
+- `d3e40b8` `feat(task): add interactive question answers`
+
+Branch-level verification:
+
+- `go test ./cmd/elnath ./internal/event ./internal/daemon ./internal/skill ./internal/scheduler -count=1`
+  passed.
+- `go vet ./...` passed.
+- `git diff --check` passed.
+
+Batch status:
+
+- PR-sized and locally verified.
+- No benchmark lane was run.
+- No baseline/comparison was run.
+- Product/runtime completion moved forward through runtime visibility,
+  skill-curator operator surfacing, and terminal user-input UX.

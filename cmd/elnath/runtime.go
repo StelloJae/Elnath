@@ -71,6 +71,10 @@ func (terminalObserver) OnEvent(e event.Event) {
 			ev := e.(event.WorkflowProgressEvent)
 			fmt.Printf("[%s → %s]\n\n", ev.Intent, ev.Workflow)
 		},
+		event.RuntimeProgressEvent{}.EventType(): func(e event.Event) {
+			ev := e.(event.RuntimeProgressEvent)
+			fmt.Print(formatTerminalRuntimeProgress(ev))
+		},
 		event.UsageProgressEvent{}.EventType(): func(e event.Event) {
 			ev := e.(event.UsageProgressEvent)
 			fmt.Println()
@@ -100,6 +104,10 @@ func (p progressObserver) OnEvent(e event.Event) {
 		event.WorkflowProgressEvent{}.EventType(): func(e event.Event) {
 			ev := e.(event.WorkflowProgressEvent)
 			p.onProgress(daemon.WorkflowProgressEvent(ev.Intent, ev.Workflow))
+		},
+		event.RuntimeProgressEvent{}.EventType(): func(e event.Event) {
+			ev := e.(event.RuntimeProgressEvent)
+			p.onProgress(daemon.RuntimeProgressEvent(ev.Phase, ev.Message))
 		},
 		event.UsageProgressEvent{}.EventType(): func(e event.Event) {
 			p.onProgress(daemon.UsageProgressEvent(e.(event.UsageProgressEvent).Summary))
@@ -179,6 +187,18 @@ func formatTerminalToolProgress(ev event.ToolProgressEvent) string {
 	return msg + "\n"
 }
 
+func formatTerminalRuntimeProgress(ev event.RuntimeProgressEvent) string {
+	phase := strings.TrimSpace(ev.Phase)
+	if phase == "" {
+		phase = "runtime"
+	}
+	msg := strings.TrimSpace(ev.Message)
+	if msg == "" {
+		msg = phase
+	}
+	return fmt.Sprintf("[runtime %s] %s\n", phase, msg)
+}
+
 // legacyCallbackObserver bridges typed events to the old OnWorkflow/OnText/
 // OnUsage callbacks. Used by tests that set these fields directly.
 type legacyCallbackObserver struct {
@@ -198,6 +218,11 @@ func (o legacyCallbackObserver) OnEvent(e event.Event) {
 			if o.onWorkflow != nil {
 				ev := e.(event.WorkflowProgressEvent)
 				o.onWorkflow(conversation.Intent(ev.Intent), ev.Workflow)
+			}
+		},
+		event.RuntimeProgressEvent{}.EventType(): func(e event.Event) {
+			if o.onText != nil {
+				o.onText(formatTerminalRuntimeProgress(e.(event.RuntimeProgressEvent)))
 			}
 		},
 		event.UsageProgressEvent{}.EventType(): func(e event.Event) {
@@ -1207,6 +1232,7 @@ func (rt *executionRuntime) runTask(
 		ProjectID:      routeCtx.ProjectID,
 		ResumeContext:  taskResumeHandoffContextFromContext(ctx),
 	}
+	emitRuntimeProgress(bus, "prompt_build", "preparing prompt context")
 	systemPrompt, err := rt.promptBuilder.Build(ctx, renderState)
 	if err != nil {
 		return nil, "", fmt.Errorf("prompt build: %w", err)
@@ -1263,6 +1289,7 @@ func (rt *executionRuntime) runTask(
 	}
 
 	wfStart := time.Now()
+	emitRuntimeProgress(bus, "workflow_running", "running "+wf.Name()+" workflow")
 	result, err := wf.Run(ctx, input)
 	elapsed := time.Since(wfStart)
 	if err != nil {
@@ -1282,6 +1309,7 @@ func (rt *executionRuntime) runTask(
 		return nil, "", fmt.Errorf("workflow %s: %w", wf.Name(), err)
 	}
 
+	emitRuntimeProgress(bus, "completion_check", "checking completion contract")
 	completionSummary := withProviderCapabilities(summarizeCompletionContract(routeCtx, cfg, result), rt.provider)
 	result, completionSummary = rt.maybeRunCompletionRetry(ctx, wf, input, result, completionSummary)
 	if hasAgenticTask {
@@ -1316,8 +1344,28 @@ func (rt *executionRuntime) runTask(
 	if err := sess.AppendMessages(result.Messages[len(prepared):]); err != nil {
 		rt.app.Logger.Warn("session persist failed", "error", err)
 	}
+	emitRuntimeProgress(bus, "session_persist", "persisted session messages")
 
 	return result.Messages, result.Summary, nil
+}
+
+func emitRuntimeProgress(sink event.Sink, phase, message string) {
+	if sink == nil {
+		return
+	}
+	phase = strings.TrimSpace(phase)
+	message = strings.TrimSpace(message)
+	if phase == "" && message == "" {
+		return
+	}
+	if message == "" {
+		message = phase
+	}
+	sink.Emit(event.RuntimeProgressEvent{
+		Base:    event.NewBase(),
+		Phase:   phase,
+		Message: message,
+	})
 }
 
 func (rt *executionRuntime) toolContextForSession(ctx context.Context, sess *agent.Session) context.Context {

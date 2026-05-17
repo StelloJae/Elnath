@@ -32,6 +32,7 @@ func (rt *executionRuntime) maybeRunCompletionRetry(
 	for currentSummary.RetryDecision != "" && attempts < rt.completionRetryMax {
 		attempts++
 		currentSummary.CorrectionMaxAttempts = rt.completionRetryMax
+		emitRuntimeProgress(input.Sink, "completion_retry", fmt.Sprintf("correction attempt %d/%d: %s", attempts, rt.completionRetryMax, currentSummary.RetryReason))
 		switch currentSummary.RetryDecision {
 		case completionRetryDecisionRetrySmallerScope:
 			if wf == nil {
@@ -222,6 +223,7 @@ func (rt *executionRuntime) runVerificationCompletionRetry(
 		return result, completionCorrectionSkippedSummary(summary, "missing_verification_executor", attempt)
 	}
 
+	emitRuntimeProgress(input.Sink, "verification_retry", "running verification command")
 	params, err := json.Marshal(map[string]string{"command": command})
 	if err != nil {
 		return result, summary

@@ -45,6 +45,19 @@ func TestOnTextToSinkToolProgressEncodesJSON(t *testing.T) {
 	}
 }
 
+func TestOnTextToSinkRuntimeProgressEncodesJSON(t *testing.T) {
+	var got string
+	sink := OnTextToSink(func(s string) { got = s })
+
+	sink.Emit(RuntimeProgressEvent{Base: NewBase(), Phase: "workflow_running", Message: "running single workflow"})
+
+	for _, want := range []string{"runtime", "workflow_running", "running single workflow"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("encoded runtime progress = %q, want %q", got, want)
+		}
+	}
+}
+
 func TestOnTextToSinkNilReturnsNopSink(t *testing.T) {
 	sink := OnTextToSink(nil)
 	if _, ok := sink.(NopSink); !ok {

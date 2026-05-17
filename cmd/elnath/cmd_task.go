@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/stello/elnath/internal/config"
@@ -57,7 +59,7 @@ Subcommands:
   monitor <id>       Show or wait for task monitor snapshot
   output <id>        Read bounded task output
   stop <id>          Stop a pending task
-  answer             Answer a pending user-input request and enqueue resume
+  answer             Answer a pending user-input request; use --interactive for terminal picker
   cancel-question    Cancel a pending user-input request
   handoff <id>        Generate a session resume handoff recap for a task
   handoffs            List pending session handoff requests
@@ -365,15 +367,18 @@ func cmdTaskStopWithQueue(ctx context.Context, queue *daemon.Queue, args []strin
 
 func cmdTaskAnswerWithQueue(ctx context.Context, queue *daemon.Queue, outcomeStore *learning.OutcomeStore, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: elnath task answer --session ID --request ID (--answer TEXT | --choice N) [--json] [--question TEXT] [--surface TEXT] [--idempotency-key KEY]")
+		return fmt.Errorf("usage: elnath task answer --session ID --request ID (--answer TEXT | --choice N) [--json] [--interactive] [--question TEXT] [--surface TEXT] [--idempotency-key KEY]")
 	}
 	params := map[string]any{}
 	jsonOut := false
 	answerProvided := false
+	interactive := false
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--json":
 			jsonOut = true
+		case "--interactive":
+			interactive = true
 		case "--session":
 			value, next, err := parseStringFlag(args, i, "--session")
 			if err != nil {
@@ -435,6 +440,11 @@ func cmdTaskAnswerWithQueue(ctx context.Context, queue *daemon.Queue, outcomeSto
 			return fmt.Errorf("unknown task answer flag: %s", args[i])
 		}
 	}
+	if interactive {
+		if err := fillInteractiveTaskAnswerParams(outcomeStore, params, answerProvided); err != nil {
+			return err
+		}
+	}
 
 	output, err := executeTaskTool(ctx, daemon.NewUserQuestionAnswerToolWithValidator(queue, pendingUserQuestionValidator{store: outcomeStore}), params)
 	if err != nil {
@@ -453,6 +463,116 @@ func cmdTaskAnswerWithQueue(ctx context.Context, queue *daemon.Queue, outcomeSto
 	}
 	printTaskAnswer(view)
 	return nil
+}
+
+func fillInteractiveTaskAnswerParams(outcomeStore *learning.OutcomeStore, params map[string]any, answerProvided bool) error {
+	if outcomeStore == nil {
+		return fmt.Errorf("task answer: outcome store unavailable")
+	}
+	records, err := outcomeStore.Recent(0)
+	if err != nil {
+		return fmt.Errorf("task answer: pending questions: %w", err)
+	}
+	reader := bufio.NewReader(os.Stdin)
+	sessionID := stringParam(params, "session_id")
+	requestID := stringParam(params, "request_id")
+	pending := learning.PendingUserQuestions(records, sessionID, 20)
+	if requestID != "" {
+		filtered := pending[:0]
+		for _, question := range pending {
+			if question.RequestID == requestID {
+				filtered = append(filtered, question)
+			}
+		}
+		pending = filtered
+	}
+	if len(pending) == 0 {
+		return fmt.Errorf("task answer: no pending user questions")
+	}
+	question, err := chooseInteractivePendingQuestion(reader, pending)
+	if err != nil {
+		return err
+	}
+	params["session_id"] = question.SessionID
+	params["request_id"] = question.RequestID
+	if !answerProvided {
+		answer, err := promptInteractiveQuestionAnswer(reader, question)
+		if err != nil {
+			return err
+		}
+		params["answer"] = answer
+	}
+	return nil
+}
+
+func chooseInteractivePendingQuestion(reader *bufio.Reader, pending []learning.PendingUserQuestion) (learning.PendingUserQuestion, error) {
+	if len(pending) == 1 {
+		return pending[0], nil
+	}
+	fmt.Println("Pending user questions:")
+	for i, question := range pending {
+		fmt.Printf("  %d. %s session=%s request=%s\n", i+1, displayQuestionText(question), emptyDash(question.SessionID), question.RequestID)
+	}
+	fmt.Print("Select question: ")
+	raw, err := reader.ReadString('\n')
+	if err != nil {
+		return learning.PendingUserQuestion{}, fmt.Errorf("task answer: read question selection: %w", err)
+	}
+	selection := strings.TrimSpace(raw)
+	if selection == "" {
+		return learning.PendingUserQuestion{}, fmt.Errorf("task answer: question selection is required")
+	}
+	if idx, err := strconv.Atoi(selection); err == nil {
+		if idx >= 1 && idx <= len(pending) {
+			return pending[idx-1], nil
+		}
+		return learning.PendingUserQuestion{}, fmt.Errorf("task answer: question selection out of range")
+	}
+	for _, question := range pending {
+		if question.RequestID == selection {
+			return question, nil
+		}
+	}
+	return learning.PendingUserQuestion{}, fmt.Errorf("task answer: pending request %q not found", selection)
+}
+
+func promptInteractiveQuestionAnswer(reader *bufio.Reader, question learning.PendingUserQuestion) (string, error) {
+	fmt.Printf("Question: %s\n", displayQuestionText(question))
+	if len(question.Options) > 0 {
+		fmt.Println("Choices:")
+		for i, option := range question.Options {
+			fmt.Printf("  %d. %s\n", i+1, option)
+		}
+		if question.AllowFreeText {
+			fmt.Print("Answer (number or text): ")
+		} else {
+			fmt.Print("Choice number: ")
+		}
+	} else {
+		fmt.Print("Answer: ")
+	}
+	raw, err := reader.ReadString('\n')
+	if err != nil {
+		return "", fmt.Errorf("task answer: read answer: %w", err)
+	}
+	answer := strings.TrimSpace(raw)
+	if answer == "" {
+		return "", fmt.Errorf("task answer: answer is required")
+	}
+	return answer, nil
+}
+
+func displayQuestionText(question learning.PendingUserQuestion) string {
+	text := strings.TrimSpace(question.Question)
+	if text == "" {
+		return "(question omitted)"
+	}
+	return text
+}
+
+func stringParam(params map[string]any, key string) string {
+	value, _ := params[key].(string)
+	return strings.TrimSpace(value)
 }
 
 func recordTaskAnswerOutcome(outcomeStore *learning.OutcomeStore, view taskAnswerCLIOutput) error {
@@ -605,20 +725,21 @@ type taskMonitorCLIOutput struct {
 		TimeoutMS      int    `json:"timeout_ms"`
 		MaxChars       int    `json:"max_chars"`
 	} `json:"observation"`
-	NextPollSeconds    int    `json:"next_poll_seconds"`
-	ObservedAt         string `json:"observed_at"`
-	UpdatedAt          string `json:"updated_at"`
-	AgeSeconds         int64  `json:"age_seconds"`
-	RunningSeconds     int64  `json:"running_seconds"`
-	IdleSeconds        int64  `json:"idle_seconds"`
-	Progress           string `json:"progress"`
-	Summary            string `json:"summary"`
-	ResultTail         string `json:"result_tail"`
-	ResultTotalChars   int    `json:"result_total_chars"`
-	ResultTruncated    bool   `json:"result_truncated"`
-	TimeoutClass       string `json:"timeout_class"`
-	IdleTimeoutCount   int    `json:"idle_timeout_count"`
-	ActiveTimeoutCount int    `json:"active_timeout_count"`
+	NextPollSeconds    int                   `json:"next_poll_seconds"`
+	ObservedAt         string                `json:"observed_at"`
+	UpdatedAt          string                `json:"updated_at"`
+	AgeSeconds         int64                 `json:"age_seconds"`
+	RunningSeconds     int64                 `json:"running_seconds"`
+	IdleSeconds        int64                 `json:"idle_seconds"`
+	Progress           string                `json:"progress"`
+	ProgressEvent      *daemon.ProgressEvent `json:"progress_event,omitempty"`
+	Summary            string                `json:"summary"`
+	ResultTail         string                `json:"result_tail"`
+	ResultTotalChars   int                   `json:"result_total_chars"`
+	ResultTruncated    bool                  `json:"result_truncated"`
+	TimeoutClass       string                `json:"timeout_class"`
+	IdleTimeoutCount   int                   `json:"idle_timeout_count"`
+	ActiveTimeoutCount int                   `json:"active_timeout_count"`
 }
 
 type taskOutputCLIOutput struct {
