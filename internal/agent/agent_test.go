@@ -704,15 +704,21 @@ func TestAgentInjectsMutationVerifierFooter(t *testing.T) {
 			return &tools.Result{
 				Output: "wrote foo.go",
 				Mutation: &tools.FileMutation{
-					Operation:    "write_file",
-					Path:         "foo.go",
-					Changed:      true,
-					BeforeExists: false,
-					AfterExists:  true,
-					AfterHash:    "sha256:after",
-					BeforeLines:  0,
-					AfterLines:   3,
-					LineDelta:    3,
+					Operation:          "write_file",
+					Path:               "foo.go",
+					Changed:            true,
+					BeforeExists:       false,
+					AfterExists:        true,
+					AfterHash:          "sha256:after",
+					BeforeLines:        0,
+					AfterLines:         3,
+					LineDelta:          3,
+					DiagnosticLanguage: "go",
+					DiagnosticStatus:   "new_diagnostics_found",
+					NewDiagnosticCount: 1,
+					NewDiagnostics: []tools.FileMutationDiagnostic{
+						{Line: 3, Column: 1, Error: "expected declaration, found EOF", Source: "go/parser"},
+					},
 				},
 			}, nil
 		},
@@ -755,7 +761,7 @@ func TestAgentInjectsMutationVerifierFooter(t *testing.T) {
 	if footer == "" {
 		t.Fatalf("second request missing filesystem mutation verifier footer: %+v", requests[1].Messages)
 	}
-	for _, want := range []string{"write_file", "foo.go", "changed=true", "line_delta=+3"} {
+	for _, want := range []string{"write_file", "foo.go", "changed=true", "line_delta=+3", "diagnostics=new_diagnostics_found", "new=1", "new_diag_1=go/parser:3:1:expected declaration"} {
 		if !strings.Contains(footer, want) {
 			t.Fatalf("footer %q missing %q", footer, want)
 		}

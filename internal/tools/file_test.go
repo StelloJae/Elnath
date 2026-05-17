@@ -141,6 +141,38 @@ func TestWriteToolRecordsMutationReceipt(t *testing.T) {
 	}
 }
 
+func TestWriteToolRecordsGoDiagnosticDelta(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sample.go")
+	if err := os.WriteFile(path, []byte("package demo\n\nfunc OK() {}\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	tool := NewWriteTool(NewPathGuard(dir, nil))
+
+	res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{
+		"file_path": "sample.go",
+		"content":   "package demo\n\nfunc Broken( {\n",
+	}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.Output)
+	}
+	if res.Mutation == nil {
+		t.Fatal("Mutation = nil, want structured file mutation receipt")
+	}
+	if got, want := res.Mutation.DiagnosticStatus, "new_diagnostics_found"; got != want {
+		t.Fatalf("DiagnosticStatus = %q, want %q", got, want)
+	}
+	if res.Mutation.NewDiagnosticCount == 0 || len(res.Mutation.NewDiagnostics) == 0 {
+		t.Fatalf("new diagnostics = count %d details %+v, want at least one", res.Mutation.NewDiagnosticCount, res.Mutation.NewDiagnostics)
+	}
+	if got := res.Mutation.NewDiagnostics[0]; got.Line == 0 || got.Column == 0 || got.Error == "" || got.Source != "go/parser" {
+		t.Fatalf("first new diagnostic = %+v, want located go/parser error", got)
+	}
+}
+
 func TestWriteToolRejectsSameContentOverwrite(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "out.txt")
@@ -350,6 +382,37 @@ func TestEditTool(t *testing.T) {
 		}
 		if !res.Mutation.Changed || res.Mutation.BeforeHash == "" || res.Mutation.AfterHash == "" {
 			t.Fatalf("mutation = %+v, want changed with hashes", *res.Mutation)
+		}
+	})
+
+	t.Run("resolved go diagnostic", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "edit.go")
+		if err := os.WriteFile(path, []byte("package demo\n\nfunc Broken( {\n"), 0o644); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+		tool := NewEditTool(NewPathGuard(dir, nil))
+
+		res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{
+			"file_path":  "edit.go",
+			"old_string": "func Broken( {\n",
+			"new_string": "func Fixed() {}\n",
+		}))
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		if res.IsError {
+			t.Fatalf("unexpected error: %s", res.Output)
+		}
+		if res.Mutation == nil {
+			t.Fatal("Mutation = nil, want edit mutation receipt")
+		}
+		if got, want := res.Mutation.DiagnosticStatus, "diagnostic_delta_clean"; got != want {
+			t.Fatalf("DiagnosticStatus = %q, want %q", got, want)
+		}
+		if res.Mutation.ResolvedDiagnosticCount == 0 || res.Mutation.NewDiagnosticCount != 0 {
+			t.Fatalf("diagnostic counts = new %d resolved %d, want resolved without new",
+				res.Mutation.NewDiagnosticCount, res.Mutation.ResolvedDiagnosticCount)
 		}
 	})
 

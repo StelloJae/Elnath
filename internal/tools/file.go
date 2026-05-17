@@ -211,7 +211,18 @@ func (t *WriteTool) Execute(ctx context.Context, params json.RawMessage) (*Resul
 		[]byte(p.Content),
 		true,
 	)
+	AnnotateGoMutationDiagnostics(result.Mutation, abs, mutationDiagnosticsBasePath(ctx, t.guard), before, beforeExists, []byte(p.Content), true)
 	return result, nil
+}
+
+func mutationDiagnosticsBasePath(ctx context.Context, guard *PathGuard) string {
+	if guard == nil {
+		return ""
+	}
+	if base, err := SessionWorkDirFromContext(ctx, guard); err == nil && strings.TrimSpace(base) != "" {
+		return base
+	}
+	return guard.WorkDir()
 }
 
 func firstErr(a, b error) error {
@@ -310,6 +321,7 @@ func (t *EditTool) Execute(ctx context.Context, params json.RawMessage) (*Result
 				[]byte(updated),
 				true,
 			)
+			AnnotateGoMutationDiagnostics(result.Mutation, abs, mutationDiagnosticsBasePath(ctx, t.guard), []byte(original), true, []byte(updated), true)
 			return result, nil
 		}
 		if errMsg != "" {
@@ -343,6 +355,7 @@ func (t *EditTool) Execute(ctx context.Context, params json.RawMessage) (*Result
 		[]byte(updated),
 		true,
 	)
+	AnnotateGoMutationDiagnostics(result.Mutation, abs, mutationDiagnosticsBasePath(ctx, t.guard), []byte(original), true, []byte(updated), true)
 	return result, nil
 }
 
