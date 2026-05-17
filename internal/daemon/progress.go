@@ -18,13 +18,16 @@ const (
 // ProgressEvent is the shared, UI-safe progress envelope consumed by daemon
 // status output today and future delivery bridges later.
 type ProgressEvent struct {
-	Version  string `json:"version,omitempty"`
-	Kind     string `json:"kind"`
-	Message  string `json:"message"`
-	Intent   string `json:"intent,omitempty"`
-	Workflow string `json:"workflow,omitempty"`
-	ToolName string `json:"tool_name,omitempty"`
-	Preview  string `json:"preview,omitempty"`
+	Version    string `json:"version,omitempty"`
+	Kind       string `json:"kind"`
+	Message    string `json:"message"`
+	Intent     string `json:"intent,omitempty"`
+	Workflow   string `json:"workflow,omitempty"`
+	ToolName   string `json:"tool_name,omitempty"`
+	Preview    string `json:"preview,omitempty"`
+	Phase      string `json:"phase,omitempty"`
+	DurationMS int64  `json:"duration_ms,omitempty"`
+	IsError    bool   `json:"is_error,omitempty"`
 }
 
 func WorkflowProgressEvent(intent, workflow string) ProgressEvent {
@@ -58,6 +61,19 @@ func ToolProgressEvent(toolName, preview string) ProgressEvent {
 		ToolName: strings.TrimSpace(toolName),
 		Preview:  strings.TrimSpace(preview),
 	}
+}
+
+func ToolPhaseProgressEvent(toolName, preview, phase string, durationMS int64, isError bool) ProgressEvent {
+	ev := ToolProgressEvent(toolName, preview)
+	ev.Phase = strings.TrimSpace(phase)
+	if durationMS > 0 {
+		ev.DurationMS = durationMS
+	}
+	ev.IsError = isError
+	if ev.Phase != "" {
+		ev.Message = strings.TrimSpace(fmt.Sprintf("%s %s", ev.Message, "("+ev.Phase+")"))
+	}
+	return ev
 }
 
 func UsageProgressEvent(summary string) ProgressEvent {
@@ -110,5 +126,8 @@ func normalizeProgressEvent(ev ProgressEvent) ProgressEvent {
 	ev.Message = strings.TrimSpace(ev.Message)
 	ev.Intent = strings.TrimSpace(ev.Intent)
 	ev.Workflow = strings.TrimSpace(ev.Workflow)
+	ev.ToolName = strings.TrimSpace(ev.ToolName)
+	ev.Preview = strings.TrimSpace(ev.Preview)
+	ev.Phase = strings.TrimSpace(ev.Phase)
 	return ev
 }

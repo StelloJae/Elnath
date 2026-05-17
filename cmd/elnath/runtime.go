@@ -63,6 +63,10 @@ func (terminalObserver) OnEvent(e event.Event) {
 		event.TextDeltaEvent{}.EventType(): func(e event.Event) {
 			fmt.Print(e.(event.TextDeltaEvent).Content)
 		},
+		event.ToolProgressEvent{}.EventType(): func(e event.Event) {
+			ev := e.(event.ToolProgressEvent)
+			fmt.Print(formatTerminalToolProgress(ev))
+		},
 		event.WorkflowProgressEvent{}.EventType(): func(e event.Event) {
 			ev := e.(event.WorkflowProgressEvent)
 			fmt.Printf("[%s → %s]\n\n", ev.Intent, ev.Workflow)
@@ -91,7 +95,7 @@ func (p progressObserver) OnEvent(e event.Event) {
 	progressEventHandlers := map[string]func(event.Event){
 		event.ToolProgressEvent{}.EventType(): func(e event.Event) {
 			ev := e.(event.ToolProgressEvent)
-			p.onProgress(daemon.ToolProgressEvent(ev.ToolName, ev.Preview))
+			p.onProgress(daemon.ToolPhaseProgressEvent(ev.ToolName, ev.Preview, ev.Phase, ev.DurationMS, ev.IsError))
 		},
 		event.WorkflowProgressEvent{}.EventType(): func(e event.Event) {
 			ev := e.(event.WorkflowProgressEvent)
@@ -151,6 +155,28 @@ func newBus(output orchestrationOutput, cli bool) *event.Bus {
 		bus.Subscribe(progressObserver{onProgress: output.OnProgress})
 	}
 	return bus
+}
+
+func formatTerminalToolProgress(ev event.ToolProgressEvent) string {
+	tool := strings.TrimSpace(ev.ToolName)
+	if tool == "" {
+		tool = "tool"
+	}
+	phase := strings.TrimSpace(ev.Phase)
+	if phase == "" {
+		phase = "progress"
+	}
+	msg := fmt.Sprintf("[tool %s] %s", phase, tool)
+	if preview := strings.TrimSpace(ev.Preview); preview != "" {
+		msg += ": " + preview
+	}
+	if ev.DurationMS > 0 {
+		msg += fmt.Sprintf(" (%dms)", ev.DurationMS)
+	}
+	if ev.IsError {
+		msg += " error"
+	}
+	return msg + "\n"
 }
 
 // legacyCallbackObserver bridges typed events to the old OnWorkflow/OnText/

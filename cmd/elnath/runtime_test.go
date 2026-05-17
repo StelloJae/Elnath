@@ -658,7 +658,7 @@ func TestProgressObserverDispatchesRepresentativeEventTypesAndIgnoresUnknown(t *
 	}}
 
 	observer.OnEvent(event.WorkflowProgressEvent{Intent: "question", Workflow: "single"})
-	observer.OnEvent(event.ToolProgressEvent{ToolName: "wiki_search", Preview: "looking up docs"})
+	observer.OnEvent(event.ToolProgressEvent{ToolName: "wiki_search", Preview: "looking up docs", Phase: "running", DurationMS: 42})
 	observer.OnEvent(event.TextDeltaEvent{Content: "partial output"})
 	observer.OnEvent(event.UsageProgressEvent{Summary: "tokens: 42"})
 	observer.OnEvent(event.ResearchProgressEvent{Message: "researching"})
@@ -670,8 +670,8 @@ func TestProgressObserverDispatchesRepresentativeEventTypesAndIgnoresUnknown(t *
 	if got[0].Kind != daemon.ProgressKindWorkflow || got[0].Intent != "question" || got[0].Workflow != "single" {
 		t.Fatalf("workflow event = %+v, want workflow/question/single", got[0])
 	}
-	if got[1].Kind != daemon.ProgressKindTool || got[1].ToolName != "wiki_search" || got[1].Preview != "looking up docs" {
-		t.Fatalf("tool event = %+v, want tool/wiki_search/looking up docs", got[1])
+	if got[1].Kind != daemon.ProgressKindTool || got[1].ToolName != "wiki_search" || got[1].Preview != "looking up docs" || got[1].Phase != "running" || got[1].DurationMS != 42 {
+		t.Fatalf("tool event = %+v, want tool/wiki_search/looking up docs/running", got[1])
 	}
 	if got[2].Kind != daemon.ProgressKindText || got[2].Message == "" {
 		t.Fatalf("text event = %+v, want text with non-empty message", got[2])
