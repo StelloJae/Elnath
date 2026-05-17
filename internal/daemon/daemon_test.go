@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -497,6 +498,51 @@ func TestDaemonStatusReportsTimeoutPolicy(t *testing.T) {
 	}
 	if got := int(wallRaw); got != 3 {
 		t.Fatalf("wall_clock_timeout_seconds = %d, want 3", got)
+	}
+}
+
+func TestDaemonStatusReportsDeliveryRouter(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+	router := mustNewDeliveryRouter(t, db)
+	router.Register(&targetedRecordingSink{
+		recordingSink: recordingSink{name: "telegram"},
+		target:        DeliveryTarget{Kind: DeliveryTargetPlatform, Platform: "telegram", Address: "chat-1", Explicit: true},
+	})
+
+	socketPath := shortDaemonSocketPath("elnath-delivery-status")
+	d := New(q, socketPath, 1, mockTaskRunner{text: "ok"}.run, nil)
+	d.WithDeliveryRouter(router)
+	startDaemonInstance(t, d, socketPath)
+
+	statusResp := sendIPC(t, socketPath, IPCRequest{Command: "status"})
+	if !statusResp.OK {
+		t.Fatalf("status: not OK: %s", statusResp.Err)
+	}
+	m, ok := statusResp.Data.(map[string]interface{})
+	if !ok {
+		t.Fatalf("status response Data is not a map: %T", statusResp.Data)
+	}
+	delivery, ok := m["delivery"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("delivery status = %T, want map", m["delivery"])
+	}
+	if got := int(delivery["completion_sink_count"].(float64)); got != 1 {
+		t.Fatalf("completion_sink_count = %d, want 1", got)
+	}
+	if got := int(delivery["target_aware_count"].(float64)); got != 1 {
+		t.Fatalf("target_aware_count = %d, want 1", got)
+	}
+	sinks, ok := delivery["sinks"].([]interface{})
+	if !ok || len(sinks) != 1 {
+		t.Fatalf("delivery sinks = %#v, want one sink", delivery["sinks"])
+	}
+	sink := sinks[0].(map[string]interface{})
+	if sink["name"] != "telegram" || sink["target"] != "telegram:chat-1" || sink["platform"] != "telegram" {
+		t.Fatalf("sink status = %+v, want telegram target", sink)
 	}
 }
 
@@ -1512,7 +1558,8 @@ func TestDaemonResearchTaskUsesConfiguredRunner(t *testing.T) {
 	if task.SessionID != "sess-123" {
 		t.Fatalf("session_id = %q, want sess-123", task.SessionID)
 	}
-	if got := researchRunner.Payload(); got != (TaskPayload{Type: TaskTypeResearch, Prompt: "ambient research loop", SessionID: "sess-123"}) {
+	wantPayload := TaskPayload{Type: TaskTypeResearch, Prompt: "ambient research loop", SessionID: "sess-123"}
+	if got := researchRunner.Payload(); !reflect.DeepEqual(got, wantPayload) {
 		t.Fatalf("runner payload = %+v", got)
 	}
 }

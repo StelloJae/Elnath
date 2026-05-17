@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -197,6 +198,9 @@ func TestLoadConfigValidYAML(t *testing.T) {
     prompt: go patterns
     interval: 24h
     run_on_start: true
+    delivery_targets:
+      - origin
+      - local
 `)
 
 	tasks, err := LoadConfig(path)
@@ -211,6 +215,9 @@ func TestLoadConfigValidYAML(t *testing.T) {
 	}
 	if tasks[1].Name != "task2" || tasks[1].Type != "research" || tasks[1].Prompt != "go patterns" || tasks[1].Interval != 24*time.Hour || !tasks[1].RunOnStart {
 		t.Fatalf("tasks[1] = %+v", tasks[1])
+	}
+	if !slices.Equal(tasks[1].DeliveryTargets, []string{"origin", "local"}) {
+		t.Fatalf("tasks[1].DeliveryTargets = %+v, want origin/local", tasks[1].DeliveryTargets)
 	}
 }
 
@@ -286,6 +293,24 @@ func TestLoadConfigRejectsInvalidType(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "invalid type") {
 		t.Fatalf("LoadConfig() error = %q, want invalid type", err.Error())
+	}
+}
+
+func TestLoadConfigRejectsInvalidDeliveryTarget(t *testing.T) {
+	path := writeConfigFile(t, `scheduled_tasks:
+  - name: task1
+    prompt: hello
+    interval: 1h
+    delivery_targets:
+      - ":broken"
+`)
+
+	_, err := LoadConfig(path)
+	if err == nil {
+		t.Fatal("LoadConfig() error = nil, want invalid delivery target error")
+	}
+	if !strings.Contains(err.Error(), "invalid delivery target") {
+		t.Fatalf("LoadConfig() error = %q, want invalid delivery target", err.Error())
 	}
 }
 
@@ -462,12 +487,13 @@ func TestSchedulerEnqueueOnceMapsTaskTypes(t *testing.T) {
 			s := New(nil, enq, discardLogger())
 
 			s.enqueueOnce(context.Background(), ScheduledTask{
-				Name:      "task1",
-				Type:      tt.taskType,
-				Prompt:    "hello",
-				Interval:  time.Minute,
-				SessionID: "sess-1",
-				Surface:   "daemon",
+				Name:            "task1",
+				Type:            tt.taskType,
+				Prompt:          "hello",
+				Interval:        time.Minute,
+				SessionID:       "sess-1",
+				Surface:         "daemon",
+				DeliveryTargets: []string{"origin", "local"},
 			})
 
 			calls, payloads := enq.snapshot()
@@ -481,7 +507,7 @@ func TestSchedulerEnqueueOnceMapsTaskTypes(t *testing.T) {
 			if payload.Type != tt.wantType {
 				t.Fatalf("payload.Type = %q, want %q", payload.Type, tt.wantType)
 			}
-			if payload.Prompt != "hello" || payload.SessionID != "sess-1" || payload.Surface != "daemon" {
+			if payload.Prompt != "hello" || payload.SessionID != "sess-1" || payload.Surface != "daemon" || !slices.Equal(payload.DeliveryTargets, []string{"origin", "local"}) {
 				t.Fatalf("payload = %+v", payload)
 			}
 		})

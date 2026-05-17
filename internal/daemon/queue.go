@@ -70,6 +70,8 @@ const (
 type TaskCompletion struct {
 	TaskID                  int64
 	SessionID               string
+	OriginSurface           string
+	DeliveryTargets         []DeliveryTarget
 	Summary                 string
 	Status                  TaskStatus
 	FailureClass            string
@@ -480,6 +482,8 @@ func (q *Queue) Get(ctx context.Context, id int64) (*Task, error) {
 type taskCompletionRecord struct {
 	TaskID                  int64      `json:"task_id"`
 	SessionID               string     `json:"session_id,omitempty"`
+	OriginSurface           string     `json:"origin_surface,omitempty"`
+	DeliveryTargets         []string   `json:"delivery_targets,omitempty"`
 	Summary                 string     `json:"summary"`
 	Status                  TaskStatus `json:"status"`
 	FailureClass            string     `json:"failure_class,omitempty"`
@@ -496,15 +500,19 @@ func (q *Queue) buildCompletionJSON(ctx context.Context, id int64, status TaskSt
 	if err != nil {
 		return "", err
 	}
+	payload := ParseTaskPayload(task.Payload)
+	targets := parseDeliveryTargetsLenient(payload.DeliveryTargets)
 
 	record := taskCompletionRecord{
-		TaskID:      task.ID,
-		SessionID:   task.SessionID,
-		Summary:     completionSummary(status, summary, fallback),
-		Status:      status,
-		CreatedAt:   task.CreatedAt.UnixMilli(),
-		StartedAt:   task.StartedAt.UnixMilli(),
-		CompletedAt: time.Now().UnixMilli(),
+		TaskID:          task.ID,
+		SessionID:       task.SessionID,
+		OriginSurface:   payload.Surface,
+		DeliveryTargets: deliveryTargetStrings(targets),
+		Summary:         completionSummary(status, summary, fallback),
+		Status:          status,
+		CreatedAt:       task.CreatedAt.UnixMilli(),
+		StartedAt:       task.StartedAt.UnixMilli(),
+		CompletedAt:     time.Now().UnixMilli(),
 	}
 	if status == StatusFailed {
 		record.FailureClass = meta.FailureClass
@@ -546,6 +554,8 @@ func parseTaskCompletion(raw string) (*TaskCompletion, error) {
 	return &TaskCompletion{
 		TaskID:                  record.TaskID,
 		SessionID:               record.SessionID,
+		OriginSurface:           record.OriginSurface,
+		DeliveryTargets:         parseDeliveryTargetsLenient(record.DeliveryTargets),
 		Summary:                 record.Summary,
 		Status:                  record.Status,
 		FailureClass:            record.FailureClass,
@@ -573,6 +583,12 @@ func (c *TaskCompletion) View() map[string]interface{} {
 	}
 	if c.FailureClass != "" {
 		view["failure_class"] = c.FailureClass
+	}
+	if c.OriginSurface != "" {
+		view["origin_surface"] = c.OriginSurface
+	}
+	if targets := deliveryTargetStrings(c.DeliveryTargets); len(targets) > 0 {
+		view["delivery_targets"] = targets
 	}
 	if c.ShouldRetireSession {
 		view["should_retire_session"] = true

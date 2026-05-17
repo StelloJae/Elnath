@@ -81,10 +81,11 @@ func (s *Scheduler) enqueueOnce(ctx context.Context, task ScheduledTask) {
 	}
 
 	payload := daemon.TaskPayload{
-		Type:      mapTaskType(task.Type),
-		Prompt:    task.Prompt,
-		SessionID: task.SessionID,
-		Surface:   task.Surface,
+		Type:            mapTaskType(task.Type),
+		Prompt:          task.Prompt,
+		SessionID:       task.SessionID,
+		Surface:         task.Surface,
+		DeliveryTargets: task.DeliveryTargets,
 	}
 	encoded := daemon.EncodeTaskPayload(payload)
 	idemKey := "scheduled:" + task.Name

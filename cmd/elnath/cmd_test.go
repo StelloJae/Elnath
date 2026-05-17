@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -187,6 +188,63 @@ func TestCmdDaemonSubmitWithSession(t *testing.T) {
 	got := <-receivedSession
 	if got != sess.ID {
 		t.Fatalf("daemon received session_id = %q, want resolved full id %q", got, sess.ID)
+	}
+}
+
+func TestCmdDaemonSubmitWithDeliveryTargets(t *testing.T) {
+	socketPath := testSocketPath(t, "subdeliver")
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	receivedTargets := make(chan []string, 1)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		var req daemon.IPCRequest
+		dec := json.NewDecoder(conn)
+		if err := dec.Decode(&req); err != nil {
+			return
+		}
+		var encoded string
+		if err := json.Unmarshal(req.Payload, &encoded); err != nil {
+			receivedTargets <- nil
+			return
+		}
+		parsed := daemon.ParseTaskPayload(encoded)
+		receivedTargets <- parsed.DeliveryTargets
+		resp := daemon.IPCResponse{
+			OK:   true,
+			Data: map[string]interface{}{"task_id": 77, "existed": false},
+		}
+		enc := json.NewEncoder(conn)
+		_ = enc.Encode(resp)
+	}()
+
+	cfgPath := writeDaemonTestConfig(t, onboarding.En, socketPath)
+	withArgs(t, []string{"elnath", "--config", cfgPath})
+	resetLoadLocaleCache()
+
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdDaemonSubmit(context.Background(), []string{"--deliver", "origin", "--deliver", "local", "ship", "targeted", "reply"}); err != nil {
+			t.Fatalf("cmdDaemonSubmit with delivery targets: %v", err)
+		}
+	})
+	if !strings.Contains(stdout, "Task #77 enqueued") {
+		t.Fatalf("stdout = %q, want enqueued output", stdout)
+	}
+	<-done
+	got := <-receivedTargets
+	if !slices.Equal(got, []string{"origin", "local"}) {
+		t.Fatalf("daemon received delivery_targets = %+v, want origin/local", got)
 	}
 }
 
@@ -571,11 +629,12 @@ func TestCmdEvalSummarizeMalformedJSON(t *testing.T) {
 
 func TestParseDaemonSubmitArgsEdgeCases(t *testing.T) {
 	tests := []struct {
-		name      string
-		args      []string
-		wantSess  string
-		wantPrmpt string
-		wantErr   bool
+		name        string
+		args        []string
+		wantSess    string
+		wantTargets []string
+		wantPrmpt   string
+		wantErr     bool
 	}{
 		{
 			name:      "empty args",
@@ -587,6 +646,11 @@ func TestParseDaemonSubmitArgsEdgeCases(t *testing.T) {
 		{
 			name:    "session flag without value",
 			args:    []string{"--session"},
+			wantErr: true,
+		},
+		{
+			name:    "delivery flag without value",
+			args:    []string{"--deliver"},
 			wantErr: true,
 		},
 		{
@@ -603,11 +667,18 @@ func TestParseDaemonSubmitArgsEdgeCases(t *testing.T) {
 			wantPrmpt: "build the feature",
 			wantErr:   false,
 		},
+		{
+			name:        "delivery targets",
+			args:        []string{"--deliver", "origin", "--deliver", "local", "build", "the", "feature"},
+			wantTargets: []string{"origin", "local"},
+			wantPrmpt:   "build the feature",
+			wantErr:     false,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sessID, prompt, err := parseDaemonSubmitArgs(tt.args)
+			sessID, targets, prompt, err := parseDaemonSubmitArgs(tt.args)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("expected error")
@@ -619,6 +690,9 @@ func TestParseDaemonSubmitArgsEdgeCases(t *testing.T) {
 			}
 			if sessID != tt.wantSess {
 				t.Fatalf("sessionID = %q, want %q", sessID, tt.wantSess)
+			}
+			if !slices.Equal(targets, tt.wantTargets) {
+				t.Fatalf("targets = %+v, want %+v", targets, tt.wantTargets)
 			}
 			if prompt != tt.wantPrmpt {
 				t.Fatalf("prompt = %q, want %q", prompt, tt.wantPrmpt)

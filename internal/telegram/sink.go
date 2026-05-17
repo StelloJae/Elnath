@@ -224,6 +224,15 @@ func (s *TelegramSink) String() string {
 	return "TelegramSink"
 }
 
+func (s *TelegramSink) DeliveryTarget() daemon.DeliveryTarget {
+	return daemon.DeliveryTarget{
+		Kind:     daemon.DeliveryTargetPlatform,
+		Platform: "telegram",
+		Address:  s.chatID,
+		Explicit: s.chatID != "",
+	}
+}
+
 // ensureTask must be called with s.mu held.
 func (s *TelegramSink) ensureTask(taskID int64) *activeTask {
 	task := s.active[taskID]

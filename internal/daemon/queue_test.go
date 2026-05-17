@@ -611,6 +611,50 @@ func TestMarkDone(t *testing.T) {
 	}
 }
 
+func TestMarkDoneCompletionIncludesDeliveryRouteFromPayload(t *testing.T) {
+	db := openTestDB(t)
+	q, err := NewQueue(db)
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+	ctx := context.Background()
+
+	id := mustEnqueue(t, q, ctx, EncodeTaskPayload(TaskPayload{
+		Prompt:          "do the work",
+		Surface:         "telegram",
+		DeliveryTargets: []string{"origin", "local"},
+	}))
+	task, _ := q.Next(ctx)
+	if task.ID != id {
+		t.Fatalf("claimed id = %d, want %d", task.ID, id)
+	}
+
+	if err := q.MarkDone(ctx, task.ID, "all good", "summary text"); err != nil {
+		t.Fatalf("MarkDone: %v", err)
+	}
+
+	got, err := q.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Completion == nil {
+		t.Fatal("expected completion payload to be stored")
+	}
+	if got.Completion.OriginSurface != "telegram" {
+		t.Fatalf("origin_surface = %q, want telegram", got.Completion.OriginSurface)
+	}
+	if len(got.Completion.DeliveryTargets) != 2 || got.Completion.DeliveryTargets[0].Kind != DeliveryTargetOrigin || got.Completion.DeliveryTargets[1].Kind != DeliveryTargetLocal {
+		t.Fatalf("delivery_targets = %+v, want origin/local", got.Completion.DeliveryTargets)
+	}
+	view := got.Completion.View()
+	if view["origin_surface"] != "telegram" {
+		t.Fatalf("view origin_surface = %#v, want telegram", view["origin_surface"])
+	}
+	if targets, ok := view["delivery_targets"].([]string); !ok || len(targets) != 2 || targets[0] != "origin" || targets[1] != "local" {
+		t.Fatalf("view delivery_targets = %#v, want origin/local", view["delivery_targets"])
+	}
+}
+
 func TestMarkFailed(t *testing.T) {
 	db := openTestDB(t)
 	q, err := NewQueue(db)

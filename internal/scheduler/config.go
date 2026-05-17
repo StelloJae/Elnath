@@ -9,14 +9,15 @@ import (
 )
 
 type rawTask struct {
-	Name       string `yaml:"name"`
-	Type       string `yaml:"type,omitempty"`
-	Prompt     string `yaml:"prompt"`
-	Interval   string `yaml:"interval"`
-	RunOnStart bool   `yaml:"run_on_start,omitempty"`
-	Enabled    *bool  `yaml:"enabled,omitempty"`
-	SessionID  string `yaml:"session_id,omitempty"`
-	Surface    string `yaml:"surface,omitempty"`
+	Name            string   `yaml:"name"`
+	Type            string   `yaml:"type,omitempty"`
+	Prompt          string   `yaml:"prompt"`
+	Interval        string   `yaml:"interval"`
+	RunOnStart      bool     `yaml:"run_on_start,omitempty"`
+	Enabled         *bool    `yaml:"enabled,omitempty"`
+	SessionID       string   `yaml:"session_id,omitempty"`
+	Surface         string   `yaml:"surface,omitempty"`
+	DeliveryTargets []string `yaml:"delivery_targets,omitempty"`
 }
 
 type rawConfig struct {
@@ -57,14 +58,15 @@ func LoadConfig(path string) ([]ScheduledTask, error) {
 		}
 
 		task := ScheduledTask{
-			Name:       item.Name,
-			Type:       item.Type,
-			Prompt:     item.Prompt,
-			Interval:   interval,
-			RunOnStart: item.RunOnStart,
-			Enabled:    enabled,
-			SessionID:  item.SessionID,
-			Surface:    item.Surface,
+			Name:            item.Name,
+			Type:            item.Type,
+			Prompt:          item.Prompt,
+			Interval:        interval,
+			RunOnStart:      item.RunOnStart,
+			Enabled:         enabled,
+			SessionID:       item.SessionID,
+			Surface:         item.Surface,
+			DeliveryTargets: item.DeliveryTargets,
 		}
 		if err := task.Validate(); err != nil {
 			return nil, err

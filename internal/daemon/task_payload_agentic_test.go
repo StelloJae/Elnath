@@ -25,6 +25,7 @@ func TestTaskPayload_RoundTripsAgenticCompletionGate(t *testing.T) {
 	payload := TaskPayload{
 		Prompt:                "run with explicit verifier completion gate",
 		AgenticCompletionGate: "verification",
+		DeliveryTargets:       []string{" origin ", "local"},
 	}
 
 	raw := EncodeTaskPayload(payload)
@@ -37,6 +38,9 @@ func TestTaskPayload_RoundTripsAgenticCompletionGate(t *testing.T) {
 	}
 	if got.Prompt != payload.Prompt {
 		t.Fatalf("Prompt = %q, want %q", got.Prompt, payload.Prompt)
+	}
+	if len(got.DeliveryTargets) != 2 || got.DeliveryTargets[0] != "origin" || got.DeliveryTargets[1] != "local" {
+		t.Fatalf("DeliveryTargets = %+v, want normalized origin/local", got.DeliveryTargets)
 	}
 }
 

@@ -23,6 +23,9 @@ type TaskPayload struct {
 	SessionID string             `json:"session_id,omitempty"`
 	Surface   string             `json:"surface,omitempty"`
 	Principal identity.Principal `json:"principal,omitempty"`
+	// DeliveryTargets controls where daemon progress/completion should be sent.
+	// Empty preserves legacy fanout to all registered sinks.
+	DeliveryTargets []string `json:"delivery_targets,omitempty"`
 
 	// AgenticEnforcement is an explicit opt-in boundary for future agentic
 	// runtime enforcement. Empty means legacy pass-through behavior.
@@ -42,7 +45,7 @@ func ParseTaskPayload(raw string) TaskPayload {
 	var payload TaskPayload
 	if strings.HasPrefix(raw, "{") && json.Unmarshal([]byte(raw), &payload) == nil {
 		payload = normalizeTaskPayload(payload)
-		if payload.Prompt != "" || payload.Type != TaskTypeAgent || payload.SessionID != "" || payload.Surface != "" || !payload.Principal.IsZero() || payload.AgenticEnforcement != "" || payload.AgenticCompletionGate != "" {
+		if payload.Prompt != "" || payload.Type != TaskTypeAgent || payload.SessionID != "" || payload.Surface != "" || !payload.Principal.IsZero() || len(payload.DeliveryTargets) > 0 || payload.AgenticEnforcement != "" || payload.AgenticCompletionGate != "" {
 			return payload
 		}
 	}
@@ -52,7 +55,7 @@ func ParseTaskPayload(raw string) TaskPayload {
 
 func EncodeTaskPayload(payload TaskPayload) string {
 	payload = normalizeTaskPayload(payload)
-	if payload.Type == TaskTypeAgent && payload.SessionID == "" && payload.Surface == "" && payload.Principal.IsZero() && payload.AgenticEnforcement == "" && payload.AgenticCompletionGate == "" {
+	if payload.Type == TaskTypeAgent && payload.SessionID == "" && payload.Surface == "" && payload.Principal.IsZero() && len(payload.DeliveryTargets) == 0 && payload.AgenticEnforcement == "" && payload.AgenticCompletionGate == "" {
 		return payload.Prompt
 	}
 	data, err := json.Marshal(payload)
@@ -66,6 +69,7 @@ func normalizeTaskPayload(payload TaskPayload) TaskPayload {
 	payload.Prompt = strings.TrimSpace(payload.Prompt)
 	payload.SessionID = strings.TrimSpace(payload.SessionID)
 	payload.Surface = strings.TrimSpace(payload.Surface)
+	payload.DeliveryTargets = normalizeDeliveryTargetStrings(payload.DeliveryTargets)
 	payload.AgenticEnforcement = strings.ToLower(strings.TrimSpace(payload.AgenticEnforcement))
 	payload.AgenticCompletionGate = strings.ToLower(strings.TrimSpace(payload.AgenticCompletionGate))
 	payload.Principal = identity.NewPrincipal(identity.PrincipalSource{

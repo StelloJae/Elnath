@@ -77,6 +77,15 @@ func (s *recordingSink) String() string {
 	return "recordingSink"
 }
 
+type targetedRecordingSink struct {
+	recordingSink
+	target DeliveryTarget
+}
+
+func (s *targetedRecordingSink) DeliveryTarget() DeliveryTarget {
+	return s.target
+}
+
 func mustNewDeliveryRouter(t *testing.T, db *sql.DB) *DeliveryRouter {
 	t.Helper()
 	router, err := NewDeliveryRouter(db, slog.Default())
@@ -228,6 +237,71 @@ func TestDeliveryRouter_MixedSinks(t *testing.T) {
 	}
 }
 
+func TestDeliveryRouter_TargetsPlatformSink(t *testing.T) {
+	router := mustNewDeliveryRouter(t, nil)
+	audit := &recordingSink{name: "audit"}
+	telegram := &targetedRecordingSink{
+		recordingSink: recordingSink{name: "telegram"},
+		target:        DeliveryTarget{Kind: DeliveryTargetPlatform, Platform: "telegram", Address: "chat-1", Explicit: true},
+	}
+	router.Register(audit)
+	router.Register(telegram)
+
+	completion := testCompletion()
+	completion.DeliveryTargets = []DeliveryTarget{{Kind: DeliveryTargetPlatform, Platform: "telegram"}}
+	if err := router.Deliver(context.Background(), completion); err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+	if audit.Count() != 1 {
+		t.Fatalf("audit sink count = %d, want 1", audit.Count())
+	}
+	if telegram.Count() != 1 {
+		t.Fatalf("telegram sink count = %d, want 1", telegram.Count())
+	}
+}
+
+func TestDeliveryRouter_TargetsLocalSkipsPlatformSink(t *testing.T) {
+	router := mustNewDeliveryRouter(t, nil)
+	audit := &recordingSink{name: "audit"}
+	telegram := &targetedRecordingSink{
+		recordingSink: recordingSink{name: "telegram"},
+		target:        DeliveryTarget{Kind: DeliveryTargetPlatform, Platform: "telegram", Address: "chat-1", Explicit: true},
+	}
+	router.Register(audit)
+	router.Register(telegram)
+
+	completion := testCompletion()
+	completion.DeliveryTargets = []DeliveryTarget{{Kind: DeliveryTargetLocal}}
+	if err := router.Deliver(context.Background(), completion); err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+	if audit.Count() != 1 {
+		t.Fatalf("audit sink count = %d, want 1", audit.Count())
+	}
+	if telegram.Count() != 0 {
+		t.Fatalf("telegram sink count = %d, want 0", telegram.Count())
+	}
+}
+
+func TestDeliveryRouter_TargetsOriginSurface(t *testing.T) {
+	router := mustNewDeliveryRouter(t, nil)
+	telegram := &targetedRecordingSink{
+		recordingSink: recordingSink{name: "telegram"},
+		target:        DeliveryTarget{Kind: DeliveryTargetPlatform, Platform: "telegram", Address: "chat-1", Explicit: true},
+	}
+	router.Register(telegram)
+
+	completion := testCompletion()
+	completion.OriginSurface = "telegram"
+	completion.DeliveryTargets = []DeliveryTarget{{Kind: DeliveryTargetOrigin}}
+	if err := router.Deliver(context.Background(), completion); err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+	if telegram.Count() != 1 {
+		t.Fatalf("telegram sink count = %d, want 1", telegram.Count())
+	}
+}
+
 func TestDeliveryRouter_AllSinksFail(t *testing.T) {
 	router := mustNewDeliveryRouter(t, nil)
 	err1 := errors.New("err1")
@@ -308,6 +382,46 @@ func TestDeliveryRouter_DeliverProgressAllSinksFail(t *testing.T) {
 	}
 	if !errors.Is(err, err2) {
 		t.Errorf("error does not wrap err2: %v", err)
+	}
+}
+
+func TestDeliveryRouter_TargetsProgressByRegisteredRoute(t *testing.T) {
+	router := mustNewDeliveryRouter(t, nil)
+	telegram := &targetedRecordingSink{
+		recordingSink: recordingSink{name: "telegram"},
+		target:        DeliveryTarget{Kind: DeliveryTargetPlatform, Platform: "telegram", Address: "chat-1", Explicit: true},
+	}
+	router.Register(telegram)
+	router.RegisterTaskRoute(42, DeliveryRoute{DeliveryTargets: []DeliveryTarget{{Kind: DeliveryTargetLocal}}})
+
+	router.OnProgress(42, EncodeProgressEvent(TextProgressEvent("working")))
+
+	if telegram.ProgressCount() != 0 {
+		t.Fatalf("telegram progress count = %d, want 0", telegram.ProgressCount())
+	}
+}
+
+func TestDeliveryRouter_StatusReportsTargetsAndCapabilities(t *testing.T) {
+	router := mustNewDeliveryRouter(t, nil)
+	router.Register(&recordingSink{name: "audit"})
+	router.Register(&targetedRecordingSink{
+		recordingSink: recordingSink{name: "telegram"},
+		target:        DeliveryTarget{Kind: DeliveryTargetPlatform, Platform: "telegram", Address: "chat-1", Explicit: true},
+	})
+
+	status := router.Status()
+	if status.CompletionSinkCount != 2 || status.ProgressSinkCount != 2 || status.TargetAwareCount != 1 || status.InternalSinkCount != 1 {
+		t.Fatalf("status counts = %+v, want completion=2 progress=2 targetAware=1 internal=1", status)
+	}
+	seen := map[string]DeliverySinkStatus{}
+	for _, sink := range status.Sinks {
+		seen[sink.Name] = sink
+	}
+	if got := seen["audit"]; !got.Internal || got.TargetAware || !got.Completion || !got.Progress || got.DeliveryNote != "internal_audit_sink_receives_all_events" {
+		t.Fatalf("audit sink status = %+v, want internal completion/progress sink", got)
+	}
+	if got := seen["telegram"]; !got.TargetAware || got.Internal || !got.Completion || !got.Progress || got.Target != "telegram:chat-1" || got.Platform != "telegram" || got.Address != "chat-1" {
+		t.Fatalf("telegram sink status = %+v, want target-aware telegram chat sink", got)
 	}
 }
 

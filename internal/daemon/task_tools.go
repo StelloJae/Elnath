@@ -64,6 +64,7 @@ func (t *TaskCreateTool) Schema() json.RawMessage {
 		"prompt":                  tools.String("Task prompt to enqueue."),
 		"session_id":              tools.String("Optional session id to continue."),
 		"surface":                 tools.String("Optional originating surface label."),
+		"delivery_targets":        tools.Array("Optional delivery targets: origin, local, platform, or platform:address[:thread].", "string"),
 		"idempotency_key":         tools.String("Optional key used to deduplicate active pending/running tasks."),
 		"agentic_enforcement":     tools.String("Optional explicit agentic enforcement mode."),
 		"agentic_completion_gate": tools.String("Optional explicit completion gate mode."),
@@ -83,12 +84,13 @@ func (t *TaskCreateTool) ShouldCancelSiblingsOnError() bool { return false }
 func (t *TaskCreateTool) DeferInitialToolSchema() bool { return true }
 
 type taskCreateToolInput struct {
-	Prompt                string `json:"prompt"`
-	SessionID             string `json:"session_id"`
-	Surface               string `json:"surface"`
-	IdempotencyKey        string `json:"idempotency_key"`
-	AgenticEnforcement    string `json:"agentic_enforcement"`
-	AgenticCompletionGate string `json:"agentic_completion_gate"`
+	Prompt                string   `json:"prompt"`
+	SessionID             string   `json:"session_id"`
+	Surface               string   `json:"surface"`
+	DeliveryTargets       []string `json:"delivery_targets"`
+	IdempotencyKey        string   `json:"idempotency_key"`
+	AgenticEnforcement    string   `json:"agentic_enforcement"`
+	AgenticCompletionGate string   `json:"agentic_completion_gate"`
 }
 
 type taskCreateToolOutput struct {
@@ -127,6 +129,7 @@ type taskToolReceipt struct {
 	FollowupTool    string     `json:"followup_tool,omitempty"`
 	QuestionChars   int        `json:"question_chars,omitempty"`
 	AnswerChars     int        `json:"answer_chars,omitempty"`
+	DeliveryTargets []string   `json:"delivery_targets,omitempty"`
 }
 
 func (t *TaskCreateTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
@@ -143,11 +146,17 @@ func (t *TaskCreateTool) Execute(ctx context.Context, params json.RawMessage) (*
 	if prompt == "" {
 		return tools.ErrorResult("task_create: prompt is required"), nil
 	}
+	targets, err := ParseDeliveryTargets(normalizeDeliveryTargetStrings(input.DeliveryTargets))
+	if err != nil {
+		return tools.ErrorResult(fmt.Sprintf("task_create: %v", err)), nil
+	}
+	deliveryTargets := deliveryTargetStrings(targets)
 
 	payload := EncodeTaskPayload(TaskPayload{
 		Prompt:                prompt,
 		SessionID:             input.SessionID,
 		Surface:               input.Surface,
+		DeliveryTargets:       deliveryTargets,
 		AgenticEnforcement:    input.AgenticEnforcement,
 		AgenticCompletionGate: input.AgenticCompletionGate,
 	})
@@ -175,6 +184,7 @@ func (t *TaskCreateTool) Execute(ctx context.Context, params json.RawMessage) (*
 			Status:          StatusPending,
 			Deduplicated:    deduped,
 			FollowupTool:    TaskMonitorToolName,
+			DeliveryTargets: deliveryTargets,
 		},
 	}
 	raw, err := json.Marshal(output)

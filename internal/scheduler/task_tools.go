@@ -78,14 +78,15 @@ func (t *ScheduleCreateTool) Description() string {
 
 func (t *ScheduleCreateTool) Schema() json.RawMessage {
 	return tools.Object(map[string]tools.Property{
-		"name":         tools.String("Unique scheduled task name."),
-		"prompt":       tools.String("Prompt to enqueue when the schedule fires."),
-		"interval":     tools.String("Go duration interval, minimum 1m, for example 15m or 24h."),
-		"type":         tools.StringEnum("Optional task type. Defaults to agent.", "agent", "research", "skill-promote"),
-		"run_on_start": tools.Bool("Whether to enqueue once when the daemon scheduler starts."),
-		"enabled":      tools.Bool("Whether the task is enabled. Defaults to true."),
-		"session_id":   tools.String("Optional session id to continue."),
-		"surface":      tools.String("Optional originating surface label."),
+		"name":             tools.String("Unique scheduled task name."),
+		"prompt":           tools.String("Prompt to enqueue when the schedule fires."),
+		"interval":         tools.String("Go duration interval, minimum 1m, for example 15m or 24h."),
+		"type":             tools.StringEnum("Optional task type. Defaults to agent.", "agent", "research", "skill-promote"),
+		"run_on_start":     tools.Bool("Whether to enqueue once when the daemon scheduler starts."),
+		"enabled":          tools.Bool("Whether the task is enabled. Defaults to true."),
+		"session_id":       tools.String("Optional session id to continue."),
+		"surface":          tools.String("Optional originating surface label."),
+		"delivery_targets": tools.Array("Delivery targets such as origin, local, telegram, or telegram:<chat_id>.", "string"),
 	}, []string{"name", "prompt", "interval"})
 }
 
@@ -102,25 +103,27 @@ func (t *ScheduleCreateTool) ShouldCancelSiblingsOnError() bool { return false }
 func (t *ScheduleCreateTool) DeferInitialToolSchema() bool { return true }
 
 type scheduleCreateToolInput struct {
-	Name       string `json:"name"`
-	Prompt     string `json:"prompt"`
-	Interval   string `json:"interval"`
-	Type       string `json:"type"`
-	RunOnStart bool   `json:"run_on_start"`
-	Enabled    *bool  `json:"enabled"`
-	SessionID  string `json:"session_id"`
-	Surface    string `json:"surface"`
+	Name            string   `json:"name"`
+	Prompt          string   `json:"prompt"`
+	Interval        string   `json:"interval"`
+	Type            string   `json:"type"`
+	RunOnStart      bool     `json:"run_on_start"`
+	Enabled         *bool    `json:"enabled"`
+	SessionID       string   `json:"session_id"`
+	Surface         string   `json:"surface"`
+	DeliveryTargets []string `json:"delivery_targets"`
 }
 
 type scheduleToolItem struct {
-	Name       string `json:"name"`
-	Type       string `json:"type"`
-	Prompt     string `json:"prompt"`
-	Interval   string `json:"interval"`
-	RunOnStart bool   `json:"run_on_start"`
-	Enabled    bool   `json:"enabled"`
-	SessionID  string `json:"session_id,omitempty"`
-	Surface    string `json:"surface,omitempty"`
+	Name            string   `json:"name"`
+	Type            string   `json:"type"`
+	Prompt          string   `json:"prompt"`
+	Interval        string   `json:"interval"`
+	RunOnStart      bool     `json:"run_on_start"`
+	Enabled         bool     `json:"enabled"`
+	SessionID       string   `json:"session_id,omitempty"`
+	Surface         string   `json:"surface,omitempty"`
+	DeliveryTargets []string `json:"delivery_targets,omitempty"`
 }
 
 type scheduleRuntimeSemantics struct {
@@ -386,14 +389,15 @@ func normalizeScheduleCreateInput(input scheduleCreateToolInput) (scheduleToolIt
 		return scheduleToolItem{}, rawTask{}, fmt.Errorf("parse interval: %w", err)
 	}
 	task := ScheduledTask{
-		Name:       name,
-		Type:       taskType,
-		Prompt:     prompt,
-		Interval:   interval,
-		RunOnStart: input.RunOnStart,
-		Enabled:    true,
-		SessionID:  sessionID,
-		Surface:    surface,
+		Name:            name,
+		Type:            taskType,
+		Prompt:          prompt,
+		Interval:        interval,
+		RunOnStart:      input.RunOnStart,
+		Enabled:         true,
+		SessionID:       sessionID,
+		Surface:         surface,
+		DeliveryTargets: input.DeliveryTargets,
 	}
 	if input.Enabled != nil {
 		task.Enabled = *input.Enabled
@@ -402,14 +406,15 @@ func normalizeScheduleCreateInput(input scheduleCreateToolInput) (scheduleToolIt
 		return scheduleToolItem{}, rawTask{}, err
 	}
 	raw := rawTask{
-		Name:       task.Name,
-		Type:       task.Type,
-		Prompt:     task.Prompt,
-		Interval:   task.Interval.String(),
-		RunOnStart: task.RunOnStart,
-		Enabled:    input.Enabled,
-		SessionID:  task.SessionID,
-		Surface:    task.Surface,
+		Name:            task.Name,
+		Type:            task.Type,
+		Prompt:          task.Prompt,
+		Interval:        task.Interval.String(),
+		RunOnStart:      task.RunOnStart,
+		Enabled:         input.Enabled,
+		SessionID:       task.SessionID,
+		Surface:         task.Surface,
+		DeliveryTargets: task.DeliveryTargets,
 	}
 	return scheduleToolItemFromRaw(raw), raw, nil
 }
@@ -424,13 +429,14 @@ func scheduleToolItemFromRaw(raw rawTask) scheduleToolItem {
 		taskType = "agent"
 	}
 	return scheduleToolItem{
-		Name:       strings.TrimSpace(raw.Name),
-		Type:       taskType,
-		Prompt:     strings.TrimSpace(raw.Prompt),
-		Interval:   strings.TrimSpace(raw.Interval),
-		RunOnStart: raw.RunOnStart,
-		Enabled:    enabled,
-		SessionID:  strings.TrimSpace(raw.SessionID),
-		Surface:    strings.TrimSpace(raw.Surface),
+		Name:            strings.TrimSpace(raw.Name),
+		Type:            taskType,
+		Prompt:          strings.TrimSpace(raw.Prompt),
+		Interval:        strings.TrimSpace(raw.Interval),
+		RunOnStart:      raw.RunOnStart,
+		Enabled:         enabled,
+		SessionID:       strings.TrimSpace(raw.SessionID),
+		Surface:         strings.TrimSpace(raw.Surface),
+		DeliveryTargets: normalizeScheduleDeliveryTargets(raw.DeliveryTargets),
 	}
 }

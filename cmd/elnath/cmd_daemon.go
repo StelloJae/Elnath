@@ -43,7 +43,8 @@ func cmdDaemon(ctx context.Context, args []string) error {
 
 Subcommands:
   start              Start the daemon (blocks until stopped)
-  submit <task>      Submit a task to the running daemon
+  submit [opts] <task>
+                     Submit a task to the running daemon
   status             List queued and running tasks
   stop               Gracefully stop the running daemon
   install            Install launchd plist for auto-start`)
@@ -412,12 +413,15 @@ func loadScheduler(cfg *config.Config, queue scheduler.Enqueuer, logger *slog.Lo
 }
 
 func cmdDaemonSubmit(ctx context.Context, args []string) error {
-	sessionID, prompt, err := parseDaemonSubmitArgs(args)
+	sessionID, deliveryTargets, prompt, err := parseDaemonSubmitArgs(args)
 	if err != nil {
 		return err
 	}
 	if prompt == "" {
-		return fmt.Errorf("usage: elnath daemon submit [--session <session-id>] <task description>")
+		return fmt.Errorf("usage: elnath daemon submit [--session <session-id>] [--deliver <target>] <task description>")
+	}
+	if _, err := daemon.ParseDeliveryTargets(deliveryTargets); err != nil {
+		return fmt.Errorf("invalid --deliver target: %w", err)
 	}
 	cfgPath := extractConfigFlag(os.Args)
 	if cfgPath == "" {
@@ -442,10 +446,11 @@ func cmdDaemonSubmit(ctx context.Context, args []string) error {
 	principal.ProjectID = identity.ResolveProjectID(cwd, extractFlagValue(os.Args, "--project-id"))
 
 	payload := daemon.EncodeTaskPayload(daemon.TaskPayload{
-		Prompt:    prompt,
-		SessionID: sessionID,
-		Surface:   principal.Surface,
-		Principal: principal,
+		Prompt:          prompt,
+		SessionID:       sessionID,
+		Surface:         principal.Surface,
+		Principal:       principal,
+		DeliveryTargets: deliveryTargets,
 	})
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
@@ -481,14 +486,26 @@ func cmdDaemonSubmit(ctx context.Context, args []string) error {
 	return nil
 }
 
-func parseDaemonSubmitArgs(args []string) (sessionID string, prompt string, err error) {
+func parseDaemonSubmitArgs(args []string) (sessionID string, deliveryTargets []string, prompt string, err error) {
 	var parts []string
 	for i := 0; i < len(args); i++ {
 		if args[i] == "--session" {
 			if i+1 >= len(args) {
-				return "", "", fmt.Errorf("usage: elnath daemon submit [--session <session-id>] <task description>")
+				return "", nil, "", fmt.Errorf("usage: elnath daemon submit [--session <session-id>] [--deliver <target>] <task description>")
 			}
 			sessionID = args[i+1]
+			i++
+			continue
+		}
+		if args[i] == "--deliver" {
+			if i+1 >= len(args) {
+				return "", nil, "", fmt.Errorf("usage: elnath daemon submit [--session <session-id>] [--deliver <target>] <task description>")
+			}
+			target := strings.TrimSpace(args[i+1])
+			if target == "" {
+				return "", nil, "", fmt.Errorf("usage: elnath daemon submit [--session <session-id>] [--deliver <target>] <task description>")
+			}
+			deliveryTargets = append(deliveryTargets, target)
 			i++
 			continue
 		}
@@ -501,7 +518,7 @@ func parseDaemonSubmitArgs(args []string) (sessionID string, prompt string, err 
 		parts = append(parts, args[i])
 	}
 	prompt = strings.TrimSpace(strings.Join(parts, " "))
-	return sessionID, prompt, nil
+	return sessionID, deliveryTargets, prompt, nil
 }
 
 func cmdDaemonStatus(ctx context.Context, args []string) error {

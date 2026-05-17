@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/stello/elnath/internal/identity"
@@ -32,7 +33,7 @@ func TestParseTaskPayloadLegacyJSONDefaultsToAgentType(t *testing.T) {
 func TestParseTaskPayloadPreservesResearchTypeForBlankJSONPrompt(t *testing.T) {
 	got := ParseTaskPayload(`{"type":"research","prompt":"   "}`)
 	want := TaskPayload{Type: TaskTypeResearch}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("payload = %+v, want %+v", got, want)
 	}
 }
@@ -51,7 +52,7 @@ func TestEncodeTaskPayloadRoundTripsStructuredPayload(t *testing.T) {
 	}
 
 	got := ParseTaskPayload(raw)
-	if got != payload {
+	if !reflect.DeepEqual(got, payload) {
 		t.Fatalf("round trip payload = %+v, want %+v", got, payload)
 	}
 }
@@ -65,7 +66,7 @@ func TestEncodeTaskPayloadRoundTripsResearchType(t *testing.T) {
 
 	raw := EncodeTaskPayload(payload)
 	got := ParseTaskPayload(raw)
-	if got != payload {
+	if !reflect.DeepEqual(got, payload) {
 		t.Fatalf("round trip payload = %+v, want %+v", got, payload)
 	}
 }
@@ -77,7 +78,7 @@ func TestEncodeTaskPayloadKeepsResearchPromptOnlyStructured(t *testing.T) {
 		t.Fatalf("EncodeTaskPayload returned plain prompt for research payload: %q", raw)
 	}
 	got := ParseTaskPayload(raw)
-	if got != payload {
+	if !reflect.DeepEqual(got, payload) {
 		t.Fatalf("round trip payload = %+v, want %+v", got, payload)
 	}
 }
@@ -89,7 +90,7 @@ func TestEncodeTaskPayloadRoundTripsSkillPromoteType(t *testing.T) {
 		t.Fatalf("EncodeTaskPayload returned plain prompt for skill-promote payload: %q", raw)
 	}
 	got := ParseTaskPayload(raw)
-	if got != payload {
+	if !reflect.DeepEqual(got, payload) {
 		t.Fatalf("round trip payload = %+v, want %+v", got, payload)
 	}
 }
