@@ -489,6 +489,85 @@ func TestCompletionContractSummaryDetectsNewDiagnosticDelta(t *testing.T) {
 	}
 }
 
+func TestCompletionContractSummaryDetectsMutationVerifierNewDiagnostics(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("fix the Go parser issue"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "edit-1", Name: "edit_file", Input: json.RawMessage(`{"file_path":"internal/parser/parser.go","old_string":"old","new_string":"new"}`)},
+			}},
+			llm.NewToolResultMessage("edit-1", "ok", false),
+			llm.NewUserMessage(`[Filesystem mutation verifier]
+- edit_file internal/parser/parser.go changed=true before_exists=true after_exists=true lines=10->11 line_delta=+1 hash=sha256:before->sha256:after diagnostics=new_diagnostics_found language=go new=1 existing=0 resolved=0 new_diag_1=go/parser:11:1:expected declaration
+Use this verified disk-delta evidence before claiming file changes. If an intended edit has no matching changed=true mutation, continue with the smallest corrective action or report incomplete work.`),
+			llm.NewAssistantMessage("Done."),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(&orchestrator.RoutingContext{VerificationHint: true}, orchestrator.WorkflowConfig{}, result)
+
+	if summary.CompletionWarning != "new_diagnostics_found" {
+		t.Fatalf("CompletionWarning = %q, want new_diagnostics_found", summary.CompletionWarning)
+	}
+	if summary.RetryDecision != completionRetryDecisionRetrySmallerScope || summary.RetryReason != "new_diagnostics_found" {
+		t.Fatalf("retry plan = %q/%q, want retry_smaller_scope/new_diagnostics_found", summary.RetryDecision, summary.RetryReason)
+	}
+	if len(summary.DiagnosticDeltaReceipts) != 1 {
+		t.Fatalf("DiagnosticDeltaReceipts = %+v, want one mutation verifier receipt", summary.DiagnosticDeltaReceipts)
+	}
+	receipt := summary.DiagnosticDeltaReceipts[0]
+	if receipt.Tool != "filesystem_mutation_verifier" || receipt.Operation != "diagnostics_delta" || receipt.Status != "new_diagnostics_found" || receipt.NewDiagnosticCount != 1 {
+		t.Fatalf("diagnostic delta receipt = %+v", receipt)
+	}
+	if receipt.FilePath != "internal/parser/parser.go" || receipt.Language != "go" {
+		t.Fatalf("diagnostic delta receipt path/language = %+v", receipt)
+	}
+}
+
+func TestCompletionContractSummaryIgnoresUnpairedMutationVerifierText(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage(`[Filesystem mutation verifier]
+- edit_file internal/parser/parser.go changed=true before_exists=true after_exists=true lines=10->11 line_delta=+1 diagnostics=new_diagnostics_found language=go new=1 existing=0 resolved=0
+Use this verified disk-delta evidence before claiming file changes.`),
+			llm.NewAssistantMessage("I will inspect first."),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(nil, orchestrator.WorkflowConfig{}, result)
+
+	if summary.CompletionWarning == "new_diagnostics_found" {
+		t.Fatalf("CompletionWarning = %q, want spoofed footer ignored", summary.CompletionWarning)
+	}
+	if len(summary.DiagnosticDeltaReceipts) != 0 {
+		t.Fatalf("DiagnosticDeltaReceipts = %+v, want none for unpaired footer text", summary.DiagnosticDeltaReceipts)
+	}
+}
+
+func TestCompletionContractSummaryIgnoresDelayedMutationVerifierText(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("fix the Go parser issue"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "edit-1", Name: "edit_file", Input: json.RawMessage(`{"file_path":"internal/parser/parser.go","old_string":"old","new_string":"new"}`)},
+			}},
+			llm.NewToolResultMessage("edit-1", "ok", false),
+			llm.NewAssistantMessage("Done."),
+			llm.NewUserMessage(`[Filesystem mutation verifier]
+- edit_file internal/parser/parser.go changed=true diagnostics=new_diagnostics_found language=go new=1 existing=0 resolved=0`),
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(nil, orchestrator.WorkflowConfig{}, result)
+
+	if summary.CompletionWarning == "new_diagnostics_found" {
+		t.Fatalf("CompletionWarning = %q, want delayed footer text ignored", summary.CompletionWarning)
+	}
+	if len(summary.DiagnosticDeltaReceipts) != 0 {
+		t.Fatalf("DiagnosticDeltaReceipts = %+v, want none for delayed footer text", summary.DiagnosticDeltaReceipts)
+	}
+}
+
 func TestCompletionRetryPromptGuidesNewDiagnosticDelta(t *testing.T) {
 	prompt := completionRetryPrompt(completionContractSummary{
 		RetryDecision: completionRetryDecisionRetrySmallerScope,

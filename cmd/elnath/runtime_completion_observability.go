@@ -571,10 +571,118 @@ func observedDiagnosticDeltaReceipts(messages []llm.Message) []completionDiagnos
 			}
 		}
 	}
+	receipts = append(receipts, observedMutationVerifierDiagnosticReceipts(messages)...)
 	if len(receipts) == 0 {
 		return nil
 	}
 	return receipts
+}
+
+func observedMutationVerifierDiagnosticReceipts(messages []llm.Message) []completionDiagnosticDeltaReceipt {
+	pendingMutatingToolIDs := make(map[string]struct{})
+	awaitingVerifierFooter := false
+	var receipts []completionDiagnosticDeltaReceipt
+	for _, msg := range messages {
+		if awaitingVerifierFooter {
+			if msg.Role == llm.RoleUser {
+				if parsed := mutationVerifierDiagnosticReceiptsFromText(msg.Text()); len(parsed) > 0 {
+					receipts = append(receipts, parsed...)
+				}
+			}
+			awaitingVerifierFooter = false
+		}
+		for _, block := range msg.Content {
+			switch b := block.(type) {
+			case llm.ToolUseBlock:
+				if b.ID != "" && mutatingToolUseObserved(b) {
+					pendingMutatingToolIDs[b.ID] = struct{}{}
+				}
+			case llm.ToolResultBlock:
+				if _, ok := pendingMutatingToolIDs[b.ToolUseID]; !ok {
+					continue
+				}
+				if !b.IsError && !mutatingToolResultLooksNoop(b.Content) {
+					awaitingVerifierFooter = true
+				}
+				delete(pendingMutatingToolIDs, b.ToolUseID)
+			}
+		}
+	}
+	if len(receipts) == 0 {
+		return nil
+	}
+	return receipts
+}
+
+func mutationVerifierDiagnosticReceiptsFromText(text string) []completionDiagnosticDeltaReceipt {
+	text = strings.TrimSpace(text)
+	if !strings.HasPrefix(text, "[Filesystem mutation verifier]\n") {
+		return nil
+	}
+	var receipts []completionDiagnosticDeltaReceipt
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "- ") {
+			continue
+		}
+		fields := strings.Fields(strings.TrimPrefix(line, "- "))
+		if len(fields) < 2 {
+			continue
+		}
+		values := completionKeyValueFields(fields[2:])
+		status := strings.TrimSpace(values["diagnostics"])
+		if status == "" {
+			continue
+		}
+		newCount := parseCompletionReceiptInt(values["new"])
+		existingCount := parseCompletionReceiptInt(values["existing"])
+		resolvedCount := parseCompletionReceiptInt(values["resolved"])
+		receipt := completionDiagnosticDeltaReceipt{
+			Tool:                    "filesystem_mutation_verifier",
+			Action:                  "diagnostics_delta",
+			ReadOnly:                true,
+			ExecutionPolicy:         "filesystem_mutation_verifier",
+			Operation:               "diagnostics_delta",
+			Status:                  status,
+			Language:                strings.TrimSpace(values["language"]),
+			FilePath:                normalizeCompletionScopePath(fields[1]),
+			Path:                    normalizeCompletionScopePath(fields[1]),
+			Count:                   newCount + existingCount,
+			ErrorCount:              newCount,
+			NewDiagnosticCount:      newCount,
+			ExistingDiagnosticCount: existingCount,
+			ResolvedDiagnosticCount: resolvedCount,
+		}
+		receipts = append(receipts, receipt)
+	}
+	if len(receipts) == 0 {
+		return nil
+	}
+	return receipts
+}
+
+func completionKeyValueFields(fields []string) map[string]string {
+	out := make(map[string]string, len(fields))
+	for _, field := range fields {
+		key, value, ok := strings.Cut(field, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		out[key] = strings.TrimSpace(value)
+	}
+	return out
+}
+
+func parseCompletionReceiptInt(raw string) int {
+	parsed, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		return 0
+	}
+	return parsed
 }
 
 func diagnosticDeltaReceiptFromOutput(output string) (completionDiagnosticDeltaReceipt, bool) {
