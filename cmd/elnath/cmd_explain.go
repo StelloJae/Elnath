@@ -16,7 +16,7 @@ import (
 	"github.com/stello/elnath/internal/wiki"
 )
 
-func cmdExplain(_ context.Context, args []string) error {
+func cmdExplain(ctx context.Context, args []string) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
 		return printExplainUsage()
 	}
@@ -58,6 +58,8 @@ func cmdExplain(_ context.Context, args []string) error {
 		return explainTimeouts(cfg, args[1:])
 	case "control-surfaces":
 		return explainControlSurfaces(args[1:])
+	case "code-intelligence":
+		return explainCodeIntelligenceWithContext(ctx, args[1:])
 	case "pending-questions":
 		return explainPendingQuestions(outcomeStore, args[1:])
 	default:
@@ -74,11 +76,259 @@ Subcommands:
   timeouts [--json] Show configured timeout and retry policy
   control-surfaces [--json]
                     Show implemented model-callable control surfaces
+  code-intelligence [--json] [--path PATH] [--max-results N]
+                    Show code intelligence boundary, adapters, and Go diagnostics
   pending-questions [--json] [--session ID] [--limit N]
                     Show unanswered user-input requests from outcome receipts
   help              Show this help
 `)
 	return nil
+}
+
+type codeIntelligenceView struct {
+	ProductBoundary    string                                      `json:"product_boundary"`
+	ReplacementPath    []string                                    `json:"replacement_path"`
+	DiagnosticAdapters []basetools.MutationDiagnosticAdapterPolicy `json:"diagnostic_adapters"`
+	GoDiagnostics      codeIntelligenceDiagnosticsView             `json:"go_diagnostics"`
+	RepairHints        []codeIntelligenceRepairHint                `json:"repair_hints,omitempty"`
+	Receipt            codeIntelligenceReceipt                     `json:"receipt"`
+}
+
+type codeIntelligenceDiagnosticsView struct {
+	Operation string                       `json:"operation"`
+	Status    string                       `json:"status"`
+	Language  string                       `json:"language"`
+	Path      string                       `json:"path,omitempty"`
+	FilePath  string                       `json:"file_path,omitempty"`
+	Count     int                          `json:"count"`
+	Truncated bool                         `json:"truncated,omitempty"`
+	Errors    []codeIntelligenceDiagnostic `json:"errors,omitempty"`
+}
+
+type codeIntelligenceDiagnostic struct {
+	FilePath string `json:"file_path"`
+	Line     int    `json:"line,omitempty"`
+	Column   int    `json:"column,omitempty"`
+	Error    string `json:"error"`
+	Severity string `json:"severity,omitempty"`
+	Source   string `json:"source,omitempty"`
+	LineText string `json:"line_text,omitempty"`
+}
+
+type codeIntelligenceReceipt struct {
+	Tool               string `json:"tool"`
+	Action             string `json:"action"`
+	ReadOnly           bool   `json:"read_only"`
+	DiagnosticsChecked bool   `json:"diagnostics_checked"`
+	Path               string `json:"path,omitempty"`
+	Status             string `json:"status"`
+	Count              int    `json:"count"`
+	Truncated          bool   `json:"truncated,omitempty"`
+}
+
+type codeIntelligenceRepairHint struct {
+	FilePath       string   `json:"file_path"`
+	Line           int      `json:"line,omitempty"`
+	Column         int      `json:"column,omitempty"`
+	Source         string   `json:"source,omitempty"`
+	Error          string   `json:"error"`
+	SuggestedTools []string `json:"suggested_tools"`
+	StopCondition  string   `json:"stop_condition"`
+}
+
+func explainCodeIntelligence(args []string) error {
+	return explainCodeIntelligenceWithContext(context.Background(), args)
+}
+
+func explainCodeIntelligenceWithContext(ctx context.Context, args []string) error {
+	jsonOut := false
+	pathArg := "."
+	maxResults := 50
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--json":
+			jsonOut = true
+		case "--path":
+			value, next, err := parseStringFlag(args, i, "--path")
+			if err != nil {
+				return err
+			}
+			pathArg = value
+			i = next
+		case "--max-results":
+			value, next, err := parseIntFlag(args, i, "--max-results")
+			if err != nil {
+				return err
+			}
+			if value <= 0 {
+				return fmt.Errorf("explain: code-intelligence: --max-results must be positive")
+			}
+			maxResults = value
+			i = next
+		case "help", "-h", "--help":
+			return printExplainUsage()
+		default:
+			return fmt.Errorf("explain: code-intelligence: unknown flag %q", args[i])
+		}
+	}
+
+	view, err := codeIntelligenceViewForRuntime(ctx, pathArg, maxResults)
+	if err != nil {
+		return err
+	}
+	if jsonOut {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(view)
+	}
+
+	fmt.Fprintln(os.Stdout, "Code intelligence:")
+	fmt.Fprintf(os.Stdout, "  boundary: %s\n", view.ProductBoundary)
+	for _, replacement := range view.ReplacementPath {
+		fmt.Fprintf(os.Stdout, "  replacement: %s\n", replacement)
+	}
+	fmt.Fprintf(os.Stdout, "  Go diagnostics: %s count=%d path=%s\n",
+		view.GoDiagnostics.Status,
+		view.GoDiagnostics.Count,
+		view.GoDiagnostics.Path,
+	)
+	for _, diagnostic := range view.GoDiagnostics.Errors {
+		location := diagnostic.FilePath
+		if diagnostic.Line > 0 {
+			location = fmt.Sprintf("%s:%d", location, diagnostic.Line)
+			if diagnostic.Column > 0 {
+				location = fmt.Sprintf("%s:%d", location, diagnostic.Column)
+			}
+		}
+		fmt.Fprintf(os.Stdout, "    - %s %s: %s\n", diagnostic.Source, location, diagnostic.Error)
+	}
+	if len(view.RepairHints) > 0 {
+		fmt.Fprintln(os.Stdout, "Repair hints:")
+		for _, hint := range view.RepairHints {
+			location := hint.FilePath
+			if hint.Line > 0 {
+				location = fmt.Sprintf("%s:%d", location, hint.Line)
+				if hint.Column > 0 {
+					location = fmt.Sprintf("%s:%d", location, hint.Column)
+				}
+			}
+			fmt.Fprintf(os.Stdout, "  - %s: tools=%s stop=%s\n",
+				location,
+				strings.Join(hint.SuggestedTools, ","),
+				hint.StopCondition,
+			)
+		}
+	}
+	if len(view.DiagnosticAdapters) > 0 {
+		fmt.Fprintln(os.Stdout, "Diagnostic adapters:")
+		for _, adapter := range view.DiagnosticAdapters {
+			fmt.Fprintf(os.Stdout, "  - %s: %s adapter=%s command=%s timeout_ms=%d scope=%s\n",
+				adapter.Language,
+				adapter.Status,
+				adapter.Adapter,
+				adapter.Command,
+				adapter.TimeoutMS,
+				adapter.Scope,
+			)
+		}
+	}
+	return nil
+}
+
+func codeIntelligenceViewForRuntime(ctx context.Context, pathArg string, maxResults int) (codeIntelligenceView, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return codeIntelligenceView{}, fmt.Errorf("explain: code-intelligence: get cwd: %w", err)
+	}
+	guard := basetools.NewPathGuard(cwd, nil)
+	tool := basetools.NewCodeSymbolsTool(guard)
+	params, err := json.Marshal(map[string]any{
+		"operation":   "diagnostics",
+		"path":        strings.TrimSpace(pathArg),
+		"max_results": maxResults,
+	})
+	if err != nil {
+		return codeIntelligenceView{}, fmt.Errorf("explain: code-intelligence: encode diagnostics params: %w", err)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	result, err := tool.Execute(basetools.WithRootSessionWorkDir(ctx), params)
+	if err != nil {
+		return codeIntelligenceView{}, fmt.Errorf("explain: code-intelligence: diagnostics: %w", err)
+	}
+	if result == nil {
+		return codeIntelligenceView{}, fmt.Errorf("explain: code-intelligence: diagnostics returned no result")
+	}
+	if result.IsError {
+		return codeIntelligenceView{}, fmt.Errorf("explain: code-intelligence: %s", result.Output)
+	}
+	var diagnostics codeIntelligenceDiagnosticsView
+	if err := json.Unmarshal([]byte(result.Output), &diagnostics); err != nil {
+		return codeIntelligenceView{}, fmt.Errorf("explain: code-intelligence: decode diagnostics: %w", err)
+	}
+	diagnostics.Path = strings.TrimSpace(diagnostics.Path)
+	if diagnostics.Path == "" {
+		diagnostics.Path = strings.TrimSpace(pathArg)
+	}
+	boundaries := controlSurfaceBoundaryReasons()
+	replacements := append([]string(nil), controlSurfaceReplacementPaths()["code_intelligence"]...)
+	return codeIntelligenceView{
+		ProductBoundary:    boundaries["code_intelligence"],
+		ReplacementPath:    replacements,
+		DiagnosticAdapters: basetools.MutationDiagnosticAdapterPolicies(),
+		GoDiagnostics:      diagnostics,
+		RepairHints:        codeIntelligenceRepairHints(diagnostics.Errors),
+		Receipt: codeIntelligenceReceipt{
+			Tool:               "explain_code_intelligence",
+			Action:             "status",
+			ReadOnly:           true,
+			DiagnosticsChecked: true,
+			Path:               diagnostics.Path,
+			Status:             diagnostics.Status,
+			Count:              diagnostics.Count,
+			Truncated:          diagnostics.Truncated,
+		},
+	}, nil
+}
+
+func codeIntelligenceRepairHints(diagnostics []codeIntelligenceDiagnostic) []codeIntelligenceRepairHint {
+	if len(diagnostics) == 0 {
+		return nil
+	}
+	const maxHints = 3
+	hints := make([]codeIntelligenceRepairHint, 0, maxHints)
+	seen := make(map[string]struct{}, len(diagnostics))
+	for _, diagnostic := range diagnostics {
+		if strings.TrimSpace(diagnostic.FilePath) == "" || strings.TrimSpace(diagnostic.Error) == "" {
+			continue
+		}
+		key := fmt.Sprintf("%s:%d:%d:%s", diagnostic.FilePath, diagnostic.Line, diagnostic.Column, diagnostic.Error)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		hints = append(hints, codeIntelligenceRepairHint{
+			FilePath: diagnostic.FilePath,
+			Line:     diagnostic.Line,
+			Column:   diagnostic.Column,
+			Source:   diagnostic.Source,
+			Error:    diagnostic.Error,
+			SuggestedTools: []string{
+				"read_file",
+				"edit_file",
+				"code_symbols diagnostics_delta",
+			},
+			StopCondition: "diagnostic_delta_clean_or_no_new_diagnostics",
+		})
+		if len(hints) >= maxHints {
+			break
+		}
+	}
+	if len(hints) == 0 {
+		return nil
+	}
+	return hints
 }
 
 type pendingQuestionsView struct {
