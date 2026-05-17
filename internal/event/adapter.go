@@ -29,7 +29,7 @@ func (a *onTextSinkAdapter) Emit(e Event) {
 	case TextDeltaEvent:
 		a.fn(ev.Content)
 	case ToolProgressEvent:
-		a.fn(encodeProgressCompat("tool", ev.ToolName, ev.Preview))
+		a.fn(encodeToolProgressCompat(ev))
 	case WorkflowProgressEvent:
 		msg := strings.TrimSpace(ev.Intent + " → " + ev.Workflow)
 		a.fn(encodeProgressCompat("workflow", msg, ""))
@@ -52,6 +52,38 @@ func encodeProgressCompat(kind, message, preview string) string {
 	data, err := json.Marshal(m)
 	if err != nil {
 		return message
+	}
+	return string(data)
+}
+
+func encodeToolProgressCompat(ev ToolProgressEvent) string {
+	msg := strings.TrimSpace(ev.ToolName)
+	if strings.TrimSpace(ev.Preview) != "" {
+		msg = strings.TrimSpace(msg + ": " + ev.Preview)
+	}
+	m := map[string]any{
+		"version": "elnath.progress.v1",
+		"kind":    "tool",
+		"message": msg,
+	}
+	if strings.TrimSpace(ev.ToolName) != "" {
+		m["tool_name"] = strings.TrimSpace(ev.ToolName)
+	}
+	if strings.TrimSpace(ev.Preview) != "" {
+		m["preview"] = strings.TrimSpace(ev.Preview)
+	}
+	if strings.TrimSpace(ev.Phase) != "" {
+		m["phase"] = strings.TrimSpace(ev.Phase)
+	}
+	if ev.DurationMS > 0 {
+		m["duration_ms"] = ev.DurationMS
+	}
+	if ev.IsError {
+		m["is_error"] = true
+	}
+	data, err := json.Marshal(m)
+	if err != nil {
+		return msg
 	}
 	return string(data)
 }

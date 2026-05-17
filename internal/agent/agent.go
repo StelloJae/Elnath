@@ -812,7 +812,7 @@ func (a *Agent) executeToolsWithStats(ctx context.Context, messages []llm.Messag
 	if err != nil {
 		return nil, err
 	}
-	if err := a.executeApprovedToolCalls(ctx, approved, results, toolStats, toolStatsMu); err != nil {
+	if err := a.executeApprovedToolCalls(ctx, approved, results, sink, toolStats, toolStatsMu); err != nil {
 		return nil, err
 	}
 	return a.appendToolResults(messages, results), nil
@@ -829,6 +829,7 @@ func (a *Agent) collectApprovedToolCalls(ctx context.Context, calls []llm.ToolUs
 			Base:     event.NewBase(),
 			ToolName: call.Name,
 			Preview:  preview,
+			Phase:    "planned",
 		})
 
 		allowed, err := a.permission.Check(ctx, call.Name, call.Input)

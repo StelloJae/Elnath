@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/stello/elnath/internal/core"
+	"github.com/stello/elnath/internal/event"
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/tools"
 )
@@ -25,9 +26,12 @@ type scheduledToolCall struct {
 	cancelOnErr bool
 }
 
-func (a *Agent) executeApprovedToolCalls(ctx context.Context, approved []approvedToolCall, results []toolExecResult, toolStats map[string]*toolStatAcc, toolStatsMu *sync.Mutex) error {
+func (a *Agent) executeApprovedToolCalls(ctx context.Context, approved []approvedToolCall, results []toolExecResult, sink event.Sink, toolStats map[string]*toolStatAcc, toolStatsMu *sync.Mutex) error {
+	if sink == nil {
+		sink = event.NopSink{}
+	}
 	for _, batch := range partitionToolCalls(a.tools, approved) {
-		if err := a.executeToolBatch(ctx, batch, results, toolStats, toolStatsMu); err != nil {
+		if err := a.executeToolBatch(ctx, batch, results, sink, toolStats, toolStatsMu); err != nil {
 			return err
 		}
 	}
@@ -130,7 +134,10 @@ func hasPathPrefix(path, prefix string) bool {
 	return !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-func (a *Agent) executeToolBatch(ctx context.Context, batch []scheduledToolCall, results []toolExecResult, toolStats map[string]*toolStatAcc, toolStatsMu *sync.Mutex) error {
+func (a *Agent) executeToolBatch(ctx context.Context, batch []scheduledToolCall, results []toolExecResult, sink event.Sink, toolStats map[string]*toolStatAcc, toolStatsMu *sync.Mutex) error {
+	if sink == nil {
+		sink = event.NopSink{}
+	}
 	childCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -147,6 +154,13 @@ func (a *Agent) executeToolBatch(ctx context.Context, batch []scheduledToolCall,
 			defer wg.Done()
 
 			callCtx := tools.WithAgenticToolCallID(childCtx, call.call.ID)
+			preview := extractToolPreview(call.call.Name, string(call.call.Input))
+			sink.Emit(event.ToolProgressEvent{
+				Base:     event.NewBase(),
+				ToolName: call.call.Name,
+				Preview:  preview,
+				Phase:    "running",
+			})
 			start := time.Now()
 			result, err := a.executor.Execute(callCtx, call.call.Name, call.call.Input)
 			duration := time.Since(start)
@@ -162,6 +176,14 @@ func (a *Agent) executeToolBatch(ctx context.Context, batch []scheduledToolCall,
 			}
 
 			hadErr := err != nil || result.IsError
+			sink.Emit(event.ToolProgressEvent{
+				Base:       event.NewBase(),
+				ToolName:   call.call.Name,
+				Preview:    preview,
+				Phase:      "done",
+				DurationMS: durationMillisAtLeastOne(duration),
+				IsError:    hadErr,
+			})
 			if toolStats != nil && toolStatsMu != nil {
 				mergeToolStat(toolStats, toolStatsMu, call.call.Name, duration, hadErr)
 			}
@@ -202,4 +224,15 @@ func (a *Agent) executeToolBatch(ctx context.Context, batch []scheduledToolCall,
 
 	wg.Wait()
 	return fatalErr
+}
+
+func durationMillisAtLeastOne(duration time.Duration) int64 {
+	if duration <= 0 {
+		return 0
+	}
+	ms := duration.Milliseconds()
+	if ms == 0 {
+		return 1
+	}
+	return ms
 }

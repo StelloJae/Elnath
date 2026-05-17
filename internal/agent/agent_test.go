@@ -768,6 +768,44 @@ func TestAgentInjectsMutationVerifierFooter(t *testing.T) {
 	}
 }
 
+func TestExecuteToolsEmitsToolExecutionProgressPhases(t *testing.T) {
+	reg := tools.NewRegistry()
+	reg.Register(&mockTool{
+		name:        "slow_tool",
+		description: "slow",
+		schema:      json.RawMessage(`{"type":"object"}`),
+		executeFn: func(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
+			return tools.SuccessResult("ok"), nil
+		},
+	})
+	sink := &event.RecorderSink{}
+	a := New(&mockProvider{}, reg, WithPermission(NewPermission(WithMode(ModeBypass))))
+
+	_, err := a.executeTools(context.Background(), nil, []llm.ToolUseBlock{{
+		ID:    "tool-1",
+		Name:  "slow_tool",
+		Input: []byte(`{"target":"x"}`),
+	}}, sink)
+	if err != nil {
+		t.Fatalf("executeTools: %v", err)
+	}
+
+	progress := event.EventsOfType[event.ToolProgressEvent](sink)
+	var phases []string
+	for _, ev := range progress {
+		if ev.ToolName == "slow_tool" {
+			phases = append(phases, ev.Phase)
+		}
+	}
+	if strings.Join(phases, ",") != "planned,running,done" {
+		t.Fatalf("tool progress phases = %v, want planned,running,done", phases)
+	}
+	last := progress[len(progress)-1]
+	if last.ToolName != "slow_tool" || last.Phase != "done" || last.DurationMS <= 0 || last.IsError {
+		t.Fatalf("last progress event = %+v, want successful done event with duration", last)
+	}
+}
+
 func TestBuildToolDefsSearchFirstFallsBackWithoutToolSearch(t *testing.T) {
 	reg := tools.NewRegistry()
 	reg.Register(&mockTool{

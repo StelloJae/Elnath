@@ -48,9 +48,12 @@ func TestTextDeltaEvent(t *testing.T) {
 
 func TestToolProgressEvent(t *testing.T) {
 	e := ToolProgressEvent{
-		Base:     NewBase(),
-		ToolName: "bash",
-		Preview:  "ls -la",
+		Base:       NewBase(),
+		ToolName:   "bash",
+		Preview:    "ls -la",
+		Phase:      "running",
+		DurationMS: 125,
+		IsError:    true,
 	}
 
 	if e.EventType() != "tool_progress" {
@@ -58,6 +61,9 @@ func TestToolProgressEvent(t *testing.T) {
 	}
 	if e.ToolName != "bash" {
 		t.Fatalf("expected bash, got %q", e.ToolName)
+	}
+	if e.Phase != "running" || e.DurationMS != 125 || !e.IsError {
+		t.Fatalf("unexpected progress metadata: %+v", e)
 	}
 	var _ Event = e
 }

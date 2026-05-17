@@ -88,8 +88,11 @@ func (e AgentFinishEvent) EventType() string { return "agent_finish" }
 
 type ToolProgressEvent struct {
 	Base
-	ToolName string
-	Preview  string
+	ToolName   string
+	Preview    string
+	Phase      string
+	DurationMS int64
+	IsError    bool
 }
 
 func (e ToolProgressEvent) EventType() string { return "tool_progress" }
@@ -144,7 +147,7 @@ func (e SkillExecuteEvent) EventType() string { return "skill_execute" }
 type SessionResumeEvent struct {
 	Base
 	ResumedSessionID string
-	Surface string
+	Surface          string
 }
 
 func (e SessionResumeEvent) EventType() string { return "session_resume" }
