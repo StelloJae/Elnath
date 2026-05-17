@@ -635,7 +635,7 @@ func (s *Shell) renderPendingQuestions() (string, error) {
 	}
 	lines := []string{"❓ <b>Pending questions</b>"}
 	for _, q := range pending {
-		lines = append(lines, fmt.Sprintf("• <code>%s</code> session=<code>%s</code>", escapeHTML(q.RequestID), escapeHTML(q.SessionID)))
+		lines = append(lines, fmt.Sprintf("• <code>%s</code> session=<code>%s</code>", escapeHTML(q.RequestID), escapeHTML(emptyFallback(q.SessionID, "-"))))
 		if q.Question != "" {
 			lines = append(lines, "  "+escapeHTML(q.Question))
 		}
@@ -646,10 +646,29 @@ func (s *Shell) renderPendingQuestions() (string, error) {
 			}
 			lines = append(lines, "  choices: "+strings.Join(choices, ", "))
 		}
-		lines = append(lines, fmt.Sprintf("  answer: <code>/answer %s %s ANSWER_TEXT</code>", escapeHTML(q.SessionID), escapeHTML(q.RequestID)))
-		lines = append(lines, fmt.Sprintf("  cancel: <code>/cancel-question %s %s REASON</code>", escapeHTML(q.SessionID), escapeHTML(q.RequestID)))
+		if q.TimeoutSeconds > 0 {
+			lines = append(lines, fmt.Sprintf("  timeout: %ds", q.TimeoutSeconds))
+		}
+		lines = append(lines, renderPendingQuestionHandoffLines(q)...)
 	}
 	return strings.Join(lines, "\n"), nil
+}
+
+func renderPendingQuestionHandoffLines(q learning.PendingUserQuestion) []string {
+	if !q.Answerable {
+		return []string{"  not answerable: missing session binding; inspect the receipt or ask again from a bound session."}
+	}
+	sessionID := escapeHTML(q.SessionID)
+	requestID := escapeHTML(q.RequestID)
+	lines := make([]string, 0, len(q.Options)+2)
+	for _, opt := range q.Options {
+		lines = append(lines, fmt.Sprintf("  choose <code>%s</code>: <code>/answer %s %s %s</code>", escapeHTML(opt), sessionID, requestID, escapeHTML(opt)))
+	}
+	if q.AllowFreeText || len(q.Options) == 0 {
+		lines = append(lines, fmt.Sprintf("  free text: <code>/answer %s %s ANSWER_TEXT</code>", sessionID, requestID))
+	}
+	lines = append(lines, fmt.Sprintf("  cancel: <code>/cancel-question %s %s REASON</code>", sessionID, requestID))
+	return lines
 }
 
 func (s *Shell) answerPendingQuestion(ctx context.Context, raw string, principal identity.Principal) (string, error) {
