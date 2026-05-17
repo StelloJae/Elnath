@@ -241,6 +241,45 @@ func TestTrackerReadImprovementProposalRejectsOutsidePath(t *testing.T) {
 	}
 }
 
+func TestTrackerListImprovementProposals(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	tracker := NewTracker(dir)
+	newer := time.Date(2026, 5, 17, 5, 0, 0, 0, time.UTC)
+	older := newer.Add(-time.Hour)
+	if _, err := tracker.WriteImprovementProposal(ImprovementProposal{
+		SkillName:       "older-skill",
+		Reason:          "older reason",
+		SuggestedChange: "older change",
+		CreatedAt:       older,
+	}); err != nil {
+		t.Fatalf("WriteImprovementProposal(older) error = %v", err)
+	}
+	if _, err := tracker.WriteImprovementProposal(ImprovementProposal{
+		SkillName:       "newer-skill",
+		Reason:          "newer reason",
+		SuggestedChange: "newer change",
+		CreatedAt:       newer,
+	}); err != nil {
+		t.Fatalf("WriteImprovementProposal(newer) error = %v", err)
+	}
+
+	proposals, err := tracker.ListImprovementProposals()
+	if err != nil {
+		t.Fatalf("ListImprovementProposals() error = %v", err)
+	}
+	if len(proposals) != 2 {
+		t.Fatalf("len(ListImprovementProposals()) = %d, want 2", len(proposals))
+	}
+	if proposals[0].Proposal.SkillName != "newer-skill" || proposals[1].Proposal.SkillName != "older-skill" {
+		t.Fatalf("proposal order = %+v, want newest first", proposals)
+	}
+	if proposals[0].FileName == "" || proposals[0].Path == "" || proposals[0].ModTime.IsZero() {
+		t.Fatalf("proposal file metadata = %+v, want filename/path/modtime", proposals[0])
+	}
+}
+
 func TestTrackerEmptyFiles(t *testing.T) {
 	t.Parallel()
 

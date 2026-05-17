@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -746,7 +747,7 @@ func TestToolGateway_FinalizerKeyIncludesActorID(t *testing.T) {
 
 func newGatewayTestStore(t *testing.T) (*sql.DB, *agentic.Store, *approvals.Bridge, *agentic.AgenticTask) {
 	t.Helper()
-	db, err := sql.Open("sqlite", ":memory:")
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "agentic.db"))
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}

@@ -164,6 +164,13 @@ type ImprovementProposal struct {
 	CreatedAt       time.Time `json:"created_at"`
 }
 
+type ImprovementProposalFile struct {
+	FileName string              `json:"file_name"`
+	Path     string              `json:"path"`
+	Proposal ImprovementProposal `json:"proposal"`
+	ModTime  time.Time           `json:"mod_time"`
+}
+
 func (t *Tracker) WriteImprovementProposal(proposal ImprovementProposal) (string, error) {
 	if t == nil {
 		return "", fmt.Errorf("skill tracker is not configured")
@@ -201,6 +208,47 @@ func (t *Tracker) WriteImprovementProposal(proposal ImprovementProposal) (string
 		return "", fmt.Errorf("write skill improvement proposal: %w", err)
 	}
 	return path, nil
+}
+
+func (t *Tracker) ListImprovementProposals() ([]ImprovementProposalFile, error) {
+	if t == nil {
+		return nil, fmt.Errorf("skill tracker is not configured")
+	}
+	entries, err := os.ReadDir(t.proposalDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read skill improvement proposals: %w", err)
+	}
+	proposals := make([]ImprovementProposalFile, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+			continue
+		}
+		path := filepath.Join(t.proposalDir, entry.Name())
+		proposal, err := t.ReadImprovementProposal(path)
+		if err != nil {
+			return nil, fmt.Errorf("read proposal %s: %w", entry.Name(), err)
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return nil, fmt.Errorf("stat proposal %s: %w", entry.Name(), err)
+		}
+		proposals = append(proposals, ImprovementProposalFile{
+			FileName: entry.Name(),
+			Path:     path,
+			Proposal: proposal,
+			ModTime:  info.ModTime(),
+		})
+	}
+	sort.Slice(proposals, func(i, j int) bool {
+		if proposals[i].Proposal.CreatedAt.Equal(proposals[j].Proposal.CreatedAt) {
+			return proposals[i].FileName < proposals[j].FileName
+		}
+		return proposals[i].Proposal.CreatedAt.After(proposals[j].Proposal.CreatedAt)
+	})
+	return proposals, nil
 }
 
 func (t *Tracker) ReadImprovementProposal(path string) (ImprovementProposal, error) {
