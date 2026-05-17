@@ -144,6 +144,38 @@ func TestCmdTaskMonitorWithQueueShowsSnapshot(t *testing.T) {
 	}
 }
 
+func TestCmdTaskMonitorWithQueueRendersStructuredProgress(t *testing.T) {
+	ctx := context.Background()
+	queue := newCmdTaskTestQueue(t)
+	id, _, err := queue.Enqueue(ctx, "monitor structured progress", "")
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	task, err := queue.Next(ctx)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if task == nil {
+		t.Fatal("Next returned nil")
+	}
+	rawProgress := daemon.EncodeProgressEvent(daemon.ToolPhaseProgressEvent("bash", "go test ./cmd/elnath", "running", 42, false))
+	if _, err := queue.UpdateAnnotation(ctx, task.ID, rawProgress, "tests running"); err != nil {
+		t.Fatalf("UpdateAnnotation: %v", err)
+	}
+
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdTaskMonitorWithQueue(ctx, queue, []string{fmt.Sprint(id)}); err != nil {
+			t.Fatalf("cmdTaskMonitorWithQueue: %v", err)
+		}
+	})
+	if !strings.Contains(stdout, "Progress:     bash: go test ./cmd/elnath (running)") {
+		t.Fatalf("stdout = %q, want rendered structured progress", stdout)
+	}
+	if strings.Contains(stdout, `"version"`) {
+		t.Fatalf("stdout = %q, should not dump raw progress JSON", stdout)
+	}
+}
+
 func TestCmdTaskMonitorWithQueueJSONWaitsForUpdate(t *testing.T) {
 	ctx := context.Background()
 	queue := newCmdTaskTestQueue(t)
@@ -213,6 +245,38 @@ func TestCmdTaskOutputWithQueueReturnsTail(t *testing.T) {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("stdout = %q, want %q", stdout, want)
 		}
+	}
+}
+
+func TestCmdTaskOutputWithQueueRendersStructuredProgress(t *testing.T) {
+	ctx := context.Background()
+	queue := newCmdTaskTestQueue(t)
+	id, _, err := queue.Enqueue(ctx, "output structured progress", "")
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	task, err := queue.Next(ctx)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if task == nil {
+		t.Fatal("Next returned nil")
+	}
+	rawProgress := daemon.EncodeProgressEvent(daemon.ToolPhaseProgressEvent("bash", "go test ./cmd/elnath", "running", 42, false))
+	if err := queue.UpdateProgress(ctx, task.ID, rawProgress); err != nil {
+		t.Fatalf("UpdateProgress: %v", err)
+	}
+
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdTaskOutputWithQueue(ctx, queue, []string{fmt.Sprint(id), "--field", "progress"}); err != nil {
+			t.Fatalf("cmdTaskOutputWithQueue: %v", err)
+		}
+	})
+	if !strings.Contains(stdout, "Content:\nbash: go test ./cmd/elnath (running)") {
+		t.Fatalf("stdout = %q, want rendered structured progress", stdout)
+	}
+	if strings.Contains(stdout, `"version"`) {
+		t.Fatalf("stdout = %q, should not dump raw progress JSON", stdout)
 	}
 }
 

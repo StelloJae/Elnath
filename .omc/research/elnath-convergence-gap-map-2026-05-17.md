@@ -1289,6 +1289,56 @@ Updated next candidates:
 2. terminal-native user-input choice UX;
 3. gateway exposure for handoff state if CLI behavior remains stable.
 
+## Post-Task-Progress-CLI-Render Local Update
+
+Date: 2026-05-17 KST
+
+Local branch:
+
+- `codex/user-input-operator-ux`
+
+Artifact:
+
+- `.omc/research/task-progress-cli-render-2026-05-17.md`
+
+What changed:
+
+- `elnath task monitor <id>` now renders structured progress envelopes as
+  human-readable text in plain output.
+- `elnath task output <id> --field progress` now does the same.
+- `--json` remains raw and machine-readable.
+
+Reference impact:
+
+- Gap 3 Progress Bridge / Alive Status improves for CLI task observation.
+- This does not add a new streaming TUI; it removes raw JSON leakage from
+  existing progress observation surfaces.
+
+Verification:
+
+- `go test ./cmd/elnath -run 'TestCmdTask(MonitorWithQueueRendersStructuredProgress|OutputWithQueueRendersStructuredProgress)' -count=1`
+  failed before implementation because raw progress JSON was printed.
+- `go test ./cmd/elnath -run 'TestCmdTask(MonitorWithQueueRendersStructuredProgress|OutputWithQueueRendersStructuredProgress|MonitorWithQueueShowsSnapshot|OutputWithQueueReturnsTail)' -count=1`
+  passed.
+- `go test ./cmd/elnath -count=1` passed.
+- `go test ./internal/daemon -run 'Test(DeliveryRouter_OnProgressParsesAndRoutes|TaskOutputToolReadsProgressField|TaskMonitorTool)' -count=1`
+  passed.
+- `git diff --check -- cmd/elnath/cmd_task.go cmd/elnath/cmd_task_test.go`
+  passed.
+
+Remaining progress/alive gaps:
+
+- No full rich TUI or streaming progress timeline.
+- Telegram/gateway progress formatting remains a separate surface.
+- Long-running local command observation can still be improved with better
+  phase/heartbeat summaries.
+
+Updated next candidates:
+
+1. terminal-native user-input choice UX;
+2. gateway handoff lifecycle exposure;
+3. PR-ready branch cleanup after enough UX work is batched.
+
 ## Claim Boundary
 
 Allowed after this gap map:
@@ -1306,6 +1356,8 @@ Allowed after this gap map:
   and numeric fallback milestone on `codex/user-input-operator-ux`.
 - Handoff lifecycle states now have a local, tested CLI milestone on
   `codex/user-input-operator-ux`.
+- Plain text task monitor/output progress now has a local, tested rendering
+  polish milestone on `codex/user-input-operator-ux`.
 - The next highest-leverage product/runtime candidates are approval
   continuation closeout, remaining user-input/operator UX, session
   handoff/recap, and progress/alive-status polish.
@@ -1326,9 +1378,9 @@ Commands run:
 - `test -f /Users/stello/elnath/.omc/research/elnath-convergence-gap-map-2026-05-17.md`
   passed.
 - `wc -l /Users/stello/elnath/.omc/research/elnath-convergence-gap-map-2026-05-17.md`
-  returned `1337`.
-- `rg -n "Post-Session-Handoff-Lifecycle|session-handoff-lifecycle|--state STATE|Handoff lifecycle states|Claim Boundary" /Users/stello/elnath/.omc/research/elnath-convergence-gap-map-2026-05-17.md /Users/stello/elnath/.omc/research/session-handoff-lifecycle-cli-2026-05-17.md`
-  found the handoff lifecycle update, artifact link, CLI state flag, and claim
-  boundary.
-- `git diff --check -- cmd/elnath/cmd_task_handoff.go cmd/elnath/cmd_task_test.go .omc/research/session-handoff-lifecycle-cli-2026-05-17.md .omc/research/elnath-convergence-gap-map-2026-05-17.md`
+  returned `1389`.
+- `rg -n "Post-Task-Progress-CLI-Render|task-progress-cli-render|Plain text task monitor|structured progress|Claim Boundary" /Users/stello/elnath/.omc/research/elnath-convergence-gap-map-2026-05-17.md /Users/stello/elnath/.omc/research/task-progress-cli-render-2026-05-17.md`
+  found the progress render update, artifact link, structured progress claim,
+  and claim boundary.
+- `git diff --check -- cmd/elnath/cmd_task.go cmd/elnath/cmd_task_test.go .omc/research/task-progress-cli-render-2026-05-17.md .omc/research/elnath-convergence-gap-map-2026-05-17.md`
   passed.
