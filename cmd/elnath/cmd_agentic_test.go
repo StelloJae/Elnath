@@ -1357,6 +1357,35 @@ func TestAgenticCommand_SignalCreateRejectsInvalidPayloadJSON(t *testing.T) {
 	}
 }
 
+func TestAgenticCommand_TasksJSONListsTasksByStatus(t *testing.T) {
+	fx := newAgenticCommandFixture(t)
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdAgentic(context.Background(), []string{"tasks", "--status", agentic.TaskStatusProposed, "--limit", "1", "--json"}); err != nil {
+			t.Fatalf("cmdAgentic tasks json: %v", err)
+		}
+	})
+	var view struct {
+		AutonomyEnabled bool   `json:"autonomy_enabled"`
+		Limit           int    `json:"limit"`
+		Status          string `json:"status"`
+		Tasks           []struct {
+			ID     int64  `json:"id"`
+			Title  string `json:"title"`
+			Status string `json:"status"`
+		} `json:"tasks"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &view); err != nil {
+		t.Fatalf("tasks JSON = %q, unmarshal: %v", stdout, err)
+	}
+	if view.AutonomyEnabled || view.Limit != 1 || view.Status != agentic.TaskStatusProposed || len(view.Tasks) != 1 {
+		t.Fatalf("tasks view = %+v, want one proposed task", view)
+	}
+	if view.Tasks[0].ID != fx.task.ID || view.Tasks[0].Title != "Investigate blocked receipt" || view.Tasks[0].Status != agentic.TaskStatusProposed {
+		t.Fatalf("listed task = %+v, want fixture task", view.Tasks[0])
+	}
+	assertNoRawSecrets(t, stdout, fx.rawSecrets)
+}
+
 func TestExistingTaskAndDaemonStatusCommandsUnchanged(t *testing.T) {
 	fx := newAgenticCommandFixture(t)
 	stdout, _ := captureOutput(t, func() {
@@ -1385,6 +1414,8 @@ func runAgenticCommandVariants(t *testing.T, fx *agenticCommandFixture) {
 		{"activations", "--json"},
 		{"goals"},
 		{"goals", "--json"},
+		{"tasks"},
+		{"tasks", "--status", agentic.TaskStatusProposed, "--json"},
 		{"task", fmt.Sprint(fx.task.ID)},
 		{"task", fmt.Sprint(fx.task.ID), "--json"},
 		{"task", "--queue-task-id", fmt.Sprint(fx.queueTask)},

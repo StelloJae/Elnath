@@ -962,6 +962,32 @@ func TestAgenticStore_InsertReadAgenticTask(t *testing.T) {
 	}
 }
 
+func TestAgenticStore_ListAgenticTasksFiltersStatusAndOrdersByUpdatedAt(t *testing.T) {
+	ctx := context.Background()
+	_, store := newTestStore(t)
+	base := time.Unix(1714478400, 0)
+	for _, task := range []AgenticTask{
+		{Title: "older proposed", Prompt: "older", Status: TaskStatusProposed, RiskLevel: RiskLevelLow, AutonomyDecision: PolicyDecisionObserve, VerificationStatus: VerificationStatusPending, CreatedAt: base, UpdatedAt: base},
+		{Title: "running task", Prompt: "running", Status: TaskStatusRunning, RiskLevel: RiskLevelLow, AutonomyDecision: PolicyDecisionObserve, VerificationStatus: VerificationStatusPending, CreatedAt: base, UpdatedAt: base.Add(time.Hour)},
+		{Title: "newer proposed", Prompt: "newer", Status: TaskStatusProposed, RiskLevel: RiskLevelLow, AutonomyDecision: PolicyDecisionObserve, VerificationStatus: VerificationStatusPending, CreatedAt: base, UpdatedAt: base.Add(2 * time.Hour)},
+	} {
+		if _, err := store.CreateAgenticTask(ctx, task); err != nil {
+			t.Fatalf("CreateAgenticTask(%q): %v", task.Title, err)
+		}
+	}
+
+	got, err := store.ListAgenticTasks(ctx, TaskStatusProposed, 2)
+	if err != nil {
+		t.Fatalf("ListAgenticTasks: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len(tasks) = %d, want 2", len(got))
+	}
+	if got[0].Title != "newer proposed" || got[1].Title != "older proposed" {
+		t.Fatalf("task order = %q, %q; want newer, older proposed", got[0].Title, got[1].Title)
+	}
+}
+
 func TestAgenticStore_InsertReadDaemonOriginTaskAllowsNullableGoalSignal(t *testing.T) {
 	ctx := context.Background()
 	_, store := newTestStore(t)

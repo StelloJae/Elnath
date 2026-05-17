@@ -114,6 +114,13 @@ type agenticTaskView struct {
 	ActorRoleCounts    map[string]int           `json:"actor_role_counts"`
 }
 
+type agenticTasksView struct {
+	AutonomyEnabled bool              `json:"autonomy_enabled"`
+	Limit           int               `json:"limit"`
+	Status          string            `json:"status,omitempty"`
+	Tasks           []agenticTaskInfo `json:"tasks"`
+}
+
 type agenticLineageView struct {
 	AutonomyEnabled  bool                      `json:"autonomy_enabled"`
 	Goal             *agenticGoalInfo          `json:"goal,omitempty"`
@@ -349,6 +356,7 @@ Subcommands:
   goals [--limit n] [--json]               List standing goals
   goal create [flags]                      Create a standing goal
   signal create [flags]                    Create a new goal signal
+  tasks [--status s] [--limit n] [--json]  List agentic tasks
   task <id> [--json]                      Read-only task status
   task --queue-task-id <id> [--json]      Resolve agentic task from daemon queue task
   lineage <task-id> [--json]              Read-only task lineage
@@ -418,6 +426,20 @@ Enqueue flags:
 			return printJSON(view)
 		}
 		fmt.Print(renderAgenticGoals(view))
+		return nil
+	case "tasks":
+		parsed, err := parseAgenticTaskListArgs(args[1:])
+		if err != nil {
+			return err
+		}
+		view, err := cli.tasks(ctx, parsed.Status, parsed.Limit)
+		if err != nil {
+			return err
+		}
+		if parsed.JSON {
+			return printJSON(view)
+		}
+		fmt.Print(renderAgenticTasks(view))
 		return nil
 	case "task":
 		id, jsonOut, err := cli.resolveTaskID(ctx, args[1:])
@@ -505,6 +527,12 @@ type agenticSignalCreateArgs struct {
 	Severity    int
 	DedupeKey   string
 	JSON        bool
+}
+
+type agenticTaskListArgs struct {
+	Limit  int
+	Status string
+	JSON   bool
 }
 
 func cmdAgenticActivate(ctx context.Context, args []string) error {
@@ -1057,6 +1085,36 @@ func parseAgenticListArgs(args []string, usage string) (int, bool, error) {
 	return limit, jsonOut, nil
 }
 
+func parseAgenticTaskListArgs(args []string) (agenticTaskListArgs, error) {
+	parsed := agenticTaskListArgs{Limit: 10}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "--json":
+			parsed.JSON = true
+		case "--limit":
+			i++
+			if i >= len(args) {
+				return parsed, fmt.Errorf("usage: elnath agentic tasks [--status s] [--limit n] [--json]")
+			}
+			limit, err := strconv.Atoi(args[i])
+			if err != nil || limit <= 0 {
+				return parsed, fmt.Errorf("invalid limit %q", args[i])
+			}
+			parsed.Limit = limit
+		case "--status":
+			i++
+			if i >= len(args) {
+				return parsed, fmt.Errorf("usage: elnath agentic tasks [--status s] [--limit n] [--json]")
+			}
+			parsed.Status = strings.TrimSpace(args[i])
+		default:
+			return parsed, fmt.Errorf("unknown tasks flag: %s", arg)
+		}
+	}
+	return parsed, nil
+}
+
 func (c *agenticCLI) status(ctx context.Context) (*agenticStatusView, error) {
 	counts := map[string]map[string]int{}
 	specs := map[string]struct {
@@ -1151,6 +1209,23 @@ func (c *agenticCLI) goals(ctx context.Context, limit int) (*agenticGoalsView, e
 		AutonomyEnabled: false,
 		Limit:           limit,
 		Goals:           out,
+	}, nil
+}
+
+func (c *agenticCLI) tasks(ctx context.Context, status string, limit int) (*agenticTasksView, error) {
+	tasks, err := c.store.ListAgenticTasks(ctx, status, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]agenticTaskInfo, 0, len(tasks))
+	for _, task := range tasks {
+		out = append(out, taskInfo(task))
+	}
+	return &agenticTasksView{
+		AutonomyEnabled: false,
+		Limit:           limit,
+		Status:          status,
+		Tasks:           out,
 	}, nil
 }
 
@@ -1850,6 +1925,25 @@ func renderAgenticSignalCreated(view *agenticSignalCreateView) string {
 	fmt.Fprintf(&b, "  status: %s\n", view.Signal.Status)
 	fmt.Fprintf(&b, "  severity: %d\n", view.Signal.Severity)
 	fmt.Fprintf(&b, "  dedupe_key: %s\n", noneIfEmpty(view.Signal.DedupeKey))
+	return b.String()
+}
+
+func renderAgenticTasks(view *agenticTasksView) string {
+	var b strings.Builder
+	fmt.Fprintln(&b, "Agentic Tasks")
+	fmt.Fprintf(&b, "  autonomy_enabled: %t\n", view.AutonomyEnabled)
+	fmt.Fprintf(&b, "  limit: %d\n", view.Limit)
+	if view.Status != "" {
+		fmt.Fprintf(&b, "  status_filter: %s\n", view.Status)
+	}
+	if len(view.Tasks) == 0 {
+		fmt.Fprintln(&b, "  tasks: none")
+		return b.String()
+	}
+	fmt.Fprintln(&b, "  tasks:")
+	for _, task := range view.Tasks {
+		fmt.Fprintf(&b, "  - #%d %s status=%s goal=%s signal=%s queue=%s risk=%s verification=%s\n", task.ID, task.Title, task.Status, intOrNone(task.GoalID), intOrNone(task.SignalID), intOrNone(task.QueueTaskID), task.RiskLevel, task.VerificationStatus)
+	}
 	return b.String()
 }
 
