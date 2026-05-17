@@ -9,8 +9,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stello/elnath/internal/agent"
 	"github.com/stello/elnath/internal/daemon"
+	"github.com/stello/elnath/internal/identity"
 	"github.com/stello/elnath/internal/learning"
+	"github.com/stello/elnath/internal/llm"
 
 	_ "modernc.org/sqlite"
 )
@@ -46,7 +49,7 @@ func TestCmdTaskUsage(t *testing.T) {
 	if !strings.Contains(stdout, "Usage: elnath task") {
 		t.Fatalf("stdout = %q, want task usage", stdout)
 	}
-	for _, want := range []string{"monitor <id>", "output <id>", "stop <id>", "answer", "cancel-question"} {
+	for _, want := range []string{"monitor <id>", "output <id>", "stop <id>", "answer", "cancel-question", "handoff <id>"} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("stdout = %q, want usage to contain %q", stdout, want)
 		}
@@ -352,6 +355,118 @@ func TestCmdTaskAnswerWithQueueRejectsStaleRequest(t *testing.T) {
 	}
 	if len(tasks) != 0 {
 		t.Fatalf("tasks = %+v, want no enqueue for stale answer", tasks)
+	}
+}
+
+func TestCmdTaskHandoffWithQueuePrintsResumeRecap(t *testing.T) {
+	ctx := context.Background()
+	queue := newCmdTaskTestQueue(t)
+	dataDir := t.TempDir()
+	sess, err := agent.NewSession(dataDir, identity.Principal{UserID: "tg-77", ProjectID: "elnath", Surface: "telegram"})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if err := sess.AppendMessages([]llm.Message{
+		llm.NewUserMessage("continue the roadmap"),
+		llm.NewAssistantMessage("working on handoff recap"),
+	}); err != nil {
+		t.Fatalf("AppendMessages: %v", err)
+	}
+	if err := sess.RecordResume(identity.Principal{UserID: "stello@local", ProjectID: "elnath", Surface: "cli"}); err != nil {
+		t.Fatalf("RecordResume: %v", err)
+	}
+
+	id, _, err := queue.Enqueue(ctx, "handoff me", "")
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	task, err := queue.Next(ctx)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if task == nil || task.ID != id {
+		t.Fatalf("task = %+v, want %d", task, id)
+	}
+	if err := queue.BindSession(ctx, id, sess.ID); err != nil {
+		t.Fatalf("BindSession: %v", err)
+	}
+	if err := queue.MarkDone(ctx, id, "finished result", "done summary"); err != nil {
+		t.Fatalf("MarkDone: %v", err)
+	}
+
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdTaskHandoffWithQueue(ctx, queue, dataDir, []string{fmt.Sprint(id)}); err != nil {
+			t.Fatalf("cmdTaskHandoffWithQueue: %v", err)
+		}
+	})
+	for _, want := range []string{
+		"Task handoff",
+		"Status:       done",
+		"Session:",
+		"Resume:       elnath task resume",
+		"Messages:     2",
+		"Resumes:      1",
+		"user: continue the roadmap",
+		"assistant: working on handoff recap",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout = %q, want %q", stdout, want)
+		}
+	}
+}
+
+func TestCmdTaskHandoffWithQueueJSONIncludesRetirement(t *testing.T) {
+	ctx := context.Background()
+	queue := newCmdTaskTestQueue(t)
+	dataDir := t.TempDir()
+	sess, err := agent.NewSession(dataDir)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if err := sess.AppendMessage(llm.NewUserMessage("this session wedged")); err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+	if err := sess.RecordRetirement("task_timeout_idle", "post_tool_quiet_timeout", "start_new_session_or_operator_review"); err != nil {
+		t.Fatalf("RecordRetirement: %v", err)
+	}
+
+	id, _, err := queue.Enqueue(ctx, "handoff me", "")
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	task, err := queue.Next(ctx)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if task == nil || task.ID != id {
+		t.Fatalf("task = %+v, want %d", task, id)
+	}
+	if err := queue.BindSession(ctx, id, sess.ID); err != nil {
+		t.Fatalf("BindSession: %v", err)
+	}
+	if err := queue.MarkFailedWithMetadata(ctx, id, "timed out", daemon.TaskFailureMetadata{
+		FailureClass:            "task_timeout_idle",
+		ShouldRetireSession:     true,
+		SessionRetirementReason: "post_tool_quiet_timeout",
+		NextAction:              "start_new_session_or_operator_review",
+	}); err != nil {
+		t.Fatalf("MarkFailedWithMetadata: %v", err)
+	}
+
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdTaskHandoffWithQueue(ctx, queue, dataDir, []string{fmt.Sprint(id), "--json"}); err != nil {
+			t.Fatalf("cmdTaskHandoffWithQueue: %v", err)
+		}
+	})
+	for _, want := range []string{
+		`"retired": true`,
+		`"failure_class": "task_timeout_idle"`,
+		`"next_action": "start_new_session_or_operator_review"`,
+		`"resume_command": "elnath task resume`,
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout = %q, want %q", stdout, want)
+		}
 	}
 }
 
