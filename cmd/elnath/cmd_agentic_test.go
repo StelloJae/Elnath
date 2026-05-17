@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/stello/elnath/internal/agentic"
+	agenticactivation "github.com/stello/elnath/internal/agentic/activation"
 	"github.com/stello/elnath/internal/config"
 	"github.com/stello/elnath/internal/core"
 	"github.com/stello/elnath/internal/daemon"
@@ -530,6 +531,192 @@ func TestProposedTaskEnqueue_DoesNotCreateToolReceiptsVerificationMemoryOrFollow
 	}
 }
 
+func TestAgenticActivate_RunOnceJSONProcessesDueFollowupWithoutEnqueue(t *testing.T) {
+	fx := newAgenticCommandFixture(t)
+	beforeQueue := countQueueRows(t, fx.db.Main)
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdAgentic(context.Background(), []string{"activate", "--once", "--limit", "10", "--json"}); err != nil {
+			t.Fatalf("cmdAgentic activate: %v", err)
+		}
+	})
+	var view agenticActivationView
+	if err := json.Unmarshal([]byte(stdout), &view); err != nil {
+		t.Fatalf("activate JSON = %q, unmarshal: %v", stdout, err)
+	}
+	if view.RunID == 0 || view.AutonomyEnabled || view.ExecutionPolicy != "propose_only" || view.Limit != 10 || view.EnqueuePerformed || view.Status != agentic.ActivationRunStatusSucceeded {
+		t.Fatalf("activate view = %+v", view)
+	}
+	if view.Followups.Processed != 1 || view.Followups.Created != 1 {
+		t.Fatalf("followup counts = %+v", view.Followups)
+	}
+	if view.Signals.Processed != 1 || view.Signals.Failed != 0 {
+		t.Fatalf("signal counts = %+v", view.Signals)
+	}
+	if after := countQueueRows(t, fx.db.Main); after != beforeQueue {
+		t.Fatalf("queue rows changed: before=%d after=%d", beforeQueue, after)
+	}
+	updated, err := fx.store.GetFollowup(context.Background(), fx.followup.ID)
+	if err != nil {
+		t.Fatalf("GetFollowup: %v", err)
+	}
+	if updated.Status != agentic.FollowupStatusCreated || updated.CreatedTaskID == 0 {
+		t.Fatalf("followup after activate = %+v", updated)
+	}
+	child, err := fx.store.GetAgenticTask(context.Background(), updated.CreatedTaskID)
+	if err != nil {
+		t.Fatalf("GetAgenticTask child: %v", err)
+	}
+	if child.Status != agentic.TaskStatusProposed || child.QueueTaskID != 0 || child.ParentID != fx.task.ID {
+		t.Fatalf("child task = %+v", child)
+	}
+	if len(view.ProposedTaskIDs) != 1 || view.ProposedTaskIDs[0] != child.ID {
+		t.Fatalf("proposed task ids = %+v, want child %d", view.ProposedTaskIDs, child.ID)
+	}
+	signal, err := fx.store.GetGoalSignal(context.Background(), child.SignalID)
+	if err != nil {
+		t.Fatalf("GetGoalSignal: %v", err)
+	}
+	if signal.Status != agentic.SignalStatusTriaged {
+		t.Fatalf("signal status = %q, want triaged", signal.Status)
+	}
+	run, err := fx.store.GetActivationRun(context.Background(), view.RunID)
+	if err != nil {
+		t.Fatalf("GetActivationRun: %v", err)
+	}
+	if run.FollowupCreated != 1 || run.SignalProcessed != 1 || run.EnqueuePerformed {
+		t.Fatalf("activation run = %+v", run)
+	}
+}
+
+func TestAgenticActivate_AutoEnqueuesLowRiskDueFollowupWhenConfigured(t *testing.T) {
+	fx := newAgenticCommandFixture(t)
+	enableAgenticActivationAutoEnqueue(t, fx.cfgPath)
+	beforeQueue := countQueueRows(t, fx.db.Main)
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdAgentic(context.Background(), []string{"activate", "--once", "--limit", "10", "--json"}); err != nil {
+			t.Fatalf("cmdAgentic activate: %v", err)
+		}
+	})
+	var view agenticActivationView
+	if err := json.Unmarshal([]byte(stdout), &view); err != nil {
+		t.Fatalf("activate JSON = %q, unmarshal: %v", stdout, err)
+	}
+	if !view.AutonomyEnabled || view.ExecutionPolicy != agenticactivation.ExecutionPolicyAutoEnqueueLowRisk || !view.EnqueuePerformed || view.Status != agentic.ActivationRunStatusSucceeded {
+		t.Fatalf("activate view = %+v", view)
+	}
+	if view.AutoEnqueue == nil || view.AutoEnqueue.Considered != 1 || view.AutoEnqueue.Enqueued != 1 || len(view.AutoEnqueue.QueueTaskIDs) != 1 {
+		t.Fatalf("auto enqueue view = %+v", view.AutoEnqueue)
+	}
+	if after := countQueueRows(t, fx.db.Main); after != beforeQueue+1 {
+		t.Fatalf("queue rows = %d, want %d", after, beforeQueue+1)
+	}
+	updated, err := fx.store.GetFollowup(context.Background(), fx.followup.ID)
+	if err != nil {
+		t.Fatalf("GetFollowup: %v", err)
+	}
+	child, err := fx.store.GetAgenticTask(context.Background(), updated.CreatedTaskID)
+	if err != nil {
+		t.Fatalf("GetAgenticTask child: %v", err)
+	}
+	if child.Status != agentic.TaskStatusPending || child.QueueTaskID != view.AutoEnqueue.QueueTaskIDs[0] {
+		t.Fatalf("child task = %+v", child)
+	}
+	decisions, err := fx.store.ListTaskEnqueueDecisionsByTask(context.Background(), child.ID)
+	if err != nil {
+		t.Fatalf("ListTaskEnqueueDecisionsByTask: %v", err)
+	}
+	if len(decisions) != 1 || decisions[0].QueueTaskID != child.QueueTaskID || decisions[0].OperatorID != "agentic-activation" || decisions[0].RequestedEnforcement != config.AgenticEnforcementModeGateway || decisions[0].RequestedCompletionGate != config.AgenticCompletionGateModeVerification {
+		t.Fatalf("enqueue decisions = %+v", decisions)
+	}
+}
+
+func TestAgenticActivate_RequiresExplicitOnce(t *testing.T) {
+	newAgenticCommandFixture(t)
+	err := cmdAgentic(context.Background(), []string{"activate", "--json"})
+	if err == nil || !strings.Contains(err.Error(), "activate --once") {
+		t.Fatalf("activate without --once err = %v, want usage", err)
+	}
+}
+
+func TestAgenticActivate_HumanOutputSummarizesPolicy(t *testing.T) {
+	newAgenticCommandFixture(t)
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdAgentic(context.Background(), []string{"activate", "--once"}); err != nil {
+			t.Fatalf("cmdAgentic activate: %v", err)
+		}
+	})
+	for _, want := range []string{
+		"Agentic Activation",
+		"run_id:",
+		"execution_policy: propose_only",
+		"enqueue_performed: false",
+		"status: succeeded",
+		"proposed_task_ids:",
+		"followups: processed=1 created=1",
+		"signals: processed=1",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("activate output = %q, want %q", stdout, want)
+		}
+	}
+}
+
+func TestAgenticActivations_ReadOnlyHistory(t *testing.T) {
+	fx := newAgenticCommandFixture(t)
+	captureOutput(t, func() {
+		if err := cmdAgentic(context.Background(), []string{"activate", "--once"}); err != nil {
+			t.Fatalf("activate: %v", err)
+		}
+	})
+	before := tableCounts(t, fx.db.Main, agenticSideEffectTables()...)
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdAgentic(context.Background(), []string{"activations", "--limit", "5"}); err != nil {
+			t.Fatalf("activations: %v", err)
+		}
+	})
+	after := tableCounts(t, fx.db.Main, agenticSideEffectTables()...)
+	if fmt.Sprint(after) != fmt.Sprint(before) {
+		t.Fatalf("activations mutated side-effect tables: before=%v after=%v", before, after)
+	}
+	for _, want := range []string{
+		"Agentic Activations",
+		"policy=propose_only",
+		"enqueue=false",
+		"proposed_task_ids=",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("activations output = %q, want %q", stdout, want)
+		}
+	}
+}
+
+func TestAgenticActivations_JSONOutputStable(t *testing.T) {
+	newAgenticCommandFixture(t)
+	captureOutput(t, func() {
+		if err := cmdAgentic(context.Background(), []string{"activate", "--once"}); err != nil {
+			t.Fatalf("activate: %v", err)
+		}
+	})
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdAgentic(context.Background(), []string{"activations", "--json"}); err != nil {
+			t.Fatalf("activations json: %v", err)
+		}
+	})
+	var view agenticActivationsView
+	if err := json.Unmarshal([]byte(stdout), &view); err != nil {
+		t.Fatalf("activations JSON = %q, unmarshal: %v", stdout, err)
+	}
+	if view.AutonomyEnabled || view.Limit != 10 || len(view.Runs) != 1 {
+		t.Fatalf("activations view = %+v", view)
+	}
+	if view.Runs[0].ExecutionPolicy != "propose_only" || view.Runs[0].Status != agentic.ActivationRunStatusSucceeded {
+		t.Fatalf("activation run summary = %+v", view.Runs[0])
+	}
+	if len(view.Runs[0].ProposedTaskIDs) != 1 {
+		t.Fatalf("activation run proposed task ids = %+v, want one", view.Runs[0].ProposedTaskIDs)
+	}
+}
+
 func TestAgenticOperatorLineage_ShowsProposedTaskEnqueueState(t *testing.T) {
 	fx := newAgenticCommandFixture(t)
 	task := createStandaloneProposedTask(t, fx)
@@ -594,6 +781,32 @@ func enableAgenticModes(t *testing.T, cfgPath string) {
 	}
 	defer f.Close()
 	if _, err := f.WriteString("\nagentic:\n  enforcement:\n    mode: gateway\n  completion_gate:\n    mode: verification\n"); err != nil {
+		t.Fatalf("append config: %v", err)
+	}
+}
+
+func enableAgenticActivationAutoEnqueue(t *testing.T, cfgPath string) {
+	t.Helper()
+	f, err := os.OpenFile(cfgPath, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("open config: %v", err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString(`
+agentic:
+  enforcement:
+    mode: gateway
+  completion_gate:
+    mode: verification
+  activation:
+    enabled: true
+    auto_enqueue:
+      enabled: true
+      limit: 3
+      max_risk_level: low
+      agentic_enforcement: gateway
+      completion_gate: verification
+`); err != nil {
 		t.Fatalf("append config: %v", err)
 	}
 }
@@ -678,6 +891,15 @@ func TestAgenticCommand_CompletionGateViewsHandleMissingTable(t *testing.T) {
 	if !strings.Contains(lineageOut, "Completion gates\n  none") {
 		t.Fatalf("lineage output = %q, want missing completion gates section rendered as none", lineageOut)
 	}
+
+	evidenceOut, _ := captureOutput(t, func() {
+		if err := cmdAgentic(context.Background(), []string{"evidence", fmt.Sprint(fx.task.ID)}); err != nil {
+			t.Fatalf("cmdAgentic evidence with missing completion_gates: %v", err)
+		}
+	})
+	if !strings.Contains(evidenceOut, "latest_completion_gate: none") {
+		t.Fatalf("evidence output = %q, want missing completion gate rendered as none", evidenceOut)
+	}
 }
 
 func TestAgenticCommand_TaskShowsCoreTaskLinks(t *testing.T) {
@@ -747,6 +969,32 @@ func TestAgenticCommand_LineageShowsGoalSignalTaskActorPolicyApprovalReceiptVeri
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("lineage output = %q, want %q", stdout, want)
+		}
+	}
+	assertNoRawSecrets(t, stdout, fx.rawSecrets)
+}
+
+func TestAgenticCommand_EvidenceShowsCompactTaskEvidenceChain(t *testing.T) {
+	fx := newAgenticCommandFixture(t)
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdAgentic(context.Background(), []string{"evidence", fmt.Sprint(fx.task.ID)}); err != nil {
+			t.Fatalf("cmdAgentic evidence: %v", err)
+		}
+	})
+	for _, want := range []string{
+		fmt.Sprintf("Agentic Evidence #%d", fx.task.ID),
+		"task: proposed risk=high verification=pending",
+		fmt.Sprintf("queue: #%d pending", fx.queueTask),
+		"counts: actors=2 handoffs=1 policies=1 approvals=1 enqueue=0 receipts=1 gates=1 verification=1 memory=1 followups=1",
+		"latest_enqueue: none",
+		fmt.Sprintf("latest_receipt: #%d failed tool=bash", fx.receipt.ID),
+		fmt.Sprintf("latest_completion_gate: #%d blocked verifier=#%d", fx.gate.ID, fx.verifier.ID),
+		fmt.Sprintf("latest_verification: #%d failed", fx.verifier.ID),
+		fmt.Sprintf("latest_memory_update: #%d blocked target=wiki operation=write", fx.memory.ID),
+		fmt.Sprintf("latest_followup: #%d pending due=true", fx.followup.ID),
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("evidence output = %q, want %q", stdout, want)
 		}
 	}
 	assertNoRawSecrets(t, stdout, fx.rawSecrets)
@@ -832,6 +1080,46 @@ func TestAgenticCommand_JSONOutputStable(t *testing.T) {
 	assertNoRawSecrets(t, stdout, fx.rawSecrets)
 }
 
+func TestAgenticCommand_EvidenceJSONOutputStable(t *testing.T) {
+	fx := newAgenticCommandFixture(t)
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdAgentic(context.Background(), []string{"evidence", fmt.Sprint(fx.task.ID), "--json"}); err != nil {
+			t.Fatalf("cmdAgentic evidence json: %v", err)
+		}
+	})
+	var view struct {
+		AutonomyEnabled bool `json:"autonomy_enabled"`
+		Task            struct {
+			ID     int64  `json:"id"`
+			Status string `json:"status"`
+		} `json:"task"`
+		Counts struct {
+			Receipts         int `json:"receipts"`
+			CompletionGates  int `json:"completion_gates"`
+			VerificationRuns int `json:"verification_runs"`
+			MemoryUpdates    int `json:"memory_updates"`
+			Followups        int `json:"followups"`
+		} `json:"counts"`
+		LatestReceipt      any `json:"latest_receipt"`
+		LatestCompletion   any `json:"latest_completion_gate"`
+		LatestVerification any `json:"latest_verification"`
+		LatestMemory       any `json:"latest_memory_update"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &view); err != nil {
+		t.Fatalf("evidence JSON = %q, unmarshal: %v", stdout, err)
+	}
+	if view.AutonomyEnabled || view.Task.ID != fx.task.ID || view.Task.Status != agentic.TaskStatusProposed {
+		t.Fatalf("evidence JSON task = %+v autonomy=%t", view.Task, view.AutonomyEnabled)
+	}
+	if view.Counts.Receipts != 1 || view.Counts.CompletionGates != 1 || view.Counts.VerificationRuns != 1 || view.Counts.MemoryUpdates != 1 || view.Counts.Followups != 1 {
+		t.Fatalf("evidence counts = %+v, want one evidence row each", view.Counts)
+	}
+	if view.LatestReceipt == nil || view.LatestCompletion == nil || view.LatestVerification == nil || view.LatestMemory == nil {
+		t.Fatalf("evidence latest fields missing: %+v", view)
+	}
+	assertNoRawSecrets(t, stdout, fx.rawSecrets)
+}
+
 func TestAgenticCommand_ReadOnlyDoesNotMutateAgenticTables(t *testing.T) {
 	fx := newAgenticCommandFixture(t)
 	before := tableCounts(t, fx.db.Main, agenticSideEffectTables()...)
@@ -912,11 +1200,15 @@ func runAgenticCommandVariants(t *testing.T, fx *agenticCommandFixture) {
 	for _, args := range [][]string{
 		{"status"},
 		{"status", "--json"},
+		{"activations"},
+		{"activations", "--json"},
 		{"task", fmt.Sprint(fx.task.ID)},
 		{"task", fmt.Sprint(fx.task.ID), "--json"},
 		{"task", "--queue-task-id", fmt.Sprint(fx.queueTask)},
 		{"lineage", fmt.Sprint(fx.task.ID)},
 		{"lineage", fmt.Sprint(fx.task.ID), "--json"},
+		{"evidence", fmt.Sprint(fx.task.ID)},
+		{"evidence", fmt.Sprint(fx.task.ID), "--json"},
 	} {
 		captureOutput(t, func() {
 			if err := cmdAgentic(context.Background(), args); err != nil {
@@ -956,6 +1248,7 @@ func agenticSideEffectTables() []string {
 		"verification_runs",
 		"memory_updates",
 		"followups",
+		"activation_runs",
 		"task_queue",
 	}
 }

@@ -75,6 +75,52 @@ func ParseDeliveryTargets(raw []string) ([]DeliveryTarget, error) {
 	return targets, nil
 }
 
+func normalizeDeliveryTargetStrings(raw []string) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, item := range raw {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		out = append(out, item)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func deliveryTargetStrings(targets []DeliveryTarget) []string {
+	if len(targets) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(targets))
+	for _, target := range targets {
+		if raw := strings.TrimSpace(target.String()); raw != "" {
+			out = append(out, raw)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func DeliveryTargetStrings(targets []DeliveryTarget) []string {
+	return deliveryTargetStrings(targets)
+}
+
+func parseDeliveryTargetsLenient(raw []string) []DeliveryTarget {
+	targets, err := ParseDeliveryTargets(raw)
+	if err != nil {
+		return nil
+	}
+	return targets
+}
+
 func (t DeliveryTarget) IsHomeChannel() bool {
 	return t.Kind == DeliveryTargetPlatform && t.Platform != "" && t.Address == "" && !t.Explicit
 }

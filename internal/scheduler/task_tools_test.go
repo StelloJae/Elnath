@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -21,7 +22,8 @@ func TestScheduleCreateListDeleteTools(t *testing.T) {
 		"interval": "24h",
 		"run_on_start": true,
 		"session_id": "sess-1",
-		"surface": "tool-test"
+		"surface": "tool-test",
+		"delivery_targets": ["origin", "local"]
 	}`))
 	if err != nil {
 		t.Fatalf("create Execute error = %v", err)
@@ -65,7 +67,7 @@ func TestScheduleCreateListDeleteTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig after create: %v", err)
 	}
-	if len(tasks) != 1 || tasks[0].Name != "morning-check" || tasks[0].SessionID != "sess-1" {
+	if len(tasks) != 1 || tasks[0].Name != "morning-check" || tasks[0].SessionID != "sess-1" || !slices.Equal(tasks[0].DeliveryTargets, []string{"origin", "local"}) {
 		t.Fatalf("tasks = %+v, want persisted scheduled task", tasks)
 	}
 
@@ -89,7 +91,7 @@ func TestScheduleCreateListDeleteTools(t *testing.T) {
 	if err := json.Unmarshal([]byte(listResult.Output), &listRuntime); err != nil {
 		t.Fatalf("unmarshal list runtime output: %v", err)
 	}
-	if listOutput.Total != 1 || listOutput.Tasks[0].Name != "morning-check" || !listOutput.Tasks[0].Enabled {
+	if listOutput.Total != 1 || listOutput.Tasks[0].Name != "morning-check" || !listOutput.Tasks[0].Enabled || !slices.Equal(listOutput.Tasks[0].DeliveryTargets, []string{"origin", "local"}) {
 		t.Fatalf("list output = %+v, want one enabled task", listOutput)
 	}
 	if listOutput.Receipt.Tool != ScheduleListToolName || listOutput.Receipt.Action != "list" {

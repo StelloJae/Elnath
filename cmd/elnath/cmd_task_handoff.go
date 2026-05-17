@@ -11,6 +11,7 @@ import (
 
 	"github.com/stello/elnath/internal/agent"
 	"github.com/stello/elnath/internal/daemon"
+	"github.com/stello/elnath/internal/identity"
 	"github.com/stello/elnath/internal/llm"
 )
 
@@ -30,6 +31,7 @@ type taskHandoffCLIOutput struct {
 	LastMessages  []taskHandoffMessage   `json:"last_messages,omitempty"`
 	ResumeCount   int                    `json:"resume_count"`
 	Resumes       []taskHandoffResume    `json:"resumes,omitempty"`
+	Handoff       *taskHandoffState      `json:"handoff,omitempty"`
 	Retired       bool                   `json:"retired"`
 	Retirement    *taskHandoffRetirement `json:"retirement,omitempty"`
 	CreatedAt     string                 `json:"created_at,omitempty"`
@@ -45,6 +47,14 @@ type taskHandoffMessage struct {
 type taskHandoffResume struct {
 	Surface   string `json:"surface,omitempty"`
 	Principal string `json:"principal,omitempty"`
+	At        string `json:"at,omitempty"`
+}
+
+type taskHandoffState struct {
+	State     string `json:"state"`
+	Surface   string `json:"surface,omitempty"`
+	Principal string `json:"principal,omitempty"`
+	Reason    string `json:"reason,omitempty"`
 	At        string `json:"at,omitempty"`
 }
 
@@ -71,7 +81,7 @@ func cmdTaskHandoff(ctx context.Context, args []string) error {
 
 func cmdTaskHandoffWithQueue(ctx context.Context, queue *daemon.Queue, dataDir string, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: elnath task handoff <id> [--json|--markdown|--save] [--max-messages N]")
+		return fmt.Errorf("usage: elnath task handoff <id> [--json|--markdown|--save] [--request SURFACE] [--max-messages N]")
 	}
 	taskID, err := parseTaskID(args[0])
 	if err != nil {
@@ -80,6 +90,7 @@ func cmdTaskHandoffWithQueue(ctx context.Context, queue *daemon.Queue, dataDir s
 	jsonOut := false
 	markdownOut := false
 	saveMarkdown := false
+	requestSurface := ""
 	maxMessages := defaultTaskHandoffMessages
 	for i := 1; i < len(args); i++ {
 		switch args[i] {
@@ -89,6 +100,13 @@ func cmdTaskHandoffWithQueue(ctx context.Context, queue *daemon.Queue, dataDir s
 			markdownOut = true
 		case "--save":
 			saveMarkdown = true
+		case "--request":
+			value, next, err := parseStringFlag(args, i, "--request")
+			if err != nil {
+				return err
+			}
+			requestSurface = strings.TrimSpace(value)
+			i = next
 		case "--max-messages":
 			value, next, err := parseIntFlag(args, i, "--max-messages")
 			if err != nil {
@@ -102,6 +120,11 @@ func cmdTaskHandoffWithQueue(ctx context.Context, queue *daemon.Queue, dataDir s
 	}
 	if boolCount(jsonOut, markdownOut, saveMarkdown) > 1 {
 		return fmt.Errorf("task handoff: choose only one output mode: --json, --markdown, or --save")
+	}
+	if requestSurface != "" {
+		if err := recordTaskHandoffRequest(ctx, queue, dataDir, taskID, requestSurface); err != nil {
+			return err
+		}
 	}
 
 	view, err := buildTaskHandoff(ctx, queue, dataDir, taskID, maxMessages)
@@ -161,6 +184,10 @@ func buildTaskHandoff(ctx context.Context, queue *daemon.Queue, dataDir string, 
 	if err != nil {
 		return taskHandoffCLIOutput{}, fmt.Errorf("task handoff: load retirement status %s: %w", sessionID, err)
 	}
+	handoffStatus, err := agent.LoadSessionHandoffStatus(dataDir, sessionID)
+	if err != nil {
+		return taskHandoffCLIOutput{}, fmt.Errorf("task handoff: load handoff status %s: %w", sessionID, err)
+	}
 
 	messages := sess.SnapshotMessages()
 	view := taskHandoffCLIOutput{
@@ -174,6 +201,7 @@ func buildTaskHandoff(ctx context.Context, queue *daemon.Queue, dataDir string, 
 		LastMessages:  taskHandoffMessages(messages, normalizeTaskHandoffMessageLimit(maxMessages)),
 		ResumeCount:   len(resumes),
 		Resumes:       taskHandoffResumes(resumes),
+		Handoff:       taskHandoffStatus(handoffStatus),
 		Retired:       retirement != nil,
 		CreatedAt:     formatTaskHandoffTime(task.CreatedAt),
 		UpdatedAt:     formatTaskHandoffTime(task.UpdatedAt),
@@ -188,6 +216,18 @@ func buildTaskHandoff(ctx context.Context, queue *daemon.Queue, dataDir string, 
 		}
 	}
 	return view, nil
+}
+
+func recordTaskHandoffRequest(ctx context.Context, queue *daemon.Queue, dataDir string, taskID int64, surface string) error {
+	view, err := buildTaskHandoff(ctx, queue, dataDir, taskID, 1)
+	if err != nil {
+		return err
+	}
+	sess, err := agent.LoadSession(dataDir, view.SessionID)
+	if err != nil {
+		return fmt.Errorf("task handoff: load session %s: %w", view.SessionID, err)
+	}
+	return sess.RecordHandoff("requested", surface, identity.Principal{}, "operator requested task handoff")
 }
 
 func normalizeTaskHandoffMessageLimit(n int) int {
@@ -230,6 +270,19 @@ func taskHandoffResumes(resumes []agent.SessionResumeEvent) []taskHandoffResume 
 	return out
 }
 
+func taskHandoffStatus(status *agent.SessionHandoffStatus) *taskHandoffState {
+	if status == nil {
+		return nil
+	}
+	return &taskHandoffState{
+		State:     status.State,
+		Surface:   status.Surface,
+		Principal: status.Principal.SurfaceIdentity(),
+		Reason:    status.Reason,
+		At:        formatTaskHandoffTime(status.At),
+	}
+}
+
 func printTaskHandoff(view taskHandoffCLIOutput) {
 	fmt.Println("Task handoff")
 	fmt.Printf("ID:           %d\n", view.TaskID)
@@ -244,6 +297,9 @@ func printTaskHandoff(view taskHandoffCLIOutput) {
 	}
 	fmt.Printf("Messages:     %d\n", view.MessageCount)
 	fmt.Printf("Resumes:      %d\n", view.ResumeCount)
+	if view.Handoff != nil {
+		fmt.Printf("Handoff:     %s surface=%s\n", emptyDash(view.Handoff.State), emptyDash(view.Handoff.Surface))
+	}
 	if view.Retired && view.Retirement != nil {
 		fmt.Printf("Retired:      true reason=%s next_action=%s\n", emptyDash(view.Retirement.Reason), emptyDash(view.Retirement.NextAction))
 	} else {
@@ -278,6 +334,10 @@ func formatTaskHandoffMarkdown(view taskHandoffCLIOutput) string {
 		fmt.Fprintf(&b, "- Retirement next action: %s\n", emptyDash(view.Retirement.NextAction))
 	} else {
 		b.WriteString("- Retired: false\n")
+	}
+	if view.Handoff != nil {
+		fmt.Fprintf(&b, "- Handoff state: %s\n", emptyDash(view.Handoff.State))
+		fmt.Fprintf(&b, "- Handoff surface: %s\n", emptyDash(view.Handoff.Surface))
 	}
 	if len(view.LastMessages) > 0 {
 		b.WriteString("\n## Last Messages\n\n")

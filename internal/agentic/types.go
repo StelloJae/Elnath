@@ -73,6 +73,9 @@ const (
 	FollowupStatusFailed     = "failed"
 	FollowupStatusCanceled   = "canceled"
 
+	ActivationRunStatusSucceeded = "succeeded"
+	ActivationRunStatusFailed    = "failed"
+
 	ActorStatusCreated   = "created"
 	ActorStatusRunning   = "running"
 	ActorStatusSucceeded = "succeeded"
@@ -212,6 +215,25 @@ type ToolActionReceipt struct {
 	Reversible         bool
 	StartedAt          time.Time
 	CompletedAt        sql.NullTime
+}
+
+type ActivationRun struct {
+	ID                int64
+	ExecutionPolicy   string
+	Limit             int
+	FollowupProcessed int
+	FollowupCreated   int
+	FollowupSkipped   int
+	FollowupFailed    int
+	SignalProcessed   int
+	SignalCreated     int
+	SignalLinked      int
+	SignalFailed      int
+	EnqueuePerformed  bool
+	ProposedTaskIDs   []int64
+	Status            string
+	Reason            string
+	CreatedAt         time.Time
 }
 
 type VerificationRun struct {

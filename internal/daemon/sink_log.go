@@ -30,3 +30,15 @@ func (s *LogSink) NotifyCompletion(_ context.Context, completion TaskCompletion)
 	)
 	return nil
 }
+
+func (s *LogSink) NotifyActivation(_ context.Context, activation ActivationSummary) error {
+	s.logger.Info("agentic activation completed",
+		"run_id", activation.RunID,
+		"status", activation.Status,
+		"execution_policy", activation.ExecutionPolicy,
+		"followups_processed", activation.Followups.Processed,
+		"signals_processed", activation.Signals.Processed,
+		"enqueue_performed", activation.EnqueuePerformed,
+	)
+	return nil
+}

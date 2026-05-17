@@ -283,19 +283,23 @@ SEE ALSO
   elnath agentic <subcommand> [flags]
 
 DESCRIPTION
-  Inspect the durable agentic control-plane in read-only mode. These commands
-  summarize status and task lineage without enqueueing work, deciding
-  approvals, executing tools, running verifiers, writing memory, or processing
-  followups.
+  Inspect the durable agentic control-plane. Read commands summarize status and
+  task lineage without enqueueing work, deciding approvals, executing tools,
+  running verifiers, or writing memory. activate --once advances due followups
+  and new signals into proposed tasks only.
 
 SUBCOMMANDS
   status [--json]                         Show control-plane counts and attention items
+  activate --once [--limit n] [--json]    Advance due followups and new signals once
+  activations [--limit n] [--json]         Show activation run history
   task <id> [--json]                      Show one agentic task summary
   task --queue-task-id <id> [--json]      Resolve an agentic task from a daemon queue task
   lineage <task-id> [--json]              Show task lineage across ledgers
 
 EXAMPLES
   $ elnath agentic status
+  $ elnath agentic activate --once --json
+  $ elnath agentic activations
   $ elnath agentic task 42
   $ elnath agentic lineage 42 --json`,
 		"cmd.portability.help": `USAGE
@@ -515,12 +519,14 @@ SEE ALSO
   elnath agentic <하위명령> [플래그]
 
 설명
-  durable agentic control-plane을 읽기 전용으로 조회합니다. 작업 큐 등록,
-  승인 결정, 도구 실행, verifier 실행, memory write, followup 처리는 하지
-  않습니다.
+  durable agentic control-plane을 조회합니다. 읽기 명령은 작업 큐 등록,
+  승인 결정, 도구 실행, verifier 실행, memory write를 하지 않습니다.
+  activate --once는 due followup과 새 signal을 proposed task까지만 전진시킵니다.
 
 하위 명령
   status [--json]                         control-plane 카운트와 주의 항목 표시
+  activate --once [--limit n] [--json]    due followup과 새 signal을 한 번 전진
+  activations [--limit n] [--json]         activation run history 표시
   task <id> [--json]                      agentic task 요약 표시
   task --queue-task-id <id> [--json]      daemon queue task에서 agentic task 조회
   lineage <task-id> [--json]              ledger lineage 표시`,

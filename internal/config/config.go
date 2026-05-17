@@ -173,6 +173,7 @@ const (
 type AgenticConfig struct {
 	Enforcement    AgenticEnforcementConfig    `yaml:"enforcement"`
 	CompletionGate AgenticCompletionGateConfig `yaml:"completion_gate"`
+	Activation     AgenticActivationConfig     `yaml:"activation"`
 }
 
 type AgenticEnforcementConfig struct {
@@ -181,6 +182,23 @@ type AgenticEnforcementConfig struct {
 
 type AgenticCompletionGateConfig struct {
 	Mode string `yaml:"mode"`
+}
+
+type AgenticActivationConfig struct {
+	Enabled         bool                               `yaml:"enabled"`
+	IntervalSeconds int                                `yaml:"interval_seconds"`
+	Limit           int                                `yaml:"limit"`
+	RunOnStart      bool                               `yaml:"run_on_start"`
+	DeliveryTargets []string                           `yaml:"delivery_targets"`
+	AutoEnqueue     AgenticActivationAutoEnqueueConfig `yaml:"auto_enqueue"`
+}
+
+type AgenticActivationAutoEnqueueConfig struct {
+	Enabled            bool   `yaml:"enabled"`
+	Limit              int    `yaml:"limit"`
+	MaxRiskLevel       string `yaml:"max_risk_level"`
+	AgenticEnforcement string `yaml:"agentic_enforcement"`
+	CompletionGate     string `yaml:"completion_gate"`
 }
 
 type TelegramConfig struct {
@@ -500,6 +518,40 @@ func validate(cfg *Config) error {
 	case "", AgenticCompletionGateModeObserve, AgenticCompletionGateModeVerification:
 	default:
 		return fmt.Errorf("unsupported agentic.completion_gate.mode: %q (supported: observe, verification)", cfg.Agentic.CompletionGate.Mode)
+	}
+	if cfg.Agentic.Activation.Enabled {
+		if cfg.Agentic.Activation.IntervalSeconds < 0 {
+			return fmt.Errorf("agentic.activation.interval_seconds must be >= 0")
+		}
+		if cfg.Agentic.Activation.Limit < 0 {
+			return fmt.Errorf("agentic.activation.limit must be >= 0")
+		}
+		if cfg.Agentic.Activation.AutoEnqueue.Limit < 0 {
+			return fmt.Errorf("agentic.activation.auto_enqueue.limit must be >= 0")
+		}
+		switch strings.ToLower(strings.TrimSpace(cfg.Agentic.Activation.AutoEnqueue.MaxRiskLevel)) {
+		case "", "low":
+		default:
+			return fmt.Errorf("unsupported agentic.activation.auto_enqueue.max_risk_level: %q (supported: low)", cfg.Agentic.Activation.AutoEnqueue.MaxRiskLevel)
+		}
+		switch strings.ToLower(strings.TrimSpace(cfg.Agentic.Activation.AutoEnqueue.AgenticEnforcement)) {
+		case "", AgenticEnforcementModeGateway:
+		default:
+			return fmt.Errorf("unsupported agentic.activation.auto_enqueue.agentic_enforcement: %q (supported: gateway)", cfg.Agentic.Activation.AutoEnqueue.AgenticEnforcement)
+		}
+		switch strings.ToLower(strings.TrimSpace(cfg.Agentic.Activation.AutoEnqueue.CompletionGate)) {
+		case "", AgenticCompletionGateModeVerification:
+		default:
+			return fmt.Errorf("unsupported agentic.activation.auto_enqueue.completion_gate: %q (supported: verification)", cfg.Agentic.Activation.AutoEnqueue.CompletionGate)
+		}
+		if strings.EqualFold(strings.TrimSpace(cfg.Agentic.Activation.AutoEnqueue.AgenticEnforcement), AgenticEnforcementModeGateway) &&
+			!strings.EqualFold(strings.TrimSpace(cfg.Agentic.Enforcement.Mode), AgenticEnforcementModeGateway) {
+			return fmt.Errorf("agentic.activation.auto_enqueue.agentic_enforcement requires agentic.enforcement.mode=gateway")
+		}
+		if strings.EqualFold(strings.TrimSpace(cfg.Agentic.Activation.AutoEnqueue.CompletionGate), AgenticCompletionGateModeVerification) &&
+			!strings.EqualFold(strings.TrimSpace(cfg.Agentic.CompletionGate.Mode), AgenticCompletionGateModeVerification) {
+			return fmt.Errorf("agentic.activation.auto_enqueue.completion_gate requires agentic.completion_gate.mode=verification")
+		}
 	}
 
 	return nil

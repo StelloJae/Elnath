@@ -19,6 +19,7 @@ func TestTaskCreateToolEnqueuesPendingTask(t *testing.T) {
 		"prompt": "continue the reference lane",
 		"session_id": "sess-123",
 		"surface": "tool-test",
+		"delivery_targets": ["origin", "local"],
 		"idempotency_key": "task-create-1",
 		"agentic_enforcement": "observe",
 		"agentic_completion_gate": "verification"
@@ -49,6 +50,9 @@ func TestTaskCreateToolEnqueuesPendingTask(t *testing.T) {
 	if output.Receipt.SessionID != "sess-123" {
 		t.Fatalf("receipt SessionID = %q, want sess-123", output.Receipt.SessionID)
 	}
+	if len(output.Receipt.DeliveryTargets) != 2 || output.Receipt.DeliveryTargets[0] != "origin" || output.Receipt.DeliveryTargets[1] != "local" {
+		t.Fatalf("receipt DeliveryTargets = %+v, want origin/local", output.Receipt.DeliveryTargets)
+	}
 
 	task, err := queue.Get(ctx, output.TaskID)
 	if err != nil {
@@ -60,6 +64,25 @@ func TestTaskCreateToolEnqueuesPendingTask(t *testing.T) {
 	}
 	if payload.AgenticEnforcement != "observe" || payload.AgenticCompletionGate != "verification" {
 		t.Fatalf("payload gates = (%q,%q), want observe/verification", payload.AgenticEnforcement, payload.AgenticCompletionGate)
+	}
+	if len(payload.DeliveryTargets) != 2 || payload.DeliveryTargets[0] != "origin" || payload.DeliveryTargets[1] != "local" {
+		t.Fatalf("payload DeliveryTargets = %+v, want origin/local", payload.DeliveryTargets)
+	}
+}
+
+func TestTaskCreateToolRejectsInvalidDeliveryTarget(t *testing.T) {
+	ctx := context.Background()
+	queue := newTaskToolTestQueue(t)
+
+	result, err := NewTaskCreateTool(queue).Execute(ctx, json.RawMessage(`{
+		"prompt": "continue the reference lane",
+		"delivery_targets": ["telegram:"]
+	}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if !result.IsError || !strings.Contains(result.Output, "delivery target") {
+		t.Fatalf("result = %+v, want delivery target error", result)
 	}
 }
 

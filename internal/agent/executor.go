@@ -26,6 +26,8 @@ type scheduledToolCall struct {
 	cancelOnErr bool
 }
 
+var toolProgressHeartbeatInterval = 30 * time.Second
+
 func (a *Agent) executeApprovedToolCalls(ctx context.Context, approved []approvedToolCall, results []toolExecResult, sink event.Sink, toolStats map[string]*toolStatAcc, toolStatsMu *sync.Mutex) error {
 	if sink == nil {
 		sink = event.NopSink{}
@@ -162,8 +164,11 @@ func (a *Agent) executeToolBatch(ctx context.Context, batch []scheduledToolCall,
 				Phase:    "running",
 			})
 			start := time.Now()
+			heartbeatDone := make(chan struct{})
+			startToolProgressHeartbeat(callCtx, sink, call.call.Name, preview, start, heartbeatDone)
 			result, err := a.executor.Execute(callCtx, call.call.Name, call.call.Input)
 			duration := time.Since(start)
+			close(heartbeatDone)
 			if a.readTracker != nil {
 				a.readTracker.NotifyTool(call.call.Name)
 			}
@@ -224,6 +229,39 @@ func (a *Agent) executeToolBatch(ctx context.Context, batch []scheduledToolCall,
 
 	wg.Wait()
 	return fatalErr
+}
+
+func startToolProgressHeartbeat(ctx context.Context, sink event.Sink, toolName, preview string, start time.Time, done <-chan struct{}) {
+	interval := toolProgressHeartbeatInterval
+	if interval <= 0 || sink == nil {
+		return
+	}
+	go func() {
+		timer := time.NewTimer(interval)
+		defer timer.Stop()
+		for {
+			select {
+			case <-timer.C:
+				select {
+				case <-done:
+					return
+				default:
+				}
+				sink.Emit(event.ToolProgressEvent{
+					Base:       event.NewBase(),
+					ToolName:   toolName,
+					Preview:    preview,
+					Phase:      "still_running",
+					DurationMS: durationMillisAtLeastOne(time.Since(start)),
+				})
+				timer.Reset(interval)
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 }
 
 func durationMillisAtLeastOne(duration time.Duration) int64 {

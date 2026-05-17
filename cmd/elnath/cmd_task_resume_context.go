@@ -98,6 +98,9 @@ func formatTaskResumeHandoffContext(view taskHandoffCLIOutput, maxChars int) str
 		fmt.Fprintf(&b, "result_tail: %s\n", view.ResultTail)
 	}
 	fmt.Fprintf(&b, "resume_count: %d\n", view.ResumeCount)
+	if view.Handoff != nil {
+		fmt.Fprintf(&b, "handoff: %s surface=%s\n", emptyDash(view.Handoff.State), emptyDash(view.Handoff.Surface))
+	}
 	if view.Retired && view.Retirement != nil {
 		fmt.Fprintf(&b, "retired: true reason=%s next_action=%s\n", emptyDash(view.Retirement.Reason), emptyDash(view.Retirement.NextAction))
 	} else {

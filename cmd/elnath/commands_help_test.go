@@ -318,6 +318,8 @@ func TestPrintCommandHelp_AgenticMatchesDispatcher(t *testing.T) {
 	mustContain := []string{
 		"USAGE",
 		"status",
+		"activate --once",
+		"activations",
 		"task <id>",
 		"task --queue-task-id <id>",
 		"lineage <task-id>",

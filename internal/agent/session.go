@@ -74,6 +74,25 @@ type SessionRetirementEvent struct {
 	At           time.Time `json:"at"`
 }
 
+// SessionHandoffEvent records an explicit operator handoff state transition.
+type SessionHandoffEvent struct {
+	Type      string             `json:"type"`
+	State     string             `json:"state"`
+	Surface   string             `json:"surface,omitempty"`
+	Principal identity.Principal `json:"principal,omitempty"`
+	Reason    string             `json:"reason,omitempty"`
+	At        time.Time          `json:"at"`
+}
+
+// SessionHandoffStatus is the latest explicit handoff state for a session.
+type SessionHandoffStatus struct {
+	State     string
+	Surface   string
+	Principal identity.Principal
+	Reason    string
+	At        time.Time
+}
+
 // SessionRetirementStatus is the latest retirement marker for a session.
 type SessionRetirementStatus struct {
 	FailureClass string
@@ -218,6 +237,17 @@ func LoadSessionResumeEvents(dataDir, id string) ([]SessionResumeEvent, error) {
 	return readSessionResumeEvents(sessionPath(dataDir, id))
 }
 
+// LoadSessionHandoffEvents reads handoff metadata lines from a persisted session.
+func LoadSessionHandoffEvents(dataDir, id string) ([]SessionHandoffEvent, error) {
+	return readSessionHandoffEvents(sessionPath(dataDir, id))
+}
+
+// LoadSessionHandoffStatus reads the latest handoff metadata line from a
+// persisted session. A nil status means the session has no handoff marker.
+func LoadSessionHandoffStatus(dataDir, id string) (*SessionHandoffStatus, error) {
+	return readSessionHandoffStatus(sessionPath(dataDir, id))
+}
+
 // LoadSessionRetirementStatus reads the latest retirement metadata line from a
 // persisted session. A nil status means the session has no retirement marker.
 func LoadSessionRetirementStatus(dataDir, id string) (*SessionRetirementStatus, error) {
@@ -254,6 +284,57 @@ func (s *Session) RecordResume(principal identity.Principal) error {
 		return fmt.Errorf("session: write resume: %w", err)
 	}
 	return nil
+}
+
+// RecordHandoff appends a metadata-only handoff state event to the session JSONL.
+func (s *Session) RecordHandoff(state, surface string, principal identity.Principal, reason string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state = strings.TrimSpace(state)
+	if !validSessionHandoffState(state) {
+		return fmt.Errorf("session: invalid handoff state %q", state)
+	}
+	if principal.IsZero() {
+		principal = s.Principal
+	}
+	surface = strings.TrimSpace(surface)
+	if surface == "" {
+		surface = strings.TrimSpace(principal.Surface)
+	}
+	event := SessionHandoffEvent{
+		Type:      "handoff",
+		State:     state,
+		Surface:   surface,
+		Principal: principal,
+		Reason:    strings.TrimSpace(reason),
+		At:        time.Now().UTC(),
+	}
+	data, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("session: marshal handoff: %w", err)
+	}
+
+	f, err := os.OpenFile(s.path, os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return fmt.Errorf("session: open for handoff append: %w", err)
+	}
+	defer f.Close()
+
+	data = append(data, '\n')
+	if _, err := f.Write(data); err != nil {
+		return fmt.Errorf("session: write handoff: %w", err)
+	}
+	return nil
+}
+
+func validSessionHandoffState(state string) bool {
+	switch strings.TrimSpace(state) {
+	case "requested", "claimed", "running", "completed", "failed":
+		return true
+	default:
+		return false
+	}
 }
 
 // RecordRetirement appends a metadata-only retirement event line to the session
@@ -664,6 +745,64 @@ func readSessionResumeEvents(path string) ([]SessionResumeEvent, error) {
 		return nil, wrapSessionParse(fmt.Errorf("session: scan resumes: %w", err), "resumes scan")
 	}
 	return resumes, nil
+}
+
+func readSessionHandoffEvents(path string) ([]SessionHandoffEvent, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("session: open handoffs: %w", err)
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	if !scanner.Scan() {
+		if err := scanner.Err(); err != nil {
+			return nil, wrapSessionParse(fmt.Errorf("session: read handoffs header: %w", err), "handoffs header scan")
+		}
+		return nil, wrapSessionParse(fmt.Errorf("session: empty file"), "handoffs empty")
+	}
+
+	var handoffs []SessionHandoffEvent
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		lineType, err := sessionLineType(line)
+		if err != nil {
+			return nil, wrapSessionParse(fmt.Errorf("session: inspect handoff line: %w", err), "handoffs inspect line")
+		}
+		if lineType != "handoff" {
+			continue
+		}
+		var handoff SessionHandoffEvent
+		if err := json.Unmarshal(line, &handoff); err != nil {
+			return nil, wrapSessionParse(fmt.Errorf("session: parse handoff: %w", err), "handoffs parse")
+		}
+		handoffs = append(handoffs, handoff)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, wrapSessionParse(fmt.Errorf("session: scan handoffs: %w", err), "handoffs scan")
+	}
+	return handoffs, nil
+}
+
+func readSessionHandoffStatus(path string) (*SessionHandoffStatus, error) {
+	events, err := readSessionHandoffEvents(path)
+	if err != nil {
+		return nil, err
+	}
+	if len(events) == 0 {
+		return nil, nil
+	}
+	latest := events[len(events)-1]
+	return &SessionHandoffStatus{
+		State:     strings.TrimSpace(latest.State),
+		Surface:   strings.TrimSpace(latest.Surface),
+		Principal: latest.Principal,
+		Reason:    strings.TrimSpace(latest.Reason),
+		At:        latest.At.UTC(),
+	}, nil
 }
 
 func readSessionRetirementStatus(path string) (*SessionRetirementStatus, error) {

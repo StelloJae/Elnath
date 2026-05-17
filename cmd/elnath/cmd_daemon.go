@@ -16,6 +16,7 @@ import (
 	"github.com/stello/elnath/internal/agent"
 	"github.com/stello/elnath/internal/agent/reflection"
 	"github.com/stello/elnath/internal/agentic"
+	agenticactivation "github.com/stello/elnath/internal/agentic/activation"
 	agenticcompletion "github.com/stello/elnath/internal/agentic/completion"
 	agenticruntime "github.com/stello/elnath/internal/agentic/runtime"
 	agenticsignals "github.com/stello/elnath/internal/agentic/signals"
@@ -43,7 +44,8 @@ func cmdDaemon(ctx context.Context, args []string) error {
 
 Subcommands:
   start              Start the daemon (blocks until stopped)
-  submit <task>      Submit a task to the running daemon
+  submit [opts] <task>
+                     Submit a task to the running daemon
   status             List queued and running tasks
   stop               Gracefully stop the running daemon
   install            Install launchd plist for auto-start`)
@@ -368,7 +370,91 @@ func cmdDaemonStart(ctx context.Context) error {
 		app.Logger.Info("telegram shell embedded in daemon")
 	}
 
+	if err := startAgenticActivationLoop(ctx, cfg, agenticStore, queue, router, app.Logger); err != nil {
+		return err
+	}
+
 	return d.Start(ctx)
+}
+
+func startAgenticActivationLoop(ctx context.Context, cfg *config.Config, store *agentic.Store, queue *daemon.Queue, router *daemon.DeliveryRouter, logger *slog.Logger) error {
+	if cfg == nil || store == nil || !cfg.Agentic.Activation.Enabled {
+		return nil
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	targets, err := daemon.ParseDeliveryTargets(cfg.Agentic.Activation.DeliveryTargets)
+	if err != nil {
+		return fmt.Errorf("agentic activation delivery target: %w", err)
+	}
+	interval := time.Duration(cfg.Agentic.Activation.IntervalSeconds) * time.Second
+	limit := cfg.Agentic.Activation.Limit
+	activationLogger := logger.With("component", "agentic-activation")
+	service, err := newAgenticActivationService(cfg, store, queue)
+	if err != nil {
+		return err
+	}
+	go agenticactivation.RunLoop(ctx, service, agenticactivation.LoopOptions{
+		Interval:   interval,
+		Limit:      limit,
+		RunOnStart: cfg.Agentic.Activation.RunOnStart,
+		Logger:     activationLogger,
+		OnResult: func(callbackCtx context.Context, result agenticactivation.Result, runErr error) {
+			if router == nil || len(targets) == 0 {
+				return
+			}
+			if err := router.DeliverActivation(callbackCtx, activationDeliverySummary(result, runErr, targets)); err != nil {
+				activationLogger.Warn("agentic activation delivery failed", "run_id", result.RunID, "error", err)
+			}
+		},
+	})
+	logger.Info("agentic activation loop active",
+		"interval_seconds", cfg.Agentic.Activation.IntervalSeconds,
+		"limit", limit,
+		"run_on_start", cfg.Agentic.Activation.RunOnStart,
+		"delivery_targets", daemon.DeliveryTargetStrings(targets),
+		"auto_enqueue", cfg.Agentic.Activation.AutoEnqueue.Enabled,
+	)
+	return nil
+}
+
+func activationDeliverySummary(result agenticactivation.Result, runErr error, targets []daemon.DeliveryTarget) daemon.ActivationSummary {
+	status := result.Status
+	if status == "" {
+		if runErr != nil {
+			status = agentic.ActivationRunStatusFailed
+		} else {
+			status = agentic.ActivationRunStatusSucceeded
+		}
+	}
+	reason := result.Reason
+	if reason == "" && runErr != nil {
+		reason = runErr.Error()
+	}
+	return daemon.ActivationSummary{
+		RunID:            result.RunID,
+		DeliveryTargets:  targets,
+		ExecutionPolicy:  result.ExecutionPolicy,
+		Limit:            result.Limit,
+		EnqueuePerformed: result.EnqueuePerformed,
+		Status:           status,
+		Reason:           reason,
+		ProposedTaskIDs:  append([]int64(nil), result.ProposedTaskIDs...),
+		Followups: daemon.ActivationCounts{
+			Processed: result.Followups.Processed,
+			Created:   result.Followups.Created,
+			Skipped:   result.Followups.Skipped,
+			Failed:    result.Followups.Failed,
+		},
+		Signals: daemon.ActivationCounts{
+			Processed: result.Signals.Processed,
+			Created:   result.Signals.Created,
+			Linked:    result.Signals.Linked,
+			Failed:    result.Signals.Failed,
+		},
+		CreatedAt: result.CreatedAt,
+	}
 }
 
 func autoRotateLessons(logger *slog.Logger, store *learning.Store, opts learning.RotateOpts) {
@@ -412,12 +498,15 @@ func loadScheduler(cfg *config.Config, queue scheduler.Enqueuer, logger *slog.Lo
 }
 
 func cmdDaemonSubmit(ctx context.Context, args []string) error {
-	sessionID, prompt, err := parseDaemonSubmitArgs(args)
+	sessionID, deliveryTargets, prompt, err := parseDaemonSubmitArgs(args)
 	if err != nil {
 		return err
 	}
 	if prompt == "" {
-		return fmt.Errorf("usage: elnath daemon submit [--session <session-id>] <task description>")
+		return fmt.Errorf("usage: elnath daemon submit [--session <session-id>] [--deliver <target>] <task description>")
+	}
+	if _, err := daemon.ParseDeliveryTargets(deliveryTargets); err != nil {
+		return fmt.Errorf("invalid --deliver target: %w", err)
 	}
 	cfgPath := extractConfigFlag(os.Args)
 	if cfgPath == "" {
@@ -442,10 +531,11 @@ func cmdDaemonSubmit(ctx context.Context, args []string) error {
 	principal.ProjectID = identity.ResolveProjectID(cwd, extractFlagValue(os.Args, "--project-id"))
 
 	payload := daemon.EncodeTaskPayload(daemon.TaskPayload{
-		Prompt:    prompt,
-		SessionID: sessionID,
-		Surface:   principal.Surface,
-		Principal: principal,
+		Prompt:          prompt,
+		SessionID:       sessionID,
+		Surface:         principal.Surface,
+		Principal:       principal,
+		DeliveryTargets: deliveryTargets,
 	})
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
@@ -481,14 +571,26 @@ func cmdDaemonSubmit(ctx context.Context, args []string) error {
 	return nil
 }
 
-func parseDaemonSubmitArgs(args []string) (sessionID string, prompt string, err error) {
+func parseDaemonSubmitArgs(args []string) (sessionID string, deliveryTargets []string, prompt string, err error) {
 	var parts []string
 	for i := 0; i < len(args); i++ {
 		if args[i] == "--session" {
 			if i+1 >= len(args) {
-				return "", "", fmt.Errorf("usage: elnath daemon submit [--session <session-id>] <task description>")
+				return "", nil, "", fmt.Errorf("usage: elnath daemon submit [--session <session-id>] [--deliver <target>] <task description>")
 			}
 			sessionID = args[i+1]
+			i++
+			continue
+		}
+		if args[i] == "--deliver" {
+			if i+1 >= len(args) {
+				return "", nil, "", fmt.Errorf("usage: elnath daemon submit [--session <session-id>] [--deliver <target>] <task description>")
+			}
+			target := strings.TrimSpace(args[i+1])
+			if target == "" {
+				return "", nil, "", fmt.Errorf("usage: elnath daemon submit [--session <session-id>] [--deliver <target>] <task description>")
+			}
+			deliveryTargets = append(deliveryTargets, target)
 			i++
 			continue
 		}
@@ -501,7 +603,7 @@ func parseDaemonSubmitArgs(args []string) (sessionID string, prompt string, err 
 		parts = append(parts, args[i])
 	}
 	prompt = strings.TrimSpace(strings.Join(parts, " "))
-	return sessionID, prompt, nil
+	return sessionID, deliveryTargets, prompt, nil
 }
 
 func cmdDaemonStatus(ctx context.Context, args []string) error {

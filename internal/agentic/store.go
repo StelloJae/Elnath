@@ -1576,6 +1576,68 @@ func (s *Store) UpdateMemoryUpdateStatus(ctx context.Context, id int64, status, 
 	return s.GetMemoryUpdate(ctx, id)
 }
 
+func (s *Store) CreateActivationRun(ctx context.Context, run ActivationRun) (*ActivationRun, error) {
+	if run.ExecutionPolicy == "" {
+		run.ExecutionPolicy = "propose_only"
+	}
+	if run.Status == "" {
+		run.Status = ActivationRunStatusSucceeded
+	}
+	if run.CreatedAt.IsZero() {
+		run.CreatedAt = nowTime()
+	}
+	proposedTaskIDsJSON, err := json.Marshal(run.ProposedTaskIDs)
+	if err != nil {
+		return nil, fmt.Errorf("activation run proposed task ids: %w", err)
+	}
+	res, err := s.db.ExecContext(ctx, `
+		INSERT INTO activation_runs(execution_policy, limit_n, followup_processed, followup_created, followup_skipped, followup_failed, signal_processed, signal_created, signal_linked, signal_failed, enqueue_performed, proposed_task_ids_json, status, reason, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, run.ExecutionPolicy, run.Limit, run.FollowupProcessed, run.FollowupCreated, run.FollowupSkipped, run.FollowupFailed, run.SignalProcessed, run.SignalCreated, run.SignalLinked, run.SignalFailed, boolInt(run.EnqueuePerformed), string(proposedTaskIDsJSON), run.Status, run.Reason, timeMillis(run.CreatedAt))
+	if err != nil {
+		return nil, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+	return s.GetActivationRun(ctx, id)
+}
+
+func (s *Store) GetActivationRun(ctx context.Context, id int64) (*ActivationRun, error) {
+	return scanActivationRun(s.db.QueryRowContext(ctx, `
+		SELECT id, execution_policy, limit_n, followup_processed, followup_created, followup_skipped, followup_failed, signal_processed, signal_created, signal_linked, signal_failed, enqueue_performed, proposed_task_ids_json, status, reason, created_at
+		FROM activation_runs WHERE id = ?
+	`, id))
+}
+
+func (s *Store) ListActivationRuns(ctx context.Context, limit int) ([]ActivationRun, error) {
+	query := `
+		SELECT id, execution_policy, limit_n, followup_processed, followup_created, followup_skipped, followup_failed, signal_processed, signal_created, signal_linked, signal_failed, enqueue_performed, proposed_task_ids_json, status, reason, created_at
+		FROM activation_runs
+		ORDER BY id DESC
+	`
+	var args []any
+	if limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, limit)
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var runs []ActivationRun
+	for rows.Next() {
+		run, err := scanActivationRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		runs = append(runs, *run)
+	}
+	return runs, rows.Err()
+}
+
 func (s *Store) CreateFollowup(ctx context.Context, followup Followup) (*Followup, error) {
 	now := nowTime()
 	if followup.Status == "" {
@@ -1797,6 +1859,24 @@ func scanFollowup(scanner rowScanner) (*Followup, error) {
 	followup.TriggerAt = millisTime(triggerAt)
 	followup.CreatedAt = millisTime(createdAt)
 	return &followup, nil
+}
+
+func scanActivationRun(scanner rowScanner) (*ActivationRun, error) {
+	var run ActivationRun
+	var enqueuePerformed int
+	var proposedTaskIDsJSON string
+	var createdAt int64
+	if err := scanner.Scan(&run.ID, &run.ExecutionPolicy, &run.Limit, &run.FollowupProcessed, &run.FollowupCreated, &run.FollowupSkipped, &run.FollowupFailed, &run.SignalProcessed, &run.SignalCreated, &run.SignalLinked, &run.SignalFailed, &enqueuePerformed, &proposedTaskIDsJSON, &run.Status, &run.Reason, &createdAt); err != nil {
+		return nil, err
+	}
+	run.EnqueuePerformed = enqueuePerformed != 0
+	if proposedTaskIDsJSON != "" {
+		if err := json.Unmarshal([]byte(proposedTaskIDsJSON), &run.ProposedTaskIDs); err != nil {
+			return nil, fmt.Errorf("activation run proposed task ids: %w", err)
+		}
+	}
+	run.CreatedAt = millisTime(createdAt)
+	return &run, nil
 }
 
 func followupDedupeKey(id int64) string {

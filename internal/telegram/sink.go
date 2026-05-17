@@ -220,8 +220,55 @@ func (s *TelegramSink) NotifyCompletion(_ context.Context, c daemon.TaskCompleti
 	return nil
 }
 
+func (s *TelegramSink) NotifyActivation(_ context.Context, activation daemon.ActivationSummary) error {
+	status := emptyFallback(activation.Status, "unknown")
+	policy := emptyFallback(activation.ExecutionPolicy, "unknown")
+	lines := []string{
+		fmt.Sprintf("<b>Agentic activation</b> <code>#%d</code>", activation.RunID),
+		fmt.Sprintf("status: <code>%s</code>", escapeHTML(status)),
+		fmt.Sprintf("policy: <code>%s</code>", escapeHTML(policy)),
+		fmt.Sprintf("followups: processed=%d created=%d skipped=%d failed=%d", activation.Followups.Processed, activation.Followups.Created, activation.Followups.Skipped, activation.Followups.Failed),
+		fmt.Sprintf("signals: processed=%d created=%d linked=%d failed=%d", activation.Signals.Processed, activation.Signals.Created, activation.Signals.Linked, activation.Signals.Failed),
+		fmt.Sprintf("enqueue: <code>%t</code>", activation.EnqueuePerformed),
+	}
+	if len(activation.ProposedTaskIDs) > 0 {
+		lines = append(lines, "tasks: "+escapeHTML(formatActivationTaskIDs(activation.ProposedTaskIDs)))
+	}
+	if activation.Reason != "" {
+		lines = append(lines, "reason: "+escapeHTML(truncateAtRuneBoundary(s.redact(activation.Reason), 600)))
+	}
+	return s.bot.SendMessage(context.Background(), s.chatID, strings.Join(lines, "\n"))
+}
+
+func formatActivationTaskIDs(ids []int64) string {
+	if len(ids) == 0 {
+		return ""
+	}
+	const limit = 8
+	visible := ids
+	suffix := ""
+	if len(ids) > limit {
+		visible = ids[:limit]
+		suffix = fmt.Sprintf(" +%d more", len(ids)-limit)
+	}
+	parts := make([]string, 0, len(visible))
+	for _, id := range visible {
+		parts = append(parts, fmt.Sprintf("#%d", id))
+	}
+	return strings.Join(parts, ", ") + suffix
+}
+
 func (s *TelegramSink) String() string {
 	return "TelegramSink"
+}
+
+func (s *TelegramSink) DeliveryTarget() daemon.DeliveryTarget {
+	return daemon.DeliveryTarget{
+		Kind:     daemon.DeliveryTargetPlatform,
+		Platform: "telegram",
+		Address:  s.chatID,
+		Explicit: s.chatID != "",
+	}
 }
 
 // ensureTask must be called with s.mu held.

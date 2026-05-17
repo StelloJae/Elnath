@@ -12,14 +12,16 @@ import (
 
 // recordingSink captures all completions it receives.
 type recordingSink struct {
-	name         string
-	received     []TaskCompletion
-	progresses   []TaskProgress
-	err          error
-	errs         []error
-	progressErr  error
-	progressErrs []error
-	mu           sync.Mutex
+	name          string
+	received      []TaskCompletion
+	progresses    []TaskProgress
+	activations   []ActivationSummary
+	err           error
+	errs          []error
+	progressErr   error
+	progressErrs  []error
+	activationErr error
+	mu            sync.Mutex
 }
 
 func (s *recordingSink) NotifyCompletion(_ context.Context, c TaskCompletion) error {
@@ -46,6 +48,13 @@ func (s *recordingSink) NotifyProgress(_ context.Context, progress TaskProgress)
 	return s.progressErr
 }
 
+func (s *recordingSink) NotifyActivation(_ context.Context, activation ActivationSummary) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.activations = append(s.activations, activation)
+	return s.activationErr
+}
+
 func (s *recordingSink) Count() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -70,11 +79,32 @@ func (s *recordingSink) Progress(i int) TaskProgress {
 	return s.progresses[i]
 }
 
+func (s *recordingSink) ActivationCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.activations)
+}
+
+func (s *recordingSink) Activation(i int) ActivationSummary {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.activations[i]
+}
+
 func (s *recordingSink) String() string {
 	if s.name != "" {
 		return s.name
 	}
 	return "recordingSink"
+}
+
+type targetedRecordingSink struct {
+	recordingSink
+	target DeliveryTarget
+}
+
+func (s *targetedRecordingSink) DeliveryTarget() DeliveryTarget {
+	return s.target
 }
 
 func mustNewDeliveryRouter(t *testing.T, db *sql.DB) *DeliveryRouter {
@@ -228,6 +258,71 @@ func TestDeliveryRouter_MixedSinks(t *testing.T) {
 	}
 }
 
+func TestDeliveryRouter_TargetsPlatformSink(t *testing.T) {
+	router := mustNewDeliveryRouter(t, nil)
+	audit := &recordingSink{name: "audit"}
+	telegram := &targetedRecordingSink{
+		recordingSink: recordingSink{name: "telegram"},
+		target:        DeliveryTarget{Kind: DeliveryTargetPlatform, Platform: "telegram", Address: "chat-1", Explicit: true},
+	}
+	router.Register(audit)
+	router.Register(telegram)
+
+	completion := testCompletion()
+	completion.DeliveryTargets = []DeliveryTarget{{Kind: DeliveryTargetPlatform, Platform: "telegram"}}
+	if err := router.Deliver(context.Background(), completion); err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+	if audit.Count() != 1 {
+		t.Fatalf("audit sink count = %d, want 1", audit.Count())
+	}
+	if telegram.Count() != 1 {
+		t.Fatalf("telegram sink count = %d, want 1", telegram.Count())
+	}
+}
+
+func TestDeliveryRouter_TargetsLocalSkipsPlatformSink(t *testing.T) {
+	router := mustNewDeliveryRouter(t, nil)
+	audit := &recordingSink{name: "audit"}
+	telegram := &targetedRecordingSink{
+		recordingSink: recordingSink{name: "telegram"},
+		target:        DeliveryTarget{Kind: DeliveryTargetPlatform, Platform: "telegram", Address: "chat-1", Explicit: true},
+	}
+	router.Register(audit)
+	router.Register(telegram)
+
+	completion := testCompletion()
+	completion.DeliveryTargets = []DeliveryTarget{{Kind: DeliveryTargetLocal}}
+	if err := router.Deliver(context.Background(), completion); err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+	if audit.Count() != 1 {
+		t.Fatalf("audit sink count = %d, want 1", audit.Count())
+	}
+	if telegram.Count() != 0 {
+		t.Fatalf("telegram sink count = %d, want 0", telegram.Count())
+	}
+}
+
+func TestDeliveryRouter_TargetsOriginSurface(t *testing.T) {
+	router := mustNewDeliveryRouter(t, nil)
+	telegram := &targetedRecordingSink{
+		recordingSink: recordingSink{name: "telegram"},
+		target:        DeliveryTarget{Kind: DeliveryTargetPlatform, Platform: "telegram", Address: "chat-1", Explicit: true},
+	}
+	router.Register(telegram)
+
+	completion := testCompletion()
+	completion.OriginSurface = "telegram"
+	completion.DeliveryTargets = []DeliveryTarget{{Kind: DeliveryTargetOrigin}}
+	if err := router.Deliver(context.Background(), completion); err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+	if telegram.Count() != 1 {
+		t.Fatalf("telegram sink count = %d, want 1", telegram.Count())
+	}
+}
+
 func TestDeliveryRouter_AllSinksFail(t *testing.T) {
 	router := mustNewDeliveryRouter(t, nil)
 	err1 := errors.New("err1")
@@ -308,6 +403,96 @@ func TestDeliveryRouter_DeliverProgressAllSinksFail(t *testing.T) {
 	}
 	if !errors.Is(err, err2) {
 		t.Errorf("error does not wrap err2: %v", err)
+	}
+}
+
+func TestDeliveryRouter_DeliverActivationRoutesByTargets(t *testing.T) {
+	router := mustNewDeliveryRouter(t, nil)
+	audit := &recordingSink{name: "audit"}
+	telegram := &targetedRecordingSink{
+		recordingSink: recordingSink{name: "telegram"},
+		target:        DeliveryTarget{Kind: DeliveryTargetPlatform, Platform: "telegram", Address: "chat-1", Explicit: true},
+	}
+	router.Register(audit)
+	router.Register(telegram)
+
+	summary := ActivationSummary{
+		RunID:           7,
+		ExecutionPolicy: "propose_only",
+		Status:          "succeeded",
+		DeliveryTargets: []DeliveryTarget{{Kind: DeliveryTargetPlatform, Platform: "telegram"}},
+		Followups:       ActivationCounts{Processed: 1, Created: 1},
+	}
+	if err := router.DeliverActivation(context.Background(), summary); err != nil {
+		t.Fatalf("DeliverActivation: %v", err)
+	}
+	if audit.ActivationCount() != 1 {
+		t.Fatalf("audit activation count = %d, want 1", audit.ActivationCount())
+	}
+	if telegram.ActivationCount() != 1 {
+		t.Fatalf("telegram activation count = %d, want 1", telegram.ActivationCount())
+	}
+	if got := telegram.Activation(0); got.RunID != 7 || got.Followups.Created != 1 {
+		t.Fatalf("telegram activation = %+v", got)
+	}
+}
+
+func TestDeliveryRouter_DeliverActivationSkipsUnmatchedTargetedSink(t *testing.T) {
+	router := mustNewDeliveryRouter(t, nil)
+	telegram := &targetedRecordingSink{
+		recordingSink: recordingSink{name: "telegram"},
+		target:        DeliveryTarget{Kind: DeliveryTargetPlatform, Platform: "telegram", Address: "chat-1", Explicit: true},
+	}
+	router.Register(telegram)
+
+	if err := router.DeliverActivation(context.Background(), ActivationSummary{
+		RunID:           8,
+		DeliveryTargets: []DeliveryTarget{{Kind: DeliveryTargetLocal}},
+	}); err != nil {
+		t.Fatalf("DeliverActivation: %v", err)
+	}
+	if telegram.ActivationCount() != 0 {
+		t.Fatalf("telegram activation count = %d, want 0", telegram.ActivationCount())
+	}
+}
+
+func TestDeliveryRouter_TargetsProgressByRegisteredRoute(t *testing.T) {
+	router := mustNewDeliveryRouter(t, nil)
+	telegram := &targetedRecordingSink{
+		recordingSink: recordingSink{name: "telegram"},
+		target:        DeliveryTarget{Kind: DeliveryTargetPlatform, Platform: "telegram", Address: "chat-1", Explicit: true},
+	}
+	router.Register(telegram)
+	router.RegisterTaskRoute(42, DeliveryRoute{DeliveryTargets: []DeliveryTarget{{Kind: DeliveryTargetLocal}}})
+
+	router.OnProgress(42, EncodeProgressEvent(TextProgressEvent("working")))
+
+	if telegram.ProgressCount() != 0 {
+		t.Fatalf("telegram progress count = %d, want 0", telegram.ProgressCount())
+	}
+}
+
+func TestDeliveryRouter_StatusReportsTargetsAndCapabilities(t *testing.T) {
+	router := mustNewDeliveryRouter(t, nil)
+	router.Register(&recordingSink{name: "audit"})
+	router.Register(&targetedRecordingSink{
+		recordingSink: recordingSink{name: "telegram"},
+		target:        DeliveryTarget{Kind: DeliveryTargetPlatform, Platform: "telegram", Address: "chat-1", Explicit: true},
+	})
+
+	status := router.Status()
+	if status.CompletionSinkCount != 2 || status.ProgressSinkCount != 2 || status.ActivationSinkCount != 2 || status.TargetAwareCount != 1 || status.InternalSinkCount != 1 {
+		t.Fatalf("status counts = %+v, want completion=2 progress=2 activation=2 targetAware=1 internal=1", status)
+	}
+	seen := map[string]DeliverySinkStatus{}
+	for _, sink := range status.Sinks {
+		seen[sink.Name] = sink
+	}
+	if got := seen["audit"]; !got.Internal || got.TargetAware || !got.Completion || !got.Progress || !got.Activation || got.DeliveryNote != "internal_audit_sink_receives_all_events" {
+		t.Fatalf("audit sink status = %+v, want internal completion/progress sink", got)
+	}
+	if got := seen["telegram"]; !got.TargetAware || got.Internal || !got.Completion || !got.Progress || !got.Activation || got.Target != "telegram:chat-1" || got.Platform != "telegram" || got.Address != "chat-1" {
+		t.Fatalf("telegram sink status = %+v, want target-aware telegram chat sink", got)
 	}
 }
 

@@ -53,6 +53,17 @@ func DefaultConfig() *Config {
 		Agentic: AgenticConfig{
 			Enforcement:    AgenticEnforcementConfig{Mode: AgenticEnforcementModeObserve},
 			CompletionGate: AgenticCompletionGateConfig{Mode: AgenticCompletionGateModeObserve},
+			Activation: AgenticActivationConfig{
+				Enabled:         false,
+				IntervalSeconds: 300,
+				Limit:           25,
+				RunOnStart:      true,
+				AutoEnqueue: AgenticActivationAutoEnqueueConfig{
+					Enabled:      false,
+					Limit:        5,
+					MaxRiskLevel: "low",
+				},
+			},
 		},
 		Research: ResearchConfig{
 			MaxRounds:  5,

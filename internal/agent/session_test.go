@@ -412,6 +412,54 @@ func TestRecordResume(t *testing.T) {
 	}
 }
 
+func TestRecordHandoffAndLoadStatus(t *testing.T) {
+	dir := t.TempDir()
+	owner := identity.Principal{UserID: "12345", ProjectID: "elnath", Surface: "telegram"}
+	s, err := NewSession(dir, owner)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	if err := s.RecordHandoff("requested", "telegram", identity.Principal{}, "operator requested live handoff"); err != nil {
+		t.Fatalf("RecordHandoff(requested): %v", err)
+	}
+	if err := s.RecordHandoff("running", "telegram", identity.Principal{UserID: "stello@host", ProjectID: "elnath", Surface: "cli"}, "claimed by operator"); err != nil {
+		t.Fatalf("RecordHandoff(running): %v", err)
+	}
+
+	events, err := LoadSessionHandoffEvents(dir, s.ID)
+	if err != nil {
+		t.Fatalf("LoadSessionHandoffEvents: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("handoff events = %d, want 2", len(events))
+	}
+	if events[0].State != "requested" || events[0].Surface != "telegram" || events[0].Principal != owner {
+		t.Fatalf("first handoff = %+v, want requested telegram by owner", events[0])
+	}
+
+	status, err := LoadSessionHandoffStatus(dir, s.ID)
+	if err != nil {
+		t.Fatalf("LoadSessionHandoffStatus: %v", err)
+	}
+	if status == nil || status.State != "running" || status.Surface != "telegram" || status.Reason != "claimed by operator" {
+		t.Fatalf("handoff status = %+v, want latest running telegram", status)
+	}
+}
+
+func TestRecordHandoffRejectsUnknownState(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewSession(dir)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	err = s.RecordHandoff("maybe", "telegram", identity.Principal{}, "")
+	if err == nil || !strings.Contains(err.Error(), "invalid handoff state") {
+		t.Fatalf("RecordHandoff(maybe) err = %v, want invalid state", err)
+	}
+}
+
 func TestLoadSessionSkipsResumeLines(t *testing.T) {
 	dir := t.TempDir()
 	s, err := NewSession(dir, identity.Principal{UserID: "12345", ProjectID: "elnath", Surface: "telegram"})

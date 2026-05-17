@@ -812,6 +812,58 @@ func TestExecuteToolsEmitsToolExecutionProgressPhases(t *testing.T) {
 	}
 }
 
+func TestExecuteToolsEmitsStillRunningProgressForLongTool(t *testing.T) {
+	oldHeartbeat := toolProgressHeartbeatInterval
+	toolProgressHeartbeatInterval = 10 * time.Millisecond
+	t.Cleanup(func() { toolProgressHeartbeatInterval = oldHeartbeat })
+
+	reg := tools.NewRegistry()
+	reg.Register(&mockTool{
+		name:        "long_tool",
+		description: "long",
+		schema:      json.RawMessage(`{"type":"object"}`),
+		executeFn: func(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
+			select {
+			case <-time.After(35 * time.Millisecond):
+				return tools.SuccessResult("ok"), nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		},
+	})
+	sink := &event.RecorderSink{}
+	a := New(&mockProvider{}, reg, WithPermission(NewPermission(WithMode(ModeBypass))))
+
+	_, err := a.executeTools(context.Background(), nil, []llm.ToolUseBlock{{
+		ID:    "tool-1",
+		Name:  "long_tool",
+		Input: []byte(`{}`),
+	}}, sink)
+	if err != nil {
+		t.Fatalf("executeTools: %v", err)
+	}
+
+	progress := event.EventsOfType[event.ToolProgressEvent](sink)
+	var phases []string
+	var heartbeat event.ToolProgressEvent
+	for _, ev := range progress {
+		if ev.ToolName != "long_tool" {
+			continue
+		}
+		phases = append(phases, ev.Phase)
+		if ev.Phase == "still_running" && heartbeat.DurationMS == 0 {
+			heartbeat = ev
+		}
+	}
+	joined := strings.Join(phases, ",")
+	if !strings.Contains(joined, "planned,running,still_running") || !strings.HasSuffix(joined, "done") {
+		t.Fatalf("tool progress phases = %v, want heartbeat between running and done", phases)
+	}
+	if heartbeat.DurationMS <= 0 || heartbeat.IsError {
+		t.Fatalf("heartbeat event = %+v, want elapsed non-error event", heartbeat)
+	}
+}
+
 func TestExtractToolPreviewIncludesProcessContext(t *testing.T) {
 	tests := []struct {
 		name     string

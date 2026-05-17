@@ -51,9 +51,10 @@ type TaskStatusView struct {
 
 // StatusResponse is the payload returned by daemon status.
 type StatusResponse struct {
-	Tasks                    []TaskStatusView `json:"tasks"`
-	InactivityTimeoutSeconds int64            `json:"inactivity_timeout_seconds"`
-	WallClockTimeoutSeconds  int64            `json:"wall_clock_timeout_seconds"`
+	Tasks                    []TaskStatusView     `json:"tasks"`
+	InactivityTimeoutSeconds int64                `json:"inactivity_timeout_seconds"`
+	WallClockTimeoutSeconds  int64                `json:"wall_clock_timeout_seconds"`
+	Delivery                 DeliveryRouterStatus `json:"delivery"`
 }
 
 // TaskResult is the outcome of executing one queued daemon task.
@@ -481,6 +482,7 @@ func (d *Daemon) handleStatus(ctx context.Context, conn net.Conn) {
 			Tasks:                    views,
 			InactivityTimeoutSeconds: int64(d.inactivityTimeout / time.Second),
 			WallClockTimeoutSeconds:  int64(d.wallClockTimeout / time.Second),
+			Delivery:                 d.deliveryRouter.Status(),
 		},
 	})
 }
@@ -531,6 +533,12 @@ func (d *Daemon) worker(ctx context.Context, id int) {
 		}
 		payload := ParseTaskPayload(task.Payload)
 		principal := resolveTaskLogPrincipal(payload, d.fallbackPrincipal)
+		if d.deliveryRouter != nil {
+			d.deliveryRouter.RegisterTaskRoute(task.ID, DeliveryRoute{
+				OriginSurface:   payload.Surface,
+				DeliveryTargets: parseDeliveryTargetsLenient(payload.DeliveryTargets),
+			})
+		}
 
 		d.logger.Info("worker: processing task",
 			"worker_id", id,
@@ -721,6 +729,7 @@ func (d *Daemon) deliver(ctx context.Context, taskID int64) {
 	if d.deliveryRouter == nil {
 		return
 	}
+	defer d.deliveryRouter.ClearTaskRoute(taskID)
 	task, err := d.queue.Get(ctx, taskID)
 	if err != nil {
 		d.logger.Error("worker: deliver: get task", "task_id", taskID, "error", err)

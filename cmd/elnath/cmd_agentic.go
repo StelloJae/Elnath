@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/stello/elnath/internal/agentic"
+	agenticactivation "github.com/stello/elnath/internal/agentic/activation"
 	agenticenqueue "github.com/stello/elnath/internal/agentic/enqueue"
 	"github.com/stello/elnath/internal/config"
 	"github.com/stello/elnath/internal/core"
@@ -35,12 +36,62 @@ type agenticStatusView struct {
 	Attention               []agenticAttentionItem    `json:"attention"`
 }
 
+type agenticActivationView struct {
+	RunID            int64                   `json:"run_id"`
+	AutonomyEnabled  bool                    `json:"autonomy_enabled"`
+	ExecutionPolicy  string                  `json:"execution_policy"`
+	Limit            int                     `json:"limit"`
+	EnqueuePerformed bool                    `json:"enqueue_performed"`
+	Status           string                  `json:"status"`
+	Reason           string                  `json:"reason,omitempty"`
+	ProposedTaskIDs  []int64                 `json:"proposed_task_ids,omitempty"`
+	AutoEnqueue      *agenticAutoEnqueueInfo `json:"auto_enqueue,omitempty"`
+	Followups        agenticActivationCounts `json:"followups"`
+	Signals          agenticActivationCounts `json:"signals"`
+}
+
+type agenticAutoEnqueueInfo struct {
+	Considered      int     `json:"considered"`
+	Enqueued        int     `json:"enqueued"`
+	Skipped         int     `json:"skipped"`
+	Failed          int     `json:"failed"`
+	EnqueuedTaskIDs []int64 `json:"enqueued_task_ids,omitempty"`
+	QueueTaskIDs    []int64 `json:"queue_task_ids,omitempty"`
+}
+
+type agenticActivationCounts struct {
+	Processed int `json:"processed"`
+	Created   int `json:"created"`
+	Linked    int `json:"linked,omitempty"`
+	Skipped   int `json:"skipped,omitempty"`
+	Failed    int `json:"failed"`
+}
+
 type agenticAttentionItem struct {
 	Kind   string `json:"kind"`
 	ID     int64  `json:"id"`
 	TaskID int64  `json:"task_id,omitempty"`
 	Status string `json:"status"`
 	Reason string `json:"reason,omitempty"`
+}
+
+type agenticActivationsView struct {
+	AutonomyEnabled bool                          `json:"autonomy_enabled"`
+	Limit           int                           `json:"limit"`
+	Runs            []agenticActivationRunSummary `json:"runs"`
+}
+
+type agenticActivationRunSummary struct {
+	ID               int64                   `json:"id"`
+	ExecutionPolicy  string                  `json:"execution_policy"`
+	Limit            int                     `json:"limit"`
+	EnqueuePerformed bool                    `json:"enqueue_performed"`
+	Status           string                  `json:"status"`
+	Reason           string                  `json:"reason,omitempty"`
+	ProposedTaskIDs  []int64                 `json:"proposed_task_ids,omitempty"`
+	Followups        agenticActivationCounts `json:"followups"`
+	Signals          agenticActivationCounts `json:"signals"`
+	CreatedAt        string                  `json:"created_at"`
 }
 
 type agenticTaskView struct {
@@ -77,6 +128,35 @@ type agenticLineageView struct {
 	VerificationRuns []agenticVerificationInfo `json:"verification_runs"`
 	MemoryUpdates    []agenticMemoryInfo       `json:"memory_updates"`
 	Followups        []agenticFollowupInfo     `json:"followups"`
+}
+
+type agenticEvidenceView struct {
+	AutonomyEnabled     bool                     `json:"autonomy_enabled"`
+	Task                agenticTaskInfo          `json:"task"`
+	Queue               *agenticQueueInfo        `json:"queue,omitempty"`
+	Counts              agenticEvidenceCounts    `json:"counts"`
+	LatestEnqueue       *agenticEnqueueInfo      `json:"latest_enqueue,omitempty"`
+	LatestReceipt       *agenticReceiptInfo      `json:"latest_receipt,omitempty"`
+	LatestCompletion    *agenticCompletionInfo   `json:"latest_completion_gate,omitempty"`
+	LatestVerification  *agenticVerificationInfo `json:"latest_verification,omitempty"`
+	LatestMemoryUpdate  *agenticMemoryInfo       `json:"latest_memory_update,omitempty"`
+	LatestFollowup      *agenticFollowupInfo     `json:"latest_followup,omitempty"`
+	LatestPolicy        *agenticPolicyInfo       `json:"latest_policy,omitempty"`
+	LatestApproval      *agenticApprovalInfo     `json:"latest_approval,omitempty"`
+	LatestActorStatuses map[string]int           `json:"latest_actor_statuses,omitempty"`
+}
+
+type agenticEvidenceCounts struct {
+	Actors           int `json:"actors"`
+	Handoffs         int `json:"handoffs"`
+	PolicyDecisions  int `json:"policy_decisions"`
+	Approvals        int `json:"approvals"`
+	EnqueueDecisions int `json:"enqueue_decisions"`
+	Receipts         int `json:"receipts"`
+	CompletionGates  int `json:"completion_gates"`
+	VerificationRuns int `json:"verification_runs"`
+	MemoryUpdates    int `json:"memory_updates"`
+	Followups        int `json:"followups"`
 }
 
 type agenticGoalInfo struct {
@@ -221,9 +301,12 @@ func cmdAgentic(ctx context.Context, args []string) error {
 
 Subcommands:
   status [--json]                         Read-only control-plane summary
+  activate --once [--limit n] [--json]    Advance due followups and new signals once
+  activations [--limit n] [--json]         Read-only activation history
   task <id> [--json]                      Read-only task status
   task --queue-task-id <id> [--json]      Resolve agentic task from daemon queue task
   lineage <task-id> [--json]              Read-only task lineage
+  evidence <task-id> [--json]             Compact task evidence chain
   enqueue <task-id> [flags]               Explicitly enqueue an approved proposed task
 
 Enqueue flags:
@@ -235,6 +318,9 @@ Enqueue flags:
 	}
 	if args[0] == "enqueue" {
 		return cmdAgenticEnqueue(ctx, args[1:])
+	}
+	if args[0] == "activate" {
+		return cmdAgenticActivate(ctx, args[1:])
 	}
 	cli, closeFn, err := openAgenticCLI()
 	if err != nil {
@@ -252,6 +338,20 @@ Enqueue flags:
 			return printJSON(view)
 		}
 		fmt.Print(renderAgenticStatus(view))
+		return nil
+	case "activations":
+		limit, jsonOut, err := parseAgenticListArgs(args[1:], "elnath agentic activations [--limit n] [--json]")
+		if err != nil {
+			return err
+		}
+		view, err := cli.activations(ctx, limit)
+		if err != nil {
+			return err
+		}
+		if jsonOut {
+			return printJSON(view)
+		}
+		fmt.Print(renderAgenticActivations(view))
 		return nil
 	case "task":
 		id, jsonOut, err := cli.resolveTaskID(ctx, args[1:])
@@ -281,6 +381,20 @@ Enqueue flags:
 		}
 		fmt.Print(renderAgenticLineage(view))
 		return nil
+	case "evidence":
+		id, jsonOut, err := parseAgenticIDArgs(args[1:], "elnath agentic evidence <task-id>")
+		if err != nil {
+			return err
+		}
+		view, err := cli.evidence(ctx, id)
+		if err != nil {
+			return err
+		}
+		if jsonOut {
+			return printJSON(view)
+		}
+		fmt.Print(renderAgenticEvidence(view))
+		return nil
 	default:
 		return fmt.Errorf("unknown agentic subcommand: %s", args[0])
 	}
@@ -301,6 +415,118 @@ type agenticEnqueueArgs struct {
 	RequestedEnforcement    string
 	RequestedCompletionGate string
 	JSON                    bool
+}
+
+type agenticActivateArgs struct {
+	Once  bool
+	Limit int
+	JSON  bool
+}
+
+func cmdAgenticActivate(ctx context.Context, args []string) error {
+	parsed, err := parseAgenticActivateArgs(args)
+	if err != nil {
+		return err
+	}
+	cfgPath := extractConfigFlag(os.Args)
+	if cfgPath == "" {
+		cfgPath = config.DefaultConfigPath()
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return fmt.Errorf("agentic activate: load config: %w", err)
+	}
+	db, err := core.OpenDB(cfg.DataDir)
+	if err != nil {
+		return fmt.Errorf("agentic activate: open db: %w", err)
+	}
+	defer db.Close()
+	if err := agentic.InitSchema(db.Main); err != nil {
+		return fmt.Errorf("agentic activate: init schema: %w", err)
+	}
+	store := agentic.NewStore(db.Main)
+	var queue *daemon.Queue
+	if cfg.Agentic.Activation.AutoEnqueue.Enabled {
+		queue, err = daemon.NewQueueNoRecover(db.Main)
+		if err != nil {
+			return fmt.Errorf("agentic activate: open queue: %w", err)
+		}
+	}
+	service, err := newAgenticActivationService(cfg, store, queue)
+	if err != nil {
+		return err
+	}
+	result, err := service.RunOnce(ctx, parsed.Limit)
+	if err != nil {
+		return err
+	}
+	view := activationView(result)
+	if parsed.JSON {
+		return printJSON(view)
+	}
+	fmt.Print(renderAgenticActivation(view))
+	return nil
+}
+
+func parseAgenticActivateArgs(args []string) (agenticActivateArgs, error) {
+	parsed := agenticActivateArgs{Limit: 25}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "--once":
+			parsed.Once = true
+		case "--json":
+			parsed.JSON = true
+		case "--limit":
+			i++
+			if i >= len(args) {
+				return parsed, fmt.Errorf("usage: elnath agentic activate --once [--limit n] [--json]")
+			}
+			limit, err := strconv.Atoi(args[i])
+			if err != nil || limit <= 0 {
+				return parsed, fmt.Errorf("invalid activate limit %q", args[i])
+			}
+			parsed.Limit = limit
+		default:
+			return parsed, fmt.Errorf("unknown activate flag: %s", arg)
+		}
+	}
+	if !parsed.Once {
+		return parsed, fmt.Errorf("usage: elnath agentic activate --once [--limit n] [--json]")
+	}
+	return parsed, nil
+}
+
+func newAgenticActivationService(cfg *config.Config, store *agentic.Store, queue *daemon.Queue) (*agenticactivation.Service, error) {
+	if cfg == nil || store == nil {
+		return nil, fmt.Errorf("agentic activation: config and store are required")
+	}
+	if !cfg.Agentic.Activation.AutoEnqueue.Enabled {
+		return agenticactivation.NewService(store), nil
+	}
+	if queue == nil {
+		return nil, fmt.Errorf("agentic activation: auto enqueue enabled without queue")
+	}
+	operatorID := strings.TrimSpace(cfg.Principal.UserID)
+	if operatorID == "" {
+		operatorID = "agentic-activation"
+	}
+	auto := cfg.Agentic.Activation.AutoEnqueue
+	return agenticactivation.NewService(store, agenticactivation.WithAutoEnqueue(
+		agenticenqueue.NewService(store, queue, agenticenqueue.Options{
+			EnforcementMode:    cfg.Agentic.Enforcement.Mode,
+			CompletionGateMode: cfg.Agentic.CompletionGate.Mode,
+		}),
+		agenticactivation.AutoEnqueueOptions{
+			Enabled:                 true,
+			Limit:                   auto.Limit,
+			OperatorID:              operatorID,
+			Reason:                  "agentic activation auto enqueue",
+			MaxRiskLevel:            auto.MaxRiskLevel,
+			RequestedEnforcement:    auto.AgenticEnforcement,
+			RequestedCompletionGate: auto.CompletionGate,
+		},
+	)), nil
 }
 
 func cmdAgenticEnqueue(ctx context.Context, args []string) error {
@@ -491,6 +717,31 @@ func parseAgenticIDArgs(args []string, usage string) (int64, bool, error) {
 	return id, jsonOut, nil
 }
 
+func parseAgenticListArgs(args []string, usage string) (int, bool, error) {
+	limit := 10
+	jsonOut := false
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "--json":
+			jsonOut = true
+		case "--limit":
+			i++
+			if i >= len(args) {
+				return 0, jsonOut, fmt.Errorf("usage: %s", usage)
+			}
+			parsed, err := strconv.Atoi(args[i])
+			if err != nil || parsed <= 0 {
+				return 0, jsonOut, fmt.Errorf("invalid limit %q", args[i])
+			}
+			limit = parsed
+		default:
+			return 0, jsonOut, fmt.Errorf("unknown list flag: %s", arg)
+		}
+	}
+	return limit, jsonOut, nil
+}
+
 func (c *agenticCLI) status(ctx context.Context) (*agenticStatusView, error) {
 	counts := map[string]map[string]int{}
 	specs := map[string]struct {
@@ -508,6 +759,7 @@ func (c *agenticCLI) status(ctx context.Context) (*agenticStatusView, error) {
 		"verification":     {"verification_runs", "verdict", false},
 		"memory":           {"memory_updates", "status", false},
 		"followups":        {"followups", "status", false},
+		"activation_runs":  {"activation_runs", "status", true},
 		"actors":           {"agent_actors", "status", false},
 	}
 	for key, spec := range specs {
@@ -545,6 +797,29 @@ func (c *agenticCLI) status(ctx context.Context) (*agenticStatusView, error) {
 		ProposedAwaitingEnqueue: awaitingEnqueue,
 		DueFollowups:            due,
 		Attention:               attention,
+	}, nil
+}
+
+func (c *agenticCLI) activations(ctx context.Context, limit int) (*agenticActivationsView, error) {
+	exists, err := c.tableExists(ctx, "activation_runs")
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return &agenticActivationsView{AutonomyEnabled: false, Limit: limit}, nil
+	}
+	runs, err := c.store.ListActivationRuns(ctx, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]agenticActivationRunSummary, 0, len(runs))
+	for _, run := range runs {
+		out = append(out, activationRunSummary(run))
+	}
+	return &agenticActivationsView{
+		AutonomyEnabled: false,
+		Limit:           limit,
+		Runs:            out,
 	}, nil
 }
 
@@ -714,6 +989,56 @@ func (c *agenticCLI) lineage(ctx context.Context, id int64) (*agenticLineageView
 		return nil, err
 	}
 	view.Followups = followups
+	return view, nil
+}
+
+func (c *agenticCLI) evidence(ctx context.Context, id int64) (*agenticEvidenceView, error) {
+	lineage, err := c.lineage(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	view := &agenticEvidenceView{
+		AutonomyEnabled: false,
+		Task:            lineage.Task,
+		Queue:           lineage.Queue,
+		Counts: agenticEvidenceCounts{
+			Actors:           len(lineage.Actors),
+			Handoffs:         len(lineage.Handoffs),
+			PolicyDecisions:  len(lineage.PolicyDecisions),
+			Approvals:        len(lineage.Approvals),
+			EnqueueDecisions: len(lineage.EnqueueDecisions),
+			Receipts:         len(lineage.Receipts),
+			CompletionGates:  len(lineage.CompletionGates),
+			VerificationRuns: len(lineage.VerificationRuns),
+			MemoryUpdates:    len(lineage.MemoryUpdates),
+			Followups:        len(lineage.Followups),
+		},
+		LatestActorStatuses: countActors(lineage.Actors),
+	}
+	if len(lineage.EnqueueDecisions) > 0 {
+		view.LatestEnqueue = &lineage.EnqueueDecisions[len(lineage.EnqueueDecisions)-1]
+	}
+	if len(lineage.Receipts) > 0 {
+		view.LatestReceipt = &lineage.Receipts[len(lineage.Receipts)-1]
+	}
+	if len(lineage.CompletionGates) > 0 {
+		view.LatestCompletion = &lineage.CompletionGates[len(lineage.CompletionGates)-1]
+	}
+	if len(lineage.VerificationRuns) > 0 {
+		view.LatestVerification = &lineage.VerificationRuns[len(lineage.VerificationRuns)-1]
+	}
+	if len(lineage.MemoryUpdates) > 0 {
+		view.LatestMemoryUpdate = &lineage.MemoryUpdates[len(lineage.MemoryUpdates)-1]
+	}
+	if len(lineage.Followups) > 0 {
+		view.LatestFollowup = &lineage.Followups[len(lineage.Followups)-1]
+	}
+	if len(lineage.PolicyDecisions) > 0 {
+		view.LatestPolicy = &lineage.PolicyDecisions[len(lineage.PolicyDecisions)-1]
+	}
+	if len(lineage.Approvals) > 0 {
+		view.LatestApproval = &lineage.Approvals[len(lineage.Approvals)-1]
+	}
 	return view, nil
 }
 
@@ -994,12 +1319,122 @@ func printJSON(v any) error {
 	return enc.Encode(v)
 }
 
+func activationView(result agenticactivation.Result) *agenticActivationView {
+	view := &agenticActivationView{
+		RunID:            result.RunID,
+		AutonomyEnabled:  result.ExecutionPolicy != agenticactivation.ExecutionPolicyProposeOnly,
+		ExecutionPolicy:  result.ExecutionPolicy,
+		Limit:            result.Limit,
+		EnqueuePerformed: result.EnqueuePerformed,
+		Status:           result.Status,
+		Reason:           bounded(result.Reason, 120),
+		ProposedTaskIDs:  append([]int64(nil), result.ProposedTaskIDs...),
+		Followups: agenticActivationCounts{
+			Processed: result.Followups.Processed,
+			Created:   result.Followups.Created,
+			Skipped:   result.Followups.Skipped,
+			Failed:    result.Followups.Failed,
+		},
+		Signals: agenticActivationCounts{
+			Processed: result.Signals.Processed,
+			Created:   result.Signals.Created,
+			Linked:    result.Signals.Linked,
+			Failed:    result.Signals.Failed,
+		},
+	}
+	if result.AutoEnqueue.Considered > 0 || result.AutoEnqueue.Enqueued > 0 || result.AutoEnqueue.Failed > 0 {
+		view.AutoEnqueue = &agenticAutoEnqueueInfo{
+			Considered:      result.AutoEnqueue.Considered,
+			Enqueued:        result.AutoEnqueue.Enqueued,
+			Skipped:         result.AutoEnqueue.Skipped,
+			Failed:          result.AutoEnqueue.Failed,
+			EnqueuedTaskIDs: append([]int64(nil), result.AutoEnqueue.EnqueuedTaskIDs...),
+			QueueTaskIDs:    append([]int64(nil), result.AutoEnqueue.QueueTaskIDs...),
+		}
+	}
+	return view
+}
+
+func activationRunSummary(run agentic.ActivationRun) agenticActivationRunSummary {
+	return agenticActivationRunSummary{
+		ID:               run.ID,
+		ExecutionPolicy:  run.ExecutionPolicy,
+		Limit:            run.Limit,
+		EnqueuePerformed: run.EnqueuePerformed,
+		Status:           run.Status,
+		Reason:           bounded(run.Reason, 120),
+		ProposedTaskIDs:  append([]int64(nil), run.ProposedTaskIDs...),
+		Followups: agenticActivationCounts{
+			Processed: run.FollowupProcessed,
+			Created:   run.FollowupCreated,
+			Skipped:   run.FollowupSkipped,
+			Failed:    run.FollowupFailed,
+		},
+		Signals: agenticActivationCounts{
+			Processed: run.SignalProcessed,
+			Created:   run.SignalCreated,
+			Linked:    run.SignalLinked,
+			Failed:    run.SignalFailed,
+		},
+		CreatedAt: run.CreatedAt.Format(time.RFC3339),
+	}
+}
+
+func renderAgenticActivation(view *agenticActivationView) string {
+	var b strings.Builder
+	fmt.Fprintln(&b, "Agentic Activation")
+	fmt.Fprintf(&b, "  run_id: %d\n", view.RunID)
+	fmt.Fprintf(&b, "  autonomy_enabled: %t\n", view.AutonomyEnabled)
+	fmt.Fprintf(&b, "  execution_policy: %s\n", view.ExecutionPolicy)
+	fmt.Fprintf(&b, "  limit: %d\n", view.Limit)
+	fmt.Fprintf(&b, "  enqueue_performed: %t\n", view.EnqueuePerformed)
+	fmt.Fprintf(&b, "  status: %s\n", view.Status)
+	if view.Reason != "" {
+		fmt.Fprintf(&b, "  reason: %s\n", view.Reason)
+	}
+	if len(view.ProposedTaskIDs) > 0 {
+		fmt.Fprintf(&b, "  proposed_task_ids: %s\n", joinInt64s(view.ProposedTaskIDs))
+	}
+	if view.AutoEnqueue != nil {
+		fmt.Fprintf(&b, "  auto_enqueue: considered=%d enqueued=%d skipped=%d failed=%d\n", view.AutoEnqueue.Considered, view.AutoEnqueue.Enqueued, view.AutoEnqueue.Skipped, view.AutoEnqueue.Failed)
+		if len(view.AutoEnqueue.QueueTaskIDs) > 0 {
+			fmt.Fprintf(&b, "  auto_enqueue_queue_task_ids: %s\n", joinInt64s(view.AutoEnqueue.QueueTaskIDs))
+		}
+	}
+	fmt.Fprintf(&b, "  followups: processed=%d created=%d skipped=%d failed=%d\n", view.Followups.Processed, view.Followups.Created, view.Followups.Skipped, view.Followups.Failed)
+	fmt.Fprintf(&b, "  signals: processed=%d created=%d linked=%d failed=%d\n", view.Signals.Processed, view.Signals.Created, view.Signals.Linked, view.Signals.Failed)
+	return b.String()
+}
+
+func renderAgenticActivations(view *agenticActivationsView) string {
+	var b strings.Builder
+	fmt.Fprintln(&b, "Agentic Activations")
+	fmt.Fprintf(&b, "  autonomy_enabled: %t\n", view.AutonomyEnabled)
+	fmt.Fprintf(&b, "  limit: %d\n", view.Limit)
+	if len(view.Runs) == 0 {
+		fmt.Fprintln(&b, "  runs: none")
+		return b.String()
+	}
+	fmt.Fprintln(&b, "  runs:")
+	for _, run := range view.Runs {
+		taskIDs := ""
+		if len(run.ProposedTaskIDs) > 0 {
+			taskIDs = " proposed_task_ids=" + joinInt64s(run.ProposedTaskIDs)
+		}
+		fmt.Fprintf(&b, "  - #%d %s policy=%s followups=%d/%d signals=%d/%d enqueue=%t%s created_at=%s\n", run.ID, run.Status, run.ExecutionPolicy, run.Followups.Created, run.Followups.Processed, run.Signals.Created+run.Signals.Linked, run.Signals.Processed, run.EnqueuePerformed, taskIDs, run.CreatedAt)
+		if run.Reason != "" {
+			fmt.Fprintf(&b, "    reason: %s\n", run.Reason)
+		}
+	}
+	return b.String()
+}
+
 func renderAgenticStatus(view *agenticStatusView) string {
 	var b strings.Builder
 	fmt.Fprintln(&b, "Agentic Control Plane")
 	fmt.Fprintf(&b, "  autonomy_enabled: %t\n", view.AutonomyEnabled)
 	fmt.Fprintf(&b, "  proposed_awaiting_enqueue: %d\n", view.ProposedAwaitingEnqueue)
-	for _, key := range []string{"goals", "signals", "tasks", "approvals", "receipts", "completion_gates", "enqueue", "verification", "memory", "followups", "actors"} {
+	for _, key := range []string{"goals", "signals", "tasks", "approvals", "receipts", "completion_gates", "enqueue", "verification", "memory", "followups", "activation_runs", "actors"} {
 		line := formatCounts(view.Counts[key])
 		if key == "followups" {
 			line = strings.TrimSpace(line + fmt.Sprintf(" due=%d", view.DueFollowups))
@@ -1191,6 +1626,60 @@ func renderAgenticLineage(view *agenticLineageView) string {
 	return b.String()
 }
 
+func renderAgenticEvidence(view *agenticEvidenceView) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Agentic Evidence #%d\n", view.Task.ID)
+	fmt.Fprintf(&b, "  task: %s risk=%s verification=%s\n", view.Task.Status, noneIfEmpty(view.Task.RiskLevel), noneIfEmpty(view.Task.VerificationStatus))
+	if view.Queue == nil {
+		fmt.Fprintln(&b, "  queue: none")
+	} else {
+		fmt.Fprintf(&b, "  queue: #%d %s session=%s\n", view.Queue.ID, view.Queue.Status, noneIfEmpty(view.Queue.SessionID))
+	}
+	fmt.Fprintf(&b, "  counts: actors=%d handoffs=%d policies=%d approvals=%d enqueue=%d receipts=%d gates=%d verification=%d memory=%d followups=%d\n",
+		view.Counts.Actors,
+		view.Counts.Handoffs,
+		view.Counts.PolicyDecisions,
+		view.Counts.Approvals,
+		view.Counts.EnqueueDecisions,
+		view.Counts.Receipts,
+		view.Counts.CompletionGates,
+		view.Counts.VerificationRuns,
+		view.Counts.MemoryUpdates,
+		view.Counts.Followups,
+	)
+	if view.LatestEnqueue == nil {
+		fmt.Fprintln(&b, "  latest_enqueue: none")
+	} else {
+		fmt.Fprintf(&b, "  latest_enqueue: #%d %s %s queue_task_id=%s\n", view.LatestEnqueue.ID, view.LatestEnqueue.Decision, view.LatestEnqueue.Status, intOrNone(view.LatestEnqueue.QueueTaskID))
+	}
+	if view.LatestReceipt == nil {
+		fmt.Fprintln(&b, "  latest_receipt: none")
+	} else {
+		fmt.Fprintf(&b, "  latest_receipt: #%d %s tool=%s\n", view.LatestReceipt.ID, view.LatestReceipt.Status, view.LatestReceipt.ToolName)
+	}
+	if view.LatestCompletion == nil {
+		fmt.Fprintln(&b, "  latest_completion_gate: none")
+	} else {
+		fmt.Fprintf(&b, "  latest_completion_gate: #%d %s verifier=%s\n", view.LatestCompletion.ID, view.LatestCompletion.Status, hashIDOrNone(view.LatestCompletion.VerificationRunID))
+	}
+	if view.LatestVerification == nil {
+		fmt.Fprintln(&b, "  latest_verification: none")
+	} else {
+		fmt.Fprintf(&b, "  latest_verification: #%d %s reason=%s\n", view.LatestVerification.ID, view.LatestVerification.Verdict, noneIfEmpty(view.LatestVerification.Reason))
+	}
+	if view.LatestMemoryUpdate == nil {
+		fmt.Fprintln(&b, "  latest_memory_update: none")
+	} else {
+		fmt.Fprintf(&b, "  latest_memory_update: #%d %s target=%s operation=%s\n", view.LatestMemoryUpdate.ID, view.LatestMemoryUpdate.Status, view.LatestMemoryUpdate.Target, view.LatestMemoryUpdate.Operation)
+	}
+	if view.LatestFollowup == nil {
+		fmt.Fprintln(&b, "  latest_followup: none")
+	} else {
+		fmt.Fprintf(&b, "  latest_followup: #%d %s due=%t\n", view.LatestFollowup.ID, view.LatestFollowup.Status, view.LatestFollowup.Due)
+	}
+	return b.String()
+}
+
 func formatCounts(counts map[string]int) string {
 	if len(counts) == 0 {
 		return ""
@@ -1255,6 +1744,17 @@ func intOrNone(value int64) string {
 		return "none"
 	}
 	return strconv.FormatInt(value, 10)
+}
+
+func joinInt64s(values []int64) string {
+	if len(values) == 0 {
+		return "none"
+	}
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		parts = append(parts, strconv.FormatInt(value, 10))
+	}
+	return strings.Join(parts, ",")
 }
 
 func hashIDOrNone(value int64) string {

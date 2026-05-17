@@ -20,10 +20,11 @@ const (
 )
 
 type Result struct {
-	Processed int
-	Created   int
-	Skipped   int
-	Failed    int
+	Processed      int
+	Created        int
+	Skipped        int
+	Failed         int
+	CreatedTaskIDs []int64
 }
 
 type Scheduler struct {
@@ -46,10 +47,13 @@ func (s *Scheduler) RunOnce(ctx context.Context, limit int) (Result, error) {
 	var result Result
 	for _, fu := range due {
 		result.Processed++
-		outcome, err := s.process(ctx, fu)
+		outcome, taskID, err := s.process(ctx, fu)
 		switch outcome {
 		case agentic.FollowupStatusCreated:
 			result.Created++
+			if taskID != 0 {
+				result.CreatedTaskIDs = append(result.CreatedTaskIDs, taskID)
+			}
 		case agentic.FollowupStatusSkipped:
 			result.Skipped++
 		case agentic.FollowupStatusFailed:
@@ -62,21 +66,21 @@ func (s *Scheduler) RunOnce(ctx context.Context, limit int) (Result, error) {
 	return result, nil
 }
 
-func (s *Scheduler) process(ctx context.Context, fu agentic.Followup) (string, error) {
+func (s *Scheduler) process(ctx context.Context, fu agentic.Followup) (string, int64, error) {
 	if fu.CreatedTaskID != 0 {
 		if _, err := s.store.MarkFollowupCreated(ctx, fu.ID, fu.CreatedTaskID); err != nil {
-			return agentic.FollowupStatusFailed, err
+			return agentic.FollowupStatusFailed, 0, err
 		}
-		return agentic.FollowupStatusCreated, nil
+		return agentic.FollowupStatusCreated, fu.CreatedTaskID, nil
 	}
 	if !fu.WakeAgent {
 		if _, err := s.store.MarkFollowupSkipped(ctx, fu.ID, "wakeAgent=false"); err != nil {
-			return agentic.FollowupStatusFailed, err
+			return agentic.FollowupStatusFailed, 0, err
 		}
-		return agentic.FollowupStatusSkipped, nil
+		return agentic.FollowupStatusSkipped, 0, nil
 	}
 	if _, err := s.store.MarkFollowupProcessing(ctx, fu.ID); err != nil {
-		return agentic.FollowupStatusFailed, err
+		return agentic.FollowupStatusFailed, 0, err
 	}
 	signal, err := s.createOrGetDueSignal(ctx, fu)
 	if err != nil {
@@ -84,9 +88,9 @@ func (s *Scheduler) process(ctx context.Context, fu agentic.Followup) (string, e
 	}
 	if task, err := s.store.GetAgenticTaskBySignalID(ctx, signal.ID); err == nil {
 		if _, markErr := s.store.MarkFollowupCreated(ctx, fu.ID, task.ID); markErr != nil {
-			return agentic.FollowupStatusFailed, markErr
+			return agentic.FollowupStatusFailed, 0, markErr
 		}
-		return agentic.FollowupStatusCreated, nil
+		return agentic.FollowupStatusCreated, task.ID, nil
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return s.fail(ctx, fu.ID, err)
 	}
@@ -94,24 +98,24 @@ func (s *Scheduler) process(ctx context.Context, fu agentic.Followup) (string, e
 	if err != nil {
 		if task, getErr := s.store.GetAgenticTaskBySignalID(ctx, signal.ID); getErr == nil {
 			if _, markErr := s.store.MarkFollowupCreated(ctx, fu.ID, task.ID); markErr != nil {
-				return agentic.FollowupStatusFailed, markErr
+				return agentic.FollowupStatusFailed, 0, markErr
 			}
-			return agentic.FollowupStatusCreated, nil
+			return agentic.FollowupStatusCreated, task.ID, nil
 		}
 		return s.fail(ctx, fu.ID, err)
 	}
 	if _, err := s.store.MarkFollowupCreated(ctx, fu.ID, task.ID); err != nil {
-		return agentic.FollowupStatusFailed, err
+		return agentic.FollowupStatusFailed, 0, err
 	}
-	return agentic.FollowupStatusCreated, nil
+	return agentic.FollowupStatusCreated, task.ID, nil
 }
 
-func (s *Scheduler) fail(ctx context.Context, followupID int64, cause error) (string, error) {
+func (s *Scheduler) fail(ctx context.Context, followupID int64, cause error) (string, int64, error) {
 	reason := cause.Error()
 	if _, err := s.store.MarkFollowupFailed(ctx, followupID, reason); err != nil {
-		return agentic.FollowupStatusFailed, fmt.Errorf("%w; mark failed: %v", cause, err)
+		return agentic.FollowupStatusFailed, 0, fmt.Errorf("%w; mark failed: %v", cause, err)
 	}
-	return agentic.FollowupStatusFailed, cause
+	return agentic.FollowupStatusFailed, 0, cause
 }
 
 func (s *Scheduler) createOrGetDueSignal(ctx context.Context, fu agentic.Followup) (*agentic.GoalSignal, error) {

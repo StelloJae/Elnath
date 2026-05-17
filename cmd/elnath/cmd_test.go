@@ -7,11 +7,16 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stello/elnath/internal/agent"
+	"github.com/stello/elnath/internal/agentic"
+	agenticactivation "github.com/stello/elnath/internal/agentic/activation"
+	"github.com/stello/elnath/internal/agentic/followup"
+	"github.com/stello/elnath/internal/agentic/triage"
 	"github.com/stello/elnath/internal/config"
 	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/core"
@@ -187,6 +192,63 @@ func TestCmdDaemonSubmitWithSession(t *testing.T) {
 	got := <-receivedSession
 	if got != sess.ID {
 		t.Fatalf("daemon received session_id = %q, want resolved full id %q", got, sess.ID)
+	}
+}
+
+func TestCmdDaemonSubmitWithDeliveryTargets(t *testing.T) {
+	socketPath := testSocketPath(t, "subdeliver")
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	receivedTargets := make(chan []string, 1)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		var req daemon.IPCRequest
+		dec := json.NewDecoder(conn)
+		if err := dec.Decode(&req); err != nil {
+			return
+		}
+		var encoded string
+		if err := json.Unmarshal(req.Payload, &encoded); err != nil {
+			receivedTargets <- nil
+			return
+		}
+		parsed := daemon.ParseTaskPayload(encoded)
+		receivedTargets <- parsed.DeliveryTargets
+		resp := daemon.IPCResponse{
+			OK:   true,
+			Data: map[string]interface{}{"task_id": 77, "existed": false},
+		}
+		enc := json.NewEncoder(conn)
+		_ = enc.Encode(resp)
+	}()
+
+	cfgPath := writeDaemonTestConfig(t, onboarding.En, socketPath)
+	withArgs(t, []string{"elnath", "--config", cfgPath})
+	resetLoadLocaleCache()
+
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdDaemonSubmit(context.Background(), []string{"--deliver", "origin", "--deliver", "local", "ship", "targeted", "reply"}); err != nil {
+			t.Fatalf("cmdDaemonSubmit with delivery targets: %v", err)
+		}
+	})
+	if !strings.Contains(stdout, "Task #77 enqueued") {
+		t.Fatalf("stdout = %q, want enqueued output", stdout)
+	}
+	<-done
+	got := <-receivedTargets
+	if !slices.Equal(got, []string{"origin", "local"}) {
+		t.Fatalf("daemon received delivery_targets = %+v, want origin/local", got)
 	}
 }
 
@@ -571,11 +633,12 @@ func TestCmdEvalSummarizeMalformedJSON(t *testing.T) {
 
 func TestParseDaemonSubmitArgsEdgeCases(t *testing.T) {
 	tests := []struct {
-		name      string
-		args      []string
-		wantSess  string
-		wantPrmpt string
-		wantErr   bool
+		name        string
+		args        []string
+		wantSess    string
+		wantTargets []string
+		wantPrmpt   string
+		wantErr     bool
 	}{
 		{
 			name:      "empty args",
@@ -587,6 +650,11 @@ func TestParseDaemonSubmitArgsEdgeCases(t *testing.T) {
 		{
 			name:    "session flag without value",
 			args:    []string{"--session"},
+			wantErr: true,
+		},
+		{
+			name:    "delivery flag without value",
+			args:    []string{"--deliver"},
 			wantErr: true,
 		},
 		{
@@ -603,11 +671,18 @@ func TestParseDaemonSubmitArgsEdgeCases(t *testing.T) {
 			wantPrmpt: "build the feature",
 			wantErr:   false,
 		},
+		{
+			name:        "delivery targets",
+			args:        []string{"--deliver", "origin", "--deliver", "local", "build", "the", "feature"},
+			wantTargets: []string{"origin", "local"},
+			wantPrmpt:   "build the feature",
+			wantErr:     false,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sessID, prompt, err := parseDaemonSubmitArgs(tt.args)
+			sessID, targets, prompt, err := parseDaemonSubmitArgs(tt.args)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("expected error")
@@ -619,6 +694,9 @@ func TestParseDaemonSubmitArgsEdgeCases(t *testing.T) {
 			}
 			if sessID != tt.wantSess {
 				t.Fatalf("sessionID = %q, want %q", sessID, tt.wantSess)
+			}
+			if !slices.Equal(targets, tt.wantTargets) {
+				t.Fatalf("targets = %+v, want %+v", targets, tt.wantTargets)
 			}
 			if prompt != tt.wantPrmpt {
 				t.Fatalf("prompt = %q, want %q", prompt, tt.wantPrmpt)
@@ -2194,6 +2272,48 @@ func TestCmdSearchWithData(t *testing.T) {
 // Note: cmdDaemonStart and cmdDaemonInstall are not tested here because they
 // require real infrastructure (starts daemon, installs launchd plist) and
 // fall through to the real config when the given config path fails.
+
+func TestActivationDeliverySummaryMapsResult(t *testing.T) {
+	createdAt := time.Unix(123, 0)
+	targets := []daemon.DeliveryTarget{{Kind: daemon.DeliveryTargetPlatform, Platform: "telegram"}}
+	summary := activationDeliverySummary(agenticactivation.Result{
+		RunID:            42,
+		ExecutionPolicy:  "propose_only",
+		Limit:            7,
+		EnqueuePerformed: false,
+		Status:           agentic.ActivationRunStatusSucceeded,
+		ProposedTaskIDs:  []int64{101, 102},
+		Followups:        followup.Result{Processed: 3, Created: 2, Skipped: 1},
+		Signals:          triage.Result{Processed: 4, Created: 2, Linked: 1, Failed: 1},
+		CreatedAt:        createdAt,
+	}, nil, targets)
+
+	if summary.RunID != 42 || summary.Status != agentic.ActivationRunStatusSucceeded || summary.ExecutionPolicy != "propose_only" || summary.Limit != 7 {
+		t.Fatalf("summary identity = %+v", summary)
+	}
+	if len(summary.DeliveryTargets) != 1 || summary.DeliveryTargets[0].Platform != "telegram" {
+		t.Fatalf("summary targets = %+v", summary.DeliveryTargets)
+	}
+	if len(summary.ProposedTaskIDs) != 2 || summary.ProposedTaskIDs[0] != 101 || summary.ProposedTaskIDs[1] != 102 {
+		t.Fatalf("summary proposed task ids = %+v", summary.ProposedTaskIDs)
+	}
+	if summary.Followups.Processed != 3 || summary.Followups.Created != 2 || summary.Followups.Skipped != 1 {
+		t.Fatalf("summary followups = %+v", summary.Followups)
+	}
+	if summary.Signals.Processed != 4 || summary.Signals.Created != 2 || summary.Signals.Linked != 1 || summary.Signals.Failed != 1 {
+		t.Fatalf("summary signals = %+v", summary.Signals)
+	}
+	if !summary.CreatedAt.Equal(createdAt) {
+		t.Fatalf("summary created_at = %v, want %v", summary.CreatedAt, createdAt)
+	}
+}
+
+func TestActivationDeliverySummaryMarksRunErrorFailed(t *testing.T) {
+	summary := activationDeliverySummary(agenticactivation.Result{RunID: 9}, fmt.Errorf("boom"), nil)
+	if summary.Status != agentic.ActivationRunStatusFailed || summary.Reason != "boom" {
+		t.Fatalf("summary = %+v, want failed with reason", summary)
+	}
+}
 
 // ---------------------------------------------------------------------------
 // cmdTelegramShell error paths

@@ -502,6 +502,34 @@ func TestSinkNoRedactorPassesThrough(t *testing.T) {
 	}
 }
 
+func TestSinkNotifyActivationSendsSummary(t *testing.T) {
+	bot := newSinkBot()
+	sink := NewTelegramSink(bot, "chat-1", nil, WithRedactor(func(text string) string {
+		return strings.ReplaceAll(text, "secret-token", "[REDACTED]")
+	}))
+
+	err := sink.NotifyActivation(context.Background(), daemon.ActivationSummary{
+		RunID:            12,
+		ExecutionPolicy:  "propose_only",
+		Status:           "failed",
+		Reason:           "secret-token blocked",
+		EnqueuePerformed: false,
+		ProposedTaskIDs:  []int64{12, 13},
+		Followups:        daemon.ActivationCounts{Processed: 2, Created: 1, Skipped: 1},
+		Signals:          daemon.ActivationCounts{Processed: 3, Created: 2, Linked: 1},
+	})
+	if err != nil {
+		t.Fatalf("NotifyActivation: %v", err)
+	}
+	sent := bot.getSent()
+	if len(sent) != 1 {
+		t.Fatalf("sent messages = %d, want 1", len(sent))
+	}
+	if sent[0].chatID != "chat-1" || !strings.Contains(sent[0].text, "Agentic activation") || !strings.Contains(sent[0].text, "#12") || !strings.Contains(sent[0].text, "propose_only") || !strings.Contains(sent[0].text, "tasks: #12, #13") || !strings.Contains(sent[0].text, "[REDACTED]") {
+		t.Fatalf("activation message = %+v", sent[0])
+	}
+}
+
 func TestParseSummaryStream(t *testing.T) {
 	text, ok := parseSummaryStream("[summary] Hello world")
 	if !ok {

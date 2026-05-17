@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -759,39 +760,42 @@ func TestProviderCommandStatusShowsRequestTimeout(t *testing.T) {
 }
 
 func TestParseDaemonSubmitArgs(t *testing.T) {
-	sessionID, prompt, err := parseDaemonSubmitArgs([]string{"--session", "sess-123", "continue the review"})
+	sessionID, targets, prompt, err := parseDaemonSubmitArgs([]string{"--session", "sess-123", "--deliver", "origin", "continue the review"})
 	if err != nil {
 		t.Fatalf("parseDaemonSubmitArgs: %v", err)
 	}
 	if sessionID != "sess-123" {
 		t.Fatalf("sessionID = %q, want sess-123", sessionID)
 	}
+	if !slices.Equal(targets, []string{"origin"}) {
+		t.Fatalf("targets = %+v, want origin", targets)
+	}
 	if prompt != "continue the review" {
 		t.Fatalf("prompt = %q, want joined prompt", prompt)
 	}
 
-	sessionID, prompt, err = parseDaemonSubmitArgs([]string{"plain", "task"})
+	sessionID, targets, prompt, err = parseDaemonSubmitArgs([]string{"plain", "task"})
 	if err != nil {
 		t.Fatalf("parseDaemonSubmitArgs plain: %v", err)
 	}
-	if sessionID != "" || prompt != "plain task" {
-		t.Fatalf("plain parse = (%q,%q), want empty session/plain task", sessionID, prompt)
+	if sessionID != "" || len(targets) != 0 || prompt != "plain task" {
+		t.Fatalf("plain parse = (%q,%+v,%q), want empty session/no targets/plain task", sessionID, targets, prompt)
 	}
 
-	sessionID, prompt, err = parseDaemonSubmitArgs([]string{"--principal", "stello", "--project-id", "elnath", "ship", "it"})
+	sessionID, targets, prompt, err = parseDaemonSubmitArgs([]string{"--principal", "stello", "--project-id", "elnath", "ship", "it"})
 	if err != nil {
 		t.Fatalf("parseDaemonSubmitArgs principal flags: %v", err)
 	}
-	if sessionID != "" || prompt != "ship it" {
-		t.Fatalf("principal flag parse = (%q,%q), want empty session/ship it", sessionID, prompt)
+	if sessionID != "" || len(targets) != 0 || prompt != "ship it" {
+		t.Fatalf("principal flag parse = (%q,%+v,%q), want empty session/no targets/ship it", sessionID, targets, prompt)
 	}
 
-	sessionID, prompt, err = parseDaemonSubmitArgs([]string{"--config", "cfg.yaml", "--principal", "stello", "ship", "it"})
+	sessionID, targets, prompt, err = parseDaemonSubmitArgs([]string{"--config", "cfg.yaml", "--principal", "stello", "ship", "it"})
 	if err != nil {
 		t.Fatalf("parseDaemonSubmitArgs config flag: %v", err)
 	}
-	if sessionID != "" || prompt != "ship it" {
-		t.Fatalf("config flag parse = (%q,%q), want empty session/ship it", sessionID, prompt)
+	if sessionID != "" || len(targets) != 0 || prompt != "ship it" {
+		t.Fatalf("config flag parse = (%q,%+v,%q), want empty session/no targets/ship it", sessionID, targets, prompt)
 	}
 }
 

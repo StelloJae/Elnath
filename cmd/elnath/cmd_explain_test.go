@@ -237,7 +237,7 @@ func TestExplainControlSurfacesJSON(t *testing.T) {
 	if !out.ProductComplete {
 		t.Fatalf("product_complete = false; out=%+v", out)
 	}
-	for _, name := range []string{"discovery", "task", "schedule", "plan", "worktree", "skill", "command", "scratchpad"} {
+	for _, name := range []string{"discovery", "task", "schedule", "plan", "worktree", "skill", "command", "scratchpad", "agentic"} {
 		entry, ok := byName[name]
 		if !ok {
 			t.Fatalf("missing control surface %q in %+v", name, byName)
@@ -249,6 +249,10 @@ func TestExplainControlSurfacesJSON(t *testing.T) {
 	commandSurface := byName["command"]
 	if !strings.Contains(commandSurface.notes, "provider route") {
 		t.Fatalf("command surface notes = %q, want provider route explainability", commandSurface.notes)
+	}
+	agenticSurface := byName["agentic"]
+	if agenticSurface.toolCount != 8 || !strings.Contains(agenticSurface.notes, "delegation") || !strings.Contains(agenticSurface.notes, "evidence") {
+		t.Fatalf("agentic surface = %+v, want eight agentic delegation/evidence tools", agenticSurface)
 	}
 	userInput, ok := byName["user_input"]
 	if !ok {
@@ -399,6 +403,7 @@ func TestExplainControlSurfacesText(t *testing.T) {
 		"user_input: implemented_with_product_boundary",
 		"worktree: implemented",
 		"scratchpad: implemented",
+		"agentic: implemented",
 		"code_intelligence: implemented_with_product_boundary",
 		"Remaining gaps:",
 		"none",
