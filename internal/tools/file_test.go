@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -179,18 +180,21 @@ func TestWriteToolRecordsNonGoDiagnosticPolicy(t *testing.T) {
 		filePath string
 		content  string
 		language string
+		status   string
 	}{
 		{
 			name:     "python",
 			filePath: "script.py",
 			content:  "print('hello')\n",
 			language: "python",
+			status:   expectedPythonDiagnosticStatus("diagnostic_delta_clean"),
 		},
 		{
 			name:     "typescript",
 			filePath: "app.ts",
 			content:  "const ok = true;\n",
 			language: "typescript",
+			status:   "diagnostics_not_configured",
 		},
 	}
 
@@ -215,7 +219,7 @@ func TestWriteToolRecordsNonGoDiagnosticPolicy(t *testing.T) {
 			if got, want := res.Mutation.DiagnosticLanguage, tt.language; got != want {
 				t.Fatalf("DiagnosticLanguage = %q, want %q", got, want)
 			}
-			if got, want := res.Mutation.DiagnosticStatus, "diagnostics_not_configured"; got != want {
+			if got, want := res.Mutation.DiagnosticStatus, tt.status; got != want {
 				t.Fatalf("DiagnosticStatus = %q, want %q", got, want)
 			}
 			if res.Mutation.NewDiagnosticCount != 0 || res.Mutation.ExistingDiagnosticCount != 0 || res.Mutation.ResolvedDiagnosticCount != 0 {
@@ -223,6 +227,73 @@ func TestWriteToolRecordsNonGoDiagnosticPolicy(t *testing.T) {
 					res.Mutation.NewDiagnosticCount, res.Mutation.ExistingDiagnosticCount, res.Mutation.ResolvedDiagnosticCount)
 			}
 		})
+	}
+}
+
+func TestWriteToolRecordsPythonDiagnosticDelta(t *testing.T) {
+	if !python3Available() {
+		t.Skip("python3 unavailable")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "script.py")
+	if err := os.WriteFile(path, []byte("print('ok')\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	tool := NewWriteTool(NewPathGuard(dir, nil))
+
+	res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{
+		"file_path": "script.py",
+		"content":   "def broken(:\n",
+	}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.Output)
+	}
+	if res.Mutation == nil {
+		t.Fatal("Mutation = nil, want structured file mutation receipt")
+	}
+	if got, want := res.Mutation.DiagnosticLanguage, "python"; got != want {
+		t.Fatalf("DiagnosticLanguage = %q, want %q", got, want)
+	}
+	if got, want := res.Mutation.DiagnosticStatus, "new_diagnostics_found"; got != want {
+		t.Fatalf("DiagnosticStatus = %q, want %q", got, want)
+	}
+	if res.Mutation.NewDiagnosticCount == 0 || len(res.Mutation.NewDiagnostics) == 0 {
+		t.Fatalf("new diagnostics = count %d details %+v, want at least one", res.Mutation.NewDiagnosticCount, res.Mutation.NewDiagnostics)
+	}
+	if got := res.Mutation.NewDiagnostics[0]; got.Line == 0 || got.Error == "" || got.Source != "python/py_compile" {
+		t.Fatalf("first new diagnostic = %+v, want located python/py_compile error", got)
+	}
+}
+
+func TestWriteToolRecordsPythonDiagnosticPolicyWhenAdapterMissing(t *testing.T) {
+	oldCommand := pythonDiagnosticCommand
+	pythonDiagnosticCommand = "elnath-python-not-present-for-test"
+	t.Cleanup(func() { pythonDiagnosticCommand = oldCommand })
+
+	dir := t.TempDir()
+	tool := NewWriteTool(NewPathGuard(dir, nil))
+
+	res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{
+		"file_path": "script.py",
+		"content":   "print('hello')\n",
+	}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.Output)
+	}
+	if res.Mutation == nil {
+		t.Fatal("Mutation = nil, want structured file mutation receipt")
+	}
+	if got, want := res.Mutation.DiagnosticLanguage, "python"; got != want {
+		t.Fatalf("DiagnosticLanguage = %q, want %q", got, want)
+	}
+	if got, want := res.Mutation.DiagnosticStatus, "diagnostics_not_configured"; got != want {
+		t.Fatalf("DiagnosticStatus = %q, want %q", got, want)
 	}
 }
 
@@ -494,7 +565,7 @@ func TestEditTool(t *testing.T) {
 		if got, want := res.Mutation.DiagnosticLanguage, "python"; got != want {
 			t.Fatalf("DiagnosticLanguage = %q, want %q", got, want)
 		}
-		if got, want := res.Mutation.DiagnosticStatus, "diagnostics_not_configured"; got != want {
+		if got, want := res.Mutation.DiagnosticStatus, expectedPythonDiagnosticStatus("diagnostic_delta_clean"); got != want {
 			t.Fatalf("DiagnosticStatus = %q, want %q", got, want)
 		}
 		if res.Mutation.NewDiagnosticCount != 0 || res.Mutation.ExistingDiagnosticCount != 0 || res.Mutation.ResolvedDiagnosticCount != 0 {
@@ -656,6 +727,18 @@ func TestEditTool(t *testing.T) {
 			t.Errorf("expected error for nonexistent file")
 		}
 	})
+}
+
+func python3Available() bool {
+	_, err := exec.LookPath("python3")
+	return err == nil
+}
+
+func expectedPythonDiagnosticStatus(statusWhenAvailable string) string {
+	if python3Available() {
+		return statusWhenAvailable
+	}
+	return "diagnostics_not_configured"
 }
 
 // ---------------------------------------------------------------------------

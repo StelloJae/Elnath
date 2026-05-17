@@ -5,9 +5,19 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
+	"time"
 )
+
+const defaultMutationDiagnosticTimeout = 2 * time.Second
+
+var pythonDiagnosticCommand = "python3"
+var pythonDiagnosticLinePattern = regexp.MustCompile(`(?i)\bline\s+(\d+)\b`)
 
 type FileMutation struct {
 	Operation               string                   `json:"operation"`
@@ -71,21 +81,15 @@ func AnnotateMutationDiagnostics(mutation *FileMutation, absPath string, basePat
 		return
 	}
 	language := mutationDiagnosticLanguage(absPath)
-	if filepath.Ext(absPath) != ".go" {
-		mutation.DiagnosticLanguage = language
-		mutation.DiagnosticStatus = "diagnostics_not_configured"
-		return
-	}
 	if strings.TrimSpace(basePath) == "" {
 		basePath = filepath.Dir(absPath)
 	}
-	var baselineDiagnostics []codeSymbolError
-	if beforeExists {
-		baselineDiagnostics = parseGoDiagnosticsFromSource(absPath, basePath, before)
-	}
-	var currentDiagnostics []codeSymbolError
-	if afterExists {
-		currentDiagnostics = parseGoDiagnosticsFromSource(absPath, basePath, after)
+	baselineDiagnostics, baselineStatus, baselineOK := mutationDiagnosticsFromSource(absPath, basePath, before, beforeExists, language)
+	currentDiagnostics, currentStatus, currentOK := mutationDiagnosticsFromSource(absPath, basePath, after, afterExists, language)
+	if !baselineOK || !currentOK {
+		mutation.DiagnosticLanguage = language
+		mutation.DiagnosticStatus = firstNonEmptyMutationDiagnosticStatus(currentStatus, baselineStatus, "diagnostics_not_configured")
+		return
 	}
 	currentRel := relPath(basePath, absPath)
 	delta := compareCodeDiagnostics(baselineDiagnostics, currentDiagnostics, before, after, currentRel)
@@ -102,6 +106,101 @@ func AnnotateMutationDiagnostics(mutation *FileMutation, absPath string, basePat
 
 func AnnotateGoMutationDiagnostics(mutation *FileMutation, absPath string, basePath string, before []byte, beforeExists bool, after []byte, afterExists bool) {
 	AnnotateMutationDiagnostics(mutation, absPath, basePath, before, beforeExists, after, afterExists)
+}
+
+func mutationDiagnosticsFromSource(absPath string, basePath string, src []byte, exists bool, language string) ([]codeSymbolError, string, bool) {
+	if !exists {
+		return nil, "", true
+	}
+	switch language {
+	case "go":
+		return parseGoDiagnosticsFromSource(absPath, basePath, src), "", true
+	case "python":
+		return parsePythonDiagnosticsFromSource(absPath, basePath, src)
+	default:
+		return nil, "diagnostics_not_configured", false
+	}
+}
+
+func parsePythonDiagnosticsFromSource(absPath string, basePath string, src []byte) ([]codeSymbolError, string, bool) {
+	command := strings.TrimSpace(pythonDiagnosticCommand)
+	if command == "" {
+		return nil, "diagnostics_not_configured", false
+	}
+	exe, err := exec.LookPath(command)
+	if err != nil {
+		return nil, "diagnostics_not_configured", false
+	}
+	tmpDir, err := os.MkdirTemp("", "elnath-python-diagnostics-*")
+	if err != nil {
+		return nil, "diagnostics_unavailable", false
+	}
+	defer os.RemoveAll(tmpDir)
+
+	tmpPath := filepath.Join(tmpDir, filepath.Base(absPath))
+	if err := os.WriteFile(tmpPath, src, 0o644); err != nil {
+		return nil, "diagnostics_unavailable", false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), defaultMutationDiagnosticTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, exe, "-B", "-m", "py_compile", tmpPath)
+	cmd.Env = append(os.Environ(), "PYTHONDONTWRITEBYTECODE=1")
+	output, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		return nil, "diagnostics_unavailable", false
+	}
+	if err == nil {
+		return nil, "", true
+	}
+	diagnostic := pythonDiagnosticFromCompileOutput(relPath(basePath, absPath), src, string(output), err)
+	return []codeSymbolError{diagnostic}, "", true
+}
+
+func pythonDiagnosticFromCompileOutput(filePath string, src []byte, output string, err error) codeSymbolError {
+	line := 1
+	if match := pythonDiagnosticLinePattern.FindStringSubmatch(output); len(match) == 2 {
+		if parsed, parseErr := strconv.Atoi(match[1]); parseErr == nil && parsed > 0 {
+			line = parsed
+		}
+	}
+	column := pythonDiagnosticColumn(output)
+	message := pythonDiagnosticMessage(output, err)
+	diagnostic := codeSymbolError{
+		FilePath: filePath,
+		Line:     line,
+		Column:   column,
+		Error:    message,
+		Severity: "error",
+		Source:   "python/py_compile",
+		LineText: codeSymbolSourceLine(src, line),
+	}
+	diagnostic.Fingerprint = codeSymbolDiagnosticFingerprint(diagnostic)
+	return diagnostic
+}
+
+func pythonDiagnosticColumn(output string) int {
+	for _, line := range strings.Split(output, "\n") {
+		if idx := strings.Index(line, "^"); idx >= 0 {
+			return idx + 1
+		}
+	}
+	return 0
+}
+
+func pythonDiagnosticMessage(output string, err error) string {
+	lines := strings.Split(output, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" || strings.Contains(line, "^") || strings.HasPrefix(line, "File ") {
+			continue
+		}
+		return strings.TrimPrefix(line, "Sorry: ")
+	}
+	if err != nil {
+		return err.Error()
+	}
+	return "python syntax check failed"
 }
 
 func mutationDiagnosticLanguage(absPath string) string {
@@ -125,6 +224,16 @@ func mutationDiagnosticLanguage(absPath string) string {
 	default:
 		return "unknown"
 	}
+}
+
+func firstNonEmptyMutationDiagnosticStatus(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func fileMutationDiagnosticsFromDelta(diagnostics []codeDiagnosticDelta, limit int) []FileMutationDiagnostic {
