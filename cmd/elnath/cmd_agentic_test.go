@@ -878,6 +878,48 @@ func TestAgenticCommand_ApprovalsListsPendingRequests(t *testing.T) {
 	assertNoRawSecrets(t, stdout, fx.rawSecrets)
 }
 
+func TestAgenticCLI_ApprovalsHandleLegacyTableWithoutConsumptionColumns(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.Exec(`
+		CREATE TABLE approval_requests (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			task_id INTEGER,
+			policy_decision_id INTEGER,
+			tool_name TEXT NOT NULL,
+			decision TEXT NOT NULL,
+			risk_level TEXT NOT NULL DEFAULT '',
+			reason TEXT NOT NULL DEFAULT '',
+			decided_by TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL
+		);
+		INSERT INTO approval_requests(task_id, policy_decision_id, tool_name, decision, risk_level, reason, decided_by, created_at)
+		VALUES (7, 8, 'bash', 'pending', 'high', 'legacy approval', '', 10);
+	`); err != nil {
+		t.Fatalf("create legacy approval table: %v", err)
+	}
+	cli := &agenticCLI{db: db, now: time.Now()}
+
+	view, err := cli.pendingApprovals(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("pendingApprovals: %v", err)
+	}
+	if len(view.Approvals) != 1 || view.Approvals[0].ConsumedAt != "" || view.Approvals[0].ConsumedByReceiptID != 0 {
+		t.Fatalf("legacy pending approvals = %+v, want unconsumed approval", view.Approvals)
+	}
+
+	approvals, err := cli.approvals(context.Background(), 7, "")
+	if err != nil {
+		t.Fatalf("approvals: %v", err)
+	}
+	if len(approvals) != 1 || approvals[0].ConsumedAt != "" || approvals[0].ConsumedByReceiptID != 0 {
+		t.Fatalf("legacy task approvals = %+v, want unconsumed approval", approvals)
+	}
+}
+
 func TestAgenticCommand_ApproveDecidesPendingRequest(t *testing.T) {
 	fx := newAgenticCommandFixture(t)
 	stdout, _ := captureOutput(t, func() {
@@ -1103,6 +1145,28 @@ func TestAgenticCommand_EvidenceShowsCompactTaskEvidenceChain(t *testing.T) {
 		}
 	}
 	assertNoRawSecrets(t, stdout, fx.rawSecrets)
+}
+
+func TestAgenticCommand_EvidenceShowsConsumedApproval(t *testing.T) {
+	fx := newAgenticCommandFixture(t)
+	if _, err := fx.db.Main.Exec(`
+		UPDATE approval_requests
+		SET decision = 'approved', consumed_at = ?, consumed_by_receipt_id = ?
+		WHERE id = ?`,
+		time.Now().UnixMilli(), fx.receipt.ID, fx.approval.ID,
+	); err != nil {
+		t.Fatalf("consume approval: %v", err)
+	}
+
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdAgentic(context.Background(), []string{"evidence", fmt.Sprint(fx.task.ID)}); err != nil {
+			t.Fatalf("cmdAgentic evidence: %v", err)
+		}
+	})
+	want := fmt.Sprintf("latest_approval: #%d approved consumed_by_receipt=#%d", fx.approval.ID, fx.receipt.ID)
+	if !strings.Contains(stdout, want) {
+		t.Fatalf("evidence output = %q, want %q", stdout, want)
+	}
 }
 
 func TestAgenticCommand_LineageHandlesMissingOptionalSections(t *testing.T) {

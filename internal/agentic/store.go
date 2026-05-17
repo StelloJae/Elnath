@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -1147,6 +1148,62 @@ func (s *Store) FindReusableApprovalRequestID(ctx context.Context, taskID, actor
 		return "", err
 	}
 	return approvalRequestID, nil
+}
+
+func (s *Store) ConsumeApprovedApprovalRequestID(ctx context.Context, taskID, actorID int64, toolName, inputHash string, consumingReceiptID int64) (string, error) {
+	if consumingReceiptID == 0 {
+		return "", errors.New("agentic: consuming receipt id is required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var approvalID int64
+	err = tx.QueryRowContext(ctx, `
+		SELECT a.id
+		FROM tool_action_receipts r
+		JOIN approval_requests a ON a.id = CAST(r.approval_request_id AS INTEGER)
+		WHERE r.task_id = ?
+			AND COALESCE(r.actor_id, 0) = ?
+			AND r.tool_name = ?
+			AND r.input_hash = ?
+			AND r.status = ?
+			AND r.approval_request_id <> ''
+			AND a.decision = 'approved'
+			AND COALESCE(a.consumed_at, 0) = 0
+			AND COALESCE(a.consumed_by_receipt_id, 0) = 0
+		ORDER BY r.id
+		LIMIT 1
+	`, taskID, actorID, toolName, inputHash, ReceiptStatusApprovalRequired).Scan(&approvalID)
+	if err != nil {
+		return "", err
+	}
+
+	now := timeMillis(nowTime())
+	res, err := tx.ExecContext(ctx, `
+		UPDATE approval_requests
+		SET consumed_at = ?, consumed_by_receipt_id = ?, updated_at = ?
+		WHERE id = ?
+			AND decision = 'approved'
+			AND COALESCE(consumed_at, 0) = 0
+			AND COALESCE(consumed_by_receipt_id, 0) = 0
+	`, now, consumingReceiptID, now, approvalID)
+	if err != nil {
+		return "", err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return "", err
+	}
+	if affected == 0 {
+		return "", sql.ErrNoRows
+	}
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	return strconv.FormatInt(approvalID, 10), nil
 }
 
 func (s *Store) CreateVerificationRun(ctx context.Context, run VerificationRun) (*VerificationRun, error) {

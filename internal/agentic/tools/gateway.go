@@ -29,6 +29,10 @@ type reusableApprovalStore interface {
 	FindReusableApprovalRequestID(context.Context, int64, int64, string, string) (string, error)
 }
 
+type approvedApprovalConsumer interface {
+	ConsumeApprovedApprovalRequestID(context.Context, int64, int64, string, string, int64) (string, error)
+}
+
 type approvalCreator interface {
 	CreateApproval(context.Context, approvals.Request) (*daemon.ApprovalRequest, error)
 }
@@ -47,9 +51,10 @@ type Gateway struct {
 }
 
 type pendingReceipt struct {
-	id         int64
-	rawHash    string
-	reversible bool
+	id                int64
+	approvalRequestID string
+	rawHash           string
+	reversible        bool
 }
 
 func NewGateway(exec basetools.Executor, store receiptStore, evaluator *policy.Evaluator, approvals approvalCreator) *Gateway {
@@ -132,7 +137,10 @@ func (g *Gateway) executeAllowed(ctx context.Context, toolCtx Context, decision 
 	if err != nil {
 		return basetools.ErrorResult("agentic receipt creation failed: " + err.Error()), nil
 	}
+	return g.executeWithReceipt(ctx, toolCtx, receipt, "", name, params)
+}
 
+func (g *Gateway) executeWithReceipt(ctx context.Context, toolCtx Context, receipt *agentic.ToolActionReceipt, approvalID string, name string, params json.RawMessage) (*basetools.Result, error) {
 	result, execErr := g.executor.Execute(ctx, name, params)
 	if execErr != nil {
 		result = basetools.ErrorResult(execErr.Error())
@@ -148,10 +156,11 @@ func (g *Gateway) executeAllowed(ctx context.Context, toolCtx Context, decision 
 	}
 	rawHash := hashString(result.Output)
 	if toolCtx.FinalizeResult && toolCtx.ToolCallID != "" {
-		g.pending.Store(receiptKey(toolCtx), pendingReceipt{id: receipt.ID, rawHash: rawHash, reversible: g.reversible(name, params)})
+		g.pending.Store(receiptKey(toolCtx), pendingReceipt{id: receipt.ID, approvalRequestID: approvalID, rawHash: rawHash, reversible: g.reversible(name, params)})
 		return result, nil
 	}
-	_, err = g.store.CompleteToolActionReceipt(ctx, receipt.ID, agentic.ToolActionReceiptCompletion{
+	_, err := g.store.CompleteToolActionReceipt(ctx, receipt.ID, agentic.ToolActionReceiptCompletion{
+		ApprovalRequestID: approvalID,
 		OutputHash:        rawHash,
 		RawOutputHash:     rawHash,
 		VisibleOutputHash: rawHash,
@@ -172,6 +181,13 @@ func (g *Gateway) requireApproval(ctx context.Context, toolCtx Context, decision
 	if err != nil {
 		return basetools.ErrorResult("agentic receipt creation failed: " + err.Error()), nil
 	}
+	approvalID, err := g.consumeApprovedApprovalID(ctx, toolCtx, name, inputHash, receipt.ID)
+	if err == nil && approvalID != "" {
+		return g.executeWithReceipt(ctx, toolCtx, receipt, approvalID, name, params)
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return g.completeBlockedReceipt(ctx, receipt.ID, "", agentic.ReceiptStatusApprovalRequired, "approved approval consumption failed: "+err.Error())
+	}
 	if approvalID, ok := g.reusableApprovalID(ctx, toolCtx, name, inputHash); ok {
 		msg := fmt.Sprintf("approval required: approval_request_id=%s", approvalID)
 		return g.completeBlockedReceipt(ctx, receipt.ID, approvalID, agentic.ReceiptStatusApprovalRequired, msg)
@@ -191,6 +207,14 @@ func (g *Gateway) requireApproval(ctx context.Context, toolCtx Context, decision
 	}
 	msg := fmt.Sprintf("approval required: approval_request_id=%s", approval.IDString())
 	return g.completeBlockedReceipt(ctx, receipt.ID, approval.IDString(), agentic.ReceiptStatusApprovalRequired, msg)
+}
+
+func (g *Gateway) consumeApprovedApprovalID(ctx context.Context, toolCtx Context, name, inputHash string, receiptID int64) (string, error) {
+	store, ok := g.store.(approvedApprovalConsumer)
+	if !ok {
+		return "", sql.ErrNoRows
+	}
+	return store.ConsumeApprovedApprovalRequestID(ctx, toolCtx.TaskID, toolCtx.ActorID, name, inputHash, receiptID)
 }
 
 func (g *Gateway) reusableApprovalID(ctx context.Context, toolCtx Context, name, inputHash string) (string, bool) {
@@ -298,6 +322,7 @@ func (g *Gateway) FinalizeToolResult(ctx context.Context, name string, params js
 		provenance = `{"transformed":true}`
 	}
 	_, err := g.store.CompleteToolActionReceipt(ctx, pending.id, agentic.ToolActionReceiptCompletion{
+		ApprovalRequestID:  pending.approvalRequestID,
 		OutputHash:         visibleHash,
 		RawOutputHash:      pending.rawHash,
 		VisibleOutputHash:  visibleHash,

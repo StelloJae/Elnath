@@ -297,14 +297,16 @@ type agenticPolicyInfo struct {
 }
 
 type agenticApprovalInfo struct {
-	ID               int64  `json:"id"`
-	TaskID           int64  `json:"task_id,omitempty"`
-	PolicyDecisionID int64  `json:"policy_decision_id,omitempty"`
-	ToolName         string `json:"tool_name"`
-	Decision         string `json:"decision"`
-	RiskLevel        string `json:"risk_level,omitempty"`
-	Reason           string `json:"reason,omitempty"`
-	DecidedBy        string `json:"decided_by,omitempty"`
+	ID                  int64  `json:"id"`
+	TaskID              int64  `json:"task_id,omitempty"`
+	PolicyDecisionID    int64  `json:"policy_decision_id,omitempty"`
+	ToolName            string `json:"tool_name"`
+	Decision            string `json:"decision"`
+	RiskLevel           string `json:"risk_level,omitempty"`
+	Reason              string `json:"reason,omitempty"`
+	DecidedBy           string `json:"decided_by,omitempty"`
+	ConsumedAt          string `json:"consumed_at,omitempty"`
+	ConsumedByReceiptID int64  `json:"consumed_by_receipt_id,omitempty"`
 }
 
 type agenticReceiptInfo struct {
@@ -1618,22 +1620,28 @@ func (c *agenticCLI) pendingApprovals(ctx context.Context, limit int) (*agenticA
 	if !exists {
 		return view, nil
 	}
-	rows, err := c.db.QueryContext(ctx, `
-		SELECT id, COALESCE(task_id, 0), COALESCE(policy_decision_id, 0), tool_name, decision, risk_level, reason, decided_by
+	consumptionSelect, err := c.approvalConsumptionSelect(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := c.db.QueryContext(ctx, fmt.Sprintf(`
+		SELECT id, COALESCE(task_id, 0), COALESCE(policy_decision_id, 0), tool_name, decision, risk_level, reason, decided_by, %s
 		FROM approval_requests
 		WHERE decision = ?
 		ORDER BY created_at ASC, id ASC
-		LIMIT ?`, string(daemon.ApprovalDecisionPending), limit)
+		LIMIT ?`, consumptionSelect), string(daemon.ApprovalDecisionPending), limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var a agenticApprovalInfo
-		if err := rows.Scan(&a.ID, &a.TaskID, &a.PolicyDecisionID, &a.ToolName, &a.Decision, &a.RiskLevel, &a.Reason, &a.DecidedBy); err != nil {
+		var consumedAt, consumedByReceiptID int64
+		if err := rows.Scan(&a.ID, &a.TaskID, &a.PolicyDecisionID, &a.ToolName, &a.Decision, &a.RiskLevel, &a.Reason, &a.DecidedBy, &consumedAt, &consumedByReceiptID); err != nil {
 			return nil, err
 		}
 		a.Reason = bounded(a.Reason, 120)
+		setApprovalConsumption(&a, consumedAt, consumedByReceiptID)
 		view.Approvals = append(view.Approvals, a)
 	}
 	return view, rows.Err()
@@ -1654,16 +1662,31 @@ func enqueueInfo(decision agentic.TaskEnqueueDecision) *agenticEnqueueInfo {
 }
 
 func approvalInfo(approval daemon.ApprovalRequest) agenticApprovalInfo {
-	return agenticApprovalInfo{
-		ID:               approval.ID,
-		TaskID:           approval.TaskID,
-		PolicyDecisionID: approval.PolicyDecisionID,
-		ToolName:         approval.ToolName,
-		Decision:         string(approval.Decision),
-		RiskLevel:        approval.RiskLevel,
-		Reason:           bounded(approval.Reason, 120),
-		DecidedBy:        approval.DecidedBy,
+	info := agenticApprovalInfo{
+		ID:                  approval.ID,
+		TaskID:              approval.TaskID,
+		PolicyDecisionID:    approval.PolicyDecisionID,
+		ToolName:            approval.ToolName,
+		Decision:            string(approval.Decision),
+		RiskLevel:           approval.RiskLevel,
+		Reason:              bounded(approval.Reason, 120),
+		DecidedBy:           approval.DecidedBy,
+		ConsumedByReceiptID: approval.ConsumedByReceiptID,
 	}
+	if approval.ConsumedAt.Valid {
+		info.ConsumedAt = approval.ConsumedAt.Time.Format(time.RFC3339)
+	}
+	return info
+}
+
+func setApprovalConsumption(info *agenticApprovalInfo, consumedAt, consumedByReceiptID int64) {
+	if info == nil {
+		return
+	}
+	if consumedAt > 0 {
+		info.ConsumedAt = time.UnixMilli(consumedAt).Format(time.RFC3339)
+	}
+	info.ConsumedByReceiptID = consumedByReceiptID
 }
 
 func goalDetailInfo(goal agentic.StandingGoal) agenticGoalDetailInfo {
@@ -1856,10 +1879,14 @@ func (c *agenticCLI) approvals(ctx context.Context, taskID int64, approvalReques
 	if !exists {
 		return nil, nil
 	}
-	query := `
-		SELECT id, COALESCE(task_id, 0), COALESCE(policy_decision_id, 0), tool_name, decision, risk_level, reason, decided_by
+	consumptionSelect, err := c.approvalConsumptionSelect(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query := fmt.Sprintf(`
+		SELECT id, COALESCE(task_id, 0), COALESCE(policy_decision_id, 0), tool_name, decision, risk_level, reason, decided_by, %s
 		FROM approval_requests
-		WHERE task_id = ?`
+		WHERE task_id = ?`, consumptionSelect)
 	args := []any{taskID}
 	if approvalRequestID != "" {
 		query += ` OR id = ?`
@@ -1874,13 +1901,52 @@ func (c *agenticCLI) approvals(ctx context.Context, taskID int64, approvalReques
 	var out []agenticApprovalInfo
 	for rows.Next() {
 		var a agenticApprovalInfo
-		if err := rows.Scan(&a.ID, &a.TaskID, &a.PolicyDecisionID, &a.ToolName, &a.Decision, &a.RiskLevel, &a.Reason, &a.DecidedBy); err != nil {
+		var consumedAt, consumedByReceiptID int64
+		if err := rows.Scan(&a.ID, &a.TaskID, &a.PolicyDecisionID, &a.ToolName, &a.Decision, &a.RiskLevel, &a.Reason, &a.DecidedBy, &consumedAt, &consumedByReceiptID); err != nil {
 			return nil, err
 		}
 		a.Reason = bounded(a.Reason, 120)
+		setApprovalConsumption(&a, consumedAt, consumedByReceiptID)
 		out = append(out, a)
 	}
 	return out, rows.Err()
+}
+
+func (c *agenticCLI) approvalConsumptionSelect(ctx context.Context) (string, error) {
+	hasConsumedAt, err := c.columnExists(ctx, "approval_requests", "consumed_at")
+	if err != nil {
+		return "", err
+	}
+	hasConsumedByReceiptID, err := c.columnExists(ctx, "approval_requests", "consumed_by_receipt_id")
+	if err != nil {
+		return "", err
+	}
+	if !hasConsumedAt || !hasConsumedByReceiptID {
+		return "0, 0", nil
+	}
+	return "consumed_at, consumed_by_receipt_id", nil
+}
+
+func (c *agenticCLI) columnExists(ctx context.Context, table, column string) (bool, error) {
+	rows, err := c.db.QueryContext(ctx, "PRAGMA table_info("+table+")")
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 func (c *agenticCLI) receipts(ctx context.Context, taskID int64) ([]agenticReceiptInfo, error) {
@@ -2119,7 +2185,7 @@ func renderAgenticApprovals(view *agenticApprovalsView) string {
 	}
 	fmt.Fprintln(&b, "  approvals:")
 	for _, approval := range view.Approvals {
-		fmt.Fprintf(&b, "  - #%d %s tool=%s task=%s policy=%s risk=%s reason=%s\n", approval.ID, approval.Decision, approval.ToolName, intOrNone(approval.TaskID), intOrNone(approval.PolicyDecisionID), noneIfEmpty(approval.RiskLevel), noneIfEmpty(approval.Reason))
+		fmt.Fprintf(&b, "  - #%d %s tool=%s task=%s policy=%s risk=%s reason=%s%s\n", approval.ID, approval.Decision, approval.ToolName, intOrNone(approval.TaskID), intOrNone(approval.PolicyDecisionID), noneIfEmpty(approval.RiskLevel), noneIfEmpty(approval.Reason), approvalConsumedSuffix(approval))
 	}
 	return b.String()
 }
@@ -2132,6 +2198,10 @@ func renderAgenticApprovalDecision(view *agenticApprovalDecisionView) string {
 	fmt.Fprintf(&b, "  policy_decision_id: %s\n", intOrNone(view.Approval.PolicyDecisionID))
 	fmt.Fprintf(&b, "  risk: %s\n", noneIfEmpty(view.Approval.RiskLevel))
 	fmt.Fprintf(&b, "  decided_by: %s\n", noneIfEmpty(view.Approval.DecidedBy))
+	if view.Approval.ConsumedByReceiptID != 0 {
+		fmt.Fprintf(&b, "  consumed_by_receipt: #%d\n", view.Approval.ConsumedByReceiptID)
+		fmt.Fprintf(&b, "  consumed_at: %s\n", noneIfEmpty(view.Approval.ConsumedAt))
+	}
 	return b.String()
 }
 
@@ -2199,7 +2269,7 @@ func renderAgenticTask(view *agenticTaskView) string {
 		if view.Policy != nil {
 			policyText = fmt.Sprintf(" (policy #%d %s risk=%s)", view.Policy.ID, view.Policy.Decision, view.Policy.RiskLevel)
 		}
-		fmt.Fprintf(&b, "  approval: #%d %s%s\n", view.Approval.ID, view.Approval.Decision, policyText)
+		fmt.Fprintf(&b, "  approval: #%d %s%s%s\n", view.Approval.ID, view.Approval.Decision, policyText, approvalConsumedSuffix(*view.Approval))
 	} else {
 		fmt.Fprintln(&b, "  approval: none")
 	}
@@ -2286,7 +2356,7 @@ func renderAgenticLineage(view *agenticLineageView) string {
 		fmt.Fprintln(&b, "  none")
 	} else {
 		for _, approval := range view.Approvals {
-			fmt.Fprintf(&b, "  #%d %s tool=%s risk=%s reason=%s\n", approval.ID, approval.Decision, approval.ToolName, noneIfEmpty(approval.RiskLevel), noneIfEmpty(approval.Reason))
+			fmt.Fprintf(&b, "  #%d %s tool=%s risk=%s reason=%s%s\n", approval.ID, approval.Decision, approval.ToolName, noneIfEmpty(approval.RiskLevel), noneIfEmpty(approval.Reason), approvalConsumedSuffix(approval))
 		}
 	}
 	fmt.Fprintln(&b, "\nReceipts")
@@ -2383,7 +2453,22 @@ func renderAgenticEvidence(view *agenticEvidenceView) string {
 	} else {
 		fmt.Fprintf(&b, "  latest_followup: #%d %s due=%t\n", view.LatestFollowup.ID, view.LatestFollowup.Status, view.LatestFollowup.Due)
 	}
+	if view.LatestApproval == nil {
+		fmt.Fprintln(&b, "  latest_approval: none")
+	} else {
+		fmt.Fprintf(&b, "  latest_approval: #%d %s%s\n", view.LatestApproval.ID, view.LatestApproval.Decision, approvalConsumedSuffix(*view.LatestApproval))
+	}
 	return b.String()
+}
+
+func approvalConsumedSuffix(approval agenticApprovalInfo) string {
+	if approval.ConsumedByReceiptID == 0 {
+		return ""
+	}
+	if approval.ConsumedAt == "" {
+		return fmt.Sprintf(" consumed_by_receipt=#%d", approval.ConsumedByReceiptID)
+	}
+	return fmt.Sprintf(" consumed_by_receipt=#%d consumed_at=%s", approval.ConsumedByReceiptID, approval.ConsumedAt)
 }
 
 func formatCounts(counts map[string]int) string {
