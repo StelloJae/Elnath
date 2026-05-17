@@ -1138,6 +1138,10 @@ func extractToolPreview(toolName, input string) string {
 		if v, ok := fields["subcommand"].(string); ok {
 			preview = v
 		}
+	case "process_monitor", "process_stop":
+		preview = processToolPreview(fields, false)
+	case "process_wait":
+		preview = processToolPreview(fields, true)
 	default:
 		for _, key := range []string{"file_path", "path", "command", "query", "pattern", "url", "name", "subcommand"} {
 			if v, ok := fields[key].(string); ok && v != "" {
@@ -1150,6 +1154,37 @@ func extractToolPreview(toolName, input string) string {
 		preview = string([]rune(preview)[:37]) + "..."
 	}
 	return preview
+}
+
+func processToolPreview(fields map[string]interface{}, includeWait bool) string {
+	parts := make([]string, 0, 3)
+	if id, ok := previewNumberField(fields, "process_id"); ok {
+		parts = append(parts, "process_id="+id)
+	}
+	if includeWait {
+		if wait, ok := previewNumberField(fields, "wait_ms"); ok {
+			parts = append(parts, "wait_ms="+wait)
+		}
+		if watch, ok := fields["watch_text"].(string); ok && strings.TrimSpace(watch) != "" {
+			parts = append(parts, "watch="+strings.TrimSpace(watch))
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+func previewNumberField(fields map[string]interface{}, key string) (string, bool) {
+	switch v := fields[key].(type) {
+	case float64:
+		if v == float64(int64(v)) {
+			return fmt.Sprintf("%.0f", v), true
+		}
+		return fmt.Sprintf("%g", v), true
+	case string:
+		v = strings.TrimSpace(v)
+		return v, v != ""
+	default:
+		return "", false
+	}
 }
 
 // isAckOnly returns true when the model only states intent without executing.
