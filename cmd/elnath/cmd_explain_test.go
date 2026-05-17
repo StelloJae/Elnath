@@ -416,6 +416,103 @@ func TestExplainControlSurfacesText(t *testing.T) {
 	}
 }
 
+func TestCmdExplainCodeIntelligenceJSONRunsGoDiagnostics(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "valid.go"), []byte("package demo\n\nfunc OK() {}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(valid.go): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "broken.go"), []byte("package demo\n\nfunc Broken( {\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(broken.go): %v", err)
+	}
+	t.Chdir(root)
+
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdExplain(context.Background(), []string{"code-intelligence", "--json", "--path", "."}); err != nil {
+			t.Fatalf("cmdExplain(code-intelligence --json): %v", err)
+		}
+	})
+
+	var out struct {
+		ProductBoundary string `json:"product_boundary"`
+		GoDiagnostics   struct {
+			Status string `json:"status"`
+			Path   string `json:"path"`
+			Count  int    `json:"count"`
+			Errors []struct {
+				FilePath string `json:"file_path"`
+				Error    string `json:"error"`
+				Source   string `json:"source"`
+			} `json:"errors"`
+		} `json:"go_diagnostics"`
+		Receipt struct {
+			Tool               string `json:"tool"`
+			Action             string `json:"action"`
+			ReadOnly           bool   `json:"read_only"`
+			DiagnosticsChecked bool   `json:"diagnostics_checked"`
+			Status             string `json:"status"`
+			Count              int    `json:"count"`
+		} `json:"receipt"`
+		RepairHints []struct {
+			FilePath       string   `json:"file_path"`
+			Line           int      `json:"line"`
+			Column         int      `json:"column"`
+			SuggestedTools []string `json:"suggested_tools"`
+		} `json:"repair_hints"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &out); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout)
+	}
+	if !strings.Contains(out.ProductBoundary, "full multi-language LSP lifecycle") {
+		t.Fatalf("product_boundary = %q, want LSP boundary", out.ProductBoundary)
+	}
+	if out.GoDiagnostics.Status != "diagnostics_found" || out.GoDiagnostics.Count == 0 {
+		t.Fatalf("go_diagnostics = %+v, want diagnostics_found", out.GoDiagnostics)
+	}
+	if out.GoDiagnostics.Path != "." {
+		t.Fatalf("go_diagnostics.path = %q, want .", out.GoDiagnostics.Path)
+	}
+	if len(out.GoDiagnostics.Errors) == 0 || out.GoDiagnostics.Errors[0].FilePath != "broken.go" || out.GoDiagnostics.Errors[0].Source != "go/parser" {
+		t.Fatalf("diagnostic errors = %+v, want broken.go parser error", out.GoDiagnostics.Errors)
+	}
+	if out.Receipt.Tool != "explain_code_intelligence" || out.Receipt.Action != "status" || !out.Receipt.ReadOnly || !out.Receipt.DiagnosticsChecked || out.Receipt.Status != "diagnostics_found" || out.Receipt.Count == 0 {
+		t.Fatalf("receipt = %+v, want read-only checked diagnostics receipt", out.Receipt)
+	}
+	if len(out.RepairHints) == 0 || out.RepairHints[0].FilePath != "broken.go" || out.RepairHints[0].Line == 0 || out.RepairHints[0].Column == 0 {
+		t.Fatalf("repair_hints = %+v, want broken.go located hint", out.RepairHints)
+	}
+	for _, want := range []string{"read_file", "edit_file", "code_symbols diagnostics_delta"} {
+		if !stringSliceContainsSubstring(out.RepairHints[0].SuggestedTools, want) {
+			t.Fatalf("repair hint tools = %+v, missing %q", out.RepairHints[0].SuggestedTools, want)
+		}
+	}
+}
+
+func TestExplainCodeIntelligenceText(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "valid.go"), []byte("package demo\n\nfunc OK() {}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(valid.go): %v", err)
+	}
+	t.Chdir(root)
+
+	stdout, _ := captureOutput(t, func() {
+		if err := explainCodeIntelligence([]string{"--path", "."}); err != nil {
+			t.Fatalf("explainCodeIntelligence: %v", err)
+		}
+	})
+
+	for _, want := range []string{
+		"Code intelligence:",
+		"boundary: full multi-language LSP lifecycle",
+		"replacement: code_symbols diagnostics/diagnostics_delta",
+		"Go diagnostics: success count=0 path=.",
+		"Diagnostic adapters:",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout missing %q:\n%s", want, stdout)
+		}
+	}
+}
+
 func TestExplainPendingQuestionsJSON(t *testing.T) {
 	store := learning.NewOutcomeStore(filepath.Join(t.TempDir(), "outcomes.jsonl"))
 	askedAt := time.Date(2026, 5, 13, 7, 0, 0, 0, time.UTC)

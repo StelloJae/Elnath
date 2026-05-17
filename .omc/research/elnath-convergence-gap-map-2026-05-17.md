@@ -2095,3 +2095,53 @@ Batch status:
 - No baseline/comparison was run.
 - Product/runtime completion moved forward through runtime visibility,
   skill-curator operator surfacing, and terminal user-input UX.
+
+## Code Intelligence Status CLI Milestone Update
+
+Date: 2026-05-18 KST
+
+Branch:
+
+- `codex/code-intelligence-status`
+
+Artifact:
+
+- `.omc/research/code-intelligence-status-cli-2026-05-18.md`
+
+What changed:
+
+- Added `elnath explain code-intelligence`.
+- Added `--json`, `--path`, and `--max-results` flags.
+- The command exposes the code-intelligence product boundary, replacement path,
+  diagnostic adapters, and live Go diagnostics from the existing `code_symbols`
+  diagnostic implementation.
+- When diagnostics are present, the command surfaces top repair hints with
+  suggested model-callable tools and a bounded stop condition.
+- The command includes a read-only receipt proving diagnostics were checked.
+
+Reference impact:
+
+- Moves Elnath closer to Hermes-style inspectable LSP/code-intelligence status
+  while preserving Elnath's current product boundary.
+- Moves Elnath closer to Claude Code's diagnostic-channel discipline by making
+  diagnostics visible as a separate status/receipt surface.
+- Does not claim full multi-language LSP parity, IDE-grade diagnostic parity, or
+  benchmark impact.
+
+Verification:
+
+- `go test ./cmd/elnath -run 'TestCmdExplainCodeIntelligenceJSONRunsGoDiagnostics|TestExplainCodeIntelligenceText' -count=1`
+  passed.
+- `go test ./cmd/elnath -run 'Test(CmdExplainCodeIntelligenceJSONRunsGoDiagnostics|ExplainCodeIntelligenceText|ExplainControlSurfaces|ControlSurfaceManifestMatchesToolSearchRouting)' -count=1`
+  passed.
+- `go run ./cmd/elnath explain code-intelligence --json --path cmd/elnath --max-results 5`
+  passed and returned `go_diagnostics.status=success`, `count=0`, and a
+  read-only `explain_code_intelligence` receipt.
+
+Remaining code-intelligence gaps:
+
+- No full multi-language LSP lifecycle.
+- Non-Go diagnostics remain syntax adapter policies, not always-on semantic
+  language-server diagnostics.
+- Diagnostic repair hints are operator-facing in this slice; actual runtime
+  retry receipts do not yet carry a dedicated repair hint list.
