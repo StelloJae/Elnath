@@ -16,6 +16,7 @@ import (
 	"github.com/stello/elnath/internal/agent"
 	"github.com/stello/elnath/internal/agent/reflection"
 	"github.com/stello/elnath/internal/agentic"
+	agenticactivation "github.com/stello/elnath/internal/agentic/activation"
 	agenticcompletion "github.com/stello/elnath/internal/agentic/completion"
 	agenticruntime "github.com/stello/elnath/internal/agentic/runtime"
 	agenticsignals "github.com/stello/elnath/internal/agentic/signals"
@@ -186,6 +187,17 @@ func cmdDaemonStart(ctx context.Context) error {
 
 	agenticStore := agentic.NewStore(db.Main)
 	signalBridge := agenticsignals.NewBridge(agenticStore)
+	if cfg.Agentic.Activation.Enabled {
+		interval := time.Duration(cfg.Agentic.Activation.IntervalSeconds) * time.Second
+		limit := cfg.Agentic.Activation.Limit
+		go agenticactivation.RunLoop(ctx, agenticactivation.NewService(agenticStore), agenticactivation.LoopOptions{
+			Interval:   interval,
+			Limit:      limit,
+			RunOnStart: cfg.Agentic.Activation.RunOnStart,
+			Logger:     app.Logger.With("component", "agentic-activation"),
+		})
+		app.Logger.Info("agentic activation loop active", "interval_seconds", cfg.Agentic.Activation.IntervalSeconds, "limit", limit, "run_on_start", cfg.Agentic.Activation.RunOnStart)
+	}
 
 	d := daemon.New(queue, cfg.Daemon.SocketPath, cfg.Daemon.MaxWorkers, rt.newDaemonTaskRunner(), app.Logger)
 	rt.bindRunningTaskCanceller(d)

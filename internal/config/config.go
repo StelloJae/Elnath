@@ -173,6 +173,7 @@ const (
 type AgenticConfig struct {
 	Enforcement    AgenticEnforcementConfig    `yaml:"enforcement"`
 	CompletionGate AgenticCompletionGateConfig `yaml:"completion_gate"`
+	Activation     AgenticActivationConfig     `yaml:"activation"`
 }
 
 type AgenticEnforcementConfig struct {
@@ -181,6 +182,13 @@ type AgenticEnforcementConfig struct {
 
 type AgenticCompletionGateConfig struct {
 	Mode string `yaml:"mode"`
+}
+
+type AgenticActivationConfig struct {
+	Enabled         bool `yaml:"enabled"`
+	IntervalSeconds int  `yaml:"interval_seconds"`
+	Limit           int  `yaml:"limit"`
+	RunOnStart      bool `yaml:"run_on_start"`
 }
 
 type TelegramConfig struct {
@@ -500,6 +508,14 @@ func validate(cfg *Config) error {
 	case "", AgenticCompletionGateModeObserve, AgenticCompletionGateModeVerification:
 	default:
 		return fmt.Errorf("unsupported agentic.completion_gate.mode: %q (supported: observe, verification)", cfg.Agentic.CompletionGate.Mode)
+	}
+	if cfg.Agentic.Activation.Enabled {
+		if cfg.Agentic.Activation.IntervalSeconds < 0 {
+			return fmt.Errorf("agentic.activation.interval_seconds must be >= 0")
+		}
+		if cfg.Agentic.Activation.Limit < 0 {
+			return fmt.Errorf("agentic.activation.limit must be >= 0")
+		}
 	}
 
 	return nil
