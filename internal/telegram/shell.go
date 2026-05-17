@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/stello/elnath/internal/agent"
 	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/daemon"
 	"github.com/stello/elnath/internal/identity"
@@ -103,6 +104,10 @@ func WithWorkDir(workDir string) ShellOption {
 	return func(s *Shell) { s.workDir = strings.TrimSpace(workDir) }
 }
 
+func WithShellDataDir(dataDir string) ShellOption {
+	return func(s *Shell) { s.dataDir = strings.TrimSpace(dataDir) }
+}
+
 func WithChatSessionBinder(binder *ChatSessionBinder) ShellOption {
 	return func(s *Shell) { s.binder = binder }
 }
@@ -150,6 +155,7 @@ type Shell struct {
 	classifyProvider   llm.Provider
 	taskTracker        TaskTracker
 	workDir            string
+	dataDir            string
 	binder             *ChatSessionBinder
 	historyLoader      ChatHistoryLoader
 	skillReg           *skill.Registry
@@ -457,6 +463,8 @@ func (s *Shell) handleCommand(ctx context.Context, text string, principal identi
 		return s.resolveApproval(ctx, fields, false, principal)
 	case "/followup", "/resume":
 		return s.enqueueFollowUp(ctx, text, principal, userMsgID)
+	case "/handoff":
+		return s.handleHandoff(ctx, fields, principal)
 	case "/submit":
 		return s.enqueueNewTask(ctx, text, principal)
 	case "/questions", "/pending-questions":
@@ -568,6 +576,7 @@ func (s *Shell) handleCommand(ctx context.Context, text string, principal identi
 			"• <code>/questions</code> — pending user questions\n" +
 			"• <code>/answer &lt;sid&gt; &lt;rid&gt; &lt;text&gt;</code> — answer pending question\n" +
 			"• <code>/cancel-question &lt;sid&gt; &lt;rid&gt; [reason]</code> — cancel pending question\n" +
+			"• <code>/handoff &lt;task&gt; [state] [reason]</code> — session handoff recap/state\n" +
 			"• <code>/skill-list</code> — registered skills\n" +
 			"• <code>/skill-create</code> — create draft skill\n" +
 			"• <code>/followup &lt;sid&gt; &lt;msg&gt;</code> — follow-up\n" +
@@ -655,6 +664,147 @@ func (s *Shell) handleSkillCreate(name string) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("Created draft skill /%s. Edit the wiki entry to finish it.", name), nil
+}
+
+func (s *Shell) handleHandoff(ctx context.Context, fields []string, principal identity.Principal) (string, error) {
+	if strings.TrimSpace(s.dataDir) == "" {
+		return "Handoff unavailable: data dir is not configured.", nil
+	}
+	if len(fields) < 2 {
+		return "Usage: /handoff <task_id> [requested|claimed|running|completed|failed] [reason]", nil
+	}
+	taskID, err := strconv.ParseInt(fields[1], 10, 64)
+	if err != nil || taskID <= 0 {
+		return "Usage: /handoff <task_id> [requested|claimed|running|completed|failed] [reason]", nil
+	}
+	if len(fields) >= 3 {
+		state := strings.TrimSpace(fields[2])
+		reason := strings.TrimSpace(strings.Join(fields[3:], " "))
+		if state == "request" {
+			state = "requested"
+		}
+		if err := s.recordHandoffState(ctx, taskID, state, reason, principal); err != nil {
+			return "", err
+		}
+	}
+	return s.renderTaskHandoff(ctx, taskID)
+}
+
+func (s *Shell) recordHandoffState(ctx context.Context, taskID int64, state, reason string, principal identity.Principal) error {
+	sessionID, err := s.taskSessionID(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	sess, err := agent.LoadSession(s.dataDir, sessionID)
+	if err != nil {
+		return fmt.Errorf("telegram handoff: load session %s: %w", sessionID, err)
+	}
+	return sess.RecordHandoff(state, "telegram", principal, reason)
+}
+
+func (s *Shell) renderTaskHandoff(ctx context.Context, taskID int64) (string, error) {
+	task, err := s.queue.Get(ctx, taskID)
+	if err != nil {
+		return "", err
+	}
+	sessionID := strings.TrimSpace(task.SessionID)
+	if task.Completion != nil && strings.TrimSpace(task.Completion.SessionID) != "" {
+		sessionID = strings.TrimSpace(task.Completion.SessionID)
+	}
+	if sessionID == "" {
+		return fmt.Sprintf("Task #%d has no session bound.", taskID), nil
+	}
+	sess, err := agent.LoadSession(s.dataDir, sessionID)
+	if err != nil {
+		return "", fmt.Errorf("telegram handoff: load session %s: %w", sessionID, err)
+	}
+	handoff, err := agent.LoadSessionHandoffStatus(s.dataDir, sessionID)
+	if err != nil {
+		return "", fmt.Errorf("telegram handoff: load handoff status %s: %w", sessionID, err)
+	}
+	messages := sess.SnapshotMessages()
+	lines := []string{
+		fmt.Sprintf("🔁 <b>Task handoff</b> <code>#%d</code>", task.ID),
+		fmt.Sprintf("Status: <code>%s</code>", escapeHTML(string(task.Status))),
+		fmt.Sprintf("Session: <code>%s</code>", escapeHTML(truncateSessionID(sessionID))),
+		fmt.Sprintf("Resume: <code>elnath task resume %d</code>", task.ID),
+	}
+	if task.Summary != "" {
+		lines = append(lines, "Summary: "+escapeHTML(truncateTelegramText(strings.TrimSpace(task.Summary), 160)))
+	}
+	if handoff != nil {
+		stateLine := fmt.Sprintf("Handoff: <code>%s</code>", escapeHTML(handoff.State))
+		if handoff.Surface != "" {
+			stateLine += " via <code>" + escapeHTML(handoff.Surface) + "</code>"
+		}
+		if handoff.Reason != "" {
+			stateLine += " — " + escapeHTML(truncateTelegramText(handoff.Reason, 120))
+		}
+		lines = append(lines, stateLine)
+	}
+	tail := telegramHandoffMessages(messages, 3)
+	if len(tail) > 0 {
+		lines = append(lines, "Last messages:")
+		lines = append(lines, tail...)
+	}
+	return strings.Join(lines, "\n"), nil
+}
+
+func (s *Shell) taskSessionID(ctx context.Context, taskID int64) (string, error) {
+	task, err := s.queue.Get(ctx, taskID)
+	if err != nil {
+		return "", err
+	}
+	sessionID := strings.TrimSpace(task.SessionID)
+	if task.Completion != nil && strings.TrimSpace(task.Completion.SessionID) != "" {
+		sessionID = strings.TrimSpace(task.Completion.SessionID)
+	}
+	if sessionID == "" {
+		return "", fmt.Errorf("telegram handoff: task %d has no session bound", taskID)
+	}
+	return sessionID, nil
+}
+
+func telegramHandoffMessages(messages []llm.Message, limit int) []string {
+	if limit <= 0 {
+		return nil
+	}
+	start := len(messages) - limit
+	if start < 0 {
+		start = 0
+	}
+	out := make([]string, 0, len(messages)-start)
+	for _, msg := range messages[start:] {
+		text := truncateTelegramText(strings.TrimSpace(msg.TextContent()), 180)
+		if text == "" {
+			continue
+		}
+		out = append(out, fmt.Sprintf("• <code>%s</code>: %s", escapeHTML(msg.Role), escapeHTML(text)))
+	}
+	return out
+}
+
+func truncateTelegramText(value string, max int) string {
+	value = strings.TrimSpace(value)
+	if value == "" || max <= 0 {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= max {
+		return value
+	}
+	if max <= 3 {
+		return string(runes[:max])
+	}
+	return string(runes[:max-3]) + "..."
+}
+
+func truncateSessionID(sessionID string) string {
+	sessionID = strings.TrimSpace(sessionID)
+	if len(sessionID) <= 8 {
+		return sessionID
+	}
+	return sessionID[:8]
 }
 
 func (s *Shell) renderPendingQuestions(principal identity.Principal) (string, error) {

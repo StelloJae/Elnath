@@ -11,6 +11,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"github.com/stello/elnath/internal/agent"
 	"github.com/stello/elnath/internal/conversation"
 	"github.com/stello/elnath/internal/daemon"
 	"github.com/stello/elnath/internal/identity"
@@ -140,6 +141,38 @@ func newTestShellWithOptions(t *testing.T, skillReg *skill.Registry, opts ...She
 		t.Fatalf("NewShell: %v", err)
 	}
 	return shell, queue, approvals, bot
+}
+
+func seedTelegramHandoffTask(t *testing.T, dataDir string, queue *daemon.Queue) (*agent.Session, int64) {
+	t.Helper()
+	sess, err := agent.NewSession(dataDir, identity.Principal{UserID: "77", ProjectID: "elnath", Surface: "telegram"})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if err := sess.AppendMessages([]llm.Message{
+		llm.NewUserMessage("finish runtime polish"),
+		llm.NewAssistantMessage("recap ready"),
+	}); err != nil {
+		t.Fatalf("AppendMessages: %v", err)
+	}
+	id, _, err := queue.Enqueue(context.Background(), "handoff task", "")
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	task, err := queue.Next(context.Background())
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if task == nil || task.ID != id {
+		t.Fatalf("task = %+v, want %d", task, id)
+	}
+	if err := queue.BindSession(context.Background(), id, sess.ID); err != nil {
+		t.Fatalf("BindSession: %v", err)
+	}
+	if err := queue.MarkDone(context.Background(), id, "done", "runtime polish done"); err != nil {
+		t.Fatalf("MarkDone: %v", err)
+	}
+	return sess, id
 }
 
 func newShellBinder(t *testing.T) (*ChatSessionBinder, *stubSessionValidator) {
@@ -720,6 +753,58 @@ func TestShellQuestionChoiceCallbackEnqueuesAnswer(t *testing.T) {
 	}
 	if len(bot.sent) != 1 || !strings.Contains(bot.sent[0].text, "Answer queued") {
 		t.Fatalf("reply = %+v, want answer queued", bot.sent)
+	}
+}
+
+func TestShellHandoffCommandRendersTaskRecap(t *testing.T) {
+	dataDir := t.TempDir()
+	shell, queue, _, bot := newTestShellWithOptions(t, nil, WithShellDataDir(dataDir))
+	sess, taskID := seedTelegramHandoffTask(t, dataDir, queue)
+
+	if err := shell.HandleUpdate(context.Background(), Update{
+		ID:      1,
+		Message: Message{ChatID: "chat-1", UserID: "77", MessageID: 11, Text: fmt.Sprintf("/handoff %d", taskID)},
+	}); err != nil {
+		t.Fatalf("HandleUpdate: %v", err)
+	}
+
+	if len(bot.sent) != 1 {
+		t.Fatalf("sent = %+v, want one handoff reply", bot.sent)
+	}
+	for _, want := range []string{
+		"Task handoff",
+		fmt.Sprintf("#%d", taskID),
+		sess.ID[:8],
+		"finish runtime polish",
+		"recap ready",
+	} {
+		if !strings.Contains(bot.sent[0].text, want) {
+			t.Fatalf("handoff reply = %q, want %q", bot.sent[0].text, want)
+		}
+	}
+}
+
+func TestShellHandoffCommandRecordsLifecycleState(t *testing.T) {
+	dataDir := t.TempDir()
+	shell, queue, _, bot := newTestShellWithOptions(t, nil, WithShellDataDir(dataDir))
+	sess, taskID := seedTelegramHandoffTask(t, dataDir, queue)
+
+	if err := shell.HandleUpdate(context.Background(), Update{
+		ID:      1,
+		Message: Message{ChatID: "chat-1", UserID: "77", MessageID: 11, Text: fmt.Sprintf("/handoff %d claimed taking over from phone", taskID)},
+	}); err != nil {
+		t.Fatalf("HandleUpdate: %v", err)
+	}
+
+	status, err := agent.LoadSessionHandoffStatus(dataDir, sess.ID)
+	if err != nil {
+		t.Fatalf("LoadSessionHandoffStatus: %v", err)
+	}
+	if status == nil || status.State != "claimed" || status.Surface != "telegram" || status.Principal.UserID != "77" || status.Reason != "taking over from phone" {
+		t.Fatalf("handoff status = %+v, want claimed telegram user 77", status)
+	}
+	if len(bot.sent) != 1 || !strings.Contains(bot.sent[0].text, "claimed") {
+		t.Fatalf("reply = %+v, want claimed handoff reply", bot.sent)
 	}
 }
 
