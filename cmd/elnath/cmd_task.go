@@ -39,6 +39,8 @@ func cmdTask(ctx context.Context, args []string) error {
 		return cmdTaskCancelQuestion(ctx, args[1:])
 	case "handoff":
 		return cmdTaskHandoff(ctx, args[1:])
+	case "handoffs":
+		return cmdTaskHandoffs(ctx, args[1:])
 	case "resume":
 		return cmdTaskResume(ctx, args[1:])
 	default:
@@ -58,6 +60,7 @@ Subcommands:
   answer             Answer a pending user-input request and enqueue resume
   cancel-question    Cancel a pending user-input request
   handoff <id>        Generate a session resume handoff recap for a task
+  handoffs            List pending session handoff requests
   resume <id>        Resume the session created by a task`
 }
 

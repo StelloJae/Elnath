@@ -1724,3 +1724,57 @@ Remaining handoff/gateway gaps:
 - No distributed atomic gateway claim lock.
 - No remote claimant authentication.
 - No live runtime migration.
+
+## Post-Task-Pending-Handoffs-Surfaces Local Update
+
+Date: 2026-05-17 KST
+
+Branch:
+
+- `codex/handoff-pending`
+
+Artifact:
+
+- `.omc/research/task-pending-handoffs-cli-2026-05-17.md`
+
+What changed:
+
+- Added `elnath task handoffs`.
+- Added `elnath task handoffs --json`.
+- Added Telegram `/handoffs`.
+- Pending handoff list includes only latest handoff state `requested`.
+- Claimed/running/completed/failed handoffs are excluded.
+- Each pending row includes the operator claim command:
+  `elnath task handoff <id> --state claimed --surface cli`.
+- Telegram pending rows include `/handoff <id> claimed`.
+
+Reference impact:
+
+- Moves Gap 5 / Gap 8 closer to Hermes-style `list_pending_handoffs` flow.
+- Gives Elnath CLI and Telegram operators a discover -> claim path instead of
+  requiring the task ID to already be known.
+- Does not claim distributed atomic gateway claim, remote claimant auth, live
+  runtime migration, or full Hermes parity.
+
+Verification:
+
+- `go test ./cmd/elnath -run 'TestCmdTaskHandoffsWithQueue' -count=1`
+  failed before implementation because `cmdTaskHandoffsWithQueue` did not
+  exist.
+- `go test ./cmd/elnath -run 'TestCmdTaskHandoffsWithQueue' -count=1`
+  passed.
+- `go test ./internal/telegram -run TestShellHandoffsCommandListsPendingOnly -count=1`
+  passed.
+- `go test ./cmd/elnath ./internal/agent -run 'TestCmdTaskHandoff|TestCmdTaskHandoffs|TestRecordHandoff' -count=1`
+  passed.
+- `go test ./cmd/elnath ./internal/telegram ./internal/agent ./internal/daemon -count=1`
+  passed.
+- `go vet ./...` passed.
+- `git diff --check` passed.
+
+Remaining handoff/gateway gaps:
+
+- No distributed atomic gateway claim lock.
+- No remote claimant authentication.
+- No automatic gateway watcher loop.
+- No live runtime migration.

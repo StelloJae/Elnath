@@ -717,6 +717,73 @@ func TestCmdTaskHandoffWithQueueSaveWritesMarkdown(t *testing.T) {
 	}
 }
 
+func TestCmdTaskHandoffsWithQueueListsPendingOnly(t *testing.T) {
+	ctx := context.Background()
+	queue := newCmdTaskTestQueue(t)
+	dataDir := t.TempDir()
+
+	pendingSess, pendingID := seedTaskHandoffFixture(t, ctx, queue, dataDir)
+	if err := pendingSess.RecordHandoff("requested", "telegram", identity.Principal{}, "phone takeover"); err != nil {
+		t.Fatalf("RecordHandoff(pending): %v", err)
+	}
+	runningSess, runningID := seedTaskHandoffFixture(t, ctx, queue, dataDir)
+	if err := runningSess.RecordHandoff("requested", "telegram", identity.Principal{}, "already claimed"); err != nil {
+		t.Fatalf("RecordHandoff(running requested): %v", err)
+	}
+	if err := runningSess.RecordHandoff("running", "telegram", identity.Principal{}, "claimed"); err != nil {
+		t.Fatalf("RecordHandoff(running): %v", err)
+	}
+
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdTaskHandoffsWithQueue(ctx, queue, dataDir, nil); err != nil {
+			t.Fatalf("cmdTaskHandoffsWithQueue: %v", err)
+		}
+	})
+	for _, want := range []string{
+		"Pending handoffs",
+		fmt.Sprintf("#%d", pendingID),
+		pendingSess.ID[:8],
+		"telegram",
+		"phone takeover",
+		fmt.Sprintf("claim=elnath task handoff %d --state claimed --surface cli", pendingID),
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout = %q, want %q", stdout, want)
+		}
+	}
+	if strings.Contains(stdout, fmt.Sprintf("#%d", runningID)) {
+		t.Fatalf("stdout = %q, want running handoff excluded", stdout)
+	}
+}
+
+func TestCmdTaskHandoffsWithQueueJSON(t *testing.T) {
+	ctx := context.Background()
+	queue := newCmdTaskTestQueue(t)
+	dataDir := t.TempDir()
+	sess, taskID := seedTaskHandoffFixture(t, ctx, queue, dataDir)
+	if err := sess.RecordHandoff("requested", "telegram", identity.Principal{}, "handoff requested"); err != nil {
+		t.Fatalf("RecordHandoff: %v", err)
+	}
+
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdTaskHandoffsWithQueue(ctx, queue, dataDir, []string{"--json"}); err != nil {
+			t.Fatalf("cmdTaskHandoffsWithQueue: %v", err)
+		}
+	})
+	for _, want := range []string{
+		`"pending": [`,
+		`"task_id": ` + fmt.Sprint(taskID),
+		`"session_id": "` + sess.ID + `"`,
+		`"claim_command": "elnath task handoff ` + fmt.Sprint(taskID) + ` --state claimed --surface cli"`,
+		`"state": "requested"`,
+		`"surface": "telegram"`,
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout = %q, want %q", stdout, want)
+		}
+	}
+}
+
 func seedTaskHandoffFixture(t *testing.T, ctx context.Context, queue *daemon.Queue, dataDir string) (*agent.Session, int64) {
 	t.Helper()
 	sess, err := agent.NewSession(dataDir, identity.Principal{UserID: "tg-77", ProjectID: "elnath", Surface: "telegram"})
