@@ -2062,3 +2062,36 @@ Remaining user-input UX gaps:
 - Interactive prompt is simple stdin/stdout, not a full TUI modal.
 - Multi-select questions remain outside scope.
 - No fuzzy search/filtering for many pending questions.
+
+## Runtime / Operator UX Batch Readiness Update
+
+Date: 2026-05-18 KST
+
+Branch:
+
+- `codex/runtime-progress-status`
+
+Artifact:
+
+- `.omc/research/runtime-operator-ux-batch-readiness-2026-05-18.md`
+
+Batch commits:
+
+- `9aa818d` `feat(runtime): surface runtime progress phases`
+- `6d6ba9d` `feat(skill): expose curator schedule status`
+- `d3e40b8` `feat(task): add interactive question answers`
+
+Branch-level verification:
+
+- `go test ./cmd/elnath ./internal/event ./internal/daemon ./internal/skill ./internal/scheduler -count=1`
+  passed.
+- `go vet ./...` passed.
+- `git diff --check` passed.
+
+Batch status:
+
+- PR-sized and locally verified.
+- No benchmark lane was run.
+- No baseline/comparison was run.
+- Product/runtime completion moved forward through runtime visibility,
+  skill-curator operator surfacing, and terminal user-input UX.
