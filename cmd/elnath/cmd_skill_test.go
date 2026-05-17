@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stello/elnath/internal/skill"
 	"github.com/stello/elnath/internal/wiki"
@@ -480,6 +481,142 @@ func TestCmdSkillCreateDeleteEditAndStats(t *testing.T) {
 	}
 	if _, err := store.Read("skills/deploy-check.md"); err == nil {
 		t.Fatal("Read(deleted skill) error = nil, want not found")
+	}
+}
+
+func TestCmdSkillProposalsListShowAndApply(t *testing.T) {
+	cfgPath, dataDir, wikiDir := writeSkillTestConfig(t)
+	withArgs(t, []string{"elnath", "--config", cfgPath})
+	writeSkillPage(t, wikiDir, &wiki.Page{
+		Path:    "skills/review-pr.md",
+		Title:   "Review PR",
+		Type:    wiki.PageTypeAnalysis,
+		Tags:    []string{"skill"},
+		Content: "Review pull requests.",
+		Extra: map[string]any{
+			"name":   "review-pr",
+			"status": "active",
+			"source": "user",
+		},
+	})
+	tracker := skill.NewTracker(dataDir)
+	proposalPath, err := tracker.WriteImprovementProposal(skill.ImprovementProposal{
+		SkillName:       "review-pr",
+		SessionID:       "sess-1",
+		Reason:          "User corrected review ordering.",
+		Evidence:        []string{"findings should come first"},
+		SuggestedChange: "Start with findings before summary.",
+		CreatedAt:       time.Date(2026, 5, 17, 4, 5, 6, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("WriteImprovementProposal() error = %v", err)
+	}
+	fileName := filepath.Base(proposalPath)
+
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdSkill(context.Background(), []string{"proposals", "list"}); err != nil {
+			t.Fatalf("cmdSkill(proposals list) error = %v", err)
+		}
+	})
+	if !strings.Contains(stdout, fileName) || !strings.Contains(stdout, "/review-pr") || !strings.Contains(stdout, "User corrected review ordering.") {
+		t.Fatalf("stdout = %q, want proposal row", stdout)
+	}
+
+	stdout, _ = captureOutput(t, func() {
+		if err := cmdSkill(context.Background(), []string{"proposals", "list", "--json"}); err != nil {
+			t.Fatalf("cmdSkill(proposals list --json) error = %v", err)
+		}
+	})
+	var listed struct {
+		Proposals []struct {
+			FileName        string `json:"file_name"`
+			SkillName       string `json:"skill_name"`
+			SessionID       string `json:"session_id"`
+			Reason          string `json:"reason"`
+			SuggestedChange string `json:"suggested_change"`
+			CreatedAt       string `json:"created_at"`
+		} `json:"proposals"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &listed); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout)
+	}
+	if len(listed.Proposals) != 1 || listed.Proposals[0].FileName != fileName || listed.Proposals[0].SkillName != "review-pr" || listed.Proposals[0].SessionID != "sess-1" {
+		t.Fatalf("listed proposals = %+v", listed.Proposals)
+	}
+
+	stdout, _ = captureOutput(t, func() {
+		if err := cmdSkill(context.Background(), []string{"proposals", "show", fileName}); err != nil {
+			t.Fatalf("cmdSkill(proposals show) error = %v", err)
+		}
+	})
+	if !strings.Contains(stdout, "Skill:            /review-pr") || !strings.Contains(stdout, "findings should come first") || !strings.Contains(stdout, "Start with findings before summary.") {
+		t.Fatalf("stdout = %q, want proposal detail", stdout)
+	}
+
+	stdout, _ = captureOutput(t, func() {
+		if err := cmdSkill(context.Background(), []string{"proposals", "apply", fileName, "--yes"}); err != nil {
+			t.Fatalf("cmdSkill(proposals apply --yes) error = %v", err)
+		}
+	})
+	if !strings.Contains(stdout, "Applied proposal "+fileName+" to /review-pr") {
+		t.Fatalf("stdout = %q, want applied confirmation", stdout)
+	}
+	store, err := wiki.NewStore(wikiDir)
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	page, err := store.Read("skills/review-pr.md")
+	if err != nil {
+		t.Fatalf("Read(updated skill) error = %v", err)
+	}
+	if !strings.Contains(page.Content, "Start with findings before summary.") {
+		t.Fatalf("page content = %q, want applied proposal", page.Content)
+	}
+}
+
+func TestCmdSkillProposalsApplyCanCancel(t *testing.T) {
+	cfgPath, dataDir, wikiDir := writeSkillTestConfig(t)
+	withArgs(t, []string{"elnath", "--config", cfgPath})
+	writeSkillPage(t, wikiDir, &wiki.Page{
+		Path:    "skills/review-pr.md",
+		Title:   "Review PR",
+		Type:    wiki.PageTypeAnalysis,
+		Tags:    []string{"skill"},
+		Content: "Review pull requests.",
+		Extra: map[string]any{
+			"name":   "review-pr",
+			"status": "active",
+		},
+	})
+	tracker := skill.NewTracker(dataDir)
+	proposalPath, err := tracker.WriteImprovementProposal(skill.ImprovementProposal{
+		SkillName:       "review-pr",
+		Reason:          "User corrected review ordering.",
+		SuggestedChange: "Start with findings before summary.",
+	})
+	if err != nil {
+		t.Fatalf("WriteImprovementProposal() error = %v", err)
+	}
+
+	withStdin(t, "n\n")
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdSkill(context.Background(), []string{"proposals", "apply", filepath.Base(proposalPath)}); err != nil {
+			t.Fatalf("cmdSkill(proposals apply) error = %v", err)
+		}
+	})
+	if !strings.Contains(stdout, "Cancelled.") {
+		t.Fatalf("stdout = %q, want cancellation", stdout)
+	}
+	store, err := wiki.NewStore(wikiDir)
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	page, err := store.Read("skills/review-pr.md")
+	if err != nil {
+		t.Fatalf("Read(skill) error = %v", err)
+	}
+	if strings.Contains(page.Content, "Start with findings before summary.") {
+		t.Fatalf("page content = %q, proposal should not be applied", page.Content)
 	}
 }
 

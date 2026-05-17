@@ -1874,3 +1874,49 @@ Remaining skill feedback gaps:
 - No CLI-specific proposal list/show/apply UX yet.
 - Apply path is mechanical append, not natural skill rewrite.
 - No automatic skill lifecycle curator.
+
+## Post-Skill-Proposals-CLI-Review-UX Local Update
+
+Date: 2026-05-18 KST
+
+Branch:
+
+- `codex/skill-proposals-cli`
+
+Artifact:
+
+- `.omc/research/skill-proposals-cli-review-ux-2026-05-18.md`
+
+What changed:
+
+- Added `elnath skill proposals list`.
+- Added `elnath skill proposals list --json`.
+- Added `elnath skill proposals show <proposal-file>`.
+- Added `elnath skill proposals show <proposal-file> --json`.
+- Added `elnath skill proposals apply <proposal-file>`.
+- Added `elnath skill proposals apply <proposal-file> --yes`.
+- Added tracker proposal listing sorted newest-first.
+- Apply without `--yes` asks for confirmation and cancels safely on `n`.
+
+Reference impact:
+
+- Closes the immediate CLI/operator review UX gap after PR #260.
+- Moves Elnath closer to a practical skill self-improvement loop:
+  observe -> propose -> review -> approved apply.
+- Does not claim automatic skill improvement, natural rewrite parity, or full
+  Hermes curator lifecycle.
+
+Verification:
+
+- `go test ./internal/skill ./cmd/elnath -run 'TestTrackerListImprovementProposals|TestCmdSkillProposals' -count=1`
+  passed.
+- `go test ./cmd/elnath ./internal/skill ./internal/tools -count=1`
+  passed.
+- `go vet ./...` passed.
+- `git diff --check` passed.
+
+Remaining skill feedback gaps:
+
+- Apply path is mechanical append, not natural skill rewrite.
+- No automatic lifecycle curator.
+- No Telegram/operator proposal review surface.
