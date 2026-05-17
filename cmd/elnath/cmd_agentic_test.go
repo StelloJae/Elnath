@@ -891,6 +891,15 @@ func TestAgenticCommand_CompletionGateViewsHandleMissingTable(t *testing.T) {
 	if !strings.Contains(lineageOut, "Completion gates\n  none") {
 		t.Fatalf("lineage output = %q, want missing completion gates section rendered as none", lineageOut)
 	}
+
+	evidenceOut, _ := captureOutput(t, func() {
+		if err := cmdAgentic(context.Background(), []string{"evidence", fmt.Sprint(fx.task.ID)}); err != nil {
+			t.Fatalf("cmdAgentic evidence with missing completion_gates: %v", err)
+		}
+	})
+	if !strings.Contains(evidenceOut, "latest_completion_gate: none") {
+		t.Fatalf("evidence output = %q, want missing completion gate rendered as none", evidenceOut)
+	}
 }
 
 func TestAgenticCommand_TaskShowsCoreTaskLinks(t *testing.T) {
@@ -960,6 +969,32 @@ func TestAgenticCommand_LineageShowsGoalSignalTaskActorPolicyApprovalReceiptVeri
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("lineage output = %q, want %q", stdout, want)
+		}
+	}
+	assertNoRawSecrets(t, stdout, fx.rawSecrets)
+}
+
+func TestAgenticCommand_EvidenceShowsCompactTaskEvidenceChain(t *testing.T) {
+	fx := newAgenticCommandFixture(t)
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdAgentic(context.Background(), []string{"evidence", fmt.Sprint(fx.task.ID)}); err != nil {
+			t.Fatalf("cmdAgentic evidence: %v", err)
+		}
+	})
+	for _, want := range []string{
+		fmt.Sprintf("Agentic Evidence #%d", fx.task.ID),
+		"task: proposed risk=high verification=pending",
+		fmt.Sprintf("queue: #%d pending", fx.queueTask),
+		"counts: actors=2 handoffs=1 policies=1 approvals=1 enqueue=0 receipts=1 gates=1 verification=1 memory=1 followups=1",
+		"latest_enqueue: none",
+		fmt.Sprintf("latest_receipt: #%d failed tool=bash", fx.receipt.ID),
+		fmt.Sprintf("latest_completion_gate: #%d blocked verifier=#%d", fx.gate.ID, fx.verifier.ID),
+		fmt.Sprintf("latest_verification: #%d failed", fx.verifier.ID),
+		fmt.Sprintf("latest_memory_update: #%d blocked target=wiki operation=write", fx.memory.ID),
+		fmt.Sprintf("latest_followup: #%d pending due=true", fx.followup.ID),
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("evidence output = %q, want %q", stdout, want)
 		}
 	}
 	assertNoRawSecrets(t, stdout, fx.rawSecrets)
@@ -1041,6 +1076,46 @@ func TestAgenticCommand_JSONOutputStable(t *testing.T) {
 	}
 	if len(view.Actors) != 2 || len(view.Policies) != 1 || len(view.Receipts) != 1 || len(view.Gates) != 1 || len(view.Followups) != 1 {
 		t.Fatalf("json view missing sections: %+v", view)
+	}
+	assertNoRawSecrets(t, stdout, fx.rawSecrets)
+}
+
+func TestAgenticCommand_EvidenceJSONOutputStable(t *testing.T) {
+	fx := newAgenticCommandFixture(t)
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdAgentic(context.Background(), []string{"evidence", fmt.Sprint(fx.task.ID), "--json"}); err != nil {
+			t.Fatalf("cmdAgentic evidence json: %v", err)
+		}
+	})
+	var view struct {
+		AutonomyEnabled bool `json:"autonomy_enabled"`
+		Task            struct {
+			ID     int64  `json:"id"`
+			Status string `json:"status"`
+		} `json:"task"`
+		Counts struct {
+			Receipts         int `json:"receipts"`
+			CompletionGates  int `json:"completion_gates"`
+			VerificationRuns int `json:"verification_runs"`
+			MemoryUpdates    int `json:"memory_updates"`
+			Followups        int `json:"followups"`
+		} `json:"counts"`
+		LatestReceipt      any `json:"latest_receipt"`
+		LatestCompletion   any `json:"latest_completion_gate"`
+		LatestVerification any `json:"latest_verification"`
+		LatestMemory       any `json:"latest_memory_update"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &view); err != nil {
+		t.Fatalf("evidence JSON = %q, unmarshal: %v", stdout, err)
+	}
+	if view.AutonomyEnabled || view.Task.ID != fx.task.ID || view.Task.Status != agentic.TaskStatusProposed {
+		t.Fatalf("evidence JSON task = %+v autonomy=%t", view.Task, view.AutonomyEnabled)
+	}
+	if view.Counts.Receipts != 1 || view.Counts.CompletionGates != 1 || view.Counts.VerificationRuns != 1 || view.Counts.MemoryUpdates != 1 || view.Counts.Followups != 1 {
+		t.Fatalf("evidence counts = %+v, want one evidence row each", view.Counts)
+	}
+	if view.LatestReceipt == nil || view.LatestCompletion == nil || view.LatestVerification == nil || view.LatestMemory == nil {
+		t.Fatalf("evidence latest fields missing: %+v", view)
 	}
 	assertNoRawSecrets(t, stdout, fx.rawSecrets)
 }
@@ -1132,6 +1207,8 @@ func runAgenticCommandVariants(t *testing.T, fx *agenticCommandFixture) {
 		{"task", "--queue-task-id", fmt.Sprint(fx.queueTask)},
 		{"lineage", fmt.Sprint(fx.task.ID)},
 		{"lineage", fmt.Sprint(fx.task.ID), "--json"},
+		{"evidence", fmt.Sprint(fx.task.ID)},
+		{"evidence", fmt.Sprint(fx.task.ID), "--json"},
 	} {
 		captureOutput(t, func() {
 			if err := cmdAgentic(context.Background(), args); err != nil {

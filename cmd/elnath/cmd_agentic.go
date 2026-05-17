@@ -130,6 +130,35 @@ type agenticLineageView struct {
 	Followups        []agenticFollowupInfo     `json:"followups"`
 }
 
+type agenticEvidenceView struct {
+	AutonomyEnabled     bool                     `json:"autonomy_enabled"`
+	Task                agenticTaskInfo          `json:"task"`
+	Queue               *agenticQueueInfo        `json:"queue,omitempty"`
+	Counts              agenticEvidenceCounts    `json:"counts"`
+	LatestEnqueue       *agenticEnqueueInfo      `json:"latest_enqueue,omitempty"`
+	LatestReceipt       *agenticReceiptInfo      `json:"latest_receipt,omitempty"`
+	LatestCompletion    *agenticCompletionInfo   `json:"latest_completion_gate,omitempty"`
+	LatestVerification  *agenticVerificationInfo `json:"latest_verification,omitempty"`
+	LatestMemoryUpdate  *agenticMemoryInfo       `json:"latest_memory_update,omitempty"`
+	LatestFollowup      *agenticFollowupInfo     `json:"latest_followup,omitempty"`
+	LatestPolicy        *agenticPolicyInfo       `json:"latest_policy,omitempty"`
+	LatestApproval      *agenticApprovalInfo     `json:"latest_approval,omitempty"`
+	LatestActorStatuses map[string]int           `json:"latest_actor_statuses,omitempty"`
+}
+
+type agenticEvidenceCounts struct {
+	Actors           int `json:"actors"`
+	Handoffs         int `json:"handoffs"`
+	PolicyDecisions  int `json:"policy_decisions"`
+	Approvals        int `json:"approvals"`
+	EnqueueDecisions int `json:"enqueue_decisions"`
+	Receipts         int `json:"receipts"`
+	CompletionGates  int `json:"completion_gates"`
+	VerificationRuns int `json:"verification_runs"`
+	MemoryUpdates    int `json:"memory_updates"`
+	Followups        int `json:"followups"`
+}
+
 type agenticGoalInfo struct {
 	ID       int64  `json:"id"`
 	Title    string `json:"title"`
@@ -277,6 +306,7 @@ Subcommands:
   task <id> [--json]                      Read-only task status
   task --queue-task-id <id> [--json]      Resolve agentic task from daemon queue task
   lineage <task-id> [--json]              Read-only task lineage
+  evidence <task-id> [--json]             Compact task evidence chain
   enqueue <task-id> [flags]               Explicitly enqueue an approved proposed task
 
 Enqueue flags:
@@ -350,6 +380,20 @@ Enqueue flags:
 			return printJSON(view)
 		}
 		fmt.Print(renderAgenticLineage(view))
+		return nil
+	case "evidence":
+		id, jsonOut, err := parseAgenticIDArgs(args[1:], "elnath agentic evidence <task-id>")
+		if err != nil {
+			return err
+		}
+		view, err := cli.evidence(ctx, id)
+		if err != nil {
+			return err
+		}
+		if jsonOut {
+			return printJSON(view)
+		}
+		fmt.Print(renderAgenticEvidence(view))
 		return nil
 	default:
 		return fmt.Errorf("unknown agentic subcommand: %s", args[0])
@@ -948,6 +992,56 @@ func (c *agenticCLI) lineage(ctx context.Context, id int64) (*agenticLineageView
 	return view, nil
 }
 
+func (c *agenticCLI) evidence(ctx context.Context, id int64) (*agenticEvidenceView, error) {
+	lineage, err := c.lineage(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	view := &agenticEvidenceView{
+		AutonomyEnabled: false,
+		Task:            lineage.Task,
+		Queue:           lineage.Queue,
+		Counts: agenticEvidenceCounts{
+			Actors:           len(lineage.Actors),
+			Handoffs:         len(lineage.Handoffs),
+			PolicyDecisions:  len(lineage.PolicyDecisions),
+			Approvals:        len(lineage.Approvals),
+			EnqueueDecisions: len(lineage.EnqueueDecisions),
+			Receipts:         len(lineage.Receipts),
+			CompletionGates:  len(lineage.CompletionGates),
+			VerificationRuns: len(lineage.VerificationRuns),
+			MemoryUpdates:    len(lineage.MemoryUpdates),
+			Followups:        len(lineage.Followups),
+		},
+		LatestActorStatuses: countActors(lineage.Actors),
+	}
+	if len(lineage.EnqueueDecisions) > 0 {
+		view.LatestEnqueue = &lineage.EnqueueDecisions[len(lineage.EnqueueDecisions)-1]
+	}
+	if len(lineage.Receipts) > 0 {
+		view.LatestReceipt = &lineage.Receipts[len(lineage.Receipts)-1]
+	}
+	if len(lineage.CompletionGates) > 0 {
+		view.LatestCompletion = &lineage.CompletionGates[len(lineage.CompletionGates)-1]
+	}
+	if len(lineage.VerificationRuns) > 0 {
+		view.LatestVerification = &lineage.VerificationRuns[len(lineage.VerificationRuns)-1]
+	}
+	if len(lineage.MemoryUpdates) > 0 {
+		view.LatestMemoryUpdate = &lineage.MemoryUpdates[len(lineage.MemoryUpdates)-1]
+	}
+	if len(lineage.Followups) > 0 {
+		view.LatestFollowup = &lineage.Followups[len(lineage.Followups)-1]
+	}
+	if len(lineage.PolicyDecisions) > 0 {
+		view.LatestPolicy = &lineage.PolicyDecisions[len(lineage.PolicyDecisions)-1]
+	}
+	if len(lineage.Approvals) > 0 {
+		view.LatestApproval = &lineage.Approvals[len(lineage.Approvals)-1]
+	}
+	return view, nil
+}
+
 func (c *agenticCLI) tableExists(ctx context.Context, table string) (bool, error) {
 	var name string
 	err := c.db.QueryRowContext(ctx, `SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?`, table).Scan(&name)
@@ -1528,6 +1622,60 @@ func renderAgenticLineage(view *agenticLineageView) string {
 		for _, followup := range view.Followups {
 			fmt.Fprintf(&b, "  #%d %s trigger_at=%s due=%t reason=%s\n", followup.ID, followup.Status, followup.TriggerAt, followup.Due, noneIfEmpty(followup.Reason))
 		}
+	}
+	return b.String()
+}
+
+func renderAgenticEvidence(view *agenticEvidenceView) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Agentic Evidence #%d\n", view.Task.ID)
+	fmt.Fprintf(&b, "  task: %s risk=%s verification=%s\n", view.Task.Status, noneIfEmpty(view.Task.RiskLevel), noneIfEmpty(view.Task.VerificationStatus))
+	if view.Queue == nil {
+		fmt.Fprintln(&b, "  queue: none")
+	} else {
+		fmt.Fprintf(&b, "  queue: #%d %s session=%s\n", view.Queue.ID, view.Queue.Status, noneIfEmpty(view.Queue.SessionID))
+	}
+	fmt.Fprintf(&b, "  counts: actors=%d handoffs=%d policies=%d approvals=%d enqueue=%d receipts=%d gates=%d verification=%d memory=%d followups=%d\n",
+		view.Counts.Actors,
+		view.Counts.Handoffs,
+		view.Counts.PolicyDecisions,
+		view.Counts.Approvals,
+		view.Counts.EnqueueDecisions,
+		view.Counts.Receipts,
+		view.Counts.CompletionGates,
+		view.Counts.VerificationRuns,
+		view.Counts.MemoryUpdates,
+		view.Counts.Followups,
+	)
+	if view.LatestEnqueue == nil {
+		fmt.Fprintln(&b, "  latest_enqueue: none")
+	} else {
+		fmt.Fprintf(&b, "  latest_enqueue: #%d %s %s queue_task_id=%s\n", view.LatestEnqueue.ID, view.LatestEnqueue.Decision, view.LatestEnqueue.Status, intOrNone(view.LatestEnqueue.QueueTaskID))
+	}
+	if view.LatestReceipt == nil {
+		fmt.Fprintln(&b, "  latest_receipt: none")
+	} else {
+		fmt.Fprintf(&b, "  latest_receipt: #%d %s tool=%s\n", view.LatestReceipt.ID, view.LatestReceipt.Status, view.LatestReceipt.ToolName)
+	}
+	if view.LatestCompletion == nil {
+		fmt.Fprintln(&b, "  latest_completion_gate: none")
+	} else {
+		fmt.Fprintf(&b, "  latest_completion_gate: #%d %s verifier=%s\n", view.LatestCompletion.ID, view.LatestCompletion.Status, hashIDOrNone(view.LatestCompletion.VerificationRunID))
+	}
+	if view.LatestVerification == nil {
+		fmt.Fprintln(&b, "  latest_verification: none")
+	} else {
+		fmt.Fprintf(&b, "  latest_verification: #%d %s reason=%s\n", view.LatestVerification.ID, view.LatestVerification.Verdict, noneIfEmpty(view.LatestVerification.Reason))
+	}
+	if view.LatestMemoryUpdate == nil {
+		fmt.Fprintln(&b, "  latest_memory_update: none")
+	} else {
+		fmt.Fprintf(&b, "  latest_memory_update: #%d %s target=%s operation=%s\n", view.LatestMemoryUpdate.ID, view.LatestMemoryUpdate.Status, view.LatestMemoryUpdate.Target, view.LatestMemoryUpdate.Operation)
+	}
+	if view.LatestFollowup == nil {
+		fmt.Fprintln(&b, "  latest_followup: none")
+	} else {
+		fmt.Fprintf(&b, "  latest_followup: #%d %s due=%t\n", view.LatestFollowup.ID, view.LatestFollowup.Status, view.LatestFollowup.Due)
 	}
 	return b.String()
 }
