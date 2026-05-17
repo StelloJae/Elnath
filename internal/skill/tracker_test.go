@@ -201,6 +201,46 @@ func TestTrackerWriteImprovementProposal(t *testing.T) {
 	}
 }
 
+func TestTrackerReadImprovementProposal(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	tracker := NewTracker(dir)
+	createdAt := time.Date(2026, 5, 17, 4, 5, 6, 0, time.UTC)
+	path, err := tracker.WriteImprovementProposal(ImprovementProposal{
+		SkillName:       "pr-review",
+		SessionID:       "sess-1",
+		Reason:          "User corrected review ordering.",
+		Evidence:        []string{"findings should come first"},
+		SuggestedChange: "Start with findings before summary.",
+		CreatedAt:       createdAt,
+	})
+	if err != nil {
+		t.Fatalf("WriteImprovementProposal() error = %v", err)
+	}
+
+	got, err := tracker.ReadImprovementProposal(filepath.Base(path))
+	if err != nil {
+		t.Fatalf("ReadImprovementProposal() error = %v", err)
+	}
+	if got.SkillName != "pr-review" || got.SessionID != "sess-1" || got.Reason != "User corrected review ordering." || got.SuggestedChange != "Start with findings before summary." {
+		t.Fatalf("proposal = %+v", got)
+	}
+	if !reflect.DeepEqual(got.Evidence, []string{"findings should come first"}) {
+		t.Fatalf("Evidence = %#v", got.Evidence)
+	}
+}
+
+func TestTrackerReadImprovementProposalRejectsOutsidePath(t *testing.T) {
+	t.Parallel()
+
+	tracker := NewTracker(t.TempDir())
+	_, err := tracker.ReadImprovementProposal(filepath.Join("..", "outside.md"))
+	if err == nil || !strings.Contains(err.Error(), "must be under") {
+		t.Fatalf("ReadImprovementProposal outside err = %v, want proposal-dir boundary", err)
+	}
+}
+
 func TestTrackerEmptyFiles(t *testing.T) {
 	t.Parallel()
 

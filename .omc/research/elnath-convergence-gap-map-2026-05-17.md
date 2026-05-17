@@ -1829,3 +1829,48 @@ Remaining skill feedback gaps:
 - No automatic skill lifecycle curator.
 - No skill-specific verifier ownership model beyond explicit `not_run`
   classification in usage receipts.
+
+## Post-Skill-Improvement-Proposal-Apply Local Update
+
+Date: 2026-05-18 KST
+
+Branch:
+
+- `codex/skill-improvement-apply`
+
+Artifact:
+
+- `.omc/research/skill-improvement-proposal-apply-2026-05-18.md`
+
+What changed:
+
+- Added `Tracker.ReadImprovementProposal(path)` with proposal-dir confinement.
+- Added parsing for Elnath-generated skill improvement proposal markdown.
+- Added `Creator.ApplyImprovementProposal(path)` for wiki-native skills.
+- Added `create_skill action=apply_improvement`.
+- Applying requires `approved:true`.
+- Applying appends an explicit applied-improvement note instead of asking an
+  LLM to rewrite the whole skill file.
+
+Reference impact:
+
+- Closes the immediate "proposal exists but cannot be applied through a bounded
+  path" gap after PR #259.
+- Moves Elnath closer to Claude Code-style skill improvement flow while keeping
+  Elnath's safer receipt/review posture.
+- Does not claim automatic skill improvement or full Hermes curator parity.
+
+Verification:
+
+- `go test ./internal/skill ./internal/tools -run 'TestTracker(Read|Write)Improvement|TestCreatorApplyImprovementProposal|TestSkillTool(ProposeImprovement|ApplyImprovement|Scope)' -count=1`
+  passed.
+- `go test ./cmd/elnath ./internal/skill ./internal/tools -count=1`
+  passed.
+- `go vet ./...` passed.
+- `git diff --check` passed.
+
+Remaining skill feedback gaps:
+
+- No CLI-specific proposal list/show/apply UX yet.
+- Apply path is mechanical append, not natural skill rewrite.
+- No automatic skill lifecycle curator.

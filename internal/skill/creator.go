@@ -2,8 +2,10 @@ package skill
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/stello/elnath/internal/wiki"
 )
@@ -126,6 +128,65 @@ func (c *Creator) ProposeImprovement(proposal ImprovementProposal) (string, erro
 		return "", fmt.Errorf("skill tracker is not configured")
 	}
 	return c.tracker.WriteImprovementProposal(proposal)
+}
+
+func (c *Creator) ApplyImprovementProposal(path string) (*Skill, error) {
+	if c == nil || c.store == nil {
+		return nil, fmt.Errorf("skill creator requires a wiki store")
+	}
+	if c.tracker == nil {
+		return nil, fmt.Errorf("skill tracker is not configured")
+	}
+	proposal, err := c.tracker.ReadImprovementProposal(path)
+	if err != nil {
+		return nil, err
+	}
+	page, err := c.store.Read(skillPagePath(proposal.SkillName))
+	if err != nil {
+		return nil, fmt.Errorf("apply improvement for skill %q: %w", proposal.SkillName, err)
+	}
+	marker := "Applied improvement proposal: " + filepath.Base(path)
+	if strings.Contains(page.Content, marker) {
+		return FromPage(page), nil
+	}
+	page.Content = appendImprovementNote(page.Content, proposal, marker)
+	if page.Extra == nil {
+		page.Extra = make(map[string]any)
+	}
+	page.Extra["last_improvement_proposal"] = filepath.Base(path)
+	page.Extra["last_improved_at"] = time.Now().UTC().Format(time.RFC3339)
+	if err := c.store.Update(page); err != nil {
+		return nil, fmt.Errorf("apply improvement for skill %q: %w", proposal.SkillName, err)
+	}
+	sk := FromPage(page)
+	if sk == nil {
+		return nil, fmt.Errorf("updated page did not parse as skill")
+	}
+	if sk.Status == "active" && c.registry != nil {
+		c.registry.Add(sk)
+	}
+	return sk, nil
+}
+
+func appendImprovementNote(content string, proposal ImprovementProposal, marker string) string {
+	content = strings.TrimRight(content, "\n")
+	var b strings.Builder
+	if content != "" {
+		b.WriteString(content)
+		b.WriteString("\n\n")
+	}
+	b.WriteString("## Applied Skill Improvement\n\n")
+	b.WriteString(marker)
+	b.WriteString("\n\n")
+	if reason := strings.TrimSpace(proposal.Reason); reason != "" {
+		b.WriteString("Reason: ")
+		b.WriteString(reason)
+		b.WriteString("\n\n")
+	}
+	b.WriteString("Suggested change:\n")
+	b.WriteString(strings.TrimSpace(proposal.SuggestedChange))
+	b.WriteString("\n")
+	return b.String()
 }
 
 func skillPagePath(name string) string {
