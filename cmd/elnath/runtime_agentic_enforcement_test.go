@@ -4,10 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stello/elnath/internal/agentic"
 	"github.com/stello/elnath/internal/config"
@@ -219,6 +221,50 @@ func TestGatewayOptIn_MutatingToolRequiresApprovalAndDoesNotExecute(t *testing.T
 	}
 }
 
+func TestGatewayOptIn_LiveWaitConsumesApprovalAndContinues(t *testing.T) {
+	writePath := filepath.Join(t.TempDir(), "approved.txt")
+	rt := newTestExecutionRuntimeWithConfig(t, &runtimeToolUseProvider{
+		toolName:  "bash",
+		toolInput: `{"command":"touch ` + writePath + `"}`,
+		finalText: "continued after approval",
+	}, true, func(cfg *config.Config) {
+		cfg.Agentic.Enforcement.Mode = config.AgenticEnforcementModeGateway
+		cfg.Agentic.Approval.WaitTimeoutSeconds = 1
+	})
+	task := createRuntimeAgenticTask(t, rt)
+	ctx := daemon.WithAgenticTaskID(context.Background(), task.ID)
+	payload := daemon.EncodeTaskPayload(daemon.TaskPayload{
+		Prompt:             "write with live approval",
+		AgenticEnforcement: config.AgenticEnforcementModeGateway,
+	})
+	decideErr := decideFirstRuntimeApprovalWhenCreated(t, rt.db.Main, daemon.ApprovalDecisionApproved)
+
+	result, err := rt.newDaemonTaskRunner()(ctx, payload, nil)
+	if err != nil {
+		t.Fatalf("daemon runner: %v", err)
+	}
+	if err := <-decideErr; err != nil {
+		t.Fatalf("decide approval: %v", err)
+	}
+	if !strings.Contains(result.Result, "continued after approval") {
+		t.Fatalf("result = %q, want continuation after approval", result.Result)
+	}
+	if !fileExists(writePath) {
+		t.Fatalf("approved bash command did not create %s", writePath)
+	}
+	receipt := runtimeLatestReceipt(t, rt.db.Main)
+	if receipt.Status != agentic.ReceiptStatusSucceeded || receipt.ApprovalRequestID == "" {
+		t.Fatalf("receipt = %+v, want succeeded approval-linked receipt", receipt)
+	}
+	var consumedByReceiptID int64
+	if err := rt.db.Main.QueryRow(`SELECT consumed_by_receipt_id FROM approval_requests WHERE id = ?`, receipt.ApprovalRequestID).Scan(&consumedByReceiptID); err != nil {
+		t.Fatalf("consumed approval: %v", err)
+	}
+	if consumedByReceiptID != receipt.ID {
+		t.Fatalf("consumed_by_receipt_id = %d, want %d", consumedByReceiptID, receipt.ID)
+	}
+}
+
 func TestGatewayOptIn_DoesNotGateQueueMarkDone(t *testing.T) {
 	writePath := filepath.Join(t.TempDir(), "should-not-exist.txt")
 	rt := newGatewayOptInRuntime(t, "gateway", &runtimeToolUseProvider{
@@ -243,6 +289,30 @@ func TestGatewayOptIn_DoesNotGateQueueMarkDone(t *testing.T) {
 	if fileExists(writePath) {
 		t.Fatalf("bash command executed at %s; want approval-required path blocked", writePath)
 	}
+}
+
+func decideFirstRuntimeApprovalWhenCreated(t *testing.T, db *sql.DB, decision daemon.ApprovalDecision) <-chan error {
+	t.Helper()
+	errCh := make(chan error, 1)
+	go func() {
+		deadline := time.Now().Add(time.Second)
+		for time.Now().Before(deadline) {
+			var id int64
+			err := db.QueryRow(`SELECT id FROM approval_requests ORDER BY id LIMIT 1`).Scan(&id)
+			if err == nil {
+				_, err = db.Exec(`UPDATE approval_requests SET decision = ?, updated_at = ? WHERE id = ?`, string(decision), time.Now().UnixMilli(), id)
+				errCh <- err
+				return
+			}
+			if err != sql.ErrNoRows && !strings.Contains(err.Error(), "no such table") {
+				errCh <- err
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		errCh <- fmt.Errorf("approval was not created before timeout")
+	}()
+	return errCh
 }
 
 func TestGatewayOptIn_DoesNotEnqueueProposedTasksOrWakeFollowups(t *testing.T) {

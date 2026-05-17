@@ -53,6 +53,7 @@ func DefaultConfig() *Config {
 		Agentic: AgenticConfig{
 			Enforcement:    AgenticEnforcementConfig{Mode: AgenticEnforcementModeObserve},
 			CompletionGate: AgenticCompletionGateConfig{Mode: AgenticCompletionGateModeObserve},
+			Approval:       AgenticApprovalConfig{WaitTimeoutSeconds: 0},
 			Activation: AgenticActivationConfig{
 				Enabled:         false,
 				IntervalSeconds: 300,

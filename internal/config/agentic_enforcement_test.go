@@ -28,6 +28,9 @@ func TestAgenticEnforcementConfig_DefaultsToObservePassThrough(t *testing.T) {
 	if cfg.Agentic.Activation.AutoEnqueue.Enabled {
 		t.Fatal("agentic.activation.auto_enqueue.enabled = true, want false by default")
 	}
+	if got := cfg.Agentic.Approval.WaitTimeoutSeconds; got != 0 {
+		t.Fatalf("agentic.approval.wait_timeout_seconds = %d, want 0", got)
+	}
 	if got := cfg.Agentic.Activation.AutoEnqueue.Limit; got != 5 {
 		t.Fatalf("agentic.activation.auto_enqueue.limit = %d, want 5", got)
 	}
@@ -53,6 +56,8 @@ agentic:
     mode: gateway
   completion_gate:
     mode: verification
+  approval:
+    wait_timeout_seconds: 30
   activation:
     enabled: true
     interval_seconds: 60
@@ -79,6 +84,9 @@ agentic:
 	}
 	if got := cfg.Agentic.CompletionGate.Mode; got != AgenticCompletionGateModeVerification {
 		t.Fatalf("agentic.completion_gate.mode = %q, want %q", got, AgenticCompletionGateModeVerification)
+	}
+	if got := cfg.Agentic.Approval.WaitTimeoutSeconds; got != 30 {
+		t.Fatalf("agentic.approval.wait_timeout_seconds = %d, want 30", got)
 	}
 	if !cfg.Agentic.Activation.Enabled || cfg.Agentic.Activation.IntervalSeconds != 60 || cfg.Agentic.Activation.Limit != 5 || cfg.Agentic.Activation.RunOnStart || len(cfg.Agentic.Activation.DeliveryTargets) != 1 || cfg.Agentic.Activation.DeliveryTargets[0] != "telegram" {
 		t.Fatalf("agentic.activation = %+v", cfg.Agentic.Activation)
@@ -111,6 +119,33 @@ func TestAgenticEnforcementConfig_RejectsUnknownMode(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "agentic.enforcement.mode") {
 		t.Fatalf("validate error = %q, want agentic.enforcement.mode", err.Error())
+	}
+}
+
+func TestAgenticApprovalConfig_RejectsNegativeWaitTimeout(t *testing.T) {
+	dir := t.TempDir()
+	wikiDir := filepath.Join(dir, "wiki")
+	if err := os.MkdirAll(wikiDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	cfg := &Config{
+		DataDir: filepath.Join(dir, "data"),
+		WikiDir: wikiDir,
+		Permission: PermissionConfig{
+			Mode: "default",
+		},
+		Agentic: AgenticConfig{
+			Enforcement: AgenticEnforcementConfig{Mode: AgenticEnforcementModeObserve},
+			Approval:    AgenticApprovalConfig{WaitTimeoutSeconds: -1},
+		},
+	}
+
+	err := validate(cfg)
+	if err == nil {
+		t.Fatal("validate error = nil, want unsupported agentic approval wait timeout")
+	}
+	if !strings.Contains(err.Error(), "agentic.approval.wait_timeout_seconds") {
+		t.Fatalf("validate error = %q, want agentic.approval.wait_timeout_seconds", err.Error())
 	}
 }
 

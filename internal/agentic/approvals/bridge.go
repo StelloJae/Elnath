@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/stello/elnath/internal/agentic"
 	"github.com/stello/elnath/internal/daemon"
@@ -32,6 +33,13 @@ func NewBridge(db *sql.DB, store *agentic.Store, approvalStore *daemon.ApprovalS
 
 func (b *Bridge) CreateApproval(ctx context.Context, req Request) (*daemon.ApprovalRequest, error) {
 	return b.createApproval(ctx, req, true)
+}
+
+func (b *Bridge) WaitApproval(ctx context.Context, id int64, pollInterval time.Duration) (bool, error) {
+	if b == nil || b.approvalStore == nil {
+		return false, errors.New("approvals: bridge is not configured")
+	}
+	return b.approvalStore.Wait(ctx, id, pollInterval)
 }
 
 func (b *Bridge) createApproval(ctx context.Context, req Request, retryUnique bool) (*daemon.ApprovalRequest, error) {

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stello/elnath/internal/agentic"
 	"github.com/stello/elnath/internal/agentic/approvals"
@@ -392,6 +393,100 @@ func TestToolGateway_MutatingActionDoesNotConsumeApprovedApprovalForDifferentAct
 	}
 }
 
+func TestToolGateway_MutatingActionLiveWaitConsumesApprovedApproval(t *testing.T) {
+	ctx := context.Background()
+	db, store, approvalBridge, task := newGatewayTestStore(t)
+	exec := &recordingExecutor{}
+	gateway := NewGateway(exec, store, policy.NewEvaluator(), approvalBridge).
+		WithApprovalWait(300*time.Millisecond, 5*time.Millisecond)
+	input := json.RawMessage(`{"path":"a.txt","content":"x"}`)
+	decideErr := decideFirstApprovalWhenCreated(t, db, daemon.ApprovalDecisionApproved)
+
+	result, err := gateway.Execute(WithContext(ctx, Context{TaskID: task.ID, ToolCallID: "call-live-approve", ActionKind: "mutate"}), "write_file", input)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if err := <-decideErr; err != nil {
+		t.Fatalf("decide approval: %v", err)
+	}
+	if result == nil || result.IsError || !strings.Contains(result.Output, "write_file ok") {
+		t.Fatalf("result = %+v, want approved execution", result)
+	}
+	if exec.Calls() != 1 {
+		t.Fatalf("executor calls = %d, want 1", exec.Calls())
+	}
+	receipt := latestReceipt(t, db)
+	if receipt.Status != agentic.ReceiptStatusSucceeded || receipt.ApprovalRequestID == "" {
+		t.Fatalf("receipt = %+v, want succeeded receipt linked to approval", receipt)
+	}
+	var consumedByReceiptID int64
+	if err := db.QueryRow(`SELECT consumed_by_receipt_id FROM approval_requests WHERE id = ?`, receipt.ApprovalRequestID).Scan(&consumedByReceiptID); err != nil {
+		t.Fatalf("consumed approval: %v", err)
+	}
+	if consumedByReceiptID != receipt.ID {
+		t.Fatalf("consumed_by_receipt_id = %d, want %d", consumedByReceiptID, receipt.ID)
+	}
+}
+
+func TestToolGateway_MutatingActionLiveWaitDeniedDoesNotExecute(t *testing.T) {
+	ctx := context.Background()
+	db, store, approvalBridge, task := newGatewayTestStore(t)
+	exec := &recordingExecutor{}
+	gateway := NewGateway(exec, store, policy.NewEvaluator(), approvalBridge).
+		WithApprovalWait(300*time.Millisecond, 5*time.Millisecond)
+	input := json.RawMessage(`{"path":"a.txt","content":"x"}`)
+	decideErr := decideFirstApprovalWhenCreated(t, db, daemon.ApprovalDecisionDenied)
+
+	result, err := gateway.Execute(WithContext(ctx, Context{TaskID: task.ID, ToolCallID: "call-live-deny", ActionKind: "mutate"}), "write_file", input)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if err := <-decideErr; err != nil {
+		t.Fatalf("decide approval: %v", err)
+	}
+	if result == nil || !result.IsError || !strings.Contains(result.Output, "approval denied") {
+		t.Fatalf("result = %+v, want denied approval result", result)
+	}
+	if exec.Calls() != 0 {
+		t.Fatalf("executor calls = %d, want 0", exec.Calls())
+	}
+	receipt := latestReceipt(t, db)
+	if receipt.Status != agentic.ReceiptStatusDenied {
+		t.Fatalf("receipt = %+v, want denied", receipt)
+	}
+}
+
+func TestToolGateway_MutatingActionLiveWaitTimeoutLeavesApprovalPending(t *testing.T) {
+	ctx := context.Background()
+	db, store, approvalBridge, task := newGatewayTestStore(t)
+	exec := &recordingExecutor{}
+	gateway := NewGateway(exec, store, policy.NewEvaluator(), approvalBridge).
+		WithApprovalWait(15*time.Millisecond, 2*time.Millisecond)
+	input := json.RawMessage(`{"path":"a.txt","content":"x"}`)
+
+	result, err := gateway.Execute(WithContext(ctx, Context{TaskID: task.ID, ToolCallID: "call-live-timeout", ActionKind: "mutate"}), "write_file", input)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result == nil || !result.IsError || !strings.Contains(result.Output, "approval required") {
+		t.Fatalf("result = %+v, want approval-required timeout result", result)
+	}
+	if exec.Calls() != 0 {
+		t.Fatalf("executor calls = %d, want 0", exec.Calls())
+	}
+	receipt := latestReceipt(t, db)
+	if receipt.Status != agentic.ReceiptStatusApprovalRequired || receipt.ApprovalRequestID == "" {
+		t.Fatalf("receipt = %+v, want approval-required receipt", receipt)
+	}
+	var decision string
+	if err := db.QueryRow(`SELECT decision FROM approval_requests WHERE id = ?`, receipt.ApprovalRequestID).Scan(&decision); err != nil {
+		t.Fatalf("approval decision: %v", err)
+	}
+	if decision != string(daemon.ApprovalDecisionPending) {
+		t.Fatalf("approval decision = %q, want pending", decision)
+	}
+}
+
 func TestToolGateway_HardlineDeniedDoesNotExecute(t *testing.T) {
 	ctx := context.Background()
 	db, store, approvalBridge, task := newGatewayTestStore(t)
@@ -413,6 +508,30 @@ func TestToolGateway_HardlineDeniedDoesNotExecute(t *testing.T) {
 	if receipt.Status != agentic.ReceiptStatusDenied || receipt.FailureReason == "" {
 		t.Fatalf("unexpected denied receipt: %+v", receipt)
 	}
+}
+
+func decideFirstApprovalWhenCreated(t *testing.T, db *sql.DB, decision daemon.ApprovalDecision) <-chan error {
+	t.Helper()
+	errCh := make(chan error, 1)
+	go func() {
+		deadline := time.Now().Add(time.Second)
+		for time.Now().Before(deadline) {
+			var id int64
+			err := db.QueryRow(`SELECT id FROM approval_requests ORDER BY id LIMIT 1`).Scan(&id)
+			if err == nil {
+				_, err = db.Exec(`UPDATE approval_requests SET decision = ?, updated_at = ? WHERE id = ?`, string(decision), time.Now().UnixMilli(), id)
+				errCh <- err
+				return
+			}
+			if err != sql.ErrNoRows {
+				errCh <- err
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		errCh <- errors.New("approval was not created before timeout")
+	}()
+	return errCh
 }
 
 func TestToolGateway_ReceiptCreatedBeforeExecution(t *testing.T) {
