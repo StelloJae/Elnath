@@ -362,10 +362,11 @@ func cmdTaskStopWithQueue(ctx context.Context, queue *daemon.Queue, args []strin
 
 func cmdTaskAnswerWithQueue(ctx context.Context, queue *daemon.Queue, outcomeStore *learning.OutcomeStore, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: elnath task answer --session ID --request ID --answer TEXT [--json] [--question TEXT] [--surface TEXT] [--idempotency-key KEY]")
+		return fmt.Errorf("usage: elnath task answer --session ID --request ID (--answer TEXT | --choice N) [--json] [--question TEXT] [--surface TEXT] [--idempotency-key KEY]")
 	}
 	params := map[string]any{}
 	jsonOut := false
+	answerProvided := false
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--json":
@@ -385,11 +386,26 @@ func cmdTaskAnswerWithQueue(ctx context.Context, queue *daemon.Queue, outcomeSto
 			params["request_id"] = value
 			i = next
 		case "--answer":
+			if answerProvided {
+				return fmt.Errorf("task answer: choose only one of --answer or --choice")
+			}
 			value, next, err := parseStringFlag(args, i, "--answer")
 			if err != nil {
 				return err
 			}
 			params["answer"] = value
+			answerProvided = true
+			i = next
+		case "--choice":
+			if answerProvided {
+				return fmt.Errorf("task answer: choose only one of --answer or --choice")
+			}
+			value, next, err := parseStringFlag(args, i, "--choice")
+			if err != nil {
+				return err
+			}
+			params["answer"] = value
+			answerProvided = true
 			i = next
 		case "--question":
 			value, next, err := parseStringFlag(args, i, "--question")

@@ -176,6 +176,9 @@ func pendingQuestionNumericChoiceCommand(answerCommand string, choice int) strin
 	if answerCommand == "" || choice <= 0 {
 		return ""
 	}
+	if strings.Contains(answerCommand, " --answer 'ANSWER_TEXT'") {
+		return strings.Replace(answerCommand, " --answer 'ANSWER_TEXT'", fmt.Sprintf(" --choice %d", choice), 1)
+	}
 	return strings.Replace(answerCommand, "'ANSWER_TEXT'", fmt.Sprintf("'%d'", choice), 1)
 }
 

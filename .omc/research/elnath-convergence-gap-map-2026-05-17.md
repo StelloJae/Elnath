@@ -1339,6 +1339,57 @@ Updated next candidates:
 2. gateway handoff lifecycle exposure;
 3. PR-ready branch cleanup after enough UX work is batched.
 
+## Post-Task-Answer-Choice-CLI Local Update
+
+Date: 2026-05-17 KST
+
+Local branch:
+
+- `codex/user-input-operator-ux`
+
+Artifact:
+
+- `.omc/research/task-answer-choice-cli-2026-05-17.md`
+
+What changed:
+
+- `elnath task answer` now supports `--choice N`.
+- `--choice N` feeds the existing validator-backed answer normalization path.
+- `--answer TEXT` remains supported.
+- using both `--answer` and `--choice` is rejected.
+- `elnath explain pending-questions` now suggests `--choice N` for numbered
+  structured choices.
+
+Reference impact:
+
+- Gap 4 Native User Input UX improves for terminal operators.
+- This keeps Elnath's existing receipt-backed queue path while making structured
+  choice intent explicit.
+
+Verification:
+
+- `go test ./cmd/elnath -run 'TestCmdTaskAnswerWithQueueAcceptsChoiceFlag|TestExplainPendingQuestionsTextShowsAnswerCommand' -count=1`
+  failed before implementation because `--choice` was unknown and
+  `explain pending-questions` still suggested `--answer 'N'`.
+- `go test ./cmd/elnath -run 'TestCmdTaskAnswerWithQueue(AcceptsChoiceFlag|EnqueuesBoundAnswer|RejectsStaleRequest)|TestExplainPendingQuestionsTextShowsAnswerCommand' -count=1`
+  passed.
+- `go test ./cmd/elnath -count=1` passed.
+- `go test ./internal/daemon -run 'TestUserQuestionAnswerTool' -count=1`
+  passed.
+- `git diff --check -- cmd/elnath/cmd_task.go cmd/elnath/cmd_task_test.go cmd/elnath/cmd_explain.go cmd/elnath/cmd_explain_test.go`
+  passed.
+
+Remaining terminal input gaps:
+
+- This is still command-driven, not an interactive picker.
+- Multi-select questions remain outside scope.
+
+Updated next candidates:
+
+1. open one draft PR for the batched local UX milestones;
+2. continue with one more gateway/handoff UX slice only if PR #254 remains
+   parked and branch size is still acceptable.
+
 ## Claim Boundary
 
 Allowed after this gap map:
@@ -1358,6 +1409,8 @@ Allowed after this gap map:
   `codex/user-input-operator-ux`.
 - Plain text task monitor/output progress now has a local, tested rendering
   polish milestone on `codex/user-input-operator-ux`.
+- Terminal pending-question answers now have a local, tested `--choice N`
+  milestone on `codex/user-input-operator-ux`.
 - The next highest-leverage product/runtime candidates are approval
   continuation closeout, remaining user-input/operator UX, session
   handoff/recap, and progress/alive-status polish.
@@ -1378,9 +1431,9 @@ Commands run:
 - `test -f /Users/stello/elnath/.omc/research/elnath-convergence-gap-map-2026-05-17.md`
   passed.
 - `wc -l /Users/stello/elnath/.omc/research/elnath-convergence-gap-map-2026-05-17.md`
-  returned `1389`.
-- `rg -n "Post-Task-Progress-CLI-Render|task-progress-cli-render|Plain text task monitor|structured progress|Claim Boundary" /Users/stello/elnath/.omc/research/elnath-convergence-gap-map-2026-05-17.md /Users/stello/elnath/.omc/research/task-progress-cli-render-2026-05-17.md`
-  found the progress render update, artifact link, structured progress claim,
-  and claim boundary.
-- `git diff --check -- cmd/elnath/cmd_task.go cmd/elnath/cmd_task_test.go .omc/research/task-progress-cli-render-2026-05-17.md .omc/research/elnath-convergence-gap-map-2026-05-17.md`
+  returned `1442`.
+- `rg -n "Post-Task-Answer-Choice|task-answer-choice|--choice N|Terminal pending-question|Claim Boundary" /Users/stello/elnath/.omc/research/elnath-convergence-gap-map-2026-05-17.md /Users/stello/elnath/.omc/research/task-answer-choice-cli-2026-05-17.md`
+  found the task answer choice update, artifact link, CLI choice flag, terminal
+  pending-question claim, and claim boundary.
+- `git diff --check -- cmd/elnath/cmd_task.go cmd/elnath/cmd_task_test.go cmd/elnath/cmd_explain.go cmd/elnath/cmd_explain_test.go .omc/research/task-answer-choice-cli-2026-05-17.md .omc/research/elnath-convergence-gap-map-2026-05-17.md`
   passed.
