@@ -644,6 +644,7 @@ func buildExecutionRuntime(
 		Permission: perm,
 		Hooks:      hooks,
 		Locale:     string(loadLocale()),
+		Tracker:    skillTracker,
 	}))
 
 	auditPath := filepath.Join(cfg.DataDir, "audit.jsonl")
