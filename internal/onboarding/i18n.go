@@ -284,9 +284,9 @@ SEE ALSO
 
 DESCRIPTION
   Inspect the durable agentic control-plane. Read commands summarize status and
-  task lineage without enqueueing work, deciding approvals, executing tools,
-  running verifiers, or writing memory. activate --once advances due followups
-  and new signals into proposed tasks only.
+  task lineage without executing tools, running verifiers, or writing memory.
+  approve/deny records explicit operator decisions for pending tool requests.
+  activate --once advances due followups and new signals into proposed tasks only.
 
 SUBCOMMANDS
   status [--json]                         Show control-plane counts and attention items
@@ -298,6 +298,9 @@ SUBCOMMANDS
   tasks [--status s] [--limit n] [--json]  List agentic tasks
   task <id> [--json]                      Show one agentic task summary
   task --queue-task-id <id> [--json]      Resolve an agentic task from a daemon queue task
+  approvals [--limit n] [--json]          List pending tool approvals
+  approve <approval-id> [--json]          Approve a pending tool request
+  deny <approval-id> [--json]             Deny a pending tool request
   lineage <task-id> [--json]              Show task lineage across ledgers
 
 EXAMPLES
@@ -309,6 +312,8 @@ EXAMPLES
   $ elnath agentic signal create --goal-id 1 --source manual --type operator_signal
   $ elnath agentic tasks --status proposed
   $ elnath agentic task 42
+  $ elnath agentic approvals
+  $ elnath agentic approve 7
   $ elnath agentic lineage 42 --json`,
 		"cmd.portability.help": `USAGE
   elnath portability <subcommand>
@@ -527,8 +532,9 @@ SEE ALSO
   elnath agentic <하위명령> [플래그]
 
 설명
-  durable agentic control-plane을 조회합니다. 읽기 명령은 작업 큐 등록,
-  승인 결정, 도구 실행, verifier 실행, memory write를 하지 않습니다.
+  durable agentic control-plane을 조회합니다. 읽기 명령은 도구 실행,
+  verifier 실행, memory write를 하지 않습니다. approve/deny는 pending tool
+  request에 명시적 operator 결정을 기록합니다.
   activate --once는 due followup과 새 signal을 proposed task까지만 전진시킵니다.
 
 하위 명령
@@ -541,6 +547,9 @@ SEE ALSO
   tasks [--status s] [--limit n] [--json]  agentic task 목록 표시
   task <id> [--json]                      agentic task 요약 표시
   task --queue-task-id <id> [--json]      daemon queue task에서 agentic task 조회
+  approvals [--limit n] [--json]          pending tool approval 목록 표시
+  approve <approval-id> [--json]          pending tool request 승인
+  deny <approval-id> [--json]             pending tool request 거절
   lineage <task-id> [--json]              ledger lineage 표시`,
 	},
 }

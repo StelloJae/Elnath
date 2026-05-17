@@ -326,6 +326,9 @@ func TestPrintCommandHelp_AgenticMatchesDispatcher(t *testing.T) {
 		"tasks",
 		"task <id>",
 		"task --queue-task-id <id>",
+		"approvals",
+		"approve <approval-id>",
+		"deny <approval-id>",
 		"lineage <task-id>",
 	}
 	for _, term := range mustContain {
@@ -334,7 +337,7 @@ func TestPrintCommandHelp_AgenticMatchesDispatcher(t *testing.T) {
 		}
 	}
 
-	mustNotContain := []string{"approve <id>", "deny <id>", "enqueue <task>", "execute <tool>"}
+	mustNotContain := []string{"enqueue <task>", "execute <tool>"}
 	for _, term := range mustNotContain {
 		if strings.Contains(stdout, term) {
 			t.Fatalf("agentic help advertises non-read-only term %q; got:\n%s", term, stdout)
