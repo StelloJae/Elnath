@@ -61,8 +61,20 @@ Apply behavior:
 - `cmd/elnath/cmd_skill_test.go`
 - `internal/skill/tracker.go`
 - `internal/skill/tracker_test.go`
+- `internal/agentic/tools/gateway_test.go`
 - `.omc/research/skill-proposals-cli-review-ux-2026-05-18.md`
 - `.omc/research/elnath-convergence-gap-map-2026-05-17.md`
+
+CI repair note:
+
+- Bubblewrap CI initially failed in unrelated `internal/agentic/tools`
+  race testing with `latest receipt: SQL logic error: no such table:
+  tool_action_receipts`.
+- Root cause: the gateway test helper used SQLite `:memory:`. The approval
+  wait timeout path can cancel a driver connection; if database/sql replaces
+  that connection, the in-memory schema disappears.
+- Repair: use a temp-file SQLite DB in `newGatewayTestStore` so schema survives
+  timeout/cancel connection replacement.
 
 ## Verification
 
@@ -74,6 +86,15 @@ Focused verification:
 Broader proportional verification:
 
 - `go test ./cmd/elnath ./internal/skill ./internal/tools -count=1`
+- Result: PASS
+
+- `go test -race ./internal/agentic/tools -run TestToolGateway_MutatingActionLiveWaitTimeoutLeavesApprovalPending -count=50`
+- Result: PASS
+
+- `go test -race ./internal/agentic/tools -count=1`
+- Result: PASS
+
+- `go test -race -count=1 ./...`
 - Result: PASS
 
 - `go vet ./...`
