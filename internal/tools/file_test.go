@@ -102,6 +102,45 @@ func TestWriteTool(t *testing.T) {
 	}
 }
 
+func TestWriteToolRecordsMutationReceipt(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "out.txt")
+	if err := os.WriteFile(path, []byte("one\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	tool := NewWriteTool(NewPathGuard(dir, nil))
+
+	res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{
+		"file_path": "out.txt",
+		"content":   "one\ntwo\n",
+	}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.Output)
+	}
+	if res.Mutation == nil {
+		t.Fatal("Mutation = nil, want structured file mutation receipt")
+	}
+	if got, want := res.Mutation.Operation, "write_file"; got != want {
+		t.Fatalf("Operation = %q, want %q", got, want)
+	}
+	if got, want := res.Mutation.Path, "out.txt"; got != want {
+		t.Fatalf("Path = %q, want %q", got, want)
+	}
+	if !res.Mutation.Changed || !res.Mutation.BeforeExists || !res.Mutation.AfterExists {
+		t.Fatalf("mutation flags = changed:%t before:%t after:%t, want true/true/true",
+			res.Mutation.Changed, res.Mutation.BeforeExists, res.Mutation.AfterExists)
+	}
+	if res.Mutation.BeforeHash == "" || res.Mutation.AfterHash == "" || res.Mutation.BeforeHash == res.Mutation.AfterHash {
+		t.Fatalf("hashes = before %q after %q, want distinct non-empty", res.Mutation.BeforeHash, res.Mutation.AfterHash)
+	}
+	if got, want := res.Mutation.LineDelta, 1; got != want {
+		t.Fatalf("LineDelta = %d, want %d", got, want)
+	}
+}
+
 func TestWriteToolRejectsSameContentOverwrite(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "out.txt")
@@ -299,6 +338,18 @@ func TestEditTool(t *testing.T) {
 		data, _ := os.ReadFile(filepath.Join(dir, "edit.txt"))
 		if !strings.Contains(string(data), "goodbye") {
 			t.Errorf("file content %q missing replacement", string(data))
+		}
+		if res.Mutation == nil {
+			t.Fatal("Mutation = nil, want edit mutation receipt")
+		}
+		if got, want := res.Mutation.Operation, "edit_file"; got != want {
+			t.Fatalf("Operation = %q, want %q", got, want)
+		}
+		if got, want := res.Mutation.Path, "edit.txt"; got != want {
+			t.Fatalf("Path = %q, want %q", got, want)
+		}
+		if !res.Mutation.Changed || res.Mutation.BeforeHash == "" || res.Mutation.AfterHash == "" {
+			t.Fatalf("mutation = %+v, want changed with hashes", *res.Mutation)
 		}
 	})
 

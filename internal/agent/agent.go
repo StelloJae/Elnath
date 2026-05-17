@@ -768,6 +768,7 @@ type toolExecResult struct {
 	output   string
 	isError  bool
 	duration time.Duration
+	mutation *tools.FileMutation
 }
 
 func mergeToolStat(m map[string]*toolStatAcc, mu *sync.Mutex, name string, dur time.Duration, hadErr bool) {
@@ -857,12 +858,19 @@ func (a *Agent) collectApprovedToolCalls(ctx context.Context, calls []llm.ToolUs
 }
 
 func (a *Agent) appendToolResults(messages []llm.Message, results []toolExecResult) []llm.Message {
+	mutations := make([]*tools.FileMutation, 0, len(results))
 	for _, r := range results {
 		if r.id == "" {
 			continue
 		}
 		a.logger.Debug("tool result", "id", r.id, "is_error", r.isError)
 		messages = llm.AppendToolResult(messages, r.id, r.output, r.isError)
+		if r.mutation != nil {
+			mutations = append(mutations, r.mutation)
+		}
+	}
+	if footer := formatMutationVerifierFooter(mutations); footer != "" {
+		messages = append(messages, llm.NewUserMessage(footer))
 	}
 	return messages
 }

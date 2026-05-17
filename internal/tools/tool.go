@@ -53,8 +53,9 @@ type ResultFinalizer interface {
 
 // Result holds the output of a tool execution.
 type Result struct {
-	Output  string
-	IsError bool
+	Output   string
+	IsError  bool
+	Mutation *FileMutation
 }
 
 // ErrorResult returns a Result that signals a tool execution failure.
