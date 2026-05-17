@@ -23,13 +23,14 @@ Strategic order:
 
 ## Current Repo State
 
-Checked on 2026-05-17:
+Checked on 2026-05-17 after PR #254 merge and UX branch rebase start:
 
 - Repo: `/Users/stello/elnath`
-- Branch: `main`
-- HEAD: `ff399bc7d8764825b4189532f50d8595a6165c28`
-- origin/main: `ff399bc7d8764825b4189532f50d8595a6165c28`
-- Open PRs: none from `gh pr list`
+- Branch: `codex/user-input-operator-ux`
+- origin/main: `0f432eb9555e37e0b16dad1350ac05bf09232d34`
+- PR #254: merged, `https://github.com/StelloJae/Elnath/pull/254`
+- Bubblewrap substrate for PR #254: PASS
+- Seatbelt substrate for PR #254: PASS
 
 Pre-existing dirty/untracked files observed before this artifact:
 
@@ -41,6 +42,18 @@ Pre-existing dirty/untracked files observed before this artifact:
 - untracked: `docs/superpowers/plans/2026-04-30-elnath-local-managed-runtime.md`
 
 This artifact is under `.omc/research` and may be ignored by git.
+
+Current local branch adds:
+
+- Telegram pending-question numeric fallback;
+- Telegram native inline buttons for structured pending-question choices;
+- Telegram callback-query answer enqueue and acknowledgement;
+- Telegram HTTP client `reply_markup`, `answerCallbackQuery`, and
+  `callback_query` parsing support.
+
+Evidence artifact:
+
+- `.omc/research/telegram-user-question-numeric-choice-ux-2026-05-17.md`
 
 ## Sources Inspected
 
@@ -1152,6 +1165,130 @@ Updated next candidates:
 4. Async progress/alive-status polish after the approval continuation PR is
    either merged or parked.
 
+## Post-Telegram-Operator-UX Local Update
+
+Date: 2026-05-17 KST
+
+Local branch:
+
+- `codex/user-input-operator-ux`
+
+Local commit:
+
+- `3a6975f37aa65c9b94b66960b7be6e262b76ff15`
+  `feat(telegram): improve pending question choice UX`
+
+Artifact:
+
+- `.omc/research/telegram-user-question-numeric-choice-ux-2026-05-17.md`
+
+What changed:
+
+- Telegram `/questions` renders structured choices as numbered text.
+- `/answer <session> <request> <number>` normalizes to the selected option.
+- Bound-chat plain text numeric answers normalize to the selected option when
+  exactly one pending bound question exists.
+- Daemon `user_question_answer` accepts numeric structured choices through the
+  same validator-backed path.
+- `elnath explain pending-questions` advertises numeric answer commands.
+- Telegram `/questions` sends native inline buttons when the bot client
+  supports button messages.
+- Telegram callback queries with `uq:<request_id>:<choice_number>` enqueue the
+  answer-resume task, acknowledge the callback, and send the same operator
+  receipt.
+- Telegram HTTP client now supports `reply_markup.inline_keyboard`,
+  `answerCallbackQuery`, and `callback_query` parsing.
+
+Reference impact:
+
+- Gap 4 Native User Input UX is materially improved for Telegram structured
+  choices.
+- This adopts the Hermes `clarify` button/fallback product pattern in
+  Elnath-native Go without copying source, prompts, or error strings.
+- Claude Code AskUserQuestion parity remains broader than this slice; terminal
+  modal UX and richer interrupt/redirect UX remain separate.
+
+Verification:
+
+- `go test ./internal/telegram -run 'TestShellQuestionsCommandSendsChoiceButtons|TestShellQuestionChoiceCallbackEnqueuesAnswer' -count=1`
+  passed.
+- `go test ./internal/telegram -run 'TestHTTPClient(SendMessageWithButtons|AnswerCallback|GetUpdatesParsesCallbackQuery)' -count=1`
+  passed.
+- `go test ./internal/telegram -count=1` passed.
+- `go test ./cmd/elnath ./internal/telegram ./internal/daemon ./internal/learning -count=1`
+  passed.
+- `git diff --check` on touched UX/artifact files passed.
+
+Remaining user-input UX gaps:
+
+- Terminal-native modal/interactive choice UX is not implemented.
+- Callback payloads are request/choice based; no signed/expiring callback token
+  layer yet.
+- Multi-select questions remain outside scope.
+- Cross-surface answer routing beyond Telegram/CLI remains future gateway work.
+
+Updated next candidates:
+
+1. Park this local UX milestone until enough local work is batched for one PR,
+   unless review pressure requires opening it.
+2. Session handoff/resume recap: improve continuity and stale-session recovery
+   beyond substrate markers.
+3. Async progress/alive-status polish for local interactive runs.
+4. Terminal-native user-input choice UX if operator friction remains higher
+   than continuity friction.
+
+## Post-Session-Handoff-Lifecycle Local Update
+
+Date: 2026-05-17 KST
+
+Local branch:
+
+- `codex/user-input-operator-ux`
+
+Artifact:
+
+- `.omc/research/session-handoff-lifecycle-cli-2026-05-17.md`
+
+What changed:
+
+- `elnath task handoff <id>` now accepts `--state STATE`,
+  `--surface SURFACE`, and `--reason TEXT`.
+- Operators can mark handoff states such as `claimed`, `running`,
+  `completed`, or `failed` from the CLI.
+- Existing `--request SURFACE` behavior remains.
+- The command rejects mixing `--request` and `--state`.
+- The same recap output path shows the latest handoff state in plain text,
+  JSON, and markdown.
+
+Reference impact:
+
+- Gap 5 Session Handoff / Resume Recap improves again: the state machine was
+  already present in the session layer, and now has a direct operator CLI path.
+- This moves toward Hermes `/handoff` lifecycle semantics without claiming
+  live cross-process transfer parity.
+
+Verification:
+
+- `go test ./cmd/elnath -run TestCmdTaskHandoffWithQueueRecordsLifecycleState -count=1`
+  failed before implementation with `unknown task handoff flag: --state`.
+- `go test ./cmd/elnath -run 'TestCmdTaskHandoffWithQueue(RecordsLifecycleState|RequestRecordsHandoffState|PrintsResumeRecap|MarkdownOutput|SaveWritesMarkdown)|TestBuildTaskResumeHandoffContextIncludesCompactRecap' -count=1`
+  passed.
+- `go test ./cmd/elnath -count=1` passed.
+- `go test ./internal/agent -run 'TestRecordHandoffAndLoadStatus|TestRecordHandoffRejectsUnknownState|TestLoadSessionSkipsResumeLines' -count=1`
+  passed.
+
+Remaining handoff gaps:
+
+- No live runtime migration between processes yet.
+- No signed remote claimant identity yet.
+- Gateway surfaces other than CLI do not yet expose lifecycle state changes.
+
+Updated next candidates:
+
+1. progress/alive-status polish for long local/daemon work;
+2. terminal-native user-input choice UX;
+3. gateway exposure for handoff state if CLI behavior remains stable.
+
 ## Claim Boundary
 
 Allowed after this gap map:
@@ -1165,9 +1302,13 @@ Allowed after this gap map:
 - Per-turn file mutation verifier and automatic diagnostics-after-mutation are
   no longer the next product blockers; current code already contains those
   substrates.
+- Telegram structured pending questions now have a local, tested native button
+  and numeric fallback milestone on `codex/user-input-operator-ux`.
+- Handoff lifecycle states now have a local, tested CLI milestone on
+  `codex/user-input-operator-ux`.
 - The next highest-leverage product/runtime candidates are approval
-  continuation closeout, user-input/operator UX, session handoff/recap, and
-  progress/alive-status polish.
+  continuation closeout, remaining user-input/operator UX, session
+  handoff/recap, and progress/alive-status polish.
 - Benchmark remains downstream.
 
 Forbidden:
@@ -1180,8 +1321,14 @@ Forbidden:
 
 ## Verification for This Artifact
 
-Commands planned:
+Commands run:
 
 - `test -f /Users/stello/elnath/.omc/research/elnath-convergence-gap-map-2026-05-17.md`
+  passed.
 - `wc -l /Users/stello/elnath/.omc/research/elnath-convergence-gap-map-2026-05-17.md`
-- `rg -n "First Milestone Chosen|Per-Turn File Mutation Verifier|Claim Boundary" /Users/stello/elnath/.omc/research/elnath-convergence-gap-map-2026-05-17.md`
+  returned `1337`.
+- `rg -n "Post-Session-Handoff-Lifecycle|session-handoff-lifecycle|--state STATE|Handoff lifecycle states|Claim Boundary" /Users/stello/elnath/.omc/research/elnath-convergence-gap-map-2026-05-17.md /Users/stello/elnath/.omc/research/session-handoff-lifecycle-cli-2026-05-17.md`
+  found the handoff lifecycle update, artifact link, CLI state flag, and claim
+  boundary.
+- `git diff --check -- cmd/elnath/cmd_task_handoff.go cmd/elnath/cmd_task_test.go .omc/research/session-handoff-lifecycle-cli-2026-05-17.md .omc/research/elnath-convergence-gap-map-2026-05-17.md`
+  passed.

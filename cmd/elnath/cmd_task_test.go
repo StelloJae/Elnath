@@ -499,6 +499,45 @@ func TestCmdTaskHandoffWithQueueRequestRecordsHandoffState(t *testing.T) {
 	}
 }
 
+func TestCmdTaskHandoffWithQueueRecordsLifecycleState(t *testing.T) {
+	ctx := context.Background()
+	queue := newCmdTaskTestQueue(t)
+	dataDir := t.TempDir()
+	sess, taskID := seedTaskHandoffFixture(t, ctx, queue, dataDir)
+
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdTaskHandoffWithQueue(ctx, queue, dataDir, []string{
+			fmt.Sprint(taskID),
+			"--state", "claimed",
+			"--surface", "cli",
+			"--reason", "claimed by local operator",
+			"--json",
+		}); err != nil {
+			t.Fatalf("cmdTaskHandoffWithQueue: %v", err)
+		}
+	})
+	for _, want := range []string{
+		`"handoff": {`,
+		`"state": "claimed"`,
+		`"surface": "cli"`,
+		`"reason": "claimed by local operator"`,
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout = %q, want %q", stdout, want)
+		}
+	}
+	status, err := agent.LoadSessionHandoffStatus(dataDir, sess.ID)
+	if err != nil {
+		t.Fatalf("LoadSessionHandoffStatus: %v", err)
+	}
+	if status == nil || status.State != "claimed" || status.Surface != "cli" || status.Reason != "claimed by local operator" {
+		t.Fatalf("handoff status = %+v, want claimed cli", status)
+	}
+	if status.Principal.Surface != "cli" {
+		t.Fatalf("handoff principal = %+v, want cli operator principal", status.Principal)
+	}
+}
+
 func TestCmdTaskHandoffWithQueueMarkdownOutput(t *testing.T) {
 	ctx := context.Background()
 	queue := newCmdTaskTestQueue(t)
