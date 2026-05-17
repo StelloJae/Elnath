@@ -596,7 +596,8 @@ func buildExecutionRuntime(
 		}
 	}
 	reg.Register(newCommandCatalogTool(skillReg))
-	reg.Register(skill.NewCatalogTool(skillReg))
+	skillTracker := skill.NewTracker(cfg.DataDir)
+	reg.Register(skill.NewCatalogTool(skillReg, skillTracker))
 	profiles := make(map[string]*profile.Profile)
 	if wikiStore != nil {
 		var err error
@@ -606,7 +607,6 @@ func buildExecutionRuntime(
 		}
 	}
 
-	skillTracker := skill.NewTracker(cfg.DataDir)
 	var skillCreator *skill.Creator
 	if wikiStore != nil {
 		skillCreator = skill.NewCreator(wikiStore, skillTracker, skillReg)
@@ -644,6 +644,7 @@ func buildExecutionRuntime(
 		Permission: perm,
 		Hooks:      hooks,
 		Locale:     string(loadLocale()),
+		Tracker:    skillTracker,
 	}))
 
 	auditPath := filepath.Join(cfg.DataDir, "audit.jsonl")

@@ -22,6 +22,7 @@ type InvocationToolConfig struct {
 	Permission       *agent.Permission
 	Hooks            *agent.HookRegistry
 	Locale           string
+	Tracker          *Tracker
 }
 
 type InvocationTool struct {
@@ -70,13 +71,14 @@ type invocationInput struct {
 }
 
 type invocationOutput struct {
-	Skill      string           `json:"skill"`
-	Status     string           `json:"status"`
-	Source     string           `json:"source,omitempty"`
-	TrustLevel string           `json:"trust_level,omitempty"`
-	External   bool             `json:"external"`
-	Output     string           `json:"output"`
-	Receipt    ExecutionReceipt `json:"receipt"`
+	Skill         string           `json:"skill"`
+	Status        string           `json:"status"`
+	Source        string           `json:"source,omitempty"`
+	TrustLevel    string           `json:"trust_level,omitempty"`
+	External      bool             `json:"external"`
+	Output        string           `json:"output"`
+	UsageRecorded bool             `json:"usage_recorded"`
+	Receipt       ExecutionReceipt `json:"receipt"`
 }
 
 func (t *InvocationTool) Execute(ctx context.Context, params json.RawMessage) (*tools.Result, error) {
@@ -144,22 +146,39 @@ func (t *InvocationTool) Execute(ctx context.Context, params json.RawMessage) (*
 		SessionID:  tools.SessionIDFrom(ctx),
 	})
 	if err != nil {
+		t.recordUsage(ctx, name, false)
 		return tools.ErrorResult(fmt.Sprintf("skill %q: %v", name, err)), nil
 	}
+	usageRecorded := t.recordUsage(ctx, name, true)
 
 	raw, err := json.Marshal(invocationOutput{
-		Skill:      name,
-		Status:     "completed",
-		Source:     sk.Source,
-		TrustLevel: sk.TrustLevel(),
-		External:   sk.External(),
-		Output:     result.Output,
-		Receipt:    result.Receipt,
+		Skill:         name,
+		Status:        "completed",
+		Source:        sk.Source,
+		TrustLevel:    sk.TrustLevel(),
+		External:      sk.External(),
+		Output:        result.Output,
+		UsageRecorded: usageRecorded,
+		Receipt:       result.Receipt,
 	})
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("skill %q: marshal output: %v", name, err)), nil
 	}
 	return tools.SuccessResult(string(raw)), nil
+}
+
+func (t *InvocationTool) recordUsage(ctx context.Context, skillName string, success bool) bool {
+	if t == nil || t.cfg.Tracker == nil {
+		return false
+	}
+	if err := t.cfg.Tracker.RecordUsage(UsageRecord{
+		SkillName: skillName,
+		SessionID: tools.SessionIDFrom(ctx),
+		Success:   success,
+	}); err != nil {
+		return false
+	}
+	return true
 }
 
 func positionalNamedArgs(names []string, values []string) map[string]string {

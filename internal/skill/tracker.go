@@ -16,6 +16,14 @@ type UsageRecord struct {
 	Success   bool      `json:"success"`
 }
 
+type UsageSummary struct {
+	SkillName   string    `json:"skill_name"`
+	Invocations int       `json:"invocations"`
+	Successes   int       `json:"successes"`
+	Failures    int       `json:"failures"`
+	LastUsedAt  time.Time `json:"last_used_at,omitempty"`
+}
+
 type PatternRecord struct {
 	ID           string    `json:"id"`
 	Description  string    `json:"description"`
@@ -70,6 +78,32 @@ func (t *Tracker) UsageStats() (map[string]int, error) {
 		stats[record.SkillName]++
 	}
 	return stats, nil
+}
+
+func (t *Tracker) UsageSummaries() (map[string]UsageSummary, error) {
+	records, err := readJSONL[UsageRecord](t.usagePath)
+	if err != nil {
+		return nil, err
+	}
+	summaries := make(map[string]UsageSummary, len(records))
+	for _, record := range records {
+		if record.SkillName == "" {
+			continue
+		}
+		summary := summaries[record.SkillName]
+		summary.SkillName = record.SkillName
+		summary.Invocations++
+		if record.Success {
+			summary.Successes++
+		} else {
+			summary.Failures++
+		}
+		if record.Timestamp.After(summary.LastUsedAt) {
+			summary.LastUsedAt = record.Timestamp
+		}
+		summaries[record.SkillName] = summary
+	}
+	return summaries, nil
 }
 
 func appendJSONL[T any](path string, record T) error {

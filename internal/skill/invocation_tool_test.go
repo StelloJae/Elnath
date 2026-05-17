@@ -3,6 +3,7 @@ package skill
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -115,6 +116,101 @@ func TestInvocationToolExecutesSkillWithArgsAndToolFilter(t *testing.T) {
 	}
 	if toolNames["bash"] {
 		t.Fatalf("captured tools = %+v, bash should be filtered out", captured.Tools)
+	}
+}
+
+func TestInvocationToolRecordsSkillUsageOnSuccess(t *testing.T) {
+	t.Parallel()
+
+	skillReg := NewRegistry()
+	skillReg.Add(&Skill{
+		Name:   "probe",
+		Prompt: "Probe.",
+		Status: "active",
+	})
+	tracker := NewTracker(t.TempDir())
+	provider := &mockProvider{
+		streamFn: func(_ context.Context, _ llm.ChatRequest, cb func(llm.StreamEvent)) error {
+			cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: "done"})
+			cb(llm.StreamEvent{Type: llm.EventDone})
+			return nil
+		},
+	}
+	invoke := NewInvocationTool(InvocationToolConfig{
+		Registry: skillReg,
+		Provider: provider,
+		Tools:    tools.NewRegistry(),
+		Tracker:  tracker,
+	})
+
+	ctx := tools.WithSessionID(context.Background(), "session-usage-success")
+	res, err := invoke.Execute(ctx, json.RawMessage(`{"skill":"probe"}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("Execute returned error result: %s", res.Output)
+	}
+	var out struct {
+		UsageRecorded bool `json:"usage_recorded"`
+	}
+	if err := json.Unmarshal([]byte(res.Output), &out); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, res.Output)
+	}
+	if !out.UsageRecorded {
+		t.Fatal("usage_recorded = false, want true")
+	}
+	records, err := readJSONL[UsageRecord](tracker.usagePath)
+	if err != nil {
+		t.Fatalf("read usage records: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("usage records = %+v, want one record", records)
+	}
+	if records[0].SkillName != "probe" || records[0].SessionID != "session-usage-success" || !records[0].Success {
+		t.Fatalf("usage record = %+v, want successful probe invocation bound to session", records[0])
+	}
+}
+
+func TestInvocationToolRecordsSkillUsageOnExecutionFailure(t *testing.T) {
+	t.Parallel()
+
+	skillReg := NewRegistry()
+	skillReg.Add(&Skill{
+		Name:   "fragile",
+		Prompt: "Fail.",
+		Status: "active",
+	})
+	tracker := NewTracker(t.TempDir())
+	provider := &mockProvider{
+		streamFn: func(context.Context, llm.ChatRequest, func(llm.StreamEvent)) error {
+			return errors.New("provider boom")
+		},
+	}
+	invoke := NewInvocationTool(InvocationToolConfig{
+		Registry: skillReg,
+		Provider: provider,
+		Tools:    tools.NewRegistry(),
+		Tracker:  tracker,
+	})
+
+	ctx := tools.WithSessionID(context.Background(), "session-usage-failure")
+	res, err := invoke.Execute(ctx, json.RawMessage(`{"skill":"fragile"}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if !res.IsError || !strings.Contains(res.Output, "provider boom") {
+		t.Fatalf("result = %+v, want provider failure error result", res)
+	}
+	records, err := readJSONL[UsageRecord](tracker.usagePath)
+	if err != nil {
+		t.Fatalf("read usage records: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("usage records = %+v, want one record", records)
+	}
+	if records[0].SkillName != "fragile" || records[0].SessionID != "session-usage-failure" || records[0].Success {
+		t.Fatalf("usage record = %+v, want failed fragile invocation bound to session", records[0])
 	}
 }
 
