@@ -1322,7 +1322,7 @@ func printJSON(v any) error {
 func activationView(result agenticactivation.Result) *agenticActivationView {
 	view := &agenticActivationView{
 		RunID:            result.RunID,
-		AutonomyEnabled:  false,
+		AutonomyEnabled:  result.ExecutionPolicy != agenticactivation.ExecutionPolicyProposeOnly,
 		ExecutionPolicy:  result.ExecutionPolicy,
 		Limit:            result.Limit,
 		EnqueuePerformed: result.EnqueuePerformed,

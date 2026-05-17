@@ -601,7 +601,7 @@ func TestAgenticActivate_AutoEnqueuesLowRiskDueFollowupWhenConfigured(t *testing
 	if err := json.Unmarshal([]byte(stdout), &view); err != nil {
 		t.Fatalf("activate JSON = %q, unmarshal: %v", stdout, err)
 	}
-	if view.ExecutionPolicy != agenticactivation.ExecutionPolicyAutoEnqueueLowRisk || !view.EnqueuePerformed || view.Status != agentic.ActivationRunStatusSucceeded {
+	if !view.AutonomyEnabled || view.ExecutionPolicy != agenticactivation.ExecutionPolicyAutoEnqueueLowRisk || !view.EnqueuePerformed || view.Status != agentic.ActivationRunStatusSucceeded {
 		t.Fatalf("activate view = %+v", view)
 	}
 	if view.AutoEnqueue == nil || view.AutoEnqueue.Considered != 1 || view.AutoEnqueue.Enqueued != 1 || len(view.AutoEnqueue.QueueTaskIDs) != 1 {
