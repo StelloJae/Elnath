@@ -45,6 +45,10 @@ type stageEvent struct {
 	stage string
 }
 
+type textEvent struct {
+	text string
+}
+
 type ProgressReporter struct {
 	bot    BotClient
 	chatID string
@@ -52,6 +56,7 @@ type ProgressReporter struct {
 
 	toolCh    chan toolEvent
 	stageCh   chan stageEvent
+	textCh    chan textEvent
 	done      chan struct{}
 	wg        sync.WaitGroup
 	closeOnce sync.Once
@@ -70,6 +75,7 @@ func NewProgressReporter(bot BotClient, chatID string, logger *slog.Logger) *Pro
 		logger:  logger,
 		toolCh:  make(chan toolEvent, 256),
 		stageCh: make(chan stageEvent, 32),
+		textCh:  make(chan textEvent, 256),
 		done:    make(chan struct{}),
 	}
 }
@@ -80,6 +86,10 @@ func (pr *ProgressReporter) ReportTool(name, preview string) {
 
 func (pr *ProgressReporter) ReportStage(stage string) {
 	pr.stageCh <- stageEvent{stage: stage}
+}
+
+func (pr *ProgressReporter) ReportText(text string) {
+	pr.textCh <- textEvent{text: text}
 }
 
 func (pr *ProgressReporter) Finish() {
@@ -121,6 +131,9 @@ func (pr *ProgressReporter) loop() {
 			case ev := <-pr.stageCh:
 				appendStageLine(&lines, ev.stage)
 				dirty = true
+			case ev := <-pr.textCh:
+				appendTextLine(&lines, ev.text)
+				dirty = true
 			case <-pr.done:
 				finished = true
 			}
@@ -146,6 +159,9 @@ func (pr *ProgressReporter) loop() {
 					dirty = true
 				case ev := <-pr.stageCh:
 					appendStageLine(&lines, ev.stage)
+					dirty = true
+				case ev := <-pr.textCh:
+					appendTextLine(&lines, ev.text)
 					dirty = true
 				case <-pr.done:
 					finished = true
@@ -180,6 +196,9 @@ func (pr *ProgressReporter) drain(lines *[]string, dirty, finished *bool) {
 			*dirty = true
 		case ev := <-pr.stageCh:
 			appendStageLine(lines, ev.stage)
+			*dirty = true
+		case ev := <-pr.textCh:
+			appendTextLine(lines, ev.text)
 			*dirty = true
 		default:
 			// Check done non-blockingly only if not already finished,
@@ -258,6 +277,15 @@ func appendStageLine(lines *[]string, stage string) {
 		name = stage
 	}
 	*lines = append(*lines, fmt.Sprintf("<b>%s %s</b>", icon, name))
+}
+
+func appendTextLine(lines *[]string, text string) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	text = escapeHTML(truncateAtRuneBoundary(text, 160))
+	*lines = append(*lines, "• "+text)
 }
 
 func parseDedup(line string) (base string, count int) {

@@ -138,6 +138,12 @@ func (s *TelegramSink) OnProgress(taskID int64, progress string) {
 		pr.ReportStage(stage)
 		return
 	}
+
+	s.mu.Lock()
+	task := s.ensureTask(taskID)
+	pr := task.progress
+	s.mu.Unlock()
+	pr.ReportText(rendered)
 }
 
 // NotifyProgress implements daemon.ProgressSink so daemon progress can flow

@@ -1585,3 +1585,49 @@ Updated next candidates:
 1. Telegram/gateway progress formatting;
 2. session handoff automatic cross-surface notification;
 3. richer terminal timeline only after operator demand justifies it.
+
+## Post-Telegram-Progress-Text-Delivery Local Update
+
+Date: 2026-05-17 KST
+
+Local branch:
+
+- `codex/progress-alive-status`
+
+Artifact:
+
+- `.omc/research/telegram-progress-text-delivery-2026-05-17.md`
+
+What changed:
+
+- Telegram progress delivery now renders generic daemon text progress events.
+- `ProgressReporter` gained `ReportText`.
+- Unhandled `daemon.TextProgressEvent` messages now become short escaped bullet
+  lines instead of disappearing.
+- Tool, stage, and summary progress routes remain unchanged.
+
+Reference impact:
+
+- Gap 3 Progress Bridge / Alive Status improves on the Telegram gateway.
+- This moves toward Claude Code/Hermes-style visible long-running work without
+  adding full remote keep-alive or timeline storage.
+
+Verification:
+
+- `go test ./internal/telegram -run TestSinkNotifyProgressRendersTextEvent -count=1`
+  failed before implementation because no Telegram sent/edited message
+  contained the generic text progress.
+- `go test ./internal/telegram -run 'TestSinkNotifyProgressRendersTextEvent|TestSinkOnProgressRoutesToProgressReporter|TestSinkOnProgressSummaryRoutesToStream' -count=1`
+  passed.
+
+Remaining progress/alive gaps:
+
+- Non-Telegram gateways may still need equivalent progress formatting.
+- No full timeline store.
+- No remote keep-alive protocol parity.
+
+Updated next candidates:
+
+1. focused verification for this combined progress/alive branch;
+2. PR-ready branch cleanup if verification passes;
+3. session handoff automatic cross-surface notification after this branch.

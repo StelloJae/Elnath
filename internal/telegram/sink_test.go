@@ -179,6 +179,50 @@ func TestSinkOnProgressSummaryRoutesToStream(t *testing.T) {
 	}
 }
 
+func TestSinkNotifyProgressRendersTextEvent(t *testing.T) {
+	bot := newSinkBot()
+	sink := NewTelegramSink(bot, "chat-1", nil)
+
+	if err := sink.NotifyProgress(context.Background(), daemon.TaskProgress{
+		TaskID: 1,
+		Event:  daemon.TextProgressEvent("checking repository status"),
+	}); err != nil {
+		t.Fatalf("NotifyProgress: %v", err)
+	}
+
+	time.Sleep(progressEditInterval + 100*time.Millisecond)
+
+	sent := bot.getSent()
+	edits := bot.getEdits()
+	found := false
+	for _, m := range sent {
+		if m.chatID == "chat-1" && strings.Contains(m.text, "checking repository status") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		for _, e := range edits {
+			if e.chatID == "chat-1" && strings.Contains(e.text, "checking repository status") {
+				found = true
+				break
+			}
+		}
+	}
+
+	_ = sink.NotifyCompletion(context.Background(), daemon.TaskCompletion{
+		TaskID:      1,
+		Status:      daemon.StatusDone,
+		Summary:     "done",
+		StartedAt:   time.Now().Add(-time.Second),
+		CompletedAt: time.Now(),
+	})
+
+	if !found {
+		t.Fatalf("expected text progress in Telegram output, sent=%+v edits=%+v", sent, edits)
+	}
+}
+
 func TestSinkNotifyCompletionSetsReaction(t *testing.T) {
 	tests := []struct {
 		name      string
