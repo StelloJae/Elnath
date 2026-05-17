@@ -82,6 +82,7 @@ type WorkflowResult struct {
 	Summary               string        // human-readable summary of what was done
 	Usage                 llm.UsageStats
 	ToolStats             []agent.ToolStat
+	Mutations             []*tools.FileMutation
 	Iterations            int
 	FinishReason          string
 	Workflow              string // which workflow was used

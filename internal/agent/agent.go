@@ -285,6 +285,7 @@ type RunResult struct {
 	Messages              []llm.Message
 	Usage                 llm.UsageStats
 	ToolStats             []ToolStat
+	Mutations             []*tools.FileMutation
 	Iterations            int
 	FinishReason          FinishReason
 	ReasoningEffort       string
@@ -337,6 +338,7 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, sink event.Sink
 	finishReason := FinishReasonBudgetExceeded
 	toolStats := map[string]*toolStatAcc{}
 	var toolStatsMu sync.Mutex
+	var mutations []*tools.FileMutation
 	var lastClassified *errorclass.ClassifiedError
 	var lastEffortDecision reasoningEffortDecision
 
@@ -458,7 +460,7 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, sink event.Sink
 		ackRetries = 0
 
 		// Execute each tool call and collect results.
-		messages, err = a.executeToolsWithStats(ctx, messages, toolCalls, sink, toolStats, &toolStatsMu)
+		messages, err = a.executeToolsWithStats(ctx, messages, toolCalls, sink, toolStats, &toolStatsMu, &mutations)
 		if err != nil {
 			return nil, err
 		}
@@ -488,6 +490,7 @@ func (a *Agent) Run(ctx context.Context, messages []llm.Message, sink event.Sink
 		Messages:              messages,
 		Usage:                 totalUsage,
 		ToolStats:             finalizeToolStats(toolStats),
+		Mutations:             mutations,
 		Iterations:            iterations,
 		FinishReason:          finishReason,
 		ReasoningEffort:       lastEffortDecision.Effort,
@@ -804,10 +807,10 @@ func (a *Agent) executeTools(ctx context.Context, messages []llm.Message, calls 
 	if sink == nil {
 		sink = event.NopSink{}
 	}
-	return a.executeToolsWithStats(ctx, messages, calls, sink, nil, nil)
+	return a.executeToolsWithStats(ctx, messages, calls, sink, nil, nil, nil)
 }
 
-func (a *Agent) executeToolsWithStats(ctx context.Context, messages []llm.Message, calls []llm.ToolUseBlock, sink event.Sink, toolStats map[string]*toolStatAcc, toolStatsMu *sync.Mutex) ([]llm.Message, error) {
+func (a *Agent) executeToolsWithStats(ctx context.Context, messages []llm.Message, calls []llm.ToolUseBlock, sink event.Sink, toolStats map[string]*toolStatAcc, toolStatsMu *sync.Mutex, mutations *[]*tools.FileMutation) ([]llm.Message, error) {
 	results, approved, err := a.collectApprovedToolCalls(ctx, calls, sink)
 	if err != nil {
 		return nil, err
@@ -815,7 +818,26 @@ func (a *Agent) executeToolsWithStats(ctx context.Context, messages []llm.Messag
 	if err := a.executeApprovedToolCalls(ctx, approved, results, sink, toolStats, toolStatsMu); err != nil {
 		return nil, err
 	}
+	if mutations != nil {
+		*mutations = append(*mutations, toolExecResultMutations(results)...)
+	}
 	return a.appendToolResults(messages, results), nil
+}
+
+func toolExecResultMutations(results []toolExecResult) []*tools.FileMutation {
+	if len(results) == 0 {
+		return nil
+	}
+	mutations := make([]*tools.FileMutation, 0, len(results))
+	for _, result := range results {
+		if result.mutation != nil {
+			mutations = append(mutations, result.mutation)
+		}
+	}
+	if len(mutations) == 0 {
+		return nil
+	}
+	return mutations
 }
 
 func (a *Agent) collectApprovedToolCalls(ctx context.Context, calls []llm.ToolUseBlock, sink event.Sink) ([]toolExecResult, []approvedToolCall, error) {

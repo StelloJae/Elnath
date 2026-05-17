@@ -10,6 +10,7 @@ import (
 
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/orchestrator"
+	"github.com/stello/elnath/internal/tools"
 )
 
 type completionContractSummary struct {
@@ -326,6 +327,12 @@ func summarizeCompletionContract(routeCtx *orchestrator.RoutingContext, cfg orch
 	summary.ToolSearchReceipts = observedToolSearchReceipts(result.Messages)
 	summary.ControlToolReceipts = observedControlToolReceipts(result.Messages)
 	summary.DiagnosticDeltaReceipts = observedDiagnosticDeltaReceipts(result.Messages)
+	if structuredReceipts := diagnosticDeltaReceiptsFromMutations(result.Mutations); len(structuredReceipts) > 0 {
+		summary.DiagnosticDeltaReceipts = append(
+			withoutDiagnosticDeltaReceiptsFromTool(summary.DiagnosticDeltaReceipts, "filesystem_mutation_verifier"),
+			structuredReceipts...,
+		)
+	}
 	summary.UserInputRequired = controlToolReceiptsContain(summary.ControlToolReceipts, "ask_user_question", "request")
 
 	verificationCommand, verificationFailed := observedVerificationCommandStatus(result.Messages)
@@ -576,6 +583,59 @@ func observedDiagnosticDeltaReceipts(messages []llm.Message) []completionDiagnos
 		return nil
 	}
 	return receipts
+}
+
+func diagnosticDeltaReceiptsFromMutations(mutations []*tools.FileMutation) []completionDiagnosticDeltaReceipt {
+	if len(mutations) == 0 {
+		return nil
+	}
+	receipts := make([]completionDiagnosticDeltaReceipt, 0, len(mutations))
+	for _, mutation := range mutations {
+		if mutation == nil || strings.TrimSpace(mutation.DiagnosticStatus) == "" {
+			continue
+		}
+		if !mutation.Changed {
+			continue
+		}
+		receipt := completionDiagnosticDeltaReceipt{
+			Tool:                    "structured_mutation_receipt",
+			Action:                  "diagnostics_delta",
+			ReadOnly:                true,
+			ExecutionPolicy:         "agent_structured_mutation_receipt",
+			Operation:               "diagnostics_delta",
+			Status:                  strings.TrimSpace(mutation.DiagnosticStatus),
+			Language:                strings.TrimSpace(mutation.DiagnosticLanguage),
+			FilePath:                normalizeCompletionScopePath(mutation.Path),
+			Path:                    normalizeCompletionScopePath(mutation.Path),
+			Count:                   mutation.NewDiagnosticCount + mutation.ExistingDiagnosticCount,
+			ErrorCount:              mutation.NewDiagnosticCount,
+			NewDiagnosticCount:      mutation.NewDiagnosticCount,
+			ExistingDiagnosticCount: mutation.ExistingDiagnosticCount,
+			ResolvedDiagnosticCount: mutation.ResolvedDiagnosticCount,
+		}
+		receipts = append(receipts, receipt)
+	}
+	if len(receipts) == 0 {
+		return nil
+	}
+	return receipts
+}
+
+func withoutDiagnosticDeltaReceiptsFromTool(receipts []completionDiagnosticDeltaReceipt, tool string) []completionDiagnosticDeltaReceipt {
+	if len(receipts) == 0 {
+		return nil
+	}
+	out := make([]completionDiagnosticDeltaReceipt, 0, len(receipts))
+	for _, receipt := range receipts {
+		if receipt.Tool == tool {
+			continue
+		}
+		out = append(out, receipt)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func observedMutationVerifierDiagnosticReceipts(messages []llm.Message) []completionDiagnosticDeltaReceipt {

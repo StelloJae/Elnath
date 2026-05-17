@@ -747,6 +747,12 @@ func TestAgentInjectsMutationVerifierFooter(t *testing.T) {
 	if result.FinishReason != FinishReasonStop {
 		t.Fatalf("FinishReason = %q, want stop", result.FinishReason)
 	}
+	if len(result.Mutations) != 1 {
+		t.Fatalf("Mutations = %+v, want one structured mutation receipt", result.Mutations)
+	}
+	if result.Mutations[0].Path != "foo.go" || result.Mutations[0].DiagnosticStatus != "new_diagnostics_found" {
+		t.Fatalf("mutation receipt = %+v", result.Mutations[0])
+	}
 	if len(requests) < 2 {
 		t.Fatalf("requests = %d, want at least 2", len(requests))
 	}

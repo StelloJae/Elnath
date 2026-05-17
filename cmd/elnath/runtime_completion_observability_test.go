@@ -14,6 +14,7 @@ import (
 	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/orchestrator"
+	"github.com/stello/elnath/internal/tools"
 )
 
 func TestCompletionContractSummaryRecordsMissingVerification(t *testing.T) {
@@ -521,6 +522,45 @@ Use this verified disk-delta evidence before claiming file changes. If an intend
 	}
 	if receipt.FilePath != "internal/parser/parser.go" || receipt.Language != "go" {
 		t.Fatalf("diagnostic delta receipt path/language = %+v", receipt)
+	}
+}
+
+func TestCompletionContractSummaryDetectsStructuredMutationNewDiagnostics(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("fix the Go parser issue"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "edit-1", Name: "edit_file", Input: json.RawMessage(`{"file_path":"internal/parser/parser.go","old_string":"old","new_string":"new"}`)},
+			}},
+			llm.NewToolResultMessage("edit-1", "ok", false),
+			llm.NewAssistantMessage("Done."),
+		},
+		Mutations: []*tools.FileMutation{{
+			Operation:               "edit_file",
+			Path:                    "internal/parser/parser.go",
+			Changed:                 true,
+			DiagnosticLanguage:      "go",
+			DiagnosticStatus:        "new_diagnostics_found",
+			NewDiagnosticCount:      1,
+			ExistingDiagnosticCount: 0,
+			ResolvedDiagnosticCount: 0,
+		}},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(&orchestrator.RoutingContext{VerificationHint: true}, orchestrator.WorkflowConfig{}, result)
+
+	if summary.CompletionWarning != "new_diagnostics_found" {
+		t.Fatalf("CompletionWarning = %q, want new_diagnostics_found", summary.CompletionWarning)
+	}
+	if summary.RetryDecision != completionRetryDecisionRetrySmallerScope || summary.RetryReason != "new_diagnostics_found" {
+		t.Fatalf("retry plan = %q/%q, want retry_smaller_scope/new_diagnostics_found", summary.RetryDecision, summary.RetryReason)
+	}
+	if len(summary.DiagnosticDeltaReceipts) != 1 {
+		t.Fatalf("DiagnosticDeltaReceipts = %+v, want one structured mutation receipt", summary.DiagnosticDeltaReceipts)
+	}
+	receipt := summary.DiagnosticDeltaReceipts[0]
+	if receipt.Tool != "structured_mutation_receipt" || receipt.Operation != "diagnostics_delta" || receipt.Status != "new_diagnostics_found" || receipt.NewDiagnosticCount != 1 {
+		t.Fatalf("diagnostic delta receipt = %+v", receipt)
 	}
 }
 
