@@ -1518,6 +1518,7 @@ func (rt *executionRuntime) recordOutcome(ctx context.Context, in outcomeInput) 
 		ToolSearchReceipts:       completionToolSearchReceiptsToLearning(in.completion.ToolSearchReceipts),
 		ControlToolReceipts:      completionControlToolReceiptsToLearning(in.completion.ControlToolReceipts),
 		DiagnosticDeltaReceipts:  completionDiagnosticDeltaReceiptsToLearning(in.completion.DiagnosticDeltaReceipts),
+		DiagnosticRepairHints:    completionDiagnosticRepairHintsToLearning(in.completion.DiagnosticRepairHints),
 		ConditionalSkillMatches:  completionSkillMatchesToLearning(in.completion.ConditionalSkillMatches),
 		CorrectionAttempted:      in.completion.CorrectionAttempted,
 		CorrectionAttempts:       in.completion.CorrectionAttempts,
@@ -1753,6 +1754,26 @@ func completionDiagnosticDeltaReceiptsToLearning(src []completionDiagnosticDelta
 			NewDiagnosticCount:      receipt.NewDiagnosticCount,
 			ExistingDiagnosticCount: receipt.ExistingDiagnosticCount,
 			ResolvedDiagnosticCount: receipt.ResolvedDiagnosticCount,
+		})
+	}
+	return out
+}
+
+func completionDiagnosticRepairHintsToLearning(src []completionDiagnosticRepairHint) []learning.DiagnosticRepairHint {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]learning.DiagnosticRepairHint, 0, len(src))
+	for _, hint := range src {
+		out = append(out, learning.DiagnosticRepairHint{
+			FilePath:       hint.FilePath,
+			Line:           hint.Line,
+			Column:         hint.Column,
+			Source:         hint.Source,
+			Error:          hint.Error,
+			SourceTool:     hint.SourceTool,
+			SuggestedTools: append([]string(nil), hint.SuggestedTools...),
+			StopCondition:  hint.StopCondition,
 		})
 	}
 	return out

@@ -468,7 +468,7 @@ func TestCompletionContractSummaryDetectsNewDiagnosticDelta(t *testing.T) {
 			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
 				llm.ToolUseBlock{ID: "diag-1", Name: "code_symbols", Input: json.RawMessage(`{"operation":"diagnostics_delta","baseline_file_path":"before.go","file_path":"internal/parser/parser.go"}`)},
 			}},
-			llm.NewToolResultMessage("diag-1", `{"operation":"diagnostics_delta","status":"new_diagnostics_found","receipt":{"tool":"code_symbols","action":"diagnostics_delta","read_only":true,"execution_policy":"code_symbols_observation","operation":"diagnostics_delta","status":"new_diagnostics_found","language":"go","file_path":"internal/parser/parser.go","count":1,"error_count":1,"new_diagnostic_count":1,"existing_diagnostic_count":0,"resolved_diagnostic_count":0}}`, false),
+			llm.NewToolResultMessage("diag-1", `{"operation":"diagnostics_delta","status":"new_diagnostics_found","language":"go","file_path":"internal/parser/parser.go","count":1,"errors":[{"file_path":"internal/parser/parser.go","line":11,"column":1,"error":"expected declaration","source":"go/parser"}],"diagnostic_delta":{"file_path":"internal/parser/parser.go","new_count":1,"new":[{"status":"new","file_path":"internal/parser/parser.go","after_line":11,"after_column":1,"error":"expected declaration","source":"go/parser"}]},"receipt":{"tool":"code_symbols","action":"diagnostics_delta","read_only":true,"execution_policy":"code_symbols_observation","operation":"diagnostics_delta","status":"new_diagnostics_found","language":"go","file_path":"internal/parser/parser.go","count":1,"error_count":1,"new_diagnostic_count":1,"existing_diagnostic_count":0,"resolved_diagnostic_count":0}}`, false),
 			llm.NewAssistantMessage("Done."),
 		},
 		FinishReason: "stop",
@@ -488,6 +488,7 @@ func TestCompletionContractSummaryDetectsNewDiagnosticDelta(t *testing.T) {
 	if receipt.Tool != "code_symbols" || receipt.Operation != "diagnostics_delta" || receipt.Status != "new_diagnostics_found" || receipt.NewDiagnosticCount != 1 {
 		t.Fatalf("diagnostic delta receipt = %+v", receipt)
 	}
+	assertDiagnosticRepairHint(t, summary.DiagnosticRepairHints, "internal/parser/parser.go", 11, 1, "go/parser", "expected declaration")
 }
 
 func TestCompletionContractSummaryDetectsMutationVerifierNewDiagnostics(t *testing.T) {
@@ -523,6 +524,7 @@ Use this verified disk-delta evidence before claiming file changes. If an intend
 	if receipt.FilePath != "internal/parser/parser.go" || receipt.Language != "go" {
 		t.Fatalf("diagnostic delta receipt path/language = %+v", receipt)
 	}
+	assertDiagnosticRepairHint(t, summary.DiagnosticRepairHints, "internal/parser/parser.go", 11, 1, "go/parser", "expected declaration")
 }
 
 func TestCompletionContractSummaryDetectsStructuredMutationNewDiagnostics(t *testing.T) {
@@ -544,6 +546,12 @@ func TestCompletionContractSummaryDetectsStructuredMutationNewDiagnostics(t *tes
 			NewDiagnosticCount:      1,
 			ExistingDiagnosticCount: 0,
 			ResolvedDiagnosticCount: 0,
+			NewDiagnostics: []tools.FileMutationDiagnostic{{
+				Line:   11,
+				Column: 1,
+				Source: "go/parser",
+				Error:  "expected declaration",
+			}},
 		}},
 		FinishReason: "stop",
 	}
@@ -562,6 +570,7 @@ func TestCompletionContractSummaryDetectsStructuredMutationNewDiagnostics(t *tes
 	if receipt.Tool != "structured_mutation_receipt" || receipt.Operation != "diagnostics_delta" || receipt.Status != "new_diagnostics_found" || receipt.NewDiagnosticCount != 1 {
 		t.Fatalf("diagnostic delta receipt = %+v", receipt)
 	}
+	assertDiagnosticRepairHint(t, summary.DiagnosticRepairHints, "internal/parser/parser.go", 11, 1, "go/parser", "expected declaration")
 }
 
 func TestCompletionContractSummaryRecordsStructuredMutationDiagnosticPolicy(t *testing.T) {
@@ -696,17 +705,41 @@ func TestCompletionRetryPromptGuidesNewDiagnosticDelta(t *testing.T) {
 	prompt := completionRetryPrompt(completionContractSummary{
 		RetryDecision: completionRetryDecisionRetrySmallerScope,
 		RetryReason:   "new_diagnostics_found",
+		DiagnosticRepairHints: []completionDiagnosticRepairHint{{
+			FilePath: "internal/parser/parser.go",
+			Line:     11,
+			Column:   1,
+			Source:   "go/parser",
+			Error:    "expected declaration",
+		}},
 	})
 
 	for _, want := range []string{
 		"Retry reason: new_diagnostics_found",
 		"introduced new code diagnostics",
 		"patch only the introduced issue",
+		"internal/parser/parser.go:11:1",
+		"go/parser",
+		"expected declaration",
 		"Rerun the focused diagnostic or verification",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
 		}
+	}
+}
+
+func assertDiagnosticRepairHint(t *testing.T, hints []completionDiagnosticRepairHint, filePath string, line int, column int, source string, message string) {
+	t.Helper()
+	if len(hints) != 1 {
+		t.Fatalf("DiagnosticRepairHints = %+v, want one hint", hints)
+	}
+	hint := hints[0]
+	if hint.FilePath != filePath || hint.Line != line || hint.Column != column || hint.Source != source || hint.Error != message {
+		t.Fatalf("DiagnosticRepairHints[0] = %+v", hint)
+	}
+	if len(hint.SuggestedTools) == 0 || hint.StopCondition != "diagnostic_delta_clean_or_no_new_diagnostics" {
+		t.Fatalf("DiagnosticRepairHints[0] policy = %+v", hint)
 	}
 }
 
@@ -1699,6 +1732,16 @@ func TestRecordOutcomePersistsCompletionObservability(t *testing.T) {
 				ErrorCount:         1,
 				NewDiagnosticCount: 1,
 			}},
+			DiagnosticRepairHints: []completionDiagnosticRepairHint{{
+				FilePath:       "internal/parser/parser.go",
+				Line:           11,
+				Column:         1,
+				Source:         "go/parser",
+				Error:          "expected declaration",
+				SourceTool:     "code_symbols",
+				SuggestedTools: []string{"read_file", "edit_file", "code_symbols diagnostics_delta"},
+				StopCondition:  "diagnostic_delta_clean_or_no_new_diagnostics",
+			}},
 			CorrectionAttempted:     true,
 			CorrectionAttempts:      1,
 			CorrectionMaxAttempts:   1,
@@ -1847,6 +1890,16 @@ func TestCompletionGateContextProviderConsumesRuntimeSummary(t *testing.T) {
 			ErrorCount:         1,
 			NewDiagnosticCount: 1,
 		}},
+		DiagnosticRepairHints: []completionDiagnosticRepairHint{{
+			FilePath:       "internal/parser/parser.go",
+			Line:           11,
+			Column:         1,
+			Source:         "go/parser",
+			Error:          "expected declaration",
+			SourceTool:     "code_symbols",
+			SuggestedTools: []string{"read_file", "edit_file", "code_symbols diagnostics_delta"},
+			StopCondition:  "diagnostic_delta_clean_or_no_new_diagnostics",
+		}},
 		ConditionalSkillMatches: []completionConditionalSkillMatch{
 			{SkillName: "go-review", Pattern: "internal/**/*.go", Path: "internal/skill/skill.go", Source: "claude-skill", TrustLevel: "local_compatible", External: false},
 		},
@@ -1920,6 +1973,9 @@ func TestCompletionGateContextProviderConsumesRuntimeSummary(t *testing.T) {
 	}
 	if len(summary.DiagnosticDeltaReceipts) != 1 || summary.DiagnosticDeltaReceipts[0].NewDiagnosticCount != 1 {
 		t.Fatalf("DiagnosticDeltaReceipts = %+v", summary.DiagnosticDeltaReceipts)
+	}
+	if len(summary.DiagnosticRepairHints) != 1 || summary.DiagnosticRepairHints[0].FilePath != "internal/parser/parser.go" || summary.DiagnosticRepairHints[0].Line != 11 || summary.DiagnosticRepairHints[0].Error != "expected declaration" {
+		t.Fatalf("DiagnosticRepairHints = %+v", summary.DiagnosticRepairHints)
 	}
 	if len(summary.ConditionalSkillMatches) != 1 || summary.ConditionalSkillMatches[0].SkillName != "go-review" {
 		t.Fatalf("ConditionalSkillMatches = %+v", summary.ConditionalSkillMatches)
@@ -2239,6 +2295,9 @@ func assertCompletionOutcome(t *testing.T, rec learning.OutcomeRecord) {
 	}
 	if len(rec.DiagnosticDeltaReceipts) != 1 || rec.DiagnosticDeltaReceipts[0].NewDiagnosticCount != 1 {
 		t.Fatalf("DiagnosticDeltaReceipts = %+v", rec.DiagnosticDeltaReceipts)
+	}
+	if len(rec.DiagnosticRepairHints) != 1 || rec.DiagnosticRepairHints[0].FilePath != "internal/parser/parser.go" || rec.DiagnosticRepairHints[0].Line != 11 || rec.DiagnosticRepairHints[0].Error != "expected declaration" {
+		t.Fatalf("DiagnosticRepairHints = %+v", rec.DiagnosticRepairHints)
 	}
 	if len(rec.ConditionalSkillMatches) != 1 {
 		t.Fatalf("ConditionalSkillMatches = %#v, want one match", rec.ConditionalSkillMatches)

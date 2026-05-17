@@ -2143,5 +2143,56 @@ Remaining code-intelligence gaps:
 - No full multi-language LSP lifecycle.
 - Non-Go diagnostics remain syntax adapter policies, not always-on semantic
   language-server diagnostics.
-- Diagnostic repair hints are operator-facing in this slice; actual runtime
-  retry receipts do not yet carry a dedicated repair hint list.
+
+## Runtime Diagnostic Repair Hints Milestone Update
+
+Date: 2026-05-18 KST
+
+Branch:
+
+- `codex/diagnostic-repair-hints`
+
+Artifact:
+
+- `.omc/research/diagnostic-repair-hints-runtime-2026-05-18.md`
+
+What changed:
+
+- Added `diagnostic_repair_hints` to completion summaries.
+- Extracts top introduced diagnostic details from:
+  - `code_symbols diagnostics_delta`;
+  - filesystem mutation verifier footer `new_diag_N=...`;
+  - structured file mutation receipts.
+- Retry guidance for `new_diagnostics_found` now includes concrete
+  `file:line:column source error` hints when available.
+- Learning outcome records and agentic completion gate summaries now persist
+  these hints.
+
+Reference impact:
+
+- Moves Elnath closer to Claude Code's diagnostic-tracking loop: capture new
+  diagnostics relative to edited files, then feed concise detail back into the
+  correction path.
+- Moves Elnath closer to Hermes' compact LSP reporter pattern by keeping
+  diagnostic summaries bounded and line-oriented.
+- Keeps Elnath-native receipt and retry boundaries: hints are structured,
+  capped, and stop on `diagnostic_delta_clean_or_no_new_diagnostics`.
+
+Verification:
+
+- `go test ./cmd/elnath -run 'TestCompletionContractSummaryDetects(NewDiagnosticDelta|MutationVerifierNewDiagnostics|StructuredMutationNewDiagnostics)|TestCompletionRetryPromptGuidesNewDiagnosticDelta|TestRecordOutcomePersistsCompletionObservability|TestCompletionGateContextProviderConsumesRuntimeSummary|TestCompletionGateReceiptSummaryIncludesRuntimeContext' -count=1`
+  passed.
+- `go test ./internal/agentic/completion -run TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext -count=1`
+  passed.
+- `go test ./cmd/elnath -count=1` passed.
+- `go test ./internal/learning ./internal/agentic/completion -count=1`
+  passed.
+- `go vet ./...` passed.
+- `git diff --check` passed.
+
+Remaining code-intelligence gaps:
+
+- No full multi-language LSP lifecycle.
+- Non-Go diagnostics remain syntax adapter policies, not always-on semantic
+  language-server diagnostics.
+- Retry remains bounded; no broad silent self-healing claim.

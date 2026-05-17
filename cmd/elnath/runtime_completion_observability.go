@@ -38,6 +38,7 @@ type completionContractSummary struct {
 	ToolSearchReceipts       []completionToolSearchReceipt
 	ControlToolReceipts      []completionControlToolReceipt
 	DiagnosticDeltaReceipts  []completionDiagnosticDeltaReceipt
+	DiagnosticRepairHints    []completionDiagnosticRepairHint
 	CorrectionAttempted      bool
 	CorrectionAttempts       int
 	CorrectionMaxAttempts    int
@@ -185,6 +186,17 @@ type completionDiagnosticDeltaReceipt struct {
 	ResolvedDiagnosticCount int    `json:"resolved_diagnostic_count,omitempty"`
 }
 
+type completionDiagnosticRepairHint struct {
+	FilePath       string   `json:"file_path"`
+	Line           int      `json:"line,omitempty"`
+	Column         int      `json:"column,omitempty"`
+	Source         string   `json:"source,omitempty"`
+	Error          string   `json:"error"`
+	SourceTool     string   `json:"source_tool,omitempty"`
+	SuggestedTools []string `json:"suggested_tools,omitempty"`
+	StopCondition  string   `json:"stop_condition,omitempty"`
+}
+
 type completionControlToolReceipt struct {
 	Tool                    string   `json:"tool"`
 	Action                  string   `json:"action"`
@@ -327,12 +339,18 @@ func summarizeCompletionContract(routeCtx *orchestrator.RoutingContext, cfg orch
 	summary.ToolSearchReceipts = observedToolSearchReceipts(result.Messages)
 	summary.ControlToolReceipts = observedControlToolReceipts(result.Messages)
 	summary.DiagnosticDeltaReceipts = observedDiagnosticDeltaReceipts(result.Messages)
+	summary.DiagnosticRepairHints = observedDiagnosticRepairHints(result.Messages)
 	if structuredReceipts := diagnosticDeltaReceiptsFromMutations(result.Mutations); len(structuredReceipts) > 0 {
 		summary.DiagnosticDeltaReceipts = append(
 			withoutDiagnosticDeltaReceiptsFromTool(summary.DiagnosticDeltaReceipts, "filesystem_mutation_verifier"),
 			structuredReceipts...,
 		)
+		summary.DiagnosticRepairHints = withoutDiagnosticRepairHintsFromSourceTool(summary.DiagnosticRepairHints, "filesystem_mutation_verifier")
+		if structuredHints := diagnosticRepairHintsFromMutations(result.Mutations); len(structuredHints) > 0 {
+			summary.DiagnosticRepairHints = append(summary.DiagnosticRepairHints, structuredHints...)
+		}
 	}
+	summary.DiagnosticRepairHints = normalizeCompletionDiagnosticRepairHints(summary.DiagnosticRepairHints)
 	summary.UserInputRequired = controlToolReceiptsContain(summary.ControlToolReceipts, "ask_user_question", "request")
 
 	verificationCommand, verificationFailed := observedVerificationCommandStatus(result.Messages)
@@ -585,6 +603,28 @@ func observedDiagnosticDeltaReceipts(messages []llm.Message) []completionDiagnos
 	return receipts
 }
 
+func observedDiagnosticRepairHints(messages []llm.Message) []completionDiagnosticRepairHint {
+	toolNamesByID := make(map[string]string)
+	var hints []completionDiagnosticRepairHint
+	for _, msg := range messages {
+		for _, block := range msg.Content {
+			switch b := block.(type) {
+			case llm.ToolUseBlock:
+				if b.ID != "" {
+					toolNamesByID[b.ID] = b.Name
+				}
+			case llm.ToolResultBlock:
+				if b.IsError || toolNamesByID[b.ToolUseID] != "code_symbols" {
+					continue
+				}
+				hints = append(hints, diagnosticRepairHintsFromCodeSymbolsOutput(b.Content)...)
+			}
+		}
+	}
+	hints = append(hints, observedMutationVerifierDiagnosticRepairHints(messages)...)
+	return normalizeCompletionDiagnosticRepairHints(hints)
+}
+
 func diagnosticDeltaReceiptsFromMutations(mutations []*tools.FileMutation) []completionDiagnosticDeltaReceipt {
 	if len(mutations) == 0 {
 		return nil
@@ -614,6 +654,31 @@ func diagnosticDeltaReceiptsFromMutations(mutations []*tools.FileMutation) []com
 		return nil
 	}
 	return receipts
+}
+
+func diagnosticRepairHintsFromMutations(mutations []*tools.FileMutation) []completionDiagnosticRepairHint {
+	latest := latestDiagnosticMutationsByPath(mutations)
+	if len(latest) == 0 {
+		return nil
+	}
+	var hints []completionDiagnosticRepairHint
+	for _, mutation := range latest {
+		if mutation == nil || mutation.NewDiagnosticCount <= 0 {
+			continue
+		}
+		filePath := normalizeCompletionScopePath(mutation.Path)
+		for _, diagnostic := range mutation.NewDiagnostics {
+			hints = append(hints, completionDiagnosticRepairHint{
+				FilePath:   filePath,
+				Line:       diagnostic.Line,
+				Column:     diagnostic.Column,
+				Source:     strings.TrimSpace(diagnostic.Source),
+				Error:      strings.TrimSpace(diagnostic.Error),
+				SourceTool: "structured_mutation_receipt",
+			})
+		}
+	}
+	return normalizeCompletionDiagnosticRepairHints(hints)
 }
 
 func latestDiagnosticMutationsByPath(mutations []*tools.FileMutation) []*tools.FileMutation {
@@ -701,6 +766,37 @@ func observedMutationVerifierDiagnosticReceipts(messages []llm.Message) []comple
 	return receipts
 }
 
+func observedMutationVerifierDiagnosticRepairHints(messages []llm.Message) []completionDiagnosticRepairHint {
+	pendingMutatingToolIDs := make(map[string]struct{})
+	awaitingVerifierFooter := false
+	var hints []completionDiagnosticRepairHint
+	for _, msg := range messages {
+		if awaitingVerifierFooter {
+			if msg.Role == llm.RoleUser {
+				hints = append(hints, mutationVerifierDiagnosticRepairHintsFromText(msg.Text())...)
+			}
+			awaitingVerifierFooter = false
+		}
+		for _, block := range msg.Content {
+			switch b := block.(type) {
+			case llm.ToolUseBlock:
+				if b.ID != "" && mutatingToolUseObserved(b) {
+					pendingMutatingToolIDs[b.ID] = struct{}{}
+				}
+			case llm.ToolResultBlock:
+				if _, ok := pendingMutatingToolIDs[b.ToolUseID]; !ok {
+					continue
+				}
+				if !b.IsError && !mutatingToolResultLooksNoop(b.Content) {
+					awaitingVerifierFooter = true
+				}
+				delete(pendingMutatingToolIDs, b.ToolUseID)
+			}
+		}
+	}
+	return normalizeCompletionDiagnosticRepairHints(hints)
+}
+
 func mutationVerifierDiagnosticReceiptsFromText(text string) []completionDiagnosticDeltaReceipt {
 	text = strings.TrimSpace(text)
 	if !strings.HasPrefix(text, "[Filesystem mutation verifier]\n") {
@@ -746,6 +842,79 @@ func mutationVerifierDiagnosticReceiptsFromText(text string) []completionDiagnos
 		return nil
 	}
 	return receipts
+}
+
+func mutationVerifierDiagnosticRepairHintsFromText(text string) []completionDiagnosticRepairHint {
+	text = strings.TrimSpace(text)
+	if !strings.HasPrefix(text, "[Filesystem mutation verifier]\n") {
+		return nil
+	}
+	var hints []completionDiagnosticRepairHint
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "- ") {
+			continue
+		}
+		fields := strings.Fields(strings.TrimPrefix(line, "- "))
+		if len(fields) < 2 {
+			continue
+		}
+		filePath := normalizeCompletionScopePath(fields[1])
+		hints = append(hints, diagnosticRepairHintsFromNewDiagFields(line, filePath, "filesystem_mutation_verifier")...)
+	}
+	return normalizeCompletionDiagnosticRepairHints(hints)
+}
+
+func diagnosticRepairHintsFromNewDiagFields(line string, filePath string, sourceTool string) []completionDiagnosticRepairHint {
+	var hints []completionDiagnosticRepairHint
+	searchFrom := 0
+	for {
+		relative := strings.Index(line[searchFrom:], "new_diag_")
+		if relative < 0 {
+			break
+		}
+		start := searchFrom + relative
+		eqRelative := strings.Index(line[start:], "=")
+		if eqRelative < 0 {
+			break
+		}
+		valueStart := start + eqRelative + 1
+		valueEnd := len(line)
+		for _, marker := range []string{" new_diag_", " failure_family="} {
+			if markerIndex := strings.Index(line[valueStart:], marker); markerIndex >= 0 {
+				candidateEnd := valueStart + markerIndex
+				if candidateEnd < valueEnd {
+					valueEnd = candidateEnd
+				}
+			}
+		}
+		if hint, ok := diagnosticRepairHintFromCompactValue(line[valueStart:valueEnd], filePath, sourceTool); ok {
+			hints = append(hints, hint)
+		}
+		searchFrom = valueEnd
+	}
+	return hints
+}
+
+func diagnosticRepairHintFromCompactValue(raw string, filePath string, sourceTool string) (completionDiagnosticRepairHint, bool) {
+	parts := strings.SplitN(strings.TrimSpace(raw), ":", 4)
+	if len(parts) != 4 {
+		return completionDiagnosticRepairHint{}, false
+	}
+	line := parseCompletionReceiptInt(parts[1])
+	column := parseCompletionReceiptInt(parts[2])
+	errorText := strings.TrimSpace(parts[3])
+	if strings.TrimSpace(filePath) == "" || errorText == "" {
+		return completionDiagnosticRepairHint{}, false
+	}
+	return completionDiagnosticRepairHint{
+		FilePath:   normalizeCompletionScopePath(filePath),
+		Line:       line,
+		Column:     column,
+		Source:     strings.TrimSpace(parts[0]),
+		Error:      errorText,
+		SourceTool: sourceTool,
+	}, true
 }
 
 func completionKeyValueFields(fields []string) map[string]string {
@@ -807,6 +976,133 @@ func diagnosticDeltaReceiptFromOutput(output string) (completionDiagnosticDeltaR
 		return completionDiagnosticDeltaReceipt{}, false
 	}
 	return receipt, true
+}
+
+func diagnosticRepairHintsFromCodeSymbolsOutput(output string) []completionDiagnosticRepairHint {
+	var parsed struct {
+		Operation string `json:"operation"`
+		Status    string `json:"status"`
+		FilePath  string `json:"file_path"`
+		Errors    []struct {
+			FilePath string `json:"file_path"`
+			Line     int    `json:"line"`
+			Column   int    `json:"column"`
+			Error    string `json:"error"`
+			Source   string `json:"source"`
+		} `json:"errors"`
+		DiagnosticDelta *struct {
+			FilePath string `json:"file_path"`
+			New      []struct {
+				FilePath    string `json:"file_path"`
+				AfterLine   int    `json:"after_line"`
+				AfterColumn int    `json:"after_column"`
+				Error       string `json:"error"`
+				Source      string `json:"source"`
+			} `json:"new"`
+		} `json:"diagnostic_delta"`
+	}
+	if err := json.Unmarshal([]byte(output), &parsed); err != nil {
+		return nil
+	}
+	if strings.TrimSpace(parsed.Operation) != "diagnostics_delta" {
+		return nil
+	}
+	var hints []completionDiagnosticRepairHint
+	defaultPath := normalizeCompletionScopePath(parsed.FilePath)
+	for _, diagnostic := range parsed.Errors {
+		filePath := normalizeCompletionScopePath(diagnostic.FilePath)
+		if filePath == "" {
+			filePath = defaultPath
+		}
+		hints = append(hints, completionDiagnosticRepairHint{
+			FilePath:   filePath,
+			Line:       diagnostic.Line,
+			Column:     diagnostic.Column,
+			Source:     strings.TrimSpace(diagnostic.Source),
+			Error:      strings.TrimSpace(diagnostic.Error),
+			SourceTool: "code_symbols",
+		})
+	}
+	if parsed.DiagnosticDelta != nil {
+		deltaPath := normalizeCompletionScopePath(parsed.DiagnosticDelta.FilePath)
+		if deltaPath == "" {
+			deltaPath = defaultPath
+		}
+		for _, diagnostic := range parsed.DiagnosticDelta.New {
+			filePath := normalizeCompletionScopePath(diagnostic.FilePath)
+			if filePath == "" {
+				filePath = deltaPath
+			}
+			hints = append(hints, completionDiagnosticRepairHint{
+				FilePath:   filePath,
+				Line:       diagnostic.AfterLine,
+				Column:     diagnostic.AfterColumn,
+				Source:     strings.TrimSpace(diagnostic.Source),
+				Error:      strings.TrimSpace(diagnostic.Error),
+				SourceTool: "code_symbols",
+			})
+		}
+	}
+	return normalizeCompletionDiagnosticRepairHints(hints)
+}
+
+func normalizeCompletionDiagnosticRepairHints(hints []completionDiagnosticRepairHint) []completionDiagnosticRepairHint {
+	if len(hints) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(hints))
+	out := make([]completionDiagnosticRepairHint, 0, len(hints))
+	for _, hint := range hints {
+		hint.FilePath = normalizeCompletionScopePath(hint.FilePath)
+		hint.Source = strings.TrimSpace(hint.Source)
+		hint.Error = strings.TrimSpace(hint.Error)
+		hint.SourceTool = strings.TrimSpace(hint.SourceTool)
+		if hint.FilePath == "" || hint.Error == "" {
+			continue
+		}
+		if len(hint.SuggestedTools) == 0 {
+			hint.SuggestedTools = []string{"read_file", "edit_file", "code_symbols diagnostics_delta"}
+		}
+		if hint.StopCondition == "" {
+			hint.StopCondition = "diagnostic_delta_clean_or_no_new_diagnostics"
+		}
+		key := strings.Join([]string{
+			hint.FilePath,
+			strconv.Itoa(hint.Line),
+			strconv.Itoa(hint.Column),
+			hint.Source,
+			hint.Error,
+		}, "\x00")
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, hint)
+		if len(out) >= 3 {
+			break
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func withoutDiagnosticRepairHintsFromSourceTool(hints []completionDiagnosticRepairHint, sourceTool string) []completionDiagnosticRepairHint {
+	if len(hints) == 0 {
+		return nil
+	}
+	out := make([]completionDiagnosticRepairHint, 0, len(hints))
+	for _, hint := range hints {
+		if hint.SourceTool == sourceTool {
+			continue
+		}
+		out = append(out, hint)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func diagnosticDeltaReceiptsContainNewDiagnostics(receipts []completionDiagnosticDeltaReceipt) bool {

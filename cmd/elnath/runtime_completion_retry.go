@@ -319,7 +319,11 @@ func completionRetryReasonGuidance(summary completionContractSummary) string {
 	case "budget_exceeded_after_edit_intent":
 		return "- Previous attempt reached budget after edit intent.\n- Resume from the already identified seam; do not restart broad investigation.\n- Complete the smallest concrete patch and run the configured verification before claiming completion."
 	case "new_diagnostics_found":
-		return "- Previous attempt introduced new code diagnostics.\n- Inspect the diagnostic delta, patch only the introduced issue, and avoid unrelated rewrites.\n- Rerun the focused diagnostic or verification before claiming completion."
+		guidance := "- Previous attempt introduced new code diagnostics.\n- Inspect the diagnostic delta, patch only the introduced issue, and avoid unrelated rewrites.\n- Rerun the focused diagnostic or verification before claiming completion."
+		if hintGuidance := completionDiagnosticRepairHintGuidance(summary.DiagnosticRepairHints); hintGuidance != "" {
+			guidance += "\n" + hintGuidance
+		}
+		return guidance
 	case "verification_command_failed":
 		return "- Previous verification failed.\n- Inspect the failure, patch only the smallest root cause, and rerun the same verification command."
 	case "unsupported_verification_success_claim":
@@ -329,6 +333,39 @@ func completionRetryReasonGuidance(summary completionContractSummary) string {
 	default:
 		return ""
 	}
+}
+
+func completionDiagnosticRepairHintGuidance(hints []completionDiagnosticRepairHint) string {
+	if len(hints) == 0 {
+		return ""
+	}
+	limit := len(hints)
+	if limit > 3 {
+		limit = 3
+	}
+	lines := make([]string, 0, limit)
+	for i := 0; i < limit; i++ {
+		lines = append(lines, "- New diagnostic hint: "+completionDiagnosticRepairHintLabel(hints[i]))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func completionDiagnosticRepairHintLabel(hint completionDiagnosticRepairHint) string {
+	location := strings.TrimSpace(hint.FilePath)
+	if hint.Line > 0 {
+		location += fmt.Sprintf(":%d", hint.Line)
+		if hint.Column > 0 {
+			location += fmt.Sprintf(":%d", hint.Column)
+		}
+	}
+	parts := []string{location}
+	if source := strings.TrimSpace(hint.Source); source != "" {
+		parts = append(parts, source)
+	}
+	if errorText := strings.TrimSpace(hint.Error); errorText != "" {
+		parts = append(parts, errorText)
+	}
+	return strings.Join(parts, " ")
 }
 
 func completionVerificationExecutor(input orchestrator.WorkflowInput) tools.Executor {

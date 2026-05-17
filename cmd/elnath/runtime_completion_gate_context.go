@@ -56,6 +56,7 @@ func (rt *executionRuntime) CompletionContext(_ context.Context, _ daemon.Task, 
 		ToolSearchReceipts:       completionToolSearchReceiptsToAgentic(summary.ToolSearchReceipts),
 		ControlToolReceipts:      completionControlToolReceiptsToAgentic(summary.ControlToolReceipts),
 		DiagnosticDeltaReceipts:  completionDiagnosticDeltaReceiptsToAgentic(summary.DiagnosticDeltaReceipts),
+		DiagnosticRepairHints:    completionDiagnosticRepairHintsToAgentic(summary.DiagnosticRepairHints),
 		ConditionalSkillMatches:  completionSkillMatchesToAgentic(summary.ConditionalSkillMatches),
 		CorrectionAttempted:      summary.CorrectionAttempted,
 		CorrectionAttempts:       summary.CorrectionAttempts,
@@ -254,6 +255,26 @@ func completionDiagnosticDeltaReceiptsToAgentic(src []completionDiagnosticDeltaR
 			NewDiagnosticCount:      receipt.NewDiagnosticCount,
 			ExistingDiagnosticCount: receipt.ExistingDiagnosticCount,
 			ResolvedDiagnosticCount: receipt.ResolvedDiagnosticCount,
+		})
+	}
+	return out
+}
+
+func completionDiagnosticRepairHintsToAgentic(src []completionDiagnosticRepairHint) []agenticcompletion.DiagnosticRepairHint {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]agenticcompletion.DiagnosticRepairHint, 0, len(src))
+	for _, hint := range src {
+		out = append(out, agenticcompletion.DiagnosticRepairHint{
+			FilePath:       hint.FilePath,
+			Line:           hint.Line,
+			Column:         hint.Column,
+			Source:         hint.Source,
+			Error:          hint.Error,
+			SourceTool:     hint.SourceTool,
+			SuggestedTools: append([]string(nil), hint.SuggestedTools...),
+			StopCondition:  hint.StopCondition,
 		})
 	}
 	return out
