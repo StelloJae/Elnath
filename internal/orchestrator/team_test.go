@@ -68,6 +68,55 @@ func TestTeamWorkflow_E2E(t *testing.T) {
 	}
 }
 
+func TestTeamWorkflow_PropagatesMutationReceipts(t *testing.T) {
+	ctx := context.Background()
+	plannerJSON := `[
+		{"id":1,"title":"Write file","instruction":"write file"},
+		{"id":2,"title":"Inspect result","instruction":"inspect result"}
+	]`
+	provider := &teamLearningProvider{
+		planner: plannerJSON,
+		synth:   "Combined result",
+		scripts: map[string][]llm.Message{
+			"write file": {
+				assistantStep("", llm.CompletedToolCall{ID: "write-1", Name: "write_file", Input: `{"file_path":"foo.go","content":"package main\n"}`}),
+				llm.NewAssistantMessage("wrote file"),
+			},
+			"inspect result": {
+				llm.NewAssistantMessage("inspected"),
+			},
+		},
+		indexes: make(map[string]int),
+	}
+	input := testInput("parallel file work", provider)
+	input.Tools.Register(&testTool{
+		name: "write_file",
+		executeFn: func(context.Context, json.RawMessage) (*tools.Result, error) {
+			return &tools.Result{
+				Output: "wrote foo.go",
+				Mutation: &tools.FileMutation{
+					Operation:          "write_file",
+					Path:               "foo.go",
+					Changed:            true,
+					DiagnosticLanguage: "go",
+					DiagnosticStatus:   "diagnostic_delta_clean",
+				},
+			}, nil
+		},
+	})
+
+	result, err := NewTeamWorkflow().Run(ctx, input)
+	if err != nil {
+		t.Fatalf("TeamWorkflow.Run: %v", err)
+	}
+	if len(result.Mutations) != 1 {
+		t.Fatalf("Mutations = %+v, want one mutation receipt", result.Mutations)
+	}
+	if result.Mutations[0].Path != "foo.go" || result.Mutations[0].DiagnosticStatus != "diagnostic_delta_clean" {
+		t.Fatalf("mutation receipt = %+v", result.Mutations[0])
+	}
+}
+
 func TestTeamWorkflow_FallbackToSingle(t *testing.T) {
 	ctx := context.Background()
 

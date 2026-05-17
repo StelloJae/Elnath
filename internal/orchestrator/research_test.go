@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/self"
+	"github.com/stello/elnath/internal/tools"
 	"github.com/stello/elnath/internal/wiki"
 
 	_ "modernc.org/sqlite"
@@ -68,6 +70,35 @@ func newTestAgenticStore(t *testing.T) (*agentic.Store, *agentic.AgenticTask) {
 	}
 	return store, task
 }
+
+type researchWorkflowMutationProvider struct {
+	chatCalls   int
+	streamCalls int
+}
+
+func (p *researchWorkflowMutationProvider) Chat(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+	p.chatCalls++
+	if p.chatCalls == 1 {
+		return &llm.ChatResponse{Content: `[{"id":"H1","statement":"write file","rationale":"r","test_plan":"write file","priority":1}]`}, nil
+	}
+	return &llm.ChatResponse{Content: "Research summary"}, nil
+}
+
+func (p *researchWorkflowMutationProvider) Stream(_ context.Context, _ llm.ChatRequest, cb func(llm.StreamEvent)) error {
+	p.streamCalls++
+	switch p.streamCalls {
+	case 1:
+		cb(llm.StreamEvent{Type: llm.EventToolUseStart, ToolCall: &llm.ToolUseEvent{ID: "write-1", Name: "write_file"}})
+		cb(llm.StreamEvent{Type: llm.EventToolUseDone, ToolCall: &llm.ToolUseEvent{ID: "write-1", Name: "write_file", Input: `{"file_path":"foo.go","content":"package main\n"}`}})
+	default:
+		cb(llm.StreamEvent{Type: llm.EventTextDelta, Content: `{"findings":"f","evidence":"e","confidence":"high","supported":true}`})
+	}
+	cb(llm.StreamEvent{Type: llm.EventDone, Usage: &llm.UsageStats{InputTokens: 1, OutputTokens: 1}})
+	return nil
+}
+
+func (p *researchWorkflowMutationProvider) Name() string            { return "test" }
+func (p *researchWorkflowMutationProvider) Models() []llm.ModelInfo { return nil }
 
 func TestResearchWorkflow_E2E(t *testing.T) {
 	ctx := context.Background()
@@ -137,6 +168,46 @@ func TestResearchWorkflow_E2E(t *testing.T) {
 	}
 	if !strings.Contains(streamed.String(), "I ran the benchmarks") {
 		t.Errorf("expected experiment stream output, got %q", streamed.String())
+	}
+}
+
+func TestResearchWorkflow_PropagatesMutationReceipts(t *testing.T) {
+	ctx := context.Background()
+	provider := &researchWorkflowMutationProvider{}
+	deps := &ResearchDeps{
+		WikiIndex:    &testWikiSearcher{},
+		WikiStore:    newTestWikiStore(t),
+		UsageTracker: newTestUsageTracker(t),
+		MaxRounds:    1,
+		CostCapUSD:   10.0,
+	}
+	input := testInput("Research file write", provider)
+	input.Extra = deps
+	input.Tools.Register(&testTool{
+		name: "write_file",
+		executeFn: func(context.Context, json.RawMessage) (*tools.Result, error) {
+			return &tools.Result{
+				Output: "wrote foo.go",
+				Mutation: &tools.FileMutation{
+					Operation:          "write_file",
+					Path:               "foo.go",
+					Changed:            true,
+					DiagnosticLanguage: "go",
+					DiagnosticStatus:   "diagnostic_delta_clean",
+				},
+			}, nil
+		},
+	})
+
+	result, err := NewResearchWorkflow().Run(ctx, input)
+	if err != nil {
+		t.Fatalf("ResearchWorkflow.Run: %v", err)
+	}
+	if len(result.Mutations) != 1 {
+		t.Fatalf("Mutations = %+v, want one mutation receipt", result.Mutations)
+	}
+	if result.Mutations[0].Path != "foo.go" || result.Mutations[0].DiagnosticStatus != "diagnostic_delta_clean" {
+		t.Fatalf("mutation receipt = %+v", result.Mutations[0])
 	}
 }
 

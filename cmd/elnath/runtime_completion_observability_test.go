@@ -564,6 +564,54 @@ func TestCompletionContractSummaryDetectsStructuredMutationNewDiagnostics(t *tes
 	}
 }
 
+func TestCompletionContractSummaryUsesLatestStructuredMutationDiagnosticsByPath(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("fix the Go parser issue"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "edit-1", Name: "edit_file", Input: json.RawMessage(`{"file_path":"internal/parser/parser.go","old_string":"old","new_string":"new"}`)},
+			}},
+			llm.NewToolResultMessage("edit-1", "ok", false),
+			llm.NewAssistantMessage("Done."),
+		},
+		Mutations: []*tools.FileMutation{
+			{
+				Operation:               "edit_file",
+				Path:                    "internal/parser/parser.go",
+				Changed:                 true,
+				DiagnosticLanguage:      "go",
+				DiagnosticStatus:        "new_diagnostics_found",
+				NewDiagnosticCount:      1,
+				ExistingDiagnosticCount: 0,
+				ResolvedDiagnosticCount: 0,
+			},
+			{
+				Operation:               "edit_file",
+				Path:                    "internal/parser/parser.go",
+				Changed:                 true,
+				DiagnosticLanguage:      "go",
+				DiagnosticStatus:        "diagnostic_delta_clean",
+				NewDiagnosticCount:      0,
+				ExistingDiagnosticCount: 0,
+				ResolvedDiagnosticCount: 1,
+			},
+		},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(nil, orchestrator.WorkflowConfig{}, result)
+
+	if summary.CompletionWarning == "new_diagnostics_found" {
+		t.Fatalf("CompletionWarning = %q, want latest clean structured mutation to clear stale new diagnostic", summary.CompletionWarning)
+	}
+	if len(summary.DiagnosticDeltaReceipts) != 1 {
+		t.Fatalf("DiagnosticDeltaReceipts = %+v, want latest receipt only", summary.DiagnosticDeltaReceipts)
+	}
+	receipt := summary.DiagnosticDeltaReceipts[0]
+	if receipt.Status != "diagnostic_delta_clean" || receipt.NewDiagnosticCount != 0 || receipt.ResolvedDiagnosticCount != 1 {
+		t.Fatalf("diagnostic delta receipt = %+v, want latest clean receipt", receipt)
+	}
+}
+
 func TestCompletionContractSummaryIgnoresUnpairedMutationVerifierText(t *testing.T) {
 	result := &orchestrator.WorkflowResult{
 		Messages: []llm.Message{

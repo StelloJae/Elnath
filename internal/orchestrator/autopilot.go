@@ -9,6 +9,7 @@ import (
 	"github.com/stello/elnath/internal/event"
 	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
+	"github.com/stello/elnath/internal/tools"
 )
 
 // AutopilotWorkflow executes a four-stage pipeline: plan → code → test → verify.
@@ -106,6 +107,7 @@ func (w *AutopilotWorkflow) Run(ctx context.Context, input WorkflowInput) (*Work
 	messages := append(input.Messages, llm.NewUserMessage(input.Message))
 
 	var accToolStatSlices [][]learning.AgentToolStat
+	var mutations []*tools.FileMutation
 	var lastFinishReason string
 	totalIter := 0
 	lessonScheduled := false
@@ -157,6 +159,7 @@ func (w *AutopilotWorkflow) Run(ctx context.Context, input WorkflowInput) (*Work
 				Summary:      errSummary,
 				Usage:        totalUsage,
 				ToolStats:    toWorkflowToolStats(learning.MergeAgentToolStats(accToolStatSlices...)),
+				Mutations:    mutations,
 				Iterations:   totalIter,
 				FinishReason: lastFinishReason,
 				Workflow:     w.Name(),
@@ -168,6 +171,7 @@ func (w *AutopilotWorkflow) Run(ctx context.Context, input WorkflowInput) (*Work
 		totalUsage.CacheRead += result.Usage.CacheRead
 		totalUsage.CacheWrite += result.Usage.CacheWrite
 		accToolStatSlices = append(accToolStatSlices, toAgentToolStats(result.ToolStats))
+		mutations = appendMutationReceipts(mutations, result.Mutations)
 		totalIter += result.Iterations
 		lastFinishReason = result.FinishReason
 
@@ -184,6 +188,7 @@ func (w *AutopilotWorkflow) Run(ctx context.Context, input WorkflowInput) (*Work
 		Summary:      summary,
 		Usage:        totalUsage,
 		ToolStats:    mergedToolStats,
+		Mutations:    mutations,
 		Iterations:   totalIter,
 		FinishReason: lastFinishReason,
 		Workflow:     w.Name(),

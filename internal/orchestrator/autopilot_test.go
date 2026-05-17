@@ -156,6 +156,44 @@ func TestAutopilotWorkflow_LearningAllStagesPass(t *testing.T) {
 	}
 }
 
+func TestAutopilotWorkflow_PropagatesMutationReceipts(t *testing.T) {
+	provider := &scriptedSingleProvider{messages: []llm.Message{
+		llm.NewAssistantMessage("Plan complete"),
+		assistantStep("", llm.CompletedToolCall{ID: "code-write", Name: "write_file", Input: `{"file_path":"foo.go","content":"package main\n"}`}),
+		llm.NewAssistantMessage("Code complete"),
+		llm.NewAssistantMessage("Tests complete"),
+		llm.NewAssistantMessage("Verification complete"),
+		llm.NewAssistantMessage("완료했습니다! 구현과 검증을 마쳤습니다."),
+	}}
+	input := testInput("ship the patch", provider)
+	input.Tools.Register(&testTool{
+		name: "write_file",
+		executeFn: func(context.Context, json.RawMessage) (*tools.Result, error) {
+			return &tools.Result{
+				Output: "wrote foo.go",
+				Mutation: &tools.FileMutation{
+					Operation:          "write_file",
+					Path:               "foo.go",
+					Changed:            true,
+					DiagnosticLanguage: "go",
+					DiagnosticStatus:   "diagnostic_delta_clean",
+				},
+			}, nil
+		},
+	})
+
+	result, err := NewAutopilotWorkflow().Run(context.Background(), input)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(result.Mutations) != 1 {
+		t.Fatalf("Mutations = %+v, want one mutation receipt", result.Mutations)
+	}
+	if result.Mutations[0].Path != "foo.go" || result.Mutations[0].DiagnosticStatus != "diagnostic_delta_clean" {
+		t.Fatalf("mutation receipt = %+v", result.Mutations[0])
+	}
+}
+
 func TestAutopilotWorkflow_LLMExtractionUsesMergedRunContext(t *testing.T) {
 	store := learning.NewStore(filepath.Join(t.TempDir(), "lessons.jsonl"))
 	extractor := &countingExtractor{}

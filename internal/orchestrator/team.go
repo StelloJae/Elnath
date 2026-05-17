@@ -15,6 +15,7 @@ import (
 	"github.com/stello/elnath/internal/learning"
 	"github.com/stello/elnath/internal/llm"
 	"github.com/stello/elnath/internal/secret"
+	"github.com/stello/elnath/internal/tools"
 )
 
 // TeamWorkflow splits a task into parallel subtasks, runs each in its own
@@ -200,6 +201,7 @@ func (w *TeamWorkflow) Run(ctx context.Context, input WorkflowInput) (*WorkflowR
 	totalUsage.CacheWrite += synthUsage.CacheWrite
 
 	var toolStatSlices [][]learning.AgentToolStat
+	var mutations []*tools.FileMutation
 	finishReasons := make([]string, 0, len(results))
 	totalIter := 0
 	succeeded := 0
@@ -211,6 +213,7 @@ func (w *TeamWorkflow) Run(ctx context.Context, input WorkflowInput) (*WorkflowR
 			continue
 		}
 		toolStatSlices = append(toolStatSlices, toAgentToolStats(r.result.ToolStats))
+		mutations = appendMutationReceipts(mutations, r.result.Mutations)
 		finishReasons = append(finishReasons, string(r.result.FinishReason))
 		totalIter += r.result.Iterations
 		succeeded++
@@ -242,6 +245,7 @@ func (w *TeamWorkflow) Run(ctx context.Context, input WorkflowInput) (*WorkflowR
 		Summary:      summary,
 		Usage:        totalUsage,
 		ToolStats:    workflowToolStats,
+		Mutations:    mutations,
 		Iterations:   totalIter,
 		FinishReason: finishReason,
 		Workflow:     w.Name(),
