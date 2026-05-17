@@ -88,6 +88,7 @@ invalid call shape.
 - `internal/skill/invocation_tool_test.go`
 - `internal/skill/catalog_tool.go`
 - `internal/skill/catalog_tool_test.go`
+- `internal/skill/guard.go`
 - `internal/skill/tracker.go`
 - `cmd/elnath/runtime.go`
 - `.omc/research/skill-invocation-usage-feedback-2026-05-17.md`
@@ -110,6 +111,28 @@ Added:
 This gives Elnath a small Hermes-style skill feedback loop without adding
 automatic pruning or broad curator behavior.
 
+## Third Slice: Read-Only Skill Risk Scan
+
+Hermes has an explicit skills guard for externally sourced skills. Elnath
+already has trust levels and allowlists, but the model/operator could not ask
+the skill catalog for a compact risk scan of a specific skill.
+
+Added:
+
+- Elnath-native `ScanSkillRisk`
+- `skill_catalog` action `scan`
+- scan verdicts: `safe`, `caution`, `dangerous`
+- findings with pattern id, severity, category, line, and description
+- read-only scan receipt with returned finding count
+
+The scan is deliberately conservative and explainability-first:
+
+- it does not automatically block skill execution;
+- it does not copy Hermes regexes verbatim;
+- it does not claim full external skill security review;
+- it makes prompt-injection, secret-exfiltration, hidden-instruction, and broad
+  destructive-command markers visible before use.
+
 ## Verification
 
 TDD expected failure before implementation:
@@ -128,6 +151,9 @@ Broader proportional verification:
 - Result: PASS
 
 - `go test ./internal/skill -run 'TestCatalogToolReportsUsageStats|TestCatalogToolUsageRequiresTracker' -count=1`
+- Result: PASS
+
+- `go test ./internal/skill -run 'TestCatalogToolScansSkillRisk|TestCatalogToolScansSafeSkill' -count=1`
 - Result: PASS
 
 - `go test ./cmd/elnath -run 'TestCommandRegistryIncludesSkill|TestCmdSkillCreateDeleteEditAndStats|TestCommandCatalogToolShowsRuntimeControlArgumentHints' -count=1`
@@ -162,20 +188,24 @@ Allowed:
 - `skill_catalog` can expose read-only skill usage summaries when a tracker is
   configured;
 - usage summaries include success/failure counts for skill feedback.
+- `skill_catalog` can scan a selected skill for conservative risk markers and
+  return a read-only verdict/receipt.
 
 Not claimed:
 
 - full Hermes curator parity;
 - automatic skill pruning or lifecycle management;
-- skill safety scanning beyond existing trust filters;
+- automatic skill blocking from scan results;
+- full external skill security review;
 - benchmark or public superiority evidence.
 
 ## Next Recommendation
 
 Continue with the skill feedback lane before opening a PR:
 
-- add explicit skill guard/explainability for external/local-compatible skills,
+- document skill curator exclusions before any automatic skill lifecycle work,
   or
-- document skill curator exclusions before any automatic skill lifecycle work.
+- open one coherent PR for the skill feedback batch if no larger adjacent slice
+  is needed.
 
 Do not resume benchmark-first work.

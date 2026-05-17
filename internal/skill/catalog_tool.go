@@ -39,7 +39,7 @@ func (t *CatalogTool) Description() string {
 
 func (t *CatalogTool) Schema() json.RawMessage {
 	return tools.Object(map[string]tools.Property{
-		"action":         tools.StringEnum("Catalog action.", "list", "show", "recommend", "match_paths", "usage"),
+		"action":         tools.StringEnum("Catalog action.", "list", "show", "recommend", "match_paths", "usage", "scan"),
 		"skill":          tools.String("Skill name for action=show."),
 		"query":          tools.String("Intent or task query for action=recommend."),
 		"paths":          tools.Array("File paths for action=match_paths.", "string"),
@@ -102,6 +102,7 @@ type catalogToolReceipt struct {
 	ReturnedSkills     int      `json:"returned_skills,omitempty"`
 	ReturnedMatches    int      `json:"returned_matches,omitempty"`
 	ReturnedUsage      int      `json:"returned_usage,omitempty"`
+	ReturnedFindings   int      `json:"returned_findings,omitempty"`
 	TrustFilterApplied bool     `json:"trust_filter_applied"`
 	AllowTrustLevels   []string `json:"allow_trust_levels,omitempty"`
 	MaxResults         int      `json:"max_results,omitempty"`
@@ -172,8 +173,17 @@ func (t *CatalogTool) Execute(_ context.Context, params json.RawMessage) (*tools
 			"action": "usage",
 			"usage":  usage,
 		}, len(usage), filter))
+	case "scan":
+		scan, scanErr := t.skillRiskScan(input.Skill, filter)
+		if scanErr != nil {
+			return tools.ErrorResult(scanErr.Error()), nil
+		}
+		return marshalSkillCatalogOutput(t.withScanReceipt(input, map[string]any{
+			"action": "scan",
+			"scan":   scan,
+		}, len(scan.Findings), filter))
 	default:
-		return tools.ErrorResult(fmt.Sprintf("skill_catalog: unsupported action %q; supported actions are list, show, recommend, match_paths, and usage", input.Action)), nil
+		return tools.ErrorResult(fmt.Sprintf("skill_catalog: unsupported action %q; supported actions are list, show, recommend, match_paths, usage, and scan", input.Action)), nil
 	}
 }
 
@@ -212,6 +222,14 @@ func (t *CatalogTool) receipt(input catalogToolInput, action string, returnedSki
 func (t *CatalogTool) withUsageReceipt(input catalogToolInput, output map[string]any, returnedUsage int, filter skillTrustFilter) map[string]any {
 	receipt := t.receipt(input, "usage", 0, 0, filter)
 	receipt.ReturnedUsage = returnedUsage
+	output["receipt"] = receipt
+	return output
+}
+
+func (t *CatalogTool) withScanReceipt(input catalogToolInput, output map[string]any, returnedFindings int, filter skillTrustFilter) map[string]any {
+	receipt := t.receipt(input, "scan", 0, 0, filter)
+	receipt.Skill = strings.TrimSpace(strings.TrimPrefix(input.Skill, "/"))
+	receipt.ReturnedFindings = returnedFindings
 	output["receipt"] = receipt
 	return output
 }
@@ -330,6 +348,24 @@ func (t *CatalogTool) registrySkillsForUsage(summaries map[string]UsageSummary) 
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
+}
+
+func (t *CatalogTool) skillRiskScan(name string, filter skillTrustFilter) (SkillRiskScan, error) {
+	name = strings.TrimSpace(strings.TrimPrefix(name, "/"))
+	if name == "" {
+		return SkillRiskScan{}, fmt.Errorf("skill_catalog: skill is required for action=scan")
+	}
+	if t == nil || t.registry == nil {
+		return SkillRiskScan{}, fmt.Errorf("skill_catalog: skill registry is not configured")
+	}
+	sk, ok := t.registry.Get(name)
+	if !ok {
+		return SkillRiskScan{}, fmt.Errorf("skill %q not found", name)
+	}
+	if !filter.allowsSkill(sk) {
+		return SkillRiskScan{}, fmt.Errorf("skill %q filtered by allow_trust_levels", name)
+	}
+	return ScanSkillRisk(sk), nil
 }
 
 func firstSkillCatalogEntries(skills []*Skill, maxResults int, filter skillTrustFilter) []catalogSkillEntry {
