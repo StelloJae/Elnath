@@ -319,6 +319,16 @@ func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testi
 					ErrorCount:         1,
 					NewDiagnosticCount: 1,
 				}},
+				DiagnosticRepairHints: []DiagnosticRepairHint{{
+					FilePath:       "internal/parser/parser.go",
+					Line:           11,
+					Column:         1,
+					Source:         "go/parser",
+					Error:          "expected declaration",
+					SourceTool:     "code_symbols",
+					SuggestedTools: []string{"read_file", "edit_file", "code_symbols diagnostics_delta"},
+					StopCondition:  "diagnostic_delta_clean_or_no_new_diagnostics",
+				}},
 				CorrectionAttempts:    1,
 				CorrectionMaxAttempts: 1,
 				CorrectionAttemptDetails: []CorrectionAttemptReceipt{{
@@ -435,6 +445,14 @@ func TestCompletionGate_ReceiptSummaryIncludesOptionalCompletionContext(t *testi
 	diagnosticDeltaReceipt, ok := diagnosticDeltaReceipts[0].(map[string]any)
 	if !ok || diagnosticDeltaReceipt["tool"] != "code_symbols" || diagnosticDeltaReceipt["operation"] != "diagnostics_delta" || diagnosticDeltaReceipt["new_diagnostic_count"] != float64(1) {
 		t.Fatalf("diagnostic_delta_receipt missing fields: receipt=%v summary=%v", diagnosticDeltaReceipts[0], summary)
+	}
+	diagnosticRepairHints, ok := summary["diagnostic_repair_hints"].([]any)
+	if !ok || len(diagnosticRepairHints) != 1 {
+		t.Fatalf("diagnostic_repair_hints missing: summary=%v", summary)
+	}
+	diagnosticRepairHint, ok := diagnosticRepairHints[0].(map[string]any)
+	if !ok || diagnosticRepairHint["file_path"] != "internal/parser/parser.go" || diagnosticRepairHint["line"] != float64(11) || diagnosticRepairHint["error"] != "expected declaration" {
+		t.Fatalf("diagnostic_repair_hint missing fields: hint=%v summary=%v", diagnosticRepairHints[0], summary)
 	}
 	if summary["correction_attempts"] != float64(1) || summary["correction_max_attempts"] != float64(1) {
 		t.Fatalf("correction budget fields missing: summary=%v", summary)

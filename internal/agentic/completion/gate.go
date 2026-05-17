@@ -52,6 +52,7 @@ type CompletionContext struct {
 	ToolSearchReceipts       []ToolSearchReceipt
 	ControlToolReceipts      []ControlToolReceipt
 	DiagnosticDeltaReceipts  []DiagnosticDeltaReceipt
+	DiagnosticRepairHints    []DiagnosticRepairHint
 	ConditionalSkillMatches  []ConditionalSkillMatch
 	CorrectionAttempted      bool
 	CorrectionAttempts       int
@@ -198,6 +199,17 @@ type DiagnosticDeltaReceipt struct {
 	NewDiagnosticCount      int    `json:"new_diagnostic_count,omitempty"`
 	ExistingDiagnosticCount int    `json:"existing_diagnostic_count,omitempty"`
 	ResolvedDiagnosticCount int    `json:"resolved_diagnostic_count,omitempty"`
+}
+
+type DiagnosticRepairHint struct {
+	FilePath       string   `json:"file_path"`
+	Line           int      `json:"line,omitempty"`
+	Column         int      `json:"column,omitempty"`
+	Source         string   `json:"source,omitempty"`
+	Error          string   `json:"error"`
+	SourceTool     string   `json:"source_tool,omitempty"`
+	SuggestedTools []string `json:"suggested_tools,omitempty"`
+	StopCondition  string   `json:"stop_condition,omitempty"`
 }
 
 type ControlToolReceipt struct {
@@ -523,6 +535,9 @@ func encodeReceiptSummary(summary map[string]int, completionContext CompletionCo
 	}
 	if len(completionContext.DiagnosticDeltaReceipts) > 0 {
 		payload["diagnostic_delta_receipts"] = completionContext.DiagnosticDeltaReceipts
+	}
+	if len(completionContext.DiagnosticRepairHints) > 0 {
+		payload["diagnostic_repair_hints"] = completionContext.DiagnosticRepairHints
 	}
 	if len(completionContext.ConditionalSkillMatches) > 0 {
 		payload["conditional_skill_matches"] = completionContext.ConditionalSkillMatches
