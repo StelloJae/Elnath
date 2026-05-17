@@ -1248,6 +1248,9 @@ func TestShellNotifyCompletionsUpdatesBinder(t *testing.T) {
 	if len(bot.sent) != 1 {
 		t.Fatalf("sent messages = %d, want 1 completion notification", len(bot.sent))
 	}
+	if !strings.Contains(bot.sent[0].text, "/handoff "+fmt.Sprint(taskID)) {
+		t.Fatalf("completion notification = %q, want handoff hint", bot.sent[0].text)
+	}
 }
 
 func TestShellNotifyCompletionsSkipsNonTelegramSurface(t *testing.T) {

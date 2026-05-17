@@ -207,6 +207,9 @@ func (s *TelegramSink) NotifyCompletion(_ context.Context, c daemon.TaskCompleti
 
 	elapsed := formatElapsed(c.StartedAt, c.CompletedAt)
 	header := fmt.Sprintf("%s <b>%s</b>%s <code>#%d</code>", icon, label, elapsed, c.TaskID)
+	if handoff := telegramHandoffCommand(c.TaskID, c.SessionID); handoff != "" {
+		header += fmt.Sprintf("\nHandoff: <code>%s</code>", handoff)
+	}
 	if prMsgID := task.progress.MessageID(); prMsgID > 0 {
 		_ = s.bot.EditMessage(ctx, s.chatID, prMsgID, header)
 	} else {

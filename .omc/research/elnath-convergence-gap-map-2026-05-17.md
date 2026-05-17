@@ -1631,3 +1631,48 @@ Updated next candidates:
 1. focused verification for this combined progress/alive branch;
 2. PR-ready branch cleanup if verification passes;
 3. session handoff automatic cross-surface notification after this branch.
+
+## Post-Telegram-Handoff-Notification Local Update
+
+Date: 2026-05-17 KST
+
+Branch:
+
+- `codex/handoff-notification`
+
+Artifact:
+
+- `.omc/research/telegram-handoff-notification-2026-05-17.md`
+
+What changed:
+
+- Telegram streaming completion notifications now include
+  `Handoff: /handoff <task_id>` when the completed task has a session ID.
+- Telegram shell-polled completion notifications now include
+  `handoff: /handoff <task_id>` when the completed task has a session ID.
+- The handoff command guard is centralized in `telegramHandoffCommand`.
+
+Reference impact:
+
+- Closes the previously listed "automatic cross-surface handoff notification"
+  gap at the operator-notification level.
+- Does not claim live runtime migration, remote claimant authentication, or full
+  Hermes handoff parity.
+
+Verification:
+
+- `go test ./internal/telegram -run 'TestSinkNotifyCompletionIncludesHandoffHint|TestShellNotifyCompletionsUpdatesBinder' -count=1`
+  passed.
+- `go test ./internal/telegram -count=1` passed.
+- `go test ./cmd/elnath ./internal/telegram ./internal/daemon -count=1`
+  passed.
+- `git diff --check -- internal/telegram/sink.go internal/telegram/shell.go internal/telegram/sink_test.go internal/telegram/shell_test.go`
+  passed.
+- `go vet ./...` passed.
+
+Remaining handoff/gateway gaps:
+
+- No live runtime migration.
+- No remote claimant authentication.
+- Gateway handoff lifecycle exposure still remains a candidate if product need
+  persists.

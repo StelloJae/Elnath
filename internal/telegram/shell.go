@@ -406,6 +406,9 @@ func (s *Shell) NotifyCompletions(ctx context.Context) error {
 			emptyFallback(task.Completion.SessionID, "-"),
 			emptyFallback(task.Completion.Summary, emptyFallback(task.Summary, "-")),
 		)
+		if handoff := telegramHandoffCommand(task.ID, task.Completion.SessionID); handoff != "" {
+			text += "\nhandoff: " + handoff
+		}
 		if err := s.bot.SendMessage(ctx, s.chatID, text); err != nil {
 			return err
 		}
@@ -1461,4 +1464,11 @@ func emptyFallback(value, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func telegramHandoffCommand(taskID int64, sessionID string) string {
+	if taskID <= 0 || strings.TrimSpace(sessionID) == "" {
+		return ""
+	}
+	return fmt.Sprintf("/handoff %d", taskID)
 }

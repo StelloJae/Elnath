@@ -295,6 +295,44 @@ func TestSinkNotifyCompletionSendsSummaryWhenNotStreamed(t *testing.T) {
 	}
 }
 
+func TestSinkNotifyCompletionIncludesHandoffHint(t *testing.T) {
+	bot := newSinkBot()
+	sink := NewTelegramSink(bot, "chat-1", nil)
+
+	sink.TrackUserMessage(42, 100)
+
+	err := sink.NotifyCompletion(context.Background(), daemon.TaskCompletion{
+		TaskID:      42,
+		SessionID:   "sess-42",
+		Status:      daemon.StatusDone,
+		Summary:     "Task finished successfully.",
+		StartedAt:   time.Unix(10, 0),
+		CompletedAt: time.Unix(20, 0),
+	})
+	if err != nil {
+		t.Fatalf("NotifyCompletion: %v", err)
+	}
+
+	found := false
+	for _, m := range bot.getSent() {
+		if strings.Contains(m.text, "/handoff 42") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		for _, e := range bot.getEdits() {
+			if strings.Contains(e.text, "/handoff 42") {
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected handoff hint in completion notification, sent=%+v edits=%+v", bot.getSent(), bot.getEdits())
+	}
+}
+
 func TestSinkTrackChatBindingStoresUserID(t *testing.T) {
 	bot := newSinkBot()
 	sink := NewTelegramSink(bot, "chat-1", nil)
