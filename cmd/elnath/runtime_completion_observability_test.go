@@ -564,6 +564,42 @@ func TestCompletionContractSummaryDetectsStructuredMutationNewDiagnostics(t *tes
 	}
 }
 
+func TestCompletionContractSummaryRecordsStructuredMutationDiagnosticPolicy(t *testing.T) {
+	result := &orchestrator.WorkflowResult{
+		Messages: []llm.Message{
+			llm.NewUserMessage("fix the Python helper"),
+			{Role: llm.RoleAssistant, Content: []llm.ContentBlock{
+				llm.ToolUseBlock{ID: "edit-1", Name: "edit_file", Input: json.RawMessage(`{"file_path":"scripts/helper.py","old_string":"old","new_string":"new"}`)},
+			}},
+			llm.NewToolResultMessage("edit-1", "ok", false),
+			llm.NewAssistantMessage("Done."),
+		},
+		Mutations: []*tools.FileMutation{{
+			Operation:          "edit_file",
+			Path:               "scripts/helper.py",
+			Changed:            true,
+			DiagnosticLanguage: "python",
+			DiagnosticStatus:   "diagnostics_not_configured",
+		}},
+		FinishReason: "stop",
+	}
+	summary := summarizeCompletionContract(nil, orchestrator.WorkflowConfig{}, result)
+
+	if summary.CompletionWarning == "new_diagnostics_found" {
+		t.Fatalf("CompletionWarning = %q, want non-Go diagnostic policy receipt not to trigger new diagnostic retry", summary.CompletionWarning)
+	}
+	if summary.RetryReason == "new_diagnostics_found" {
+		t.Fatalf("RetryReason = %q, want no new diagnostic retry", summary.RetryReason)
+	}
+	if len(summary.DiagnosticDeltaReceipts) != 1 {
+		t.Fatalf("DiagnosticDeltaReceipts = %+v, want one structured policy receipt", summary.DiagnosticDeltaReceipts)
+	}
+	receipt := summary.DiagnosticDeltaReceipts[0]
+	if receipt.Tool != "structured_mutation_receipt" || receipt.Status != "diagnostics_not_configured" || receipt.Language != "python" || receipt.NewDiagnosticCount != 0 {
+		t.Fatalf("diagnostic policy receipt = %+v", receipt)
+	}
+}
+
 func TestCompletionContractSummaryUsesLatestStructuredMutationDiagnosticsByPath(t *testing.T) {
 	result := &orchestrator.WorkflowResult{
 		Messages: []llm.Message{

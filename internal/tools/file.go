@@ -211,7 +211,7 @@ func (t *WriteTool) Execute(ctx context.Context, params json.RawMessage) (*Resul
 		[]byte(p.Content),
 		true,
 	)
-	AnnotateGoMutationDiagnostics(result.Mutation, abs, mutationDiagnosticsBasePath(ctx, t.guard), before, beforeExists, []byte(p.Content), true)
+	AnnotateMutationDiagnostics(result.Mutation, abs, mutationDiagnosticsBasePath(ctx, t.guard), before, beforeExists, []byte(p.Content), true)
 	return result, nil
 }
 
@@ -321,7 +321,7 @@ func (t *EditTool) Execute(ctx context.Context, params json.RawMessage) (*Result
 				[]byte(updated),
 				true,
 			)
-			AnnotateGoMutationDiagnostics(result.Mutation, abs, mutationDiagnosticsBasePath(ctx, t.guard), []byte(original), true, []byte(updated), true)
+			AnnotateMutationDiagnostics(result.Mutation, abs, mutationDiagnosticsBasePath(ctx, t.guard), []byte(original), true, []byte(updated), true)
 			return result, nil
 		}
 		if errMsg != "" {
@@ -355,7 +355,7 @@ func (t *EditTool) Execute(ctx context.Context, params json.RawMessage) (*Result
 		[]byte(updated),
 		true,
 	)
-	AnnotateGoMutationDiagnostics(result.Mutation, abs, mutationDiagnosticsBasePath(ctx, t.guard), []byte(original), true, []byte(updated), true)
+	AnnotateMutationDiagnostics(result.Mutation, abs, mutationDiagnosticsBasePath(ctx, t.guard), []byte(original), true, []byte(updated), true)
 	return result, nil
 }
 

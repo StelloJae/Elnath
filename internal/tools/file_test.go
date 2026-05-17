@@ -173,6 +173,59 @@ func TestWriteToolRecordsGoDiagnosticDelta(t *testing.T) {
 	}
 }
 
+func TestWriteToolRecordsNonGoDiagnosticPolicy(t *testing.T) {
+	tests := []struct {
+		name     string
+		filePath string
+		content  string
+		language string
+	}{
+		{
+			name:     "python",
+			filePath: "script.py",
+			content:  "print('hello')\n",
+			language: "python",
+		},
+		{
+			name:     "typescript",
+			filePath: "app.ts",
+			content:  "const ok = true;\n",
+			language: "typescript",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			tool := NewWriteTool(NewPathGuard(dir, nil))
+
+			res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{
+				"file_path": tt.filePath,
+				"content":   tt.content,
+			}))
+			if err != nil {
+				t.Fatalf("Execute: %v", err)
+			}
+			if res.IsError {
+				t.Fatalf("unexpected error: %s", res.Output)
+			}
+			if res.Mutation == nil {
+				t.Fatal("Mutation = nil, want structured file mutation receipt")
+			}
+			if got, want := res.Mutation.DiagnosticLanguage, tt.language; got != want {
+				t.Fatalf("DiagnosticLanguage = %q, want %q", got, want)
+			}
+			if got, want := res.Mutation.DiagnosticStatus, "diagnostics_not_configured"; got != want {
+				t.Fatalf("DiagnosticStatus = %q, want %q", got, want)
+			}
+			if res.Mutation.NewDiagnosticCount != 0 || res.Mutation.ExistingDiagnosticCount != 0 || res.Mutation.ResolvedDiagnosticCount != 0 {
+				t.Fatalf("diagnostic counts = new %d existing %d resolved %d, want all zero",
+					res.Mutation.NewDiagnosticCount, res.Mutation.ExistingDiagnosticCount, res.Mutation.ResolvedDiagnosticCount)
+			}
+		})
+	}
+}
+
 func TestWriteToolRejectsSameContentOverwrite(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "out.txt")
@@ -413,6 +466,40 @@ func TestEditTool(t *testing.T) {
 		if res.Mutation.ResolvedDiagnosticCount == 0 || res.Mutation.NewDiagnosticCount != 0 {
 			t.Fatalf("diagnostic counts = new %d resolved %d, want resolved without new",
 				res.Mutation.NewDiagnosticCount, res.Mutation.ResolvedDiagnosticCount)
+		}
+	})
+
+	t.Run("non-go diagnostic policy", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "script.py")
+		if err := os.WriteFile(path, []byte("value = 1\n"), 0o644); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+		tool := NewEditTool(NewPathGuard(dir, nil))
+
+		res, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{
+			"file_path":  "script.py",
+			"old_string": "value = 1",
+			"new_string": "value = 2",
+		}))
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		if res.IsError {
+			t.Fatalf("unexpected error: %s", res.Output)
+		}
+		if res.Mutation == nil {
+			t.Fatal("Mutation = nil, want edit mutation receipt")
+		}
+		if got, want := res.Mutation.DiagnosticLanguage, "python"; got != want {
+			t.Fatalf("DiagnosticLanguage = %q, want %q", got, want)
+		}
+		if got, want := res.Mutation.DiagnosticStatus, "diagnostics_not_configured"; got != want {
+			t.Fatalf("DiagnosticStatus = %q, want %q", got, want)
+		}
+		if res.Mutation.NewDiagnosticCount != 0 || res.Mutation.ExistingDiagnosticCount != 0 || res.Mutation.ResolvedDiagnosticCount != 0 {
+			t.Fatalf("diagnostic counts = new %d existing %d resolved %d, want all zero",
+				res.Mutation.NewDiagnosticCount, res.Mutation.ExistingDiagnosticCount, res.Mutation.ResolvedDiagnosticCount)
 		}
 	})
 
