@@ -12,19 +12,19 @@ import (
 // RenderState is a read-only snapshot passed to every Node.Render call.
 // Any field may be nil or empty; nodes must handle that gracefully.
 type RenderState struct {
-	SessionID     string
-	UserInput     string
-	Self          *self.SelfState
-	Principal     identity.Principal
-	Messages      []llm.Message
-	WikiIdx       *wiki.Index
-	TokenBudget   int
-	Locale        string
-	PersonaExtra  string
-	Model         string
-	Provider      string
-	ToolNames     []string
-	WorkDir       string
+	SessionID    string
+	UserInput    string
+	Self         *self.SelfState
+	Principal    identity.Principal
+	Messages     []llm.Message
+	WikiIdx      *wiki.Index
+	TokenBudget  int
+	Locale       string
+	PersonaExtra string
+	Model        string
+	Provider     string
+	ToolNames    []string
+	WorkDir      string
 	// SessionWorkDir, when non-empty, is the per-session subdir advertised
 	// to the LLM by SelfStateNode in place of the shared root WorkDir.
 	// Search-oriented nodes (ContextFilesNode, ProjectContextNode) keep
@@ -32,12 +32,15 @@ type RenderState struct {
 	// remain reachable. Empty falls back to WorkDir.
 	SessionWorkDir string
 	ExistingCode   bool
-	VerifyHint    bool
-	BenchmarkMode bool
-	TaskLanguage  string
-	DaemonMode    bool
-	ProjectID     string
-	MessageCount  int
+	VerifyHint     bool
+	BenchmarkMode  bool
+	TaskLanguage   string
+	DaemonMode     bool
+	ProjectID      string
+	MessageCount   int
+	// ResumeContext is an operator-generated continuation note for a resumed
+	// task/session. Nodes must treat it as quoted context, not new instruction.
+	ResumeContext string
 	// IsChat is true when rendering the Telegram chat-path prompt so
 	// chat-only nodes (ChatSystemPromptNode / ChatToolGuideNode) gate on
 	// a single explicit boolean instead of re-inferring surface. The task

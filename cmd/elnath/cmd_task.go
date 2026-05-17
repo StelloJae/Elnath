@@ -535,7 +535,7 @@ func cmdTaskResume(ctx context.Context, args []string) error {
 		return err
 	}
 
-	os.Args = append(os.Args, "--session", sid)
+	os.Args = append(os.Args, "--session", sid, taskResumeHandoffContextFlag, strconv.FormatInt(taskID, 10))
 	return cmdRun(ctx, nil)
 }
 
@@ -746,6 +746,16 @@ func emptyDash(s string) string {
 		return "-"
 	}
 	return s
+}
+
+func boolCount(values ...bool) int {
+	count := 0
+	for _, value := range values {
+		if value {
+			count++
+		}
+	}
+	return count
 }
 
 func openTaskQueue() (*core.DB, *daemon.Queue, error) {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -69,18 +71,24 @@ func cmdTaskHandoff(ctx context.Context, args []string) error {
 
 func cmdTaskHandoffWithQueue(ctx context.Context, queue *daemon.Queue, dataDir string, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: elnath task handoff <id> [--json] [--max-messages N]")
+		return fmt.Errorf("usage: elnath task handoff <id> [--json|--markdown|--save] [--max-messages N]")
 	}
 	taskID, err := parseTaskID(args[0])
 	if err != nil {
 		return err
 	}
 	jsonOut := false
+	markdownOut := false
+	saveMarkdown := false
 	maxMessages := defaultTaskHandoffMessages
 	for i := 1; i < len(args); i++ {
 		switch args[i] {
 		case "--json":
 			jsonOut = true
+		case "--markdown":
+			markdownOut = true
+		case "--save":
+			saveMarkdown = true
 		case "--max-messages":
 			value, next, err := parseIntFlag(args, i, "--max-messages")
 			if err != nil {
@@ -91,6 +99,9 @@ func cmdTaskHandoffWithQueue(ctx context.Context, queue *daemon.Queue, dataDir s
 		default:
 			return fmt.Errorf("unknown task handoff flag: %s", args[i])
 		}
+	}
+	if boolCount(jsonOut, markdownOut, saveMarkdown) > 1 {
+		return fmt.Errorf("task handoff: choose only one output mode: --json, --markdown, or --save")
 	}
 
 	view, err := buildTaskHandoff(ctx, queue, dataDir, taskID, maxMessages)
@@ -103,6 +114,18 @@ func cmdTaskHandoffWithQueue(ctx context.Context, queue *daemon.Queue, dataDir s
 			return fmt.Errorf("task handoff: marshal output: %w", err)
 		}
 		fmt.Println(string(raw))
+		return nil
+	}
+	if markdownOut {
+		fmt.Println(formatTaskHandoffMarkdown(view))
+		return nil
+	}
+	if saveMarkdown {
+		path, err := saveTaskHandoffMarkdown(dataDir, view)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Saved handoff: %s\n", path)
 		return nil
 	}
 	printTaskHandoff(view)
@@ -232,6 +255,74 @@ func printTaskHandoff(view taskHandoffCLIOutput) {
 			fmt.Printf("  - %s: %s\n", msg.Role, msg.Text)
 		}
 	}
+}
+
+func formatTaskHandoffMarkdown(view taskHandoffCLIOutput) string {
+	var b strings.Builder
+	b.WriteString("# Task Handoff\n\n")
+	fmt.Fprintf(&b, "- Task ID: %d\n", view.TaskID)
+	fmt.Fprintf(&b, "- Status: %s\n", emptyDash(view.Status))
+	fmt.Fprintf(&b, "- Session: %s\n", emptyDash(view.SessionID))
+	fmt.Fprintf(&b, "- Resume command: `%s`\n", emptyDash(view.ResumeCommand))
+	if view.Summary != "" {
+		fmt.Fprintf(&b, "- Summary: %s\n", view.Summary)
+	}
+	if view.ResultTail != "" {
+		fmt.Fprintf(&b, "- Result tail: %s\n", view.ResultTail)
+	}
+	fmt.Fprintf(&b, "- Message count: %d\n", view.MessageCount)
+	fmt.Fprintf(&b, "- Resume count: %d\n", view.ResumeCount)
+	if view.Retired && view.Retirement != nil {
+		fmt.Fprintf(&b, "- Retired: true\n")
+		fmt.Fprintf(&b, "- Retirement reason: %s\n", emptyDash(view.Retirement.Reason))
+		fmt.Fprintf(&b, "- Retirement next action: %s\n", emptyDash(view.Retirement.NextAction))
+	} else {
+		b.WriteString("- Retired: false\n")
+	}
+	if len(view.LastMessages) > 0 {
+		b.WriteString("\n## Last Messages\n\n")
+		for _, msg := range view.LastMessages {
+			fmt.Fprintf(&b, "- %s: %s\n", emptyDash(msg.Role), msg.Text)
+		}
+	}
+	return strings.TrimSpace(b.String()) + "\n"
+}
+
+func saveTaskHandoffMarkdown(dataDir string, view taskHandoffCLIOutput) (string, error) {
+	dir := filepath.Join(dataDir, "task-handoffs")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("task handoff: create handoff dir: %w", err)
+	}
+	sessionToken := safeTaskHandoffFileToken(view.SessionID)
+	if sessionToken == "" {
+		sessionToken = "session"
+	}
+	if len(sessionToken) > 12 {
+		sessionToken = sessionToken[:12]
+	}
+	path := filepath.Join(dir, fmt.Sprintf("task-%d-%s.md", view.TaskID, sessionToken))
+	if err := os.WriteFile(path, []byte(formatTaskHandoffMarkdown(view)), 0o644); err != nil {
+		return "", fmt.Errorf("task handoff: write markdown: %w", err)
+	}
+	return path, nil
+}
+
+func safeTaskHandoffFileToken(value string) string {
+	value = strings.TrimSpace(value)
+	var b strings.Builder
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '-' || r == '_':
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 func tailString(value string, max int) string {
