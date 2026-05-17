@@ -1967,3 +1967,53 @@ Remaining progress/UX gaps:
 - Runtime progress is phase-level, not a rich timeline.
 - Telegram uses existing progress delivery; no new native transcript UI.
 - No Claude Code-style condensed terminal transcript grouping yet.
+
+## Post-PR261 Skill Curator CLI Status / Install Milestone Update
+
+Date: 2026-05-18 KST
+
+Branch:
+
+- `codex/runtime-progress-status`
+
+Artifact:
+
+- `.omc/research/skill-curator-cli-status-install-2026-05-18.md`
+
+What changed:
+
+- Added `elnath skill curator status`.
+- Added `elnath skill curator status --json`.
+- Added `elnath skill curator install`.
+- Added `elnath skill curator install --interval DURATION`.
+- Added `elnath skill curator install --run-on-start`.
+- Added `elnath skill curator install --json`.
+- Curator status reports schedule, draft count, proposal count, usage-tracked
+  skill count, total usage count, and static scheduler runtime semantics.
+- Curator install writes a recurring static scheduled task with type
+  `skill-promote`.
+
+Reference impact:
+
+- Makes the existing skill consolidator / `skill-promote` substrate visible as
+  a product surface.
+- Moves Elnath closer to Hermes-style self-improving skill lifecycle while
+  preserving explicit operator installation and schedule restart semantics.
+- Does not claim automatic skill rewrite quality or full Hermes curator parity.
+
+Verification:
+
+- `go test ./cmd/elnath -run TestCmdSkillCuratorStatusAndInstall -count=1`
+  passed.
+- `go test ./cmd/elnath -run 'TestCmdSkill(Curator|Proposals)' -count=1`
+  passed.
+- `go test ./cmd/elnath ./internal/skill ./internal/scheduler -count=1`
+  passed.
+- `go vet ./...` passed.
+- `git diff --check` passed.
+
+Remaining skill feedback gaps:
+
+- Installed curator schedules take effect after daemon restart; no hot reload.
+- Curator still uses existing draft promotion/cleanup thresholds only.
+- Proposal application remains review/approval driven.

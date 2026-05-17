@@ -620,6 +620,90 @@ func TestCmdSkillProposalsApplyCanCancel(t *testing.T) {
 	}
 }
 
+func TestCmdSkillCuratorStatusAndInstall(t *testing.T) {
+	cfgPath, dataDir, wikiDir := writeSkillTestConfig(t)
+	withArgs(t, []string{"elnath", "--config", cfgPath})
+	writeSkillPage(t, wikiDir, &wiki.Page{
+		Path:    "skills/draft-review.md",
+		Title:   "Draft Review",
+		Type:    wiki.PageTypeAnalysis,
+		Tags:    []string{"skill"},
+		Content: "Draft review workflow.",
+		Extra: map[string]any{
+			"name":   "draft-review",
+			"status": "draft",
+		},
+	})
+	tracker := skill.NewTracker(dataDir)
+	if err := tracker.RecordUsage(skill.UsageRecord{SkillName: "draft-review", SessionID: "sess-1"}); err != nil {
+		t.Fatalf("RecordUsage() error = %v", err)
+	}
+	if _, err := tracker.WriteImprovementProposal(skill.ImprovementProposal{
+		SkillName:       "draft-review",
+		Reason:          "User repeated same review workflow.",
+		SuggestedChange: "Promote when stable.",
+	}); err != nil {
+		t.Fatalf("WriteImprovementProposal() error = %v", err)
+	}
+
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdSkill(context.Background(), []string{"curator", "status", "--json"}); err != nil {
+			t.Fatalf("cmdSkill(curator status --json) error = %v", err)
+		}
+	})
+	var status struct {
+		Scheduled     bool `json:"scheduled"`
+		DraftCount    int  `json:"draft_count"`
+		ProposalCount int  `json:"proposal_count"`
+		UsageSkills   int  `json:"usage_skills"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &status); err != nil {
+		t.Fatalf("status stdout is not JSON: %v\n%s", err, stdout)
+	}
+	if status.Scheduled || status.DraftCount != 1 || status.ProposalCount != 1 || status.UsageSkills != 1 {
+		t.Fatalf("status = %+v, want unscheduled with draft/proposal/usage counts", status)
+	}
+
+	stdout, _ = captureOutput(t, func() {
+		if err := cmdSkill(context.Background(), []string{"curator", "install", "--interval", "12h", "--run-on-start"}); err != nil {
+			t.Fatalf("cmdSkill(curator install) error = %v", err)
+		}
+	})
+	if !strings.Contains(stdout, "Installed skill curator schedule") || !strings.Contains(stdout, "12h") {
+		t.Fatalf("install stdout = %q, want installed schedule", stdout)
+	}
+	scheduleRaw, err := os.ReadFile(filepath.Join(dataDir, "scheduled_tasks.yaml"))
+	if err != nil {
+		t.Fatalf("ReadFile(scheduled_tasks.yaml) error = %v", err)
+	}
+	for _, want := range []string{"name: skill-curator", "type: skill-promote", "interval: 12h0m0s", "run_on_start: true"} {
+		if !strings.Contains(string(scheduleRaw), want) {
+			t.Fatalf("scheduled_tasks.yaml = %q, want %q", scheduleRaw, want)
+		}
+	}
+
+	stdout, _ = captureOutput(t, func() {
+		if err := cmdSkill(context.Background(), []string{"curator", "status", "--json"}); err != nil {
+			t.Fatalf("cmdSkill(curator status --json after install) error = %v", err)
+		}
+	})
+	var installed struct {
+		Scheduled bool `json:"scheduled"`
+		Task      *struct {
+			Name       string `json:"name"`
+			Type       string `json:"type"`
+			Interval   string `json:"interval"`
+			RunOnStart bool   `json:"run_on_start"`
+		} `json:"task"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &installed); err != nil {
+		t.Fatalf("installed status stdout is not JSON: %v\n%s", err, stdout)
+	}
+	if !installed.Scheduled || installed.Task == nil || installed.Task.Name != "skill-curator" || installed.Task.Type != "skill-promote" || installed.Task.Interval != "12h0m0s" || !installed.Task.RunOnStart {
+		t.Fatalf("installed status = %+v, want scheduled skill curator", installed)
+	}
+}
+
 func TestCommandRegistryIncludesSkill(t *testing.T) {
 	reg := commandRegistry()
 	if _, ok := reg["skill"]; !ok {
