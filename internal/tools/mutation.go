@@ -47,6 +47,16 @@ type FileMutationDiagnostic struct {
 	Source   string `json:"source,omitempty"`
 }
 
+type MutationDiagnosticAdapterPolicy struct {
+	Language  string `json:"language"`
+	Status    string `json:"status"`
+	Adapter   string `json:"adapter,omitempty"`
+	Command   string `json:"command,omitempty"`
+	TimeoutMS int    `json:"timeout_ms,omitempty"`
+	Scope     string `json:"scope,omitempty"`
+	Notes     string `json:"notes,omitempty"`
+}
+
 func NewFileMutation(operation string, path string, before []byte, beforeExists bool, after []byte, afterExists bool) *FileMutation {
 	beforeLines := countMutationLines(before, beforeExists)
 	afterLines := countMutationLines(after, afterExists)
@@ -108,6 +118,43 @@ func AnnotateGoMutationDiagnostics(mutation *FileMutation, absPath string, baseP
 	AnnotateMutationDiagnostics(mutation, absPath, basePath, before, beforeExists, after, afterExists)
 }
 
+func MutationDiagnosticAdapterPolicies() []MutationDiagnosticAdapterPolicy {
+	pythonStatus := "diagnostics_not_configured"
+	if pythonDiagnosticCommandAvailable() {
+		pythonStatus = "available"
+	}
+	return []MutationDiagnosticAdapterPolicy{
+		{
+			Language: "go",
+			Status:   "available",
+			Adapter:  "go/parser",
+			Scope:    "syntax",
+			Notes:    "in-process parser diagnostic delta",
+		},
+		{
+			Language:  "python",
+			Status:    pythonStatus,
+			Adapter:   "python/py_compile",
+			Command:   strings.TrimSpace(pythonDiagnosticCommand),
+			TimeoutMS: int(defaultMutationDiagnosticTimeout / time.Millisecond),
+			Scope:     "syntax",
+			Notes:     "best-effort temp-file syntax diagnostic delta",
+		},
+		{
+			Language: "typescript",
+			Status:   "diagnostics_not_configured",
+			Scope:    "none",
+			Notes:    "explicit fallback until a local TypeScript adapter or LSP boundary is configured",
+		},
+		{
+			Language: "javascript",
+			Status:   "diagnostics_not_configured",
+			Scope:    "none",
+			Notes:    "explicit fallback until a local JavaScript adapter or LSP boundary is configured",
+		},
+	}
+}
+
 func mutationDiagnosticsFromSource(absPath string, basePath string, src []byte, exists bool, language string) ([]codeSymbolError, string, bool) {
 	if !exists {
 		return nil, "", true
@@ -127,8 +174,8 @@ func parsePythonDiagnosticsFromSource(absPath string, basePath string, src []byt
 	if command == "" {
 		return nil, "diagnostics_not_configured", false
 	}
-	exe, err := exec.LookPath(command)
-	if err != nil {
+	exe, ok := pythonDiagnosticCommandPath(command)
+	if !ok {
 		return nil, "diagnostics_not_configured", false
 	}
 	tmpDir, err := os.MkdirTemp("", "elnath-python-diagnostics-*")
@@ -155,6 +202,22 @@ func parsePythonDiagnosticsFromSource(absPath string, basePath string, src []byt
 	}
 	diagnostic := pythonDiagnosticFromCompileOutput(relPath(basePath, absPath), src, string(output), err)
 	return []codeSymbolError{diagnostic}, "", true
+}
+
+func pythonDiagnosticCommandAvailable() bool {
+	_, ok := pythonDiagnosticCommandPath(strings.TrimSpace(pythonDiagnosticCommand))
+	return ok
+}
+
+func pythonDiagnosticCommandPath(command string) (string, bool) {
+	if command == "" {
+		return "", false
+	}
+	exe, err := exec.LookPath(command)
+	if err != nil {
+		return "", false
+	}
+	return exe, true
 }
 
 func pythonDiagnosticFromCompileOutput(filePath string, src []byte, output string, err error) codeSymbolError {
