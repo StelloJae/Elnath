@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/stello/elnath/internal/agentic"
+	agenticenqueue "github.com/stello/elnath/internal/agentic/enqueue"
+	"github.com/stello/elnath/internal/config"
 	"github.com/stello/elnath/internal/daemon"
 
 	_ "modernc.org/sqlite"
@@ -88,6 +90,125 @@ func TestService_RunOnceProcessesFollowupsAndTriagesSignalsWithoutEnqueue(t *tes
 	}
 	if len(run.ProposedTaskIDs) != 1 || run.ProposedTaskIDs[0] != child.ID {
 		t.Fatalf("activation run proposed task ids = %+v, want child %d", run.ProposedTaskIDs, child.ID)
+	}
+}
+
+func TestService_RunOnceAutoEnqueuesLowRiskWhenConfigured(t *testing.T) {
+	ctx := context.Background()
+	db, store := newActivationTestStore(t)
+	queue, err := daemon.NewQueueNoRecover(db)
+	if err != nil {
+		t.Fatalf("NewQueueNoRecover: %v", err)
+	}
+	parent := createActivationTask(t, ctx, store)
+	if _, err := store.CreateFollowup(ctx, agentic.Followup{
+		TaskID:    parent.ID,
+		GoalID:    parent.GoalID,
+		Reason:    "wake and enqueue bounded work",
+		Status:    agentic.FollowupStatusPending,
+		TriggerAt: time.Now().Add(-time.Hour),
+		WakeAgent: true,
+	}); err != nil {
+		t.Fatalf("CreateFollowup: %v", err)
+	}
+	beforeQueue := activationCountRows(t, db, "task_queue")
+	enqueuer := agenticenqueue.NewService(store, queue, agenticenqueue.Options{
+		EnforcementMode:    config.AgenticEnforcementModeGateway,
+		CompletionGateMode: config.AgenticCompletionGateModeVerification,
+	})
+
+	result, err := NewService(store, WithAutoEnqueue(enqueuer, AutoEnqueueOptions{
+		Enabled:                 true,
+		Limit:                   10,
+		OperatorID:              "activation-test",
+		Reason:                  "activation test auto enqueue",
+		MaxRiskLevel:            agentic.RiskLevelLow,
+		RequestedEnforcement:    config.AgenticEnforcementModeGateway,
+		RequestedCompletionGate: config.AgenticCompletionGateModeVerification,
+	})).RunOnce(ctx, 10)
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if result.ExecutionPolicy != ExecutionPolicyAutoEnqueueLowRisk || !result.EnqueuePerformed {
+		t.Fatalf("result policy/enqueue = %+v", result)
+	}
+	if result.AutoEnqueue.Considered != 1 || result.AutoEnqueue.Enqueued != 1 || result.AutoEnqueue.Skipped != 0 || result.AutoEnqueue.Failed != 0 {
+		t.Fatalf("auto enqueue result = %+v", result.AutoEnqueue)
+	}
+	if len(result.AutoEnqueue.QueueTaskIDs) != 1 || result.AutoEnqueue.QueueTaskIDs[0] == 0 {
+		t.Fatalf("auto enqueue queue task ids = %+v", result.AutoEnqueue.QueueTaskIDs)
+	}
+	child, err := store.GetAgenticTask(ctx, result.ProposedTaskIDs[0])
+	if err != nil {
+		t.Fatalf("GetAgenticTask child: %v", err)
+	}
+	if child.Status != agentic.TaskStatusPending || child.QueueTaskID != result.AutoEnqueue.QueueTaskIDs[0] {
+		t.Fatalf("child task = %+v, want pending queue-backed task", child)
+	}
+	if _, err := queue.Get(ctx, child.QueueTaskID); err != nil {
+		t.Fatalf("queue.Get(%d): %v", child.QueueTaskID, err)
+	}
+	if afterQueue := activationCountRows(t, db, "task_queue"); afterQueue != beforeQueue+1 {
+		t.Fatalf("queue rows = %d, want %d", afterQueue, beforeQueue+1)
+	}
+	decisions, err := store.ListTaskEnqueueDecisionsByTask(ctx, child.ID)
+	if err != nil {
+		t.Fatalf("ListTaskEnqueueDecisionsByTask: %v", err)
+	}
+	if len(decisions) != 1 || decisions[0].QueueTaskID != child.QueueTaskID || decisions[0].OperatorID != "activation-test" || decisions[0].RequestedEnforcement != config.AgenticEnforcementModeGateway || decisions[0].RequestedCompletionGate != config.AgenticCompletionGateModeVerification {
+		t.Fatalf("enqueue decisions = %+v", decisions)
+	}
+	run, err := store.GetActivationRun(ctx, result.RunID)
+	if err != nil {
+		t.Fatalf("GetActivationRun: %v", err)
+	}
+	if run.ExecutionPolicy != ExecutionPolicyAutoEnqueueLowRisk || !run.EnqueuePerformed || len(run.ProposedTaskIDs) != 1 || run.ProposedTaskIDs[0] != child.ID {
+		t.Fatalf("activation run = %+v", run)
+	}
+}
+
+func TestService_AutoEnqueueSkipsAboveLowRisk(t *testing.T) {
+	ctx := context.Background()
+	db, store := newActivationTestStore(t)
+	queue, err := daemon.NewQueueNoRecover(db)
+	if err != nil {
+		t.Fatalf("NewQueueNoRecover: %v", err)
+	}
+	parent := createActivationTask(t, ctx, store)
+	task, err := store.CreateAgenticTask(ctx, agentic.AgenticTask{
+		GoalID:             parent.GoalID,
+		ParentID:           parent.ID,
+		Title:              "Risky proposed task",
+		Prompt:             "Requires human approval.",
+		Status:             agentic.TaskStatusProposed,
+		RiskLevel:          agentic.RiskLevelMedium,
+		AutonomyDecision:   agentic.PolicyDecisionObserve,
+		VerificationStatus: agentic.VerificationStatusPending,
+	})
+	if err != nil {
+		t.Fatalf("CreateAgenticTask: %v", err)
+	}
+	enqueuer := agenticenqueue.NewService(store, queue, agenticenqueue.Options{})
+	service := NewService(store, WithAutoEnqueue(enqueuer, AutoEnqueueOptions{
+		Enabled:      true,
+		MaxRiskLevel: agentic.RiskLevelLow,
+	}))
+	result, err := service.autoEnqueueProposed(ctx, []int64{task.ID})
+	if err != nil {
+		t.Fatalf("autoEnqueueProposed: %v", err)
+	}
+	if result.Considered != 1 || result.Enqueued != 0 || result.Skipped != 1 || result.Failed != 0 {
+		t.Fatalf("auto enqueue result = %+v", result)
+	}
+	updated, err := store.GetAgenticTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetAgenticTask: %v", err)
+	}
+	if updated.Status != agentic.TaskStatusProposed || updated.QueueTaskID != 0 {
+		t.Fatalf("updated task = %+v, want untouched proposed task", updated)
+	}
+	if rows := activationCountRows(t, db, "task_queue"); rows != 0 {
+		t.Fatalf("queue rows = %d, want 0", rows)
 	}
 }
 

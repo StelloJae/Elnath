@@ -370,14 +370,14 @@ func cmdDaemonStart(ctx context.Context) error {
 		app.Logger.Info("telegram shell embedded in daemon")
 	}
 
-	if err := startAgenticActivationLoop(ctx, cfg, agenticStore, router, app.Logger); err != nil {
+	if err := startAgenticActivationLoop(ctx, cfg, agenticStore, queue, router, app.Logger); err != nil {
 		return err
 	}
 
 	return d.Start(ctx)
 }
 
-func startAgenticActivationLoop(ctx context.Context, cfg *config.Config, store *agentic.Store, router *daemon.DeliveryRouter, logger *slog.Logger) error {
+func startAgenticActivationLoop(ctx context.Context, cfg *config.Config, store *agentic.Store, queue *daemon.Queue, router *daemon.DeliveryRouter, logger *slog.Logger) error {
 	if cfg == nil || store == nil || !cfg.Agentic.Activation.Enabled {
 		return nil
 	}
@@ -391,7 +391,11 @@ func startAgenticActivationLoop(ctx context.Context, cfg *config.Config, store *
 	interval := time.Duration(cfg.Agentic.Activation.IntervalSeconds) * time.Second
 	limit := cfg.Agentic.Activation.Limit
 	activationLogger := logger.With("component", "agentic-activation")
-	go agenticactivation.RunLoop(ctx, agenticactivation.NewService(store), agenticactivation.LoopOptions{
+	service, err := newAgenticActivationService(cfg, store, queue)
+	if err != nil {
+		return err
+	}
+	go agenticactivation.RunLoop(ctx, service, agenticactivation.LoopOptions{
 		Interval:   interval,
 		Limit:      limit,
 		RunOnStart: cfg.Agentic.Activation.RunOnStart,
@@ -410,6 +414,7 @@ func startAgenticActivationLoop(ctx context.Context, cfg *config.Config, store *
 		"limit", limit,
 		"run_on_start", cfg.Agentic.Activation.RunOnStart,
 		"delivery_targets", daemon.DeliveryTargetStrings(targets),
+		"auto_enqueue", cfg.Agentic.Activation.AutoEnqueue.Enabled,
 	)
 	return nil
 }

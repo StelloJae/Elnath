@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/stello/elnath/internal/agentic"
+	agenticactivation "github.com/stello/elnath/internal/agentic/activation"
 	"github.com/stello/elnath/internal/config"
 	"github.com/stello/elnath/internal/core"
 	"github.com/stello/elnath/internal/daemon"
@@ -587,6 +588,48 @@ func TestAgenticActivate_RunOnceJSONProcessesDueFollowupWithoutEnqueue(t *testin
 	}
 }
 
+func TestAgenticActivate_AutoEnqueuesLowRiskDueFollowupWhenConfigured(t *testing.T) {
+	fx := newAgenticCommandFixture(t)
+	enableAgenticActivationAutoEnqueue(t, fx.cfgPath)
+	beforeQueue := countQueueRows(t, fx.db.Main)
+	stdout, _ := captureOutput(t, func() {
+		if err := cmdAgentic(context.Background(), []string{"activate", "--once", "--limit", "10", "--json"}); err != nil {
+			t.Fatalf("cmdAgentic activate: %v", err)
+		}
+	})
+	var view agenticActivationView
+	if err := json.Unmarshal([]byte(stdout), &view); err != nil {
+		t.Fatalf("activate JSON = %q, unmarshal: %v", stdout, err)
+	}
+	if view.ExecutionPolicy != agenticactivation.ExecutionPolicyAutoEnqueueLowRisk || !view.EnqueuePerformed || view.Status != agentic.ActivationRunStatusSucceeded {
+		t.Fatalf("activate view = %+v", view)
+	}
+	if view.AutoEnqueue == nil || view.AutoEnqueue.Considered != 1 || view.AutoEnqueue.Enqueued != 1 || len(view.AutoEnqueue.QueueTaskIDs) != 1 {
+		t.Fatalf("auto enqueue view = %+v", view.AutoEnqueue)
+	}
+	if after := countQueueRows(t, fx.db.Main); after != beforeQueue+1 {
+		t.Fatalf("queue rows = %d, want %d", after, beforeQueue+1)
+	}
+	updated, err := fx.store.GetFollowup(context.Background(), fx.followup.ID)
+	if err != nil {
+		t.Fatalf("GetFollowup: %v", err)
+	}
+	child, err := fx.store.GetAgenticTask(context.Background(), updated.CreatedTaskID)
+	if err != nil {
+		t.Fatalf("GetAgenticTask child: %v", err)
+	}
+	if child.Status != agentic.TaskStatusPending || child.QueueTaskID != view.AutoEnqueue.QueueTaskIDs[0] {
+		t.Fatalf("child task = %+v", child)
+	}
+	decisions, err := fx.store.ListTaskEnqueueDecisionsByTask(context.Background(), child.ID)
+	if err != nil {
+		t.Fatalf("ListTaskEnqueueDecisionsByTask: %v", err)
+	}
+	if len(decisions) != 1 || decisions[0].QueueTaskID != child.QueueTaskID || decisions[0].OperatorID != "agentic-activation" || decisions[0].RequestedEnforcement != config.AgenticEnforcementModeGateway || decisions[0].RequestedCompletionGate != config.AgenticCompletionGateModeVerification {
+		t.Fatalf("enqueue decisions = %+v", decisions)
+	}
+}
+
 func TestAgenticActivate_RequiresExplicitOnce(t *testing.T) {
 	newAgenticCommandFixture(t)
 	err := cmdAgentic(context.Background(), []string{"activate", "--json"})
@@ -738,6 +781,32 @@ func enableAgenticModes(t *testing.T, cfgPath string) {
 	}
 	defer f.Close()
 	if _, err := f.WriteString("\nagentic:\n  enforcement:\n    mode: gateway\n  completion_gate:\n    mode: verification\n"); err != nil {
+		t.Fatalf("append config: %v", err)
+	}
+}
+
+func enableAgenticActivationAutoEnqueue(t *testing.T, cfgPath string) {
+	t.Helper()
+	f, err := os.OpenFile(cfgPath, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("open config: %v", err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString(`
+agentic:
+  enforcement:
+    mode: gateway
+  completion_gate:
+    mode: verification
+  activation:
+    enabled: true
+    auto_enqueue:
+      enabled: true
+      limit: 3
+      max_risk_level: low
+      agentic_enforcement: gateway
+      completion_gate: verification
+`); err != nil {
 		t.Fatalf("append config: %v", err)
 	}
 }

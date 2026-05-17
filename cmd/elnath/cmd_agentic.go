@@ -45,8 +45,18 @@ type agenticActivationView struct {
 	Status           string                  `json:"status"`
 	Reason           string                  `json:"reason,omitempty"`
 	ProposedTaskIDs  []int64                 `json:"proposed_task_ids,omitempty"`
+	AutoEnqueue      *agenticAutoEnqueueInfo `json:"auto_enqueue,omitempty"`
 	Followups        agenticActivationCounts `json:"followups"`
 	Signals          agenticActivationCounts `json:"signals"`
+}
+
+type agenticAutoEnqueueInfo struct {
+	Considered      int     `json:"considered"`
+	Enqueued        int     `json:"enqueued"`
+	Skipped         int     `json:"skipped"`
+	Failed          int     `json:"failed"`
+	EnqueuedTaskIDs []int64 `json:"enqueued_task_ids,omitempty"`
+	QueueTaskIDs    []int64 `json:"queue_task_ids,omitempty"`
 }
 
 type agenticActivationCounts struct {
@@ -390,7 +400,19 @@ func cmdAgenticActivate(ctx context.Context, args []string) error {
 	if err := agentic.InitSchema(db.Main); err != nil {
 		return fmt.Errorf("agentic activate: init schema: %w", err)
 	}
-	result, err := agenticactivation.NewService(agentic.NewStore(db.Main)).RunOnce(ctx, parsed.Limit)
+	store := agentic.NewStore(db.Main)
+	var queue *daemon.Queue
+	if cfg.Agentic.Activation.AutoEnqueue.Enabled {
+		queue, err = daemon.NewQueueNoRecover(db.Main)
+		if err != nil {
+			return fmt.Errorf("agentic activate: open queue: %w", err)
+		}
+	}
+	service, err := newAgenticActivationService(cfg, store, queue)
+	if err != nil {
+		return err
+	}
+	result, err := service.RunOnce(ctx, parsed.Limit)
 	if err != nil {
 		return err
 	}
@@ -429,6 +451,38 @@ func parseAgenticActivateArgs(args []string) (agenticActivateArgs, error) {
 		return parsed, fmt.Errorf("usage: elnath agentic activate --once [--limit n] [--json]")
 	}
 	return parsed, nil
+}
+
+func newAgenticActivationService(cfg *config.Config, store *agentic.Store, queue *daemon.Queue) (*agenticactivation.Service, error) {
+	if cfg == nil || store == nil {
+		return nil, fmt.Errorf("agentic activation: config and store are required")
+	}
+	if !cfg.Agentic.Activation.AutoEnqueue.Enabled {
+		return agenticactivation.NewService(store), nil
+	}
+	if queue == nil {
+		return nil, fmt.Errorf("agentic activation: auto enqueue enabled without queue")
+	}
+	operatorID := strings.TrimSpace(cfg.Principal.UserID)
+	if operatorID == "" {
+		operatorID = "agentic-activation"
+	}
+	auto := cfg.Agentic.Activation.AutoEnqueue
+	return agenticactivation.NewService(store, agenticactivation.WithAutoEnqueue(
+		agenticenqueue.NewService(store, queue, agenticenqueue.Options{
+			EnforcementMode:    cfg.Agentic.Enforcement.Mode,
+			CompletionGateMode: cfg.Agentic.CompletionGate.Mode,
+		}),
+		agenticactivation.AutoEnqueueOptions{
+			Enabled:                 true,
+			Limit:                   auto.Limit,
+			OperatorID:              operatorID,
+			Reason:                  "agentic activation auto enqueue",
+			MaxRiskLevel:            auto.MaxRiskLevel,
+			RequestedEnforcement:    auto.AgenticEnforcement,
+			RequestedCompletionGate: auto.CompletionGate,
+		},
+	)), nil
 }
 
 func cmdAgenticEnqueue(ctx context.Context, args []string) error {
@@ -1172,7 +1226,7 @@ func printJSON(v any) error {
 }
 
 func activationView(result agenticactivation.Result) *agenticActivationView {
-	return &agenticActivationView{
+	view := &agenticActivationView{
 		RunID:            result.RunID,
 		AutonomyEnabled:  false,
 		ExecutionPolicy:  result.ExecutionPolicy,
@@ -1194,6 +1248,17 @@ func activationView(result agenticactivation.Result) *agenticActivationView {
 			Failed:    result.Signals.Failed,
 		},
 	}
+	if result.AutoEnqueue.Considered > 0 || result.AutoEnqueue.Enqueued > 0 || result.AutoEnqueue.Failed > 0 {
+		view.AutoEnqueue = &agenticAutoEnqueueInfo{
+			Considered:      result.AutoEnqueue.Considered,
+			Enqueued:        result.AutoEnqueue.Enqueued,
+			Skipped:         result.AutoEnqueue.Skipped,
+			Failed:          result.AutoEnqueue.Failed,
+			EnqueuedTaskIDs: append([]int64(nil), result.AutoEnqueue.EnqueuedTaskIDs...),
+			QueueTaskIDs:    append([]int64(nil), result.AutoEnqueue.QueueTaskIDs...),
+		}
+	}
+	return view
 }
 
 func activationRunSummary(run agentic.ActivationRun) agenticActivationRunSummary {
@@ -1235,6 +1300,12 @@ func renderAgenticActivation(view *agenticActivationView) string {
 	}
 	if len(view.ProposedTaskIDs) > 0 {
 		fmt.Fprintf(&b, "  proposed_task_ids: %s\n", joinInt64s(view.ProposedTaskIDs))
+	}
+	if view.AutoEnqueue != nil {
+		fmt.Fprintf(&b, "  auto_enqueue: considered=%d enqueued=%d skipped=%d failed=%d\n", view.AutoEnqueue.Considered, view.AutoEnqueue.Enqueued, view.AutoEnqueue.Skipped, view.AutoEnqueue.Failed)
+		if len(view.AutoEnqueue.QueueTaskIDs) > 0 {
+			fmt.Fprintf(&b, "  auto_enqueue_queue_task_ids: %s\n", joinInt64s(view.AutoEnqueue.QueueTaskIDs))
+		}
 	}
 	fmt.Fprintf(&b, "  followups: processed=%d created=%d skipped=%d failed=%d\n", view.Followups.Processed, view.Followups.Created, view.Followups.Skipped, view.Followups.Failed)
 	fmt.Fprintf(&b, "  signals: processed=%d created=%d linked=%d failed=%d\n", view.Signals.Processed, view.Signals.Created, view.Signals.Linked, view.Signals.Failed)
